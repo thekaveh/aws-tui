@@ -1,7 +1,7 @@
 """Crash-diagnostics journal for long-running transfers.
 
 Each transfer owns one append-only JSONL file at
-``~/.cache/aws-tui/transfers/<id>.jsonl``. The journal records:
+``<cache-dir>/transfers/<id>.jsonl``. The journal records:
 
 - a ``begin`` line with source/destination URIs, total size, and an
   optional S3 multipart ``upload_id`` for future explicit-MPU flows,
@@ -156,9 +156,21 @@ class TransferJournal:
         for path in sorted(self._dir.glob("*.jsonl")):
             try:
                 entry = self._replay(path)
-            except (_JournalReplayError, json.JSONDecodeError, KeyError, TypeError, ValueError):
-                # Corrupt or malformed journal — skip and let the caller
-                # decide whether to purge it manually.
+            except (
+                _JournalReplayError,
+                json.JSONDecodeError,
+                KeyError,
+                TypeError,
+                ValueError,
+                OSError,
+            ):
+                # Corrupt, malformed or UNREADABLE journal — skip and let the
+                # caller decide whether to purge it manually. `_iter_jsonl`
+                # opens the file lazily during replay, so a journal removed by
+                # a second instance between `glob()` and the read, or one that
+                # fails with EACCES/EIO, raised out of this loop and aborted
+                # the whole scan — the opposite of the skip-and-continue
+                # contract this handler documents.
                 continue
             if entry is None or entry.finished or entry.aborted:
                 continue
@@ -177,6 +189,13 @@ class TransferJournal:
     def _append(self, transfer_id: str, record: dict[str, Any]) -> None:
         path = self._path_for(transfer_id)
         line = json.dumps(record, separators=(",", ":"))
+        # A directory fsync makes the file's ENTRY durable, which only changes
+        # when the file is created. Doing it on every append doubled the sync
+        # cost of a batch: pre-registering the 1,000-entry cap performed ~2,000
+        # fsyncs synchronously on the event loop before the first byte moved
+        # (measured: 400 for 200 entries). The per-file fsync in
+        # `_write_journal_line` still makes the CONTENT durable on every record.
+        created = not path.exists()
         if os.name == "posix":
             with open(
                 path,
@@ -191,7 +210,8 @@ class TransferJournal:
         if os.name == "posix":
             with contextlib.suppress(OSError, NotImplementedError):
                 path.chmod(0o600)
-        _fsync_directory(path.parent)
+        if created:
+            _fsync_directory(path.parent)
 
     def _replay(self, path: Path) -> TransferJournalEntry | None:
         filename_id = path.stem

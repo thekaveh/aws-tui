@@ -100,11 +100,27 @@ _NON_PRIORITY_ACTIONS: frozenset[str] = frozenset(
 )
 
 
+#: Runtime key names produced by a bare printable character. Derived by
+#: round-tripping every printable ASCII code through the same normalizer the
+#: binding uses, rather than listed by hand: ``/`` arrives as ``slash`` and
+#: space as ``space``, so a literal ``len(key) == 1`` test cannot see them.
+_PRINTABLE_RUNTIME_KEYS: frozenset[str] = frozenset(
+    textual_key_name(chr(code)) for code in range(0x20, 0x7F)
+)
+
+
 def _binding_priority(action_id: str, key: str) -> bool:
-    """Let editable widgets consume printable keys before app shortcuts."""
-    return action_id not in _NON_PRIORITY_ACTIONS and not (
-        key == "space" or (len(key) == 1 and key.isprintable())
-    )
+    """Let editable widgets consume printable keys before app shortcuts.
+
+    Decided on the RUNTIME key name, not the configured literal. ``Space`` and
+    ``space`` are the same key to Textual but were opposite here: the folded
+    name went to ``Binding(key=...)`` while the raw token came here, so a
+    capitalised spelling silently made the binding priority and swallowed the
+    space bar before any editable widget saw it.
+    """
+    if action_id in _NON_PRIORITY_ACTIONS:
+        return False
+    return textual_key_name(key) not in _PRINTABLE_RUNTIME_KEYS
 
 
 class BindingResolver:

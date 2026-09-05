@@ -478,12 +478,20 @@ async def test_older_snapshot_selection_survives_refresh_and_drives_time_travel(
         selection_notifications = notifications.count("selected_snapshot_id")
 
         iceberg._refresh()
+        # `_refresh` re-arms `_enable_highlight` through `call_after_refresh`, so
+        # the deferred callback lands a frame after the refresh itself. A single
+        # pause observes the intermediate state and can see an extra highlight
+        # notification.
+        await pilot.pause()
         await pilot.pause()
 
         assert table.cursor_row == 1
         assert vm.catalog.iceberg.selected_snapshot_id == 42
         assert notifications.count("selected_snapshot_id") == selection_notifications
         await pilot.click("#glue-iceberg-time-travel")
+        # The button handler dispatches through `run_worker`; without draining it
+        # the assertions below race the dispatch.
+        await pilot.app.workers.wait_for_complete()
         assert vm.catalog.iceberg.selected_snapshot_id == 42
         assert pilot.app.action_ids == ["glue.time_travel_in_athena"]
     selection_subscription.dispose()

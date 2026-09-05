@@ -650,9 +650,66 @@ def test_unreleased_changelog_allows_develop_before_main_promotion() -> None:
 def test_readme_and_published_index_share_the_product_summary() -> None:
     summary = (
         "The application combines a Norton-Commander-style S3 file manager, an EMR\n"
-        "Serverless console, and Unreleased AWS Glue, Amazon Athena, and Iceberg\n"
-        "inspection workflows."
+        "Serverless console, and AWS Glue, Amazon Athena, and Iceberg inspection\n"
+        "workflows, which are unreleased."
     )
 
     assert summary in _read("README.md")
     assert summary in _read("docs/index.md")
+
+
+def test_every_test_directory_holding_modules_is_an_importable_package() -> None:
+    """A test directory without ``__init__.py`` gets its modules imported twice.
+
+    ``tests/unit/vm/athena/test_page_vm.py`` is imported by package path from
+    four other tiers. While that directory lacked a marker, one pytest session
+    held both ``test_page_vm`` and ``tests.unit.vm.athena.test_page_vm`` — the
+    module body ran twice and its ``PageClient`` was two unrelated classes, so a
+    cross-boundary ``isinstance`` check was silently false. The bug is invisible
+    in test results, which is why it needs a structural guard rather than a
+    behavioural one.
+    """
+    tests_root = REPO_ROOT / "tests"
+    missing = sorted(
+        str(directory.relative_to(REPO_ROOT))
+        for directory in tests_root.rglob("*")
+        if directory.is_dir()
+        and directory.name != "__pycache__"
+        and "__pycache__" not in directory.parts
+        and "__snapshots__" not in directory.parts
+        and any(directory.glob("test_*.py"))
+        and not (directory / "__init__.py").exists()
+    )
+
+    assert missing == [], (
+        "test directories containing modules but no __init__.py; pytest will "
+        f"import their modules twice under two names: {missing}"
+    )
+
+
+def test_no_test_module_hand_copies_the_built_in_theme_list() -> None:
+    """Three modules each kept their own literal copy of ``BUILTIN_NAMES``.
+
+    A hand-copied list does not fail when it drifts. Adding a built-in theme
+    just shrinks the parametrization: the remaining cases still pass, the new
+    theme is never rendered, and nothing reports the gap. Every list is now
+    derived from ``ThemeStore.BUILTIN_NAMES``, so pin that.
+    """
+    from aws_tui.infra.theme_store import ThemeStore
+
+    # Two names identify a copy of the list rather than an incidental
+    # single-theme reference (a targeted regression test is legitimate). They
+    # are assembled rather than written out so this guard does not flag itself.
+    sentinels = ("gruvbox" + "-dark", "solarized" + "-light")
+    offenders = []
+    for path in sorted((REPO_ROOT / "tests").rglob("*.py")):
+        if "__snapshots__" in path.parts:
+            continue
+        text = path.read_text(encoding="utf-8")
+        if all(f'"{name}"' in text for name in sentinels):
+            offenders.append(str(path.relative_to(REPO_ROOT)))
+
+    assert offenders == [], (
+        "test modules embedding a literal copy of ThemeStore.BUILTIN_NAMES "
+        f"({len(ThemeStore.BUILTIN_NAMES)} themes); derive it instead: {offenders}"
+    )

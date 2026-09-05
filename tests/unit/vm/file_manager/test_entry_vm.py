@@ -5,6 +5,7 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from typing import cast
 
+import pytest
 from vmx import NULL_DISPATCHER, MessageHub
 from vmx.lifecycle.status import ConstructionStatus
 from vmx.messages.protocols import Message
@@ -103,3 +104,62 @@ def test_directory_kind_round_trip() -> None:
     assert vm.kind == EntryKind.DIRECTORY
     assert vm.entry.size is None
     vm.dispose()
+
+
+@pytest.mark.parametrize(
+    ("size", "expected"),
+    [
+        (0, "0 B"),
+        (1, "1 B"),
+        (1023, "1023 B"),
+        # The boundary itself: 1024 must roll over to K, not render as "1024 B".
+        # `size < 1024` -> `size <= 1024` survived the whole repo suite, because
+        # nothing exercised _format_size at all.
+        (1024, "1.0 K"),
+        (1025, "1.0 K"),
+        (1024 * 1024 - 1, "1024.0 K"),
+        (1024 * 1024, "1.0 M"),
+        (1024**3, "1.0 G"),
+        (1024**4, "1.0 T"),
+        (1024**5, "1.0 P"),
+        (None, "?"),
+    ],
+)
+def test_size_display_covers_every_unit_boundary(size: int | None, expected: str) -> None:
+    entry = FileEntry(
+        name="f",
+        kind=EntryKind.FILE,
+        size=size,
+        modified=None,
+    )
+    vm = EntryVM(entry=entry, hub=_hub(), dispatcher=NULL_DISPATCHER)
+    vm.construct()
+    try:
+        assert vm.size_display == expected
+    finally:
+        vm.dispose()
+
+
+def test_size_display_is_dir_for_directories_regardless_of_size() -> None:
+    entry = FileEntry(name="d", kind=EntryKind.DIRECTORY, size=4096, modified=None)
+    vm = EntryVM(entry=entry, hub=_hub(), dispatcher=NULL_DISPATCHER)
+    vm.construct()
+    try:
+        assert vm.size_display == "<DIR>"
+    finally:
+        vm.dispose()
+
+
+def test_modified_display_formats_and_handles_absence() -> None:
+    stamped = FileEntry(
+        name="f",
+        kind=EntryKind.FILE,
+        size=1,
+        modified=datetime(2026, 9, 4, 13, 45, tzinfo=UTC),
+    )
+    vm = EntryVM(entry=stamped, hub=_hub(), dispatcher=NULL_DISPATCHER)
+    vm.construct()
+    try:
+        assert vm.modified_display == "2026-09-04 13:45"
+    finally:
+        vm.dispose()

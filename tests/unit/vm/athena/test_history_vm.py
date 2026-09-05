@@ -598,3 +598,78 @@ async def test_history_snapshot_relational_invariants_reject_atomically_without_
     vm.restore_snapshot(retryable)
     assert vm.export_snapshot() == retryable
     assert vm.has_more
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "state", [QueryState.FAILED, QueryState.CANCELLED, QueryState.QUEUED, QueryState.RUNNING]
+)
+async def test_open_s3_location_requires_a_succeeded_execution(state: QueryState) -> None:
+    """Only a SUCCEEDED execution has results at its output location.
+
+    Dropping the ``state is not QueryState.SUCCEEDED`` clause from the reject
+    condition survived the whole repo suite: a FAILED or CANCELLED execution
+    would publish an ``OpenS3LocationRequest`` for a location that holds no
+    results, sending the file manager to an object that does not exist.
+    """
+    # q-2 is on the FIRST page; q-1 only arrives via load_more, so selecting it
+    # after a bare setup() silently does nothing and the assertion below would
+    # hold for the wrong reason.
+    client = _seeded_client()
+    detail = client.details["q-2"]
+    client.details["q-2"] = replace(detail, summary=replace(detail.summary, state=state))
+    vm = make_history_vm(client)
+    published: list[object] = []
+    subscription = vm._hub.messages.subscribe(published.append)  # type: ignore[attr-defined]
+    try:
+        await vm.setup()
+        await vm.select_execution("q-2")
+        assert vm.selected_execution_id == "q-2", "precondition: the row is selected"
+
+        assert vm.open_s3_location() is False, f"{state} published a results location"
+        assert not any(isinstance(message, OpenS3LocationRequest) for message in published)
+    finally:
+        subscription.dispose()
+
+
+@pytest.mark.asyncio
+async def test_open_s3_location_succeeds_for_a_succeeded_execution() -> None:
+    """Positive control for the test above: the same path must WORK on SUCCEEDED."""
+    client = _seeded_client()
+    vm = make_history_vm(client)
+    published: list[object] = []
+    subscription = vm._hub.messages.subscribe(published.append)  # type: ignore[attr-defined]
+    try:
+        await vm.setup()
+        await vm.select_execution("q-2")
+
+        assert vm.open_s3_location() is True
+        assert any(isinstance(message, OpenS3LocationRequest) for message in published)
+    finally:
+        subscription.dispose()
+
+
+@pytest.mark.asyncio
+async def test_refresh_clears_the_previous_selection_and_detail() -> None:
+    """A refresh swaps the worker; stale selection must not outlive it.
+
+    Dropping ``_clear_selection()`` from ``refresh()`` survived the whole repo
+    suite. The detail pane would keep showing an execution that may not be in
+    the refreshed list, and because the NEW worker's ``details`` map is empty,
+    ``export_snapshot()`` then fails its own validity check and raises
+    "Athena history snapshot is invalid" — a stale read turning into a crash on
+    the next service switch.
+    """
+    client = _seeded_client()
+    vm = make_history_vm(client)
+    await vm.setup()
+    await vm.select_execution("q-2")
+    assert vm.selected_execution_id == "q-2"
+    assert vm.detail is not None
+
+    await vm.refresh()
+
+    assert vm.selected_execution_id is None
+    assert vm.detail is None
+    # The snapshot must remain exportable; this raised before.
+    vm.export_snapshot()

@@ -45,10 +45,24 @@ def _aioboto3_session_for(connection: Connection) -> aioboto3.Session:
     open its own clients.
     """
     if connection.kind == "aws":
-        return aioboto3.Session(
-            profile_name=connection.profile,
-            region_name=connection.region,
-        )
+        try:
+            return aioboto3.Session(
+                profile_name=connection.profile,
+                region_name=connection.region,
+            )
+        except Exception as exc:
+            # botocore raises ProfileNotFound at CONSTRUCTION when the named
+            # profile is missing — a renamed or deleted `~/.aws/config` entry.
+            # Letting it escape took it out through `build_vm` to the generic
+            # handler in `app.py`, which logs only `error_type` and drops the
+            # message: the user got a blank mount with the profile name
+            # nowhere. `services/emr_serverless` already guards the identical
+            # call. Raise the domain error this module already uses for its
+            # other credential failure so `build_vm` only emits typed errors.
+            raise AuthRequiredError(
+                f"connection {connection.name!r} refers to AWS profile "
+                f"{connection.profile!r}, which could not be loaded: {exc}"
+            ) from exc
     if connection.kind == "s3-compatible":
         if not connection.access_key_id or not connection.secret_access_key:
             raise AuthRequiredError(

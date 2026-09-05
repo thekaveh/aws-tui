@@ -915,13 +915,24 @@ def _seed_iceberg_queries(
         ),
         ((ref_name, "BRANCH", str(newest), None, "2", "604800000"),),
     )
+    starter_columns = (
+        ("dimension", "varchar"),
+        ("name", "varchar"),
+        ("value", "varchar"),
+    )
     add(
         (f'SELECT * FROM "{database}"."{table}" FOR VERSION AS OF {older} LIMIT 5'),
-        (
-            ("dimension", "varchar"),
-            ("name", "varchar"),
-            ("value", "varchar"),
-        ),
+        starter_columns,
+        time_travel_rows,
+    )
+    # The PLAIN starter, i.e. `select_starter_sql(ref)` with no snapshot. This
+    # is what the Glue "Query table in Athena" handoff prefills, so without a
+    # fixture the headline cross-service demo prefilled a query and then failed
+    # on Run with "Athena demo query fixture is unavailable". Only the
+    # FOR VERSION AS OF variant had been seeded.
+    add(
+        (f'SELECT * FROM "{database}"."{table}" LIMIT 5'),
+        starter_columns,
         time_travel_rows,
     )
 

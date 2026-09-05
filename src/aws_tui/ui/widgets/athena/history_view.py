@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from collections.abc import Awaitable, Callable
 from functools import partial
 from typing import ClassVar
 
@@ -11,9 +10,9 @@ from textual.containers import Vertical
 from textual.css.query import NoMatches
 from textual.widget import Widget
 from textual.widgets import Button, OptionList
-from textual.worker import Worker
 
 from aws_tui.domain.query import QueryState
+from aws_tui.ui.widgets._worker import DeferredWorkerMixin
 from aws_tui.ui.widgets.athena.load_more_button import AthenaLoadMoreButton
 from aws_tui.ui.widgets.glue.detail_rows import (
     DetailRows,
@@ -25,7 +24,7 @@ from aws_tui.ui.widgets.glue.detail_rows import (
 from aws_tui.vm.athena.page_vm import AthenaPageVM
 
 
-class AthenaHistoryView(Widget):
+class AthenaHistoryView(DeferredWorkerMixin, Widget):
     DEFAULT_CSS: ClassVar[str] = """
     AthenaHistoryView {
         height: 1fr;
@@ -122,17 +121,6 @@ class AthenaHistoryView(Widget):
                 self._vm.load_more,
                 group="athena-more-history",
             )
-
-    def _run_lifecycle_worker(
-        self,
-        work: Callable[[], Awaitable[None]],
-        *,
-        group: str,
-    ) -> Worker[None]:
-        async def deferred() -> None:
-            await work()
-
-        return self.run_worker(deferred, exclusive=True, group=group)
 
     def _on_vm_changed(self, _property_name: str) -> None:
         self.call_after_refresh(self._refresh)

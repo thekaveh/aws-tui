@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import stat
 from pathlib import Path
 
@@ -243,3 +244,145 @@ def test_domain_transfer_journal_does_not_import_infra_layer() -> None:
     source = Path("src/aws_tui/domain/transfer_journal.py").read_text(encoding="utf-8")
     assert "from aws_tui.infra" not in source
     assert "import aws_tui.infra" not in source
+
+
+def test_find_unfinished_skips_an_unreadable_journal(tmp_path: Path) -> None:
+    """An unreadable journal must not abort the whole scan.
+
+    `_iter_jsonl` opens each file lazily during replay, so a journal removed by
+    a second instance between `glob()` and the read — or one failing with
+    EACCES/EIO — raised out of the loop. That contradicts the handler's own
+    documented contract of skipping a bad journal and letting the caller decide.
+    """
+    journal = TransferJournal(base_dir=tmp_path)
+    good = journal.begin(
+        source_uri="s3://bucket/object",
+        destination_uri="file:///tmp/object",
+        bytes_total=1,
+    )
+    unreadable = tmp_path / f"{good[:-4]}beef.jsonl"
+    shutil.copy(tmp_path / f"{good}.jsonl", unreadable)
+    unreadable.chmod(0o000)
+
+    try:
+        entries = journal.find_unfinished()
+    finally:
+        unreadable.chmod(0o600)
+
+    assert [entry.transfer_id for entry in entries] == [good]
+
+
+def _append_marker_without_purging(journal: TransferJournal, transfer_id: str, kind: str) -> None:
+    """Reproduce the crash window: the terminal marker is on disk, the purge
+    never ran. ``mark_finished``/``mark_aborted`` append and then immediately
+    purge, so tests that call them assert on an EMPTY directory and the replay
+    path they are named for never executes."""
+    journal._append(transfer_id, {"kind": kind, "ts": "2026-09-04T00:00:00+00:00"})
+
+
+def test_replay_skips_a_journal_whose_finished_marker_survived_a_crash(
+    tmp_path: Path,
+) -> None:
+    """The on-disk `finished` marker must be honoured by replay.
+
+    This is the crash-safety contract the write-then-unlink ordering exists
+    for: a crash between the append and the purge leaves the file behind, and
+    replay must read the marker and NOT offer the transfer as resumable.
+    Neutralising either the `finished = True` assignment or the filter's
+    `entry.finished` operand survived the whole suite, because the existing
+    exclusion tests call `mark_finished`, which purges — they assert on an
+    empty directory.
+    """
+    journal = TransferJournal(base_dir=tmp_path)
+    transfer_id = journal.begin(source_uri="s", destination_uri="d")
+    journal.record_part(transfer_id, part_index=1, etag="e", bytes_written=10)
+    _append_marker_without_purging(journal, transfer_id, "finished")
+    assert journal._path_for(transfer_id).exists(), "precondition: the file survived"
+
+    assert journal.find_unfinished() == [], (
+        "a transfer whose finished marker is on disk was offered for resume"
+    )
+
+
+def test_replay_skips_a_journal_whose_aborted_marker_survived_a_crash(
+    tmp_path: Path,
+) -> None:
+    journal = TransferJournal(base_dir=tmp_path)
+    transfer_id = journal.begin(source_uri="s", destination_uri="d")
+    _append_marker_without_purging(journal, transfer_id, "aborted")
+
+    assert journal.find_unfinished() == []
+
+
+def test_replay_still_surfaces_a_genuinely_unfinished_journal(tmp_path: Path) -> None:
+    """Positive control: no terminal marker on disk means resumable."""
+    journal = TransferJournal(base_dir=tmp_path)
+    transfer_id = journal.begin(source_uri="s", destination_uri="d")
+    journal.record_part(transfer_id, part_index=1, etag="e", bytes_written=10)
+
+    unfinished = journal.find_unfinished()
+    assert [entry.transfer_id for entry in unfinished] == [transfer_id]
+    assert unfinished[0].completed_parts == (1,)
+
+
+def test_a_corrupt_line_mid_journal_does_not_hide_a_later_terminal_marker(
+    tmp_path: Path,
+) -> None:
+    """Only a torn FINAL line is tolerated; corruption mid-file must not
+    truncate replay.
+
+    With the tolerance widened to any corrupt line, a journal holding a torn
+    `part` record followed by a good `aborted` marker replayed as UNFINISHED —
+    offering a resume for a transfer the user aborted. The current behaviour
+    skips the unreadable file entirely (the earlier skip-unreadable fix), which
+    surfaces nothing rather than something wrong.
+    """
+    journal = TransferJournal(base_dir=tmp_path)
+    transfer_id = journal.begin(source_uri="s", destination_uri="d")
+    _append_marker_without_purging(journal, transfer_id, "aborted")
+    path = journal._path_for(transfer_id)
+    lines = path.read_text(encoding="utf-8").splitlines(keepends=True)
+    # Corrupt the middle: tear the part record but KEEP its newline.
+    lines.insert(1, '{"kind":"part","part_index":1,"etag":"TORN\n')
+    path.write_text("".join(lines), encoding="utf-8")
+
+    assert journal.find_unfinished() == [], (
+        "a corrupt mid-file line hid the aborted marker and offered a resume"
+    )
+
+
+def test_directory_fsync_happens_on_creation_and_only_on_creation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Both halves of `created = not path.exists()` matter.
+
+    The directory entry only changes when the file is created, so the dir
+    fsync must fire exactly once per journal — on `begin`. Inverting the flag
+    survived: the new journal's directory entry was never made durable (a crash
+    could lose the file's very existence), and every later append re-paid the
+    fsync the comment above it says was deliberately removed (measured at 400
+    for 200 entries before that fix).
+    """
+    from aws_tui.domain import transfer_journal as tj_module
+
+    directory_syncs: list[Path] = []
+    real = tj_module._fsync_directory
+
+    def recording(path: Path) -> None:
+        directory_syncs.append(path)
+        real(path)
+
+    monkeypatch.setattr(tj_module, "_fsync_directory", recording)
+
+    journal = TransferJournal(base_dir=tmp_path)
+    transfer_id = journal.begin(source_uri="s", destination_uri="d")
+    assert len(directory_syncs) == 1, (
+        "the new journal's directory entry was not made durable on creation"
+    )
+
+    journal.record_part(transfer_id, part_index=1, etag="e", bytes_written=10)
+    journal.record_part(transfer_id, part_index=2, etag="f", bytes_written=10)
+    assert len(directory_syncs) == 1, (
+        f"{len(directory_syncs) - 1} extra directory fsyncs on appends — the "
+        "per-append cost the creation flag exists to avoid is back"
+    )

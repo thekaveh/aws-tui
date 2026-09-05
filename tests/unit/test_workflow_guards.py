@@ -301,6 +301,45 @@ def test_release_runs_behavioral_tests_on_non_linux_platforms_before_publish() -
     }
 
 
+def test_ci_and_release_run_the_lowest_dependency_job_identically() -> None:
+    """The two copies of ``lowest-supported-dependencies`` must not drift.
+
+    They were guarded asymmetrically: the ci.yml assertions required
+    ``moto[server,s3]>=5`` and the release.yml ones did not, so when 98ef18ef
+    added moto to ci.yml without touching release.yml, nothing noticed. Both
+    jobs run the same six test files, and collecting
+    ``tests/unit/domain/test_sql_policy.py`` imports
+    ``tests/unit/domain/conftest.py``, which imports ``moto.server`` at module
+    scope. The release copy therefore exited 4 at collection — and since it only
+    runs on a ``v*`` tag, and none has been pushed since v0.7.0, it had never
+    executed. Compare the two directly rather than asserting a needle twice.
+    """
+    ci = _workflow(".github/workflows/ci.yml")
+    release = _workflow(".github/workflows/release.yml")
+
+    def _steps(workflow: object) -> tuple[str, str]:
+        install = _step(
+            workflow, "lowest-supported-dependencies", "install declared minimum dependencies"
+        )["run"]
+        exercise = _step(
+            workflow, "lowest-supported-dependencies", "exercise minimum dependency runtime"
+        )["run"]
+        return install, exercise
+
+    ci_install, ci_exercise = _steps(ci)
+    release_install, release_exercise = _steps(release)
+
+    def _normalise(block: str) -> tuple[str, ...]:
+        return tuple(line.strip() for line in block.splitlines() if line.strip())
+
+    assert _normalise(ci_install) == _normalise(release_install), (
+        "ci.yml and release.yml install different dependencies for the same job"
+    )
+    assert _normalise(ci_exercise) == _normalise(release_exercise), (
+        "ci.yml and release.yml run different test files for the same job"
+    )
+
+
 def test_release_checks_declared_minimum_s3_dependency_models_before_publish() -> None:
     workflow = _workflow(".github/workflows/release.yml")
     job = workflow["jobs"]["lowest-supported-dependencies"]

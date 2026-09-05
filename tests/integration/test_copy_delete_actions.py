@@ -223,3 +223,49 @@ async def test_switching_to_settings_cancels_active_copy_worker(
         await pilot.pause()
 
         await asyncio.wait_for(fs.read_cancelled.wait(), timeout=2.0)
+
+
+@pytest.mark.asyncio
+async def test_delete_worker_does_not_cancel_an_in_flight_copy(
+    app_context_factory: AppContextBuilder,
+) -> None:
+    """Copy and delete must not share an exclusive worker group.
+
+    ``exclusive=True`` cancels the group's prior worker, and the copy worker
+    awaits the entire byte-streaming batch — so confirming a delete killed a
+    running transfer mid-batch, leaving a partial object at the destination.
+    ``_run_copy`` catches only ``Exception``, so the resulting ``CancelledError``
+    produced no toast and no log line either.
+    """
+    from aws_tui.app import (
+        _TRANSFER_COPY_GROUP,
+        _TRANSFER_DELETE_GROUP,
+        _TRANSFER_WORKER_GROUPS,
+    )
+
+    assert _TRANSFER_COPY_GROUP != _TRANSFER_DELETE_GROUP
+    # The content-swap cancellation must still reach both.
+    assert set(_TRANSFER_WORKER_GROUPS) == {_TRANSFER_COPY_GROUP, _TRANSFER_DELETE_GROUP}
+
+    cancelled: list[str] = []
+
+    async def _long(name: str) -> None:
+        try:
+            await asyncio.sleep(5)
+        except asyncio.CancelledError:
+            cancelled.append(name)
+            raise
+
+    app = AwsTuiApp(app_context_factory(fs=await _seed_left()))
+    async with app.run_test(size=(120, 40)):
+        app.run_worker(_long("copy"), exclusive=True, group=_TRANSFER_COPY_GROUP)
+        await asyncio.sleep(0)
+        app.run_worker(_long("delete"), exclusive=True, group=_TRANSFER_DELETE_GROUP)
+        await asyncio.sleep(0.05)
+
+        assert cancelled == [], "a delete must not cancel an in-flight copy"
+
+        # Exclusivity within a single group is retained.
+        app.run_worker(_long("copy-2"), exclusive=True, group=_TRANSFER_COPY_GROUP)
+        await asyncio.sleep(0.05)
+        assert cancelled == ["copy"]

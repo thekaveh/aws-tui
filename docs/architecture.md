@@ -231,18 +231,23 @@ subscriptions are disposed on unmount, and VM-owned subscriptions are disposed
 with the VM lifecycle.
 
 ## 1.5. Testing pyramid
-| Tier | Count | What it proves |
+| Tier | Source | What it proves |
 |---|---|---|
-| Unit | Recount with `uv run pytest tests/unit --collect-only -q | tail -1` | VM, domain, infra behavior; isolated local I/O only, with no external services |
-| Snapshot | Recount with `find tests/snapshot/__snapshots__ -name '*.raw' | wc -l` | View rendering against golden SVGs per theme × screen-state combination, plus paired content-presence guards that reject blank-but-valid output |
-| Integration (in-process) | Recount with `uv run pytest tests/integration --collect-only -q | tail -1` | Full-app smoke + regression flows (app pilot, modal forwarding, multi-select, source swap, settings nav-page toggle, expired-SSO probe, etc.) |
-| E2E | Recount with `uv run pytest tests/e2e --collect-only -q | tail -1` | Pilot-driven user journeys |
-| Integration (S3-compatible) | Recount with `uv run pytest -m integration --collect-only -q | tail -1` | Adobe S3Mock via testcontainers (opt-in, `-m integration`) |
+| Unit | `tests/unit` | VM, domain, infra behavior; isolated local I/O only, with no external services |
+| Snapshot | `tests/snapshot` | View rendering against golden SVGs per theme × screen-state combination, plus paired content-presence guards that reject blank-but-valid output |
+| Integration (in-process) | `tests/integration` | Full-app smoke + regression flows (app pilot, modal forwarding, multi-select, source swap, settings nav-page toggle, expired-SSO probe, etc.) |
+| E2E | `tests/e2e` | Pilot-driven user journeys |
+| Integration (S3-compatible) | `-m integration` | Adobe S3Mock via testcontainers (opt-in) |
 
-The default tier total changes as coverage grows. Recount with
-`uv run pytest --collect-only -q | tail -1`; recount snapshot goldens
-with `find tests/snapshot/__snapshots__ -name '*.raw' | wc -l`.
-Opt-in S3-compatible tier: `uv run pytest -m integration`.
+Counts change as coverage grows, so they are not restated here. Recount any
+tier by collecting it:
+
+```bash
+uv run pytest tests/unit --collect-only -q | tail -1
+uv run pytest --collect-only -q | tail -1          # default tiers together
+uv run pytest -m integration --collect-only -q | tail -1
+find tests/snapshot/__snapshots__ -name '*.raw' | wc -l
+```
 
 Run the default tiers (unit + snapshot + e2e + in-process integration)
 with `uv run pytest`. Opt into the S3-compatible tier with

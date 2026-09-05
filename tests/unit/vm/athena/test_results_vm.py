@@ -157,6 +157,34 @@ async def test_results_stop_paging_at_cumulative_row_budget(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
+    "failure",
+    [ProviderError("access denied"), RuntimeError("unexpected client failure")],
+)
+async def test_failed_first_page_leaves_the_pane_in_error_not_loading(
+    failure: Exception,
+) -> None:
+    """A failing initial fetch must surface an error, not spin forever.
+
+    ``load()`` sets ``PaneState.LOADING`` before awaiting the first page and
+    only leaves it via one of its four ``except`` arms. None of those arms was
+    pinned by any test: neutralising the ``ProviderError`` handler left 336
+    tests green while the results pane sat in LOADING with no message and no
+    recovery path. ``_load_more``'s equivalent handler IS covered, which is what
+    made the gap easy to miss.
+    """
+    client = ResultClient({})
+    client.failures[("q-1", None)] = failure
+    vm = make_results_vm(client)
+
+    await vm.load("q-1")
+
+    assert vm.state is not PaneState.LOADING, "results pane stuck in LOADING"
+    assert vm.state is PaneState.ERROR
+    assert vm.error_text, "error state carries no message for the user"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
     ("error", "expected_diagnostics"),
     [
         (ProviderError("access denied"), 0),

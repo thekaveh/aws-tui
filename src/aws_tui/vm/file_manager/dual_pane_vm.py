@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import logging
 from enum import StrEnum
 from typing import TYPE_CHECKING
 
@@ -46,10 +47,23 @@ class FocusedPane(StrEnum):
     RIGHT = "right"
 
 
+_logger = logging.getLogger(__name__)
+
+
 def _drain_refresh_exception(task: asyncio.Task[None]) -> None:
     if task.cancelled():
         return
-    _ = task.exception()
+    exception = task.exception()
+    if exception is None:
+        return
+    # Retrieving the exception silences asyncio's "never retrieved" warning;
+    # discarding it left a background refresh that died on expired credentials
+    # or a dropped connection with NO toast and NO log line, so the pane kept
+    # showing a stale listing and the user saw files that no longer exist.
+    _logger.warning(
+        "pane background refresh failed",
+        extra={"error_type": type(exception).__name__, "error": str(exception)},
+    )
 
 
 def _pane_uri(pane: PaneVM, leaf: str) -> str:
@@ -328,6 +342,14 @@ class DualPaneVM:
             return
         copier = CrossFsCopy(source=src_pane.provider, destination=dst_pane.provider)
         transfer_ids = self._pre_register_pending(targets, src_pane, dst_pane)
+        # Bind both directories ONCE, next to the provider pair already
+        # snapshotted above. Re-reading ``*_pane.path`` per iteration lets a
+        # navigation between two transfers redirect the rest of the batch, and
+        # ``_pre_register_pending`` has already recorded the ORIGINAL paths in
+        # the journal and the transfers overlay — so the record would name a
+        # destination the bytes never reached.
+        src_base = src_pane.path
+        dst_base = dst_pane.path
         # Track which ``transfer_id`` the loop has actually consumed
         # (success, fail, or user-cancel). If an entry's
         # ``_run_one_transfer`` raises, the loop exits early and the
@@ -337,8 +359,8 @@ class DualPaneVM:
         consumed: set[str] = set()
         try:
             for entry, transfer_id in transfer_ids:
-                src_path = src_pane.path.join(entry.entry.name)
-                dst_path = dst_pane.path.join(entry.entry.name)
+                src_path = src_base.join(entry.entry.name)
+                dst_path = dst_base.join(entry.entry.name)
                 # Mark BEFORE awaiting so a raise from
                 # ``_run_one_transfer`` (which has already
                 # ``mark_aborted``-ed its own transfer's journal
@@ -406,14 +428,22 @@ class DualPaneVM:
             return
         mover = CrossFsMove(source=src_pane.provider, destination=dst_pane.provider)
         transfer_ids = self._pre_register_pending(targets, src_pane, dst_pane)
+        # Bind both directories ONCE, next to the provider pair already
+        # snapshotted above. Re-reading ``*_pane.path`` per iteration lets a
+        # navigation between two transfers redirect the rest of the batch, and
+        # ``_pre_register_pending`` has already recorded the ORIGINAL paths in
+        # the journal and the transfers overlay — so the record would name a
+        # destination the bytes never reached.
+        src_base = src_pane.path
+        dst_base = dst_pane.path
         # See ``copy_across`` for the rationale on the ``consumed``
         # set — mid-batch failure must not strand PENDING journal
         # entries for ids the loop never reached.
         consumed: set[str] = set()
         try:
             for entry, transfer_id in transfer_ids:
-                src_path = src_pane.path.join(entry.entry.name)
-                dst_path = dst_pane.path.join(entry.entry.name)
+                src_path = src_base.join(entry.entry.name)
+                dst_path = dst_base.join(entry.entry.name)
                 # See ``copy_across`` for why consumed.add precedes the await.
                 consumed.add(transfer_id)
                 self._active_transfer_ids.add(transfer_id)
@@ -661,9 +691,11 @@ class DualPaneVM:
                 return_when=asyncio.FIRST_COMPLETED,
             )
         except BaseException:
-            # Outer-worker cancellation (a second ``c``/``d`` press
-            # cancels the prior ``run_worker(group="transfer-ops")``
-            # via exclusive=True; Settings switch; shutdown). Without
+            # Outer-worker cancellation (a second press of the SAME
+            # operation cancels the prior ``run_worker`` via
+            # exclusive=True within its own group; Settings switch;
+            # shutdown). Copy and delete use separate groups, so a
+            # delete no longer cancels an in-flight copy. Without
             # this branch the asyncio.wait raises CancelledError, the
             # finally below only cleans up cancel_task, and copy_task
             # is left running in the background — a multi-MB S3

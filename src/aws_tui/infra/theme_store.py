@@ -7,9 +7,9 @@ Active theme content is the concatenation of four layers (later wins):
    :attr:`ThemeStore.BUILTIN_NAMES`.
 2. The built-in operational pane hierarchy, appended in the same source so
    it can use the built-in theme tokens.
-3. A user-defined ``~/.config/aws-tui/themes/<name>.tcss`` that
+3. A user-defined ``<config-dir>/themes/<name>.tcss`` that
    completely replaces the built-in if present.
-4. A user overlay ``~/.config/aws-tui/theme.tcss`` appended on top of
+4. A user overlay ``<config-dir>/theme.tcss`` appended on top of
    whichever theme is active.
 """
 
@@ -186,12 +186,18 @@ def _theme_filename(name: str) -> str | None:
 
 
 def _read_regular_file(directory: Path, filename: str) -> str | None:
-    """Atomically read a direct regular UTF-8 file without following links.
+    """Atomically read ``filename`` as a direct regular UTF-8 file.
 
-    POSIX pins ``directory`` with a descriptor and opens ``filename`` relative
-    to it with ``O_NOFOLLOW``. Platforms without ``dir_fd`` support use one
-    descriptor plus before/opened/after identity checks. Missing files are
-    optional; present but unsafe, unreadable, or invalid UTF-8 files fail.
+    The symlink guard applies to the LEAF only: ``filename`` itself must not be
+    a symlink, so a theme file cannot resolve outside the directory and inline
+    its target into the stylesheet. ``directory`` IS resolved through symlinks —
+    it is the caller's config home, and refusing a symlinked config directory
+    rejects the ordinary dotfiles layout.
+
+    POSIX opens ``filename`` relative to a ``directory`` descriptor with
+    ``O_NOFOLLOW``. Platforms without ``dir_fd`` support use one descriptor plus
+    before/opened/after identity checks. Missing files are optional; present but
+    unsafe, unreadable, or invalid UTF-8 files raise ``_UnsafeThemeFile``.
     """
     try:
         if _HAS_DIR_FD:
@@ -204,8 +210,12 @@ def _read_regular_file(directory: Path, filename: str) -> str | None:
 
 
 def _read_regular_file_at(directory: Path, filename: str) -> str:
+    # No ``O_NOFOLLOW`` on the directory: the guard exists to stop the theme
+    # *file* being a symlink to somewhere else, and the caller passes the config
+    # home itself. Refusing a symlinked config directory rejects the ordinary
+    # dotfiles layout and made every theme, built-ins included, fail to load.
     directory_flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0)
-    directory_flags |= getattr(os, "O_DIRECTORY", 0) | os.O_NOFOLLOW
+    directory_flags |= getattr(os, "O_DIRECTORY", 0)
     file_flags = (
         os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NONBLOCK", 0) | os.O_NOFOLLOW
     )
@@ -228,7 +238,9 @@ def _read_regular_file_at(directory: Path, filename: str) -> str:
 def _read_regular_file_portable(directory: Path, filename: str) -> str:
     """Descriptor-identity fallback for platforms without ``dir_fd``."""
     candidate = directory / filename
-    directory_before = directory.stat(follow_symlinks=False)
+    # The directory is resolved through symlinks (see ``_read_regular_file_at``);
+    # only the leaf theme file must not be one.
+    directory_before = directory.stat()
     candidate_before = candidate.stat(follow_symlinks=False)
     if not stat.S_ISDIR(directory_before.st_mode) or not stat.S_ISREG(candidate_before.st_mode):
         raise _UnsafeThemeFile(filename)
@@ -236,7 +248,7 @@ def _read_regular_file_portable(directory: Path, filename: str) -> str:
     file_fd = os.open(candidate, os.O_RDONLY | getattr(os, "O_CLOEXEC", 0))
     try:
         opened = os.fstat(file_fd)
-        directory_after = directory.stat(follow_symlinks=False)
+        directory_after = directory.stat()
         candidate_after = candidate.stat(follow_symlinks=False)
         identities = (
             _file_identity(directory_before) == _file_identity(directory_after),

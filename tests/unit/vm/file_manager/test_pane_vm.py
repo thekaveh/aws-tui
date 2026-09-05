@@ -555,3 +555,119 @@ async def test_pane_emits_property_changed_on_state() -> None:
     assert "state" in received
     assert "entries" in received
     pane.dispose()
+
+
+@pytest.mark.asyncio
+async def test_delete_marked_stays_in_the_directory_the_marks_came_from() -> None:
+    """Navigating mid-delete must not redirect the batch.
+
+    ``delete_marked`` runs in a worker while the UI stays live. Resolving the
+    pane's path per iteration let a navigation between two awaits send the
+    remaining deletes into the newly-entered directory, destroying same-named
+    files the user never marked — silently, with no error raised.
+    """
+    fs = InMemoryFS()
+    await fs.mkdir(PathRef(("dirA",)))
+    await fs.mkdir(PathRef(("dirB",)))
+    for name in ("f1", "f2", "f3"):
+        await fs.write_stream(PathRef(("dirA", name)), _astream(b"x"))
+    for name in ("f2", "f3"):
+        await fs.write_stream(PathRef(("dirB", name)), _astream(b"y"))
+
+    deleted: list[str] = []
+    real_delete = fs.delete
+    pane = await _make_pane(fs)
+
+    async def spy(path: PathRef, **kwargs: object) -> None:
+        deleted.append(str(path))
+        if len(deleted) == 1:
+            await pane.navigate_to(PathRef(("dirB",)))
+        await real_delete(path, **kwargs)  # type: ignore[arg-type]
+
+    fs.delete = spy  # type: ignore[method-assign]
+    await pane.navigate_to(PathRef(("dirA",)))
+    for index in range(len(pane.entries)):
+        pane.mark_at(index, marked=True)
+
+    await pane.delete_marked()
+
+    assert deleted == ["/dirA/f1", "/dirA/f2", "/dirA/f3"]
+    assert [entry.name for entry in await fs.list(PathRef(("dirA",)))] == []
+    # The unmarked files in the directory the pane moved to are untouched.
+    assert sorted(entry.name for entry in await fs.list(PathRef(("dirB",)))) == ["f2", "f3"]
+
+
+@pytest.mark.asyncio
+async def test_marked_entries_are_scoped_to_the_visible_filtered_rows() -> None:
+    """Destructive operations must act only on rows the pane is displaying.
+
+    ``marked_entries`` drives copy/move/delete targets, the command predicates
+    and the footer count. Deriving it from every loaded entry meant a mark on a
+    row the active filter hid still participated: filter to one name, press
+    delete, and files the user could not see were destroyed.
+    """
+    fs = await _seed_fs()
+    pane = await _make_pane(fs)
+    for index in range(len(pane.entries)):
+        pane.mark_at(index, marked=True)
+    assert len(pane.marked_entries) == len(pane.entries)
+
+    pane.set_filter_command.execute("a.txt")
+
+    assert [entry.entry.name for entry in pane.filtered_entries] == ["a.txt"]
+    assert [entry.entry.name for entry in pane.marked_entries] == ["a.txt"]
+    # The footer count follows the same property, so it matches the screen.
+    assert pane.viewmodel.selection_count == 1
+
+    pane.set_filter_command.execute("")
+
+    # Marks on hidden rows are retained, not discarded — they simply do not
+    # participate while hidden.
+    assert len(pane.marked_entries) == len(pane.entries)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("name", ["other/moved.txt", "a\\b.txt", "..", "."])
+async def test_rename_rejects_names_that_would_become_paths(name: str) -> None:
+    """A rename must not silently relocate the entry.
+
+    ``PathRef.join`` splits on ``/`` by design, so ``other/moved.txt`` moved the
+    file into another directory and the pane reloaded showing it as vanished.
+    """
+    fs = await _seed_fs()
+    pane = await _make_pane(fs)
+    pane.move_cursor_to(0)
+
+    with pytest.raises(ProviderError, match="single path segment"):
+        await pane.rename_cursor(name)
+
+    with pytest.raises(ProviderError, match="single path segment"):
+        await pane.make_directory(name)
+
+
+@pytest.mark.asyncio
+async def test_marks_are_inert_while_the_pane_is_loading() -> None:
+    """No destructive operation may act on a listing being replaced.
+
+    ``_reload`` enters ``LOADING`` without clearing ``_entries`` — every error
+    branch does clear — and the view renders only the placeholder, so zero rows
+    are on screen. The stale marks still drove the copy/move/delete predicates,
+    the delete targets and the footer count, so on a slow listing ``d`` acted on
+    an invisible selection.
+    """
+    fs = await _seed_fs()
+    pane = await _make_pane(fs)
+    for index in range(len(pane.entries)):
+        pane.mark_at(index, marked=True)
+    assert pane.marked_entries
+
+    pane._set_state(PaneState.LOADING)
+
+    assert pane.marked_entries == ()
+    assert pane.viewmodel.selection_count == 0
+
+    pane._set_state(PaneState.IDLE)
+
+    # The marks themselves are untouched — they simply do not participate
+    # while the listing is in flight.
+    assert len(pane.marked_entries) == len(pane.entries)

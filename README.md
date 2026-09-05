@@ -10,8 +10,8 @@ Linux, and Windows. Powered by
 [VMx](https://github.com/thekaveh/VMx) MVVM framework.
 
 The application combines a Norton-Commander-style S3 file manager, an EMR
-Serverless console, and Unreleased AWS Glue, Amazon Athena, and Iceberg
-inspection workflows.
+Serverless console, and AWS Glue, Amazon Athena, and Iceberg inspection
+workflows, which are unreleased.
 
 > **Status: v0.9.0 development; no package release published** — install from Git
 > until the `aws-tui` project name is available on PyPI. Glue, Athena, and
@@ -110,7 +110,7 @@ inspection workflows.
   SSO cache reads only; no AWS network call. Non-SSO profiles go straight to
   live boto credential-chain validation.
   Honors `$AWS_DEFAULT_PROFILE` and then `$AWS_PROFILE` between
-  `[defaults].connection` and the first-auto fallback so SSO setups where
+  `[defaults].connection` and the first-connection fallback so SSO setups where
   `[default]` has no creds still pick the right profile.
 - **In-flight transfer journal.** Active transfers write durable `begin`
   records under `<cache-dir>/transfers/<id>.jsonl`; successful, skipped,
@@ -237,7 +237,9 @@ If `aws s3 ls` works on your shell but `aws-tui` shows
 `[default]` in `~/.aws/config` has no creds. Export `$AWS_DEFAULT_PROFILE`
 (or `$AWS_PROFILE`) pointing at the working profile and relaunch. The resolver
 uses `[defaults].connection`, then `AWS_DEFAULT_PROFILE`, then `AWS_PROFILE`,
-then the first auto-discovered profile.
+then the first connection in resolver order — which lists every explicit
+`[connections.*]` entry, s3-compatible ones included, ahead of any
+auto-discovered AWS profile.
 
 ### 1.3.1. First-time launch
 
@@ -296,6 +298,10 @@ are indexed below for contributors and repository review.
    21. [Glue/Athena segmented tabs](docs/superpowers/specs/2026-08-23-glue-athena-segmented-tabs-layout-fixes-design.md) — implemented shared segmented-frame and command-legend layout correction.
    22. [Overlay pickers and command handoffs](docs/superpowers/specs/2026-08-24-overlay-pickers-command-handoffs-design.md) — implemented overlay selector, compact command hint, and Glue/Athena handoff design.
    23. [VMx 3.23 maintenance audit](docs/superpowers/specs/2026-08-25-vmx-3-23-maintenance-audit.md) — current compatibility, substitution, line-count, and test-impact record for the VMx 3.23 upgrade.
+   24. [Athena UI contract repair](docs/superpowers/specs/2026-08-27-athena-ui-contract-repair-design.md) — implemented repair of the Athena interaction contracts.
+   25. [Athena controls and clickable commands](docs/superpowers/specs/2026-08-29-athena-controls-clickable-commands-design.md) — implemented clickable command chips and Athena control handoffs.
+   26. [Athena eager Glue prefill](docs/superpowers/specs/2026-08-30-athena-eager-glue-prefill-design.md) — implemented starter-SQL projection into the mounted editor before remote context resolution.
+   27. [Athena query execution repair](docs/superpowers/specs/2026-08-31-athena-query-execution-repair-design.md) — implemented context-relative generated SQL, redacted start-query rejection categories, and square Run/Stop geometry.
 4. **Maintainer-facing**
    1. [Recording todo](docs/recording-todo.md) — asciinema + screenshot artifacts the maintainer still needs to record manually.
    2. [Release procedure](docs/RELEASING.md) — cut-a-release checklist: version bump, CHANGELOG, tag, publish, Homebrew bump.
@@ -328,7 +334,7 @@ preserved when present.
 | Variable | Default | Effect |
 |---|---|---|
 | `AWS_DEFAULT_PROFILE` | unset | Preferred AWS profile at launch when `[defaults].connection` is unset. Takes precedence over `AWS_PROFILE`. |
-| `AWS_PROFILE` | unset | AWS profile fallback after `[defaults].connection` and `AWS_DEFAULT_PROFILE`, before the first auto-discovered profile. |
+| `AWS_PROFILE` | unset | AWS profile fallback after `[defaults].connection` and `AWS_DEFAULT_PROFILE`, before the first connection in resolver order (explicit `[connections.*]` entries precede auto-discovered profiles). |
 | `AWS_DEFAULT_REGION` | unset | Region fallback after an explicit connection region and the selected AWS profile's configured region, before `us-east-1`. |
 | `AWS_CONFIG_FILE` | `~/.aws/config` | Overrides the shared AWS config path used for profile discovery. `~` and environment variables in the value are expanded. |
 | `AWS_SHARED_CREDENTIALS_FILE` | `~/.aws/credentials` | Overrides the shared AWS credentials path used for profile discovery. `~` and environment variables in the value are expanded. |
@@ -342,7 +348,8 @@ aws-tui does not launch AWS CLI SSO setup; run `aws sso login --profile
 <name>` in a terminal when prompted. The app does not read `$PAGER` or
 `$EDITOR` in v0.8.x. The Quick Look full-file `$PAGER` shell-out is spec'd
 but not yet wired (see the
-`[Unreleased] Deferred` block of `CHANGELOG.md`).
+`Deferred / v0.9 roadmap` block in the `[0.8.0]` section of
+`CHANGELOG.md`).
 
 ## 1.7. Localization
 

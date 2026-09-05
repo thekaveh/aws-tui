@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from collections.abc import Awaitable, Callable
 from functools import partial
 from typing import ClassVar
 
@@ -10,8 +9,8 @@ from textual.containers import Vertical
 from textual.css.query import NoMatches
 from textual.widget import Widget
 from textual.widgets import OptionList
-from textual.worker import Worker
 
+from aws_tui.ui.widgets._worker import DeferredWorkerMixin
 from aws_tui.ui.widgets.glue.detail_rows import (
     DetailRows,
     DetailValue,
@@ -23,7 +22,7 @@ from aws_tui.ui.widgets.glue.iceberg_view import GlueIcebergView
 from aws_tui.vm.glue.page_vm import GluePageVM
 
 
-class GlueCatalogView(Widget):
+class GlueCatalogView(DeferredWorkerMixin, Widget):
     DEFAULT_CSS: ClassVar[str] = """
     GlueCatalogView {
         height: 1fr;
@@ -96,17 +95,6 @@ class GlueCatalogView(Widget):
                 partial(self._page_vm.select_table, option_id),
                 group="glue-select-table",
             )
-
-    def _run_lifecycle_worker(
-        self,
-        work: Callable[[], Awaitable[None]],
-        *,
-        group: str,
-    ) -> Worker[None]:
-        async def deferred() -> None:
-            await work()
-
-        return self.run_worker(deferred, exclusive=True, group=group)
 
     def _on_vm_changed(self, _property_name: str) -> None:
         self.call_after_refresh(self._refresh_all)

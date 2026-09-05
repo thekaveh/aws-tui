@@ -14,7 +14,7 @@ from rich.cells import cell_len
 from textual.app import App, ComposeResult
 from textual.containers import Horizontal
 from textual.css.query import NoMatches
-from textual.events import Resize
+from textual.events import Click, Resize
 from textual.geometry import Size
 from textual.widget import Widget
 from textual.widgets import Static
@@ -301,6 +301,57 @@ async def test_hint_chip_click_dispatches_enabled_action_but_not_disabled_action
             await pilot.click(disabled)
             await pilot.pause()
             assert app.dispatched_actions == ["athena.query"]
+    finally:
+        vm.dispose()
+        hub.dispose()
+
+
+async def test_retired_hint_chip_does_not_dispatch_its_action() -> None:
+    """A retired chip must be inert during the rebuild window.
+
+    ``_rebuild_chips`` mounts the new chips, retires the old ones, and only then
+    awaits their removal. A click landing in that window used to be covered only
+    by the ``enabled`` half of ``_HintChip.on_click``'s guard — the ``display``
+    half, which is what ``retire()`` actually sets, was pinned by nothing.
+    Removing ``self.display = False`` from ``retire()`` left 269 tests green
+    while a click on a retired chip still fired its action, destructive ones
+    included.
+    """
+    vm, hub = _athena_hint_vm()
+    app = _HintApp(vm, hub)
+    try:
+        async with app.run_test(size=(245, 62)) as pilot:
+            await pilot.pause()
+            legend = app.query_one(HintLegend)
+            chip = next(
+                candidate
+                for candidate in legend.query(".hint-chip")
+                if candidate.action.action_id == "athena.query"
+            )
+            assert chip.action.enabled
+
+            chip.retire()
+            await pilot.pause()
+            assert not chip.display
+
+            chip.on_click(
+                Click(
+                    widget=chip,
+                    x=0,
+                    y=0,
+                    delta_x=0,
+                    delta_y=0,
+                    button=1,
+                    shift=False,
+                    meta=False,
+                    ctrl=False,
+                )
+            )
+            await pilot.pause()
+
+            assert app.dispatched_actions == [], (
+                "a retired chip dispatched its action during the rebuild window"
+            )
     finally:
         vm.dispose()
         hub.dispose()

@@ -12,20 +12,11 @@ from pathlib import Path
 
 import pytest
 
+from aws_tui.infra.theme_store import ThemeStore
 from tests.snapshot.apps.nav_menu import NavMenuApp
 
-THEMES = [
-    "carbon",
-    "voidline",
-    "lattice",
-    "amber",
-    "solarized-light",
-    "github-light",
-    "one-light",
-    "nord",
-    "dracula",
-    "gruvbox-dark",
-]
+#: Derived from the source of truth; see tests/snapshot/conftest.py::THEMES.
+THEMES = ThemeStore.BUILTIN_NAMES
 TERMINAL_SIZE = (40, 20)
 NARROW_TERMINAL_SIZE = (20, 14)
 

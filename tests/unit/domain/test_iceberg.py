@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 from dataclasses import FrozenInstanceError, fields, is_dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -904,3 +905,63 @@ async def test_inspector_propagates_runner_cancellation_without_retry() -> None:
         await inspector.list_snapshots(TABLE)
 
     assert len(runner.calls) == 1
+
+
+@pytest.mark.parametrize(
+    ("foreign", "why"),
+    [
+        (
+            TableRef("OtherCatalog", "analytics", "order-events", "dev", "us-east-1"),
+            "catalog",
+        ),
+        (TableRef("AwsDataCatalog", "finance", "payroll", "dev", "us-east-1"), "database"),
+        (
+            TableRef("AwsDataCatalog", "analytics", "order-events", "other", "us-east-1"),
+            "connection",
+        ),
+        (
+            TableRef("AwsDataCatalog", "analytics", "order-events", "dev", "eu-west-1"),
+            "region",
+        ),
+    ],
+)
+@pytest.mark.parametrize("method", ["list_partitions", "partition_spec"])
+@pytest.mark.asyncio
+async def test_partition_queries_reject_a_table_outside_the_active_context(
+    foreign: TableRef, why: str, method: str
+) -> None:
+    """`_partition_result` guards its input; that guard was pinned by nothing.
+
+    `_inspect`'s identical `_validate_table` call IS covered, so the protection
+    looked tested. Deleting the one in `_partition_result` left the whole repo
+    suite green while a foreign `TableRef` built and submitted
+    `SELECT * FROM "OtherCatalog"."finance"."payroll$partitions" LIMIT 500`
+    through the CURRENT connection's workgroup — reading another catalog's
+    metadata under this connection's credentials.
+    """
+    runner = RecordingRunner(_query_result(("a",), ()))
+    inspector = IcebergInspector(runner=runner, context=CONTEXT)
+
+    with pytest.raises(ValidationError):
+        await getattr(inspector, method)(foreign)
+
+    assert runner.calls == [], f"a query was submitted for a foreign {why}: {runner.calls!r}"
+
+
+@pytest.mark.parametrize("method", ["list_partitions", "partition_spec"])
+@pytest.mark.asyncio
+async def test_partition_queries_submit_for_a_table_in_the_active_context(method: str) -> None:
+    """Positive control: the guard must not reject the legitimate case.
+
+    Asserts only that the guard let the call through to a submitted query —
+    row-shape mapping is a separate concern with its own tests, so a mapper
+    error here is tolerated on purpose.
+    """
+    runner = RecordingRunner(_query_result(("a",), ()))
+    inspector = IcebergInspector(runner=runner, context=CONTEXT)
+
+    with contextlib.suppress(IcebergMetadataShapeError):
+        await getattr(inspector, method)(TABLE)
+
+    assert runner.calls, "the guard rejected a table that matches the active context"
+    assert "$partitions" in runner.sql

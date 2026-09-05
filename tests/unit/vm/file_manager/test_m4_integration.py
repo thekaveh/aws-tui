@@ -10,6 +10,7 @@ dispose/reconstruct lifecycle works against the actual VM tree.
 
 from __future__ import annotations
 
+import asyncio
 import tempfile
 from collections.abc import AsyncIterator
 from pathlib import Path
@@ -29,12 +30,22 @@ from aws_tui.infra.log_sink import LogSink
 from aws_tui.infra.theme_store import ThemeStore
 from aws_tui.services.s3 import S3Service
 from aws_tui.vm.file_manager.dual_pane_vm import DualPaneVM
+from aws_tui.vm.file_manager.pane_vm import PaneState, PaneVM
 from aws_tui.vm.root_vm import RootVM
 from aws_tui.vm.services_protocol import ServiceDescriptor, ServiceRegistry
 
 
 async def _astream(payload: bytes) -> AsyncIterator[bytes]:
     yield payload
+
+
+async def _settled(pane: PaneVM, *, timeout: float = 2.0) -> None:
+    """Wait until ``pane`` leaves LOADING, or fail with the state it is stuck in."""
+    deadline = asyncio.get_running_loop().time() + timeout
+    while pane.state is PaneState.LOADING:
+        if asyncio.get_running_loop().time() >= deadline:
+            raise AssertionError(f"pane still LOADING after {timeout}s")
+        await asyncio.sleep(0)
 
 
 async def _seed_fs() -> InMemoryFS:
@@ -144,6 +155,15 @@ async def test_m4_switch_to_s3_hosts_dual_pane_vm(tmp_path: Path) -> None:
     assert isinstance(dual, DualPaneVM)
     # The dual pane is constructed by ContentHostVM but setup is deferred.
     await dual.setup()
+    # ``setup()`` awaiting is NOT sufficient. A concurrent background reload can
+    # supersede setup's own: the superseded call sees ``_reload_is_current`` go
+    # False and returns early, having already entered LOADING, so the pane is
+    # left in LOADING with no entries while the winning reload is still in
+    # flight. Asserting straight after setup failed about 1 run in 3 even in
+    # isolation, always as ``assert 'hello.txt' in []``, and a probe confirmed
+    # the provider was correct and the state was LOADING. Wait for the pane to
+    # settle instead of racing it.
+    await _settled(dual.left)
     # Left = S3 (InMemoryFS via factory), right = LocalFS.
     left_names = [e.entry.name for e in dual.left.entries]
     assert "hello.txt" in left_names

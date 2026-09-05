@@ -259,10 +259,15 @@ def test_multipart_part_size_adapts_to_known_large_object() -> None:
 
 
 def test_multipart_part_size_rejects_object_over_s3_limit() -> None:
-    maximum_size = 10_000 * 5 * 1024**3
+    # S3's documented per-object ceiling is 5 TB, not the 48.8 TiB that
+    # `10_000 parts x 5 GiB` happens to allow. This test asserted the multipart
+    # arithmetic maximum while its name claimed to enforce the S3 limit, so an
+    # object ~10x over the real cap passed the guard and only failed after the
+    # entire upload had streamed.
+    maximum_size = 5 * 1024**4
 
-    assert _multipart_part_size(maximum_size) == 5 * 1024**3
-    with pytest.raises(ProviderError, match="50 TB"):
+    assert _multipart_part_size(maximum_size) <= 5 * 1024**3
+    with pytest.raises(ProviderError, match="5 TiB"):
         _multipart_part_size(maximum_size + 1)
 
 

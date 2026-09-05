@@ -297,6 +297,17 @@ class ReadOnlySqlPolicy:
         if isinstance(expression, exp.Command):
             self._validate_command(expression)
             return
+        # Fail CLOSED on anything not explicitly allowed. A few rejected forms
+        # are genuinely read-only — a top-level parenthesized select, a bare
+        # VALUES list — so do not tell the user those "are not read-only"; that
+        # misinforms about a security control. Everything else genuinely is a
+        # write, and keeps the accurate wording. Widening the allow-list to
+        # admit the read-only forms is a change to a security envelope and
+        # belongs in a reviewed change, not an incidental one.
+        if isinstance(expression, (exp.Subquery, exp.Values)):
+            raise QueryRejectedError(
+                f"statement type {expression.key!r} is read-only but not a supported form"
+            )
         raise QueryRejectedError(f"statement type {expression.key!r} is not read-only")
 
     def _validate_describe(self, describe: exp.Describe) -> None:

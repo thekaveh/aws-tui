@@ -50,6 +50,7 @@ from aws_tui.infra.theme_store import ThemeNotFound, ThemeStore
 from aws_tui.ui import notifications
 from aws_tui.ui.actions import ActionRegistry
 from aws_tui.ui.bindings import BindingResolver
+from aws_tui.ui.widgets._worker import DeferredWorkerMixin
 from aws_tui.ui.widgets.athena.page import AthenaPage
 from aws_tui.ui.widgets.brand_banner import BrandBanner
 from aws_tui.ui.widgets.command_palette import CommandPalette
@@ -145,6 +146,16 @@ class _ThemeApplyFailure:
 _SOURCE_SERVICE_IDS = frozenset({"s3", "emr-serverless", "glue", "athena"})
 _GLUE_SERVICE_IDS = frozenset({"glue"})
 _ATHENA_SERVICE_IDS = frozenset({"athena"})
+
+# Copy and delete run in SEPARATE exclusive groups. Sharing one group meant
+# ``exclusive=True`` made a confirmed delete cancel an in-flight copy: the copy
+# worker awaits the whole byte-streaming batch, so it died mid-transfer leaving
+# a partial object at the destination, and because ``_run_copy`` catches only
+# ``Exception`` the ``CancelledError`` produced no toast and no log line.
+# Exclusivity within each group still prevents two concurrent copies.
+_TRANSFER_COPY_GROUP = "transfer-copy"
+_TRANSFER_DELETE_GROUP = "transfer-delete"
+_TRANSFER_WORKER_GROUPS = (_TRANSFER_COPY_GROUP, _TRANSFER_DELETE_GROUP)
 _EMR_SERVICE_IDS = frozenset({"emr-serverless"})
 
 _MODAL_ROUTED_ACTIONS = frozenset(
@@ -466,7 +477,32 @@ def _join_path(base: str, name: str) -> str:
     return f"{base}/{name}"
 
 
-class AwsTuiApp(App[None]):
+def _mutation_log_context(dual: object) -> dict[str, str]:
+    """Identity for a data-mutation log line.
+
+    `app.copy.failed` and `app.delete.failed` are the ONLY log lines covering
+    user data mutation — `src/aws_tui/domain/` and `src/aws_tui/vm/file_manager/`
+    emit none — and they carried just an error and a file count. "My copy
+    failed" therefore produced one context-free line that could not be
+    correlated to a file, bucket or connection.
+    """
+    context: dict[str, str] = {}
+    for side in ("left", "right"):
+        pane = getattr(dual, side, None)
+        path = getattr(pane, "path", None)
+        if path is not None:
+            context[f"{side}_path"] = str(path)
+        provider = getattr(pane, "provider", None)
+        identity = getattr(provider, "storage_identity", None)
+        if identity is not None:
+            context[f"{side}_storage"] = str(identity() if callable(identity) else identity)
+    focused = getattr(dual, "focused_side", None)
+    if focused is not None:
+        context["focused_side"] = str(getattr(focused, "value", focused))
+    return context
+
+
+class AwsTuiApp(DeferredWorkerMixin, App[None]):
     """The aws-tui Textual application.
 
     Composition root, real version. Constructor accepts an optional
@@ -821,9 +857,8 @@ class AwsTuiApp(App[None]):
             # builds a LocalFS-only DualPane directly with a toast
             # telling the user how to recover.
             self._boot_in_flight = True
-            self.run_worker(
-                self._initial_mount_worker(initial_conn=initial_conn),
-                exclusive=True,
+            self._run_lifecycle_worker(
+                partial(self._initial_mount_worker, initial_conn=initial_conn),
                 group="content-mount",
             )
         else:
@@ -1531,10 +1566,20 @@ class AwsTuiApp(App[None]):
         )
 
     async def _cancel_transfer_workers_before_content_swap(self) -> None:
-        """Stop copy/delete workers before disposing the active file panes."""
-        from textual.worker import WorkerCancelled
+        """Stop copy and delete workers before disposing the active file panes.
 
-        workers = self.workers.cancel_group(self, "transfer-ops")
+        Both groups must be cancelled: they are deliberately separate so that
+        confirming a delete does not cancel an in-flight copy.
+        """
+        from textual.worker import Worker, WorkerCancelled
+
+        workers: list[Worker[object]] = []
+        for group in _TRANSFER_WORKER_GROUPS:
+            # Tolerate a falsy return: the real manager yields a list, but
+            # callers stub this and a bare `for ... in None` would raise.
+            cancelled = self.workers.cancel_group(self, group)
+            if cancelled:
+                workers.extend(cancelled)
         if workers:
             results = await asyncio.gather(
                 *(worker.wait() for worker in workers),
@@ -1570,7 +1615,7 @@ class AwsTuiApp(App[None]):
         # Synchronous fallback for the BindingResolver bridge that
         # cannot await. Schedule the async path on the event loop
         # so cleanup still runs instead of being silently dropped.
-        self.run_worker(self.action_quit(), exclusive=True, group="shutdown")
+        self._run_lifecycle_worker(self.action_quit, group="shutdown")
 
     def action_dispatch(self, action_id: str) -> Awaitable[None] | None:
         """Single Textual action behind every resolver-materialized binding.
@@ -2087,7 +2132,11 @@ class AwsTuiApp(App[None]):
 
     async def action_modal_left_or_ascend(self) -> None:
         """In modals, move focus to the previous button; in panes, ascend to parent."""
-        self.record_action("pane.ascend")
+        # Record the id this handler is REGISTERED under. Recording
+        # "pane.ascend" attributed the keystroke to a different action in the
+        # crash-dump ring buffer, which an operator then could not cross-
+        # reference against the keymap.
+        self.record_action("pane.modal_left")
         # In a modal: Left moves arrow-key focus to the previous footer
         # button (or whatever the modal exposes as ``action_focus_prev``).
         # Outside any modal: behaves like ``ascend`` so file-pane
@@ -2101,7 +2150,9 @@ class AwsTuiApp(App[None]):
 
     def action_modal_right(self) -> None:
         """In modals, move focus to the next button. No-op in panes."""
-        self.record_action("modal.focus_next")
+        # "modal.focus_next" exists in neither the ActionRegistry nor the
+        # keymap; use the registered id.
+        self.record_action("pane.modal_right")
         # In a modal: Right moves arrow-key focus to the next footer
         # button. Outside any modal: no-op (panes don't currently bind
         # Right to anything).
@@ -2225,10 +2276,9 @@ class AwsTuiApp(App[None]):
             dialogs = TextualDialogService(self, ctx.confirm_vm, hub=ctx.hub)
             if not await ctx.confirm_vm.ask(request, dialog_service=dialogs):
                 return
-            self.run_worker(
-                self._run_copy(dual, targets, used_cursor_fallback),
-                exclusive=True,
-                group="transfer-ops",
+            self._run_lifecycle_worker(
+                partial(self._run_copy, dual, targets, used_cursor_fallback),
+                group=_TRANSFER_COPY_GROUP,
             )
         finally:
             self._confirmation_pending = False
@@ -2256,6 +2306,7 @@ class AwsTuiApp(App[None]):
                 error=str(exc),
                 error_type=type(exc).__name__,
                 file_count=len(targets),
+                **_mutation_log_context(dual),
             )
             # User feedback: "when a copy or delete fails, I see an
             # error box shown ON the command section at the bottom
@@ -2334,10 +2385,9 @@ class AwsTuiApp(App[None]):
             dialogs = TextualDialogService(self, ctx.confirm_vm, hub=ctx.hub)
             if not await ctx.confirm_vm.ask(request, dialog_service=dialogs):
                 return
-            self.run_worker(
-                self._run_delete(dual, targets, used_cursor_fallback),
-                exclusive=True,
-                group="transfer-ops",
+            self._run_lifecycle_worker(
+                partial(self._run_delete, dual, targets, used_cursor_fallback),
+                group=_TRANSFER_DELETE_GROUP,
             )
         finally:
             self._confirmation_pending = False
@@ -2364,6 +2414,7 @@ class AwsTuiApp(App[None]):
                 error=str(exc),
                 error_type=type(exc).__name__,
                 file_count=len(targets),
+                **_mutation_log_context(dual),
             )
             # See action_copy for the rationale — same Commands-strip
             # paint-over problem when using bare ``self.notify``.
@@ -2398,6 +2449,11 @@ class AwsTuiApp(App[None]):
             return True
 
         picker = ThemePickerVM(
+            # Built-ins ONLY, deliberately: `test_cycle_theme_remains_limited_to_builtins`
+            # pins Shift+T to a predictable quick-cycle over the shipped themes,
+            # while `action_open_themes` offers the full `list_themes()` set
+            # including user themes. The shared "canonical source of truth" the
+            # docstrings mention is the `ThemePickerVM` MODEL, not the theme list.
             themes=ctx.theme_store.BUILTIN_NAMES,
             active_theme=ctx.initial_theme,
             on_pick=_pick_with_toast,
@@ -3304,9 +3360,8 @@ class AwsTuiApp(App[None]):
         # deferred). Skip on 'added' — new connections aren't bound yet.
         if msg.change == "added":
             return
-        self.run_worker(
-            self._reload_panes_for(msg.names, deleted=(msg.change == "deleted")),
-            exclusive=True,
+        self._run_lifecycle_worker(
+            partial(self._reload_panes_for, msg.names, deleted=msg.change == "deleted"),
             group="settings-reload",
         )
 
@@ -3342,10 +3397,8 @@ class AwsTuiApp(App[None]):
                 "external",
                 cancel_table_tasks=True,
             )
-            self.run_worker(
-                self._open_s3_location_request(msg, generation),
-                exclusive=True,
-                group="content-mount",
+            self._run_lifecycle_worker(
+                partial(self._open_s3_location_request, msg, generation), group="content-mount"
             )
             return
         if isinstance(msg, CopyTableReferenceRequest):
@@ -4297,9 +4350,8 @@ class AwsTuiApp(App[None]):
             if selected != "s3":
                 self._boot_in_flight = False
                 self.workers.cancel_group(self, "content-mount")
-                self.run_worker(
-                    self._mount_external_navigation(selected, generation),
-                    exclusive=True,
+                self._run_lifecycle_worker(
+                    partial(self._mount_external_navigation, selected, generation),
                     group="content-mount",
                 )
             return
@@ -4317,17 +4369,15 @@ class AwsTuiApp(App[None]):
         # Textual cancel any in-flight worker in the group before
         # starting the new one.
         if selected == SETTINGS_NAV_ID:
-            self.run_worker(
-                self._mount_external_navigation(selected, generation),
-                exclusive=True,
+            self._run_lifecycle_worker(
+                partial(self._mount_external_navigation, selected, generation),
                 group="content-mount",
             )
         else:
             # Re-use the S3 content if it's already hosted; switch_service
             # is idempotent on the same service_id.
-            self.run_worker(
-                self._mount_external_navigation(selected, generation),
-                exclusive=True,
+            self._run_lifecycle_worker(
+                partial(self._mount_external_navigation, selected, generation),
                 group="content-mount",
             )
 
@@ -4742,11 +4792,10 @@ class AwsTuiApp(App[None]):
             # Claim recovery before yielding to the worker. Textual may surface
             # more than one lifecycle exception while unwinding a failed mount.
             self._content_mount_recovering.add(replacement)
-            self.run_worker(
-                self._recover_content_mount_lifecycle(replacement, host, error),
+            self._run_lifecycle_worker(
+                partial(self._recover_content_mount_lifecycle, replacement, host, error),
                 name="content mount recovery",
                 group="content-mount-recovery",
-                exclusive=True,
             )
             return
         try:

@@ -299,6 +299,84 @@ async def test_rename_file_rejects_existing_virtual_directory(s3_endpoint: str) 
     assert await _drain(await fs.read_stream(PathRef.from_posix("/source"))) == b"source"
 
 
+async def test_delete_refuses_a_name_that_is_both_an_object_and_a_prefix(
+    s3_endpoint: str,
+) -> None:
+    """S3 allows ``logs`` and ``logs/`` to coexist; a delete cannot tell them apart.
+
+    ``list`` surfaces both as separate rows with the same name, and the pane
+    renders them as two independently markable entries. ``PathRef`` carries no
+    kind, so the head_object probe in ``delete`` always resolved to the OBJECT:
+    marking the folder and pressing delete destroyed the same-named file and
+    left the folder standing. Wrong-target data loss, so refuse instead.
+    """
+    await _make_bucket(s3_endpoint, "mybkt")
+    await _put(s3_endpoint, "mybkt", "logs", b"twelve bytes")
+    await _put(s3_endpoint, "mybkt", "logs/app.log", b"inside the folder")
+    fs = _fs(s3_endpoint, bucket="mybkt")
+
+    listed = await fs.list(PathRef())
+    assert sorted((entry.kind, entry.name) for entry in listed) == [
+        (EntryKind.DIRECTORY, "logs"),
+        (EntryKind.FILE, "logs"),
+    ], "both rows must still be listed; the ambiguity is real, not hidden"
+
+    with pytest.raises(ProviderError, match="ambiguous S3 name"):
+        await fs.delete(PathRef.from_posix("/logs"))
+
+    # Nothing was removed.
+    assert await _drain(await fs.read_stream(PathRef.from_posix("/logs"))) == b"twelve bytes"
+    assert (
+        await _drain(await fs.read_stream(PathRef.from_posix("/logs/app.log")))
+        == b"inside the folder"
+    )
+
+
+async def test_recursive_delete_does_not_reach_siblings_sharing_a_name_prefix(
+    s3_endpoint: str,
+) -> None:
+    """Deleting folder ``a/b`` must not touch ``a/bar.txt`` or ``a/backup/``.
+
+    The enumeration uses ``Prefix`` with NO ``Delimiter``, so the trailing slash
+    is the only thing separating a folder from its string-prefix siblings.
+    Removing the ``not`` from ``prefix = f"{key}/" if not key.endswith("/")``
+    left the whole repo suite green while a single folder delete also destroyed
+    every sibling key whose name starts with the same characters.
+    """
+    await _make_bucket(s3_endpoint, "mybkt")
+    await _put(s3_endpoint, "mybkt", "a/b/inside.txt", b"delete me")
+    await _put(s3_endpoint, "mybkt", "a/b/nested/deep.txt", b"delete me too")
+    # Siblings that share "a/b" as a plain string prefix but are NOT inside it.
+    await _put(s3_endpoint, "mybkt", "a/bar.txt", b"keep")
+    await _put(s3_endpoint, "mybkt", "a/b-old.txt", b"keep")
+    await _put(s3_endpoint, "mybkt", "a/backup/x.txt", b"keep")
+    fs = _fs(s3_endpoint, bucket="mybkt")
+
+    await fs.delete(PathRef.from_posix("/a/b"))
+
+    survivors = sorted(entry.name for entry in await fs.list(PathRef.from_posix("/a")))
+    assert survivors == ["b-old.txt", "backup", "bar.txt"], (
+        "recursive delete reached siblings that merely share a name prefix"
+    )
+    assert await _drain(await fs.read_stream(PathRef.from_posix("/a/bar.txt"))) == b"keep"
+    assert await _drain(await fs.read_stream(PathRef.from_posix("/a/backup/x.txt"))) == b"keep"
+
+
+async def test_delete_still_removes_unambiguous_files_and_directories(
+    s3_endpoint: str,
+) -> None:
+    """The ambiguity guard must not cost the ordinary delete paths."""
+    await _make_bucket(s3_endpoint, "mybkt")
+    await _put(s3_endpoint, "mybkt", "plain.txt", b"unambiguous")
+    await _put(s3_endpoint, "mybkt", "folder/child", b"in folder")
+    fs = _fs(s3_endpoint, bucket="mybkt")
+
+    await fs.delete(PathRef.from_posix("/plain.txt"))
+    await fs.delete(PathRef.from_posix("/folder"))
+
+    assert list(await fs.list(PathRef())) == []
+
+
 # ---------------------------------------------------------------------------
 # Error code mapping
 # ---------------------------------------------------------------------------
@@ -309,3 +387,56 @@ async def test_get_missing_raises_not_found(s3_endpoint: str) -> None:
     fs = _fs(s3_endpoint, bucket="mybkt")
     with pytest.raises(NotFoundError):
         await _drain(await fs.read_stream(PathRef.from_posix("/nope")))
+
+
+async def test_listing_a_directory_never_shows_its_own_marker_as_a_row(
+    s3_endpoint: str,
+) -> None:
+    """`mkdir` creates a zero-length `a/` marker; listing `a/` must skip it.
+
+    The `name.endswith("/")`-or-empty suppression was survivable: without it,
+    every aws-tui-created S3 folder showed a phantom `FileEntry(name="",
+    kind=FILE, size=0)` inside itself, and acting on that nameless row targets
+    the directory marker object.
+    """
+    await _make_bucket(s3_endpoint, "mybkt")
+    fs = _fs(s3_endpoint, bucket="mybkt")
+    await fs.mkdir(PathRef.from_posix("/made"))
+    await fs.write_stream(PathRef.from_posix("/made/real.txt"), _agen([b"content"]))
+
+    entries = await fs.list(PathRef.from_posix("/made"))
+
+    names = [entry.name for entry in entries]
+    assert "" not in names, "the directory's own marker rendered as a nameless row"
+    assert names == ["real.txt"]
+
+
+async def test_read_stream_of_a_missing_key_fails_before_yielding_a_stream(
+    s3_endpoint: str,
+) -> None:
+    """The NotFound must surface at the `read_stream` call, not at first read.
+
+    The method's own docstring records why the eager `head_object` probe
+    exists: without it, `cross_fs.copy` opens (and partially writes) the
+    destination before discovering the source is missing — an orphan mid-upload
+    on S3, a truncated file locally. Deleting the probe survived the whole
+    suite because every missing-key test iterated the stream, where the lazy
+    GetObject also fails; none asserted that awaiting `read_stream` ITSELF
+    raises, before any destination could have been opened.
+    """
+    await _make_bucket(s3_endpoint, "mybkt")
+    fs = _fs(s3_endpoint, bucket="mybkt")
+
+    with pytest.raises(NotFoundError):
+        await fs.read_stream(PathRef.from_posix("/does-not-exist.txt"))
+
+
+async def test_read_stream_of_a_present_key_still_streams(s3_endpoint: str) -> None:
+    """Positive control: the probe must not break the happy path."""
+    await _make_bucket(s3_endpoint, "mybkt")
+    await _put(s3_endpoint, "mybkt", "here.txt", b"payload")
+    fs = _fs(s3_endpoint, bucket="mybkt")
+
+    stream = await fs.read_stream(PathRef.from_posix("/here.txt"))
+
+    assert await _drain(stream) == b"payload"

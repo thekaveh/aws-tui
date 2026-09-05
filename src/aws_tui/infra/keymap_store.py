@@ -49,7 +49,14 @@ _TEXTUAL_FRIENDLY_KEY_NAMES: dict[str, str] = {
 def textual_key_name(key: str) -> str:
     """Return the runtime Textual name for a configured key literal."""
     if len(key) != 1:
-        return key
+        # Every Textual key name and modifier is lowercase, and Textual matches
+        # them verbatim, so a configured ``Ctrl+K`` would bind a key no event
+        # ever produces — silently unbinding the action, because an overlay
+        # replaces the defaults wholesale. ``docs/cookbook.md`` documents
+        # exactly that casing, so fold it rather than reject it. Single
+        # characters are left alone: ``K`` and ``k`` are genuinely different
+        # keys.
+        return key.casefold()
     if key.isalnum():
         return key
     try:

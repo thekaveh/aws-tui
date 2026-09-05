@@ -4,9 +4,9 @@ from __future__ import annotations
 
 import pytest
 
-from aws_tui.infra.keymap_store import KeymapStore
+from aws_tui.infra.keymap_store import KeymapStore, textual_key_name
 from aws_tui.ui.actions import ActionRegistry
-from aws_tui.ui.bindings import BindingResolver
+from aws_tui.ui.bindings import BindingResolver, _binding_priority
 
 
 def _registry(*ids: str) -> ActionRegistry:
@@ -110,3 +110,32 @@ def test_duplicate_overlay_key_is_rejected_before_binding_materialization() -> N
         match=r"'y'.*'glue\.copy_table_ref'.*'pane\.copy'",
     ):
         KeymapStore(overlay={"pane.copy": "y"})
+
+
+@pytest.mark.parametrize(
+    ("configured", "equivalent"),
+    [("Space", "space"), ("SPACE", "space"), ("Space", " "), ("Slash", "/")],
+)
+def test_priority_follows_the_runtime_key_not_the_configured_spelling(
+    configured: str, equivalent: str
+) -> None:
+    """Two spellings of one key must not get opposite priority.
+
+    ``Binding(key=...)`` folds the configured literal via ``textual_key_name``
+    while ``_binding_priority`` used to receive the raw token, so ``"Space"``
+    and ``"space"`` bound the same runtime key with opposite priority. A
+    priority App binding is consulted before the focused widget, so the
+    capitalised spelling swallowed the space bar before any editable widget —
+    the pane filter, the Athena editor, the settings form — could see it.
+    """
+    assert textual_key_name(configured) == textual_key_name(equivalent)
+    assert _binding_priority("pane.toggle_select", configured) == _binding_priority(
+        "pane.toggle_select", equivalent
+    )
+
+
+def test_bare_printable_keys_never_take_priority_over_editable_widgets() -> None:
+    for key in ("space", " ", "/", "k", "K", "7", "?"):
+        assert not _binding_priority("pane.toggle_select", key), key
+    for key in ("ctrl+k", "Ctrl+K", "escape", "f1", "enter", "backspace"):
+        assert _binding_priority("pane.toggle_select", key), key

@@ -78,7 +78,14 @@ _DEFAULT_CHUNK_SIZE: int = 8 * 1024 * 1024
 # Multipart bounds from the public S3 API.
 _MAX_MULTIPART_PARTS: int = 10_000
 _MAX_MULTIPART_PART_SIZE: int = 5 * 1024 * 1024 * 1024
-_MAX_OBJECT_SIZE: int = _MAX_MULTIPART_PARTS * _MAX_MULTIPART_PART_SIZE
+# S3's documented per-object ceiling, NOT the multipart arithmetic maximum.
+# `_MAX_MULTIPART_PARTS * _MAX_MULTIPART_PART_SIZE` is 48.8 TiB — what the part
+# limits happen to allow — so the guard admitted objects roughly 10x larger than
+# S3 accepts. An oversized upload then streamed every byte and failed at
+# CompleteMultipartUpload with EntityTooLarge. AWS states the cap as "5 TB";
+# 5 TiB is the conventional reading and is the more permissive of the two, so it
+# cannot reject an upload S3 would have taken.
+_MAX_OBJECT_SIZE: int = 5 * 1024**4
 _MAX_COPY_OBJECT_SIZE: int = 5 * 1024 * 1024 * 1024
 # S3 batch-delete limit.
 _DELETE_BATCH_SIZE: int = 1000
@@ -193,10 +200,6 @@ class S3FS:
         bucket = path.segments[0]
         sub = PathRef(path.segments[1:])
         return bucket, self._key_for(sub)
-
-    @staticmethod
-    def _strip(key: str, prefix: str) -> str:
-        return key[len(prefix) :] if prefix and key.startswith(prefix) else key
 
     # ------------------------------------------------------------------
     # list / stat
@@ -429,6 +432,12 @@ class S3FS:
         if parsed.etag is None:
             raise ProviderError(f"S3 move source has no ETag: {path.as_posix()}")
 
+    @staticmethod
+    async def _prefix_exists(s3: Any, bucket: str, key: str) -> bool:
+        """Return True if any object lives under ``key/``."""
+        probe = await s3.list_objects_v2(Bucket=bucket, Prefix=f"{key}/", MaxKeys=1)
+        return bool(probe.get("Contents") or probe.get("CommonPrefixes"))
+
     async def delete(self, path: PathRef, *, expected_etag: str | None = None) -> None:
         if path.is_root:
             raise ProviderError("cannot delete the S3 filesystem provider root")
@@ -458,6 +467,20 @@ class S3FS:
                         raise _map_client_error(exc, key) from exc
 
                 if file_exists:
+                    # S3 permits an object ``k`` and a prefix ``k/`` to coexist,
+                    # and ``list`` surfaces BOTH as separate rows with the same
+                    # name. ``PathRef`` carries no kind, so the head_object
+                    # probe above cannot tell which row the user marked and
+                    # always resolves to the object: marking the FOLDER and
+                    # deleting destroyed the same-named FILE and left the folder
+                    # standing. Refuse rather than guess, as this method already
+                    # does for bucket deletion.
+                    if await self._prefix_exists(s3, bucket, key):
+                        raise ProviderError(
+                            f"ambiguous S3 name: both an object {key!r} and a "
+                            f"prefix {key + '/'!r} exist, and a delete cannot tell "
+                            "them apart — remove one via the AWS console / CLI"
+                        )
                     await s3.delete_object(Bucket=bucket, Key=key)
                     return
 
@@ -1179,7 +1202,7 @@ def _multipart_part_size(total_size: int | None) -> int:
     if total_size < 0:
         raise ProviderError("S3 upload total_size cannot be negative")
     if total_size > _MAX_OBJECT_SIZE:
-        raise ProviderError("S3 objects cannot exceed 50 TB (48.8 TiB)")
+        raise ProviderError("S3 objects cannot exceed 5 TiB")
     required = (total_size + _MAX_MULTIPART_PARTS - 1) // _MAX_MULTIPART_PARTS
     mebibyte = 1024 * 1024
     rounded_required = ((required + mebibyte - 1) // mebibyte) * mebibyte
