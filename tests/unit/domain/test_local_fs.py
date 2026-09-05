@@ -1603,3 +1603,90 @@ async def test_unrooted_mkdir_and_write_stream_actually_create(tmp_path: Path) -
     written = made / "out.txt"
     await fs.write_stream(PathRef.from_posix(str(written)), _agen([b"payload"]))
     assert written.read_bytes() == b"payload", "unrooted write_stream wrote nothing"
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX unrooted contract")
+async def test_unrooted_directory_publish_validates_its_manifest(tmp_path: Path) -> None:
+    """A staged tree that changed after staging must be refused, not published.
+
+    `_validate_stage_manifest` closes the TOCTOU window between cross_fs's own
+    verification and the rename. Every one of its mutations survived — the
+    unrooted directory-publish path had ZERO test calls — so a tree tampered
+    with after staging published as if intact, and the transactional guarantee
+    failed open.
+    """
+    fs = LocalFS()
+    staged = tmp_path / "stage"
+    staged.mkdir()
+    (staged / "expected.txt").write_bytes(b"expected")
+    destination = tmp_path / "published"
+    staged_ref = PathRef.from_posix(str(staged))
+    manifest = tuple(
+        __import__(
+            "aws_tui.domain.local_fs", fromlist=["_unrooted_stage_manifest"]
+        )._unrooted_stage_manifest(staged)
+    )
+
+    # Tamper AFTER the manifest was captured.
+    (staged / "smuggled.txt").write_bytes(b"tampered in")
+
+    with pytest.raises(ProviderError, match="stage manifest changed"):
+        await fs.atomic_publish_directory_no_replace(
+            staged_ref,
+            PathRef.from_posix(str(destination)),
+            expected_manifest=manifest,
+        )
+
+    assert not destination.exists(), "a tampered stage was published anyway"
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX unrooted contract")
+async def test_unrooted_directory_publish_returns_the_published_revision(
+    tmp_path: Path,
+) -> None:
+    """Positive control, and F12's pin: the publish lands and reports a revision.
+
+    Dropping the final `return _local_etag(...)` made publish return None; in
+    the OVERWRITE path the missing revision left the destination MISSING.
+    """
+    fs = LocalFS()
+    staged = tmp_path / "stage"
+    staged.mkdir()
+    (staged / "file.txt").write_bytes(b"content")
+    destination = tmp_path / "published"
+    manifest = tuple(
+        __import__(
+            "aws_tui.domain.local_fs", fromlist=["_unrooted_stage_manifest"]
+        )._unrooted_stage_manifest(staged)
+    )
+
+    revision = await fs.atomic_publish_directory_no_replace(
+        PathRef.from_posix(str(staged)),
+        PathRef.from_posix(str(destination)),
+        expected_manifest=manifest,
+    )
+
+    assert revision, "publish reported no revision"
+    assert (destination / "file.txt").read_bytes() == b"content"
+    assert not staged.exists(), "the stage was left behind after publishing"
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX unrooted contract")
+async def test_unrooted_claimed_stage_directory_is_owner_only(tmp_path: Path) -> None:
+    """The stage container's 0o700 is the isolation the publish path relies on.
+
+    Staged payloads pass through this directory before publication; at 0o701
+    (or looser) another local user can traverse into a stage mid-transfer. The
+    mode constant was mutable with the suite green — unrooted `claim_directory`
+    had one caller in tests and none asserted the mode.
+    """
+    import stat as stat_module
+
+    fs = LocalFS()
+    claimed = tmp_path / "stage-container"
+
+    await fs.claim_directory(PathRef.from_posix(str(claimed)))
+
+    assert claimed.is_dir()
+    mode = stat_module.S_IMODE(claimed.stat().st_mode)
+    assert mode == 0o700, f"stage container is {mode:o}, not owner-only"
