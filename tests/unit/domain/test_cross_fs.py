@@ -2023,3 +2023,32 @@ async def test_merge_move_reports_success_and_clears_the_emptied_source(
     assert (dst_root / "tree" / "new.txt").read_bytes() == b"new"
     assert (dst_root / "tree" / "existing.txt").read_bytes() == b"existing"
     assert not (src_root / "tree").exists(), "the emptied source directory was left behind"
+
+
+@pytest.mark.parametrize("mover", [False, True], ids=["copy", "move"])
+async def test_a_same_path_transfer_on_one_provider_is_refused_intact(
+    tmp_path: Path, mover: bool
+) -> None:
+    """Copying or moving a file onto itself must refuse, not destroy.
+
+    The canonical-host same-path guard was survivable: with it neutered, an
+    OVERWRITE onto the same physical path proceeds into stage-and-publish,
+    where the backup taken of the "destination" IS the source — and for a move
+    the source delete then runs against the just-published file. The file must
+    survive with its content intact and a ConflictError raised.
+    """
+    (tmp_path / "f.txt").write_bytes(b"original")
+    fs = LocalFS(root=tmp_path)
+    engine = (
+        CrossFsMove(source=fs, destination=fs) if mover else CrossFsCopy(source=fs, destination=fs)
+    )
+    operation = engine.move if mover else engine.copy
+
+    with pytest.raises(ConflictError, match="same path"):
+        await operation(
+            PathRef.from_posix("/f.txt"),
+            PathRef.from_posix("/f.txt"),
+            on_conflict=ConflictResolution.OVERWRITE,
+        )
+
+    assert (tmp_path / "f.txt").read_bytes() == b"original"

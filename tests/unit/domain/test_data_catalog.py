@@ -286,3 +286,32 @@ def test_record_field_order_matches_catalog_contract() -> None:
         ("table_format", TableFormat),
         ("parameters", tuple[tuple[str, str], ...]),
     ]
+
+
+def test_format_markers_are_read_only_from_marker_keys() -> None:
+    """A format word in a NON-marker parameter must not classify the table.
+
+    The `key in marker_keys` operand was survivable: with it forced True, every
+    string parameter value became a marker, so a plain Hive table carrying
+    `comment = "delta"` — or any parameter valued `iceberg` — was classified as
+    that format. The UI then offers Iceberg metadata tabs and time-travel SQL
+    for a table that has none of it.
+    """
+    assert (
+        detect_table_format(
+            {
+                "comment": "delta",
+                "description": "iceberg-adjacent notes",
+                "owner": "hudi-team",
+            },
+            None,
+            "EXTERNAL_TABLE",
+        )
+        is TableFormat.HIVE
+    )
+
+    # Positive control: the same words in a REAL marker key do classify.
+    assert (
+        detect_table_format({"table_type": "ICEBERG"}, None, "EXTERNAL_TABLE")
+        is TableFormat.ICEBERG
+    )

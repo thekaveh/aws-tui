@@ -387,3 +387,25 @@ async def test_get_missing_raises_not_found(s3_endpoint: str) -> None:
     fs = _fs(s3_endpoint, bucket="mybkt")
     with pytest.raises(NotFoundError):
         await _drain(await fs.read_stream(PathRef.from_posix("/nope")))
+
+
+async def test_listing_a_directory_never_shows_its_own_marker_as_a_row(
+    s3_endpoint: str,
+) -> None:
+    """`mkdir` creates a zero-length `a/` marker; listing `a/` must skip it.
+
+    The `name.endswith("/")`-or-empty suppression was survivable: without it,
+    every aws-tui-created S3 folder showed a phantom `FileEntry(name="",
+    kind=FILE, size=0)` inside itself, and acting on that nameless row targets
+    the directory marker object.
+    """
+    await _make_bucket(s3_endpoint, "mybkt")
+    fs = _fs(s3_endpoint, bucket="mybkt")
+    await fs.mkdir(PathRef.from_posix("/made"))
+    await fs.write_stream(PathRef.from_posix("/made/real.txt"), _agen([b"content"]))
+
+    entries = await fs.list(PathRef.from_posix("/made"))
+
+    names = [entry.name for entry in entries]
+    assert "" not in names, "the directory's own marker rendered as a nameless row"
+    assert names == ["real.txt"]
