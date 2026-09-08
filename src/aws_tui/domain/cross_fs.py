@@ -5,8 +5,15 @@ writes to any other (or the same) provider. The two roles are
 symmetric: the same code path runs for local↔local, local↔s3, s3↔s3,
 and any future pair.
 
-For directories, the copy is recursive. Conflict resolution is
-configurable per call:
+For directories, the copy is recursive, but ONLY when the destination
+provider can publish a directory transactionally. ``_require_directory_transaction``
+demands :class:`AtomicNoReplacePublisher`, :class:`AtomicDirectoryPublisher`
+and :class:`ExclusiveDirectoryClaimer`; :class:`LocalFS` implements all three
+and :class:`S3FS` implements none. Copying a directory TO an S3 destination
+therefore raises :class:`ProviderError` before any bytes move, while the
+S3-to-local direction works. See ``docs/services/s3.md`` §1.2.
+
+Conflict resolution is configurable per call:
 
 - ``ERROR``: raise :class:`ConflictError` if a destination file exists.
 - ``OVERWRITE``: replace whatever is at the destination.
@@ -616,7 +623,20 @@ class CrossFsCopy:
             try:
                 if entry.kind == EntryKind.DIRECTORY:
                     observed = await self._destination.stat(path)
-                    if observed.kind != entry.kind or observed.etag != entry.revision:
+                    # Kind only — NOT the revision. The manifest is walked
+                    # deepest-first, so this directory's own children have
+                    # already been removed by the iterations above, and a
+                    # local revision encodes size and mtime/ctime. Comparing
+                    # it here could therefore never succeed for a directory
+                    # that held anything: cleanup always raised "stage
+                    # changed", which surfaced as "overwrite committed but
+                    # backup cleanup failed" and orphaned the previous
+                    # destination in a hidden backup directory forever. An
+                    # empty-directory stage happened to pass, which is why no
+                    # test caught it. The emptiness guarantee does not depend
+                    # on the revision: ``delete_empty_directory`` refuses a
+                    # directory that still has entries and leaves it intact.
+                    if observed.kind != entry.kind:
                         raise ConflictError(f"stage changed: {path.as_posix()}")
                     await self._destination.delete_empty_directory(path)
                 else:

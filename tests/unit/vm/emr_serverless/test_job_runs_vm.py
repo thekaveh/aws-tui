@@ -91,6 +91,40 @@ async def test_select_routes_change_notification() -> None:
 
 
 @pytest.mark.asyncio
+async def test_selection_survives_a_refresh_that_rebuilds_every_item() -> None:
+    """The user's chosen run must outlive the 60-second poll.
+
+    ``_sync_inner_to_pager`` rebuilds the composite on every refresh, and each
+    ``JobRunItemVM`` gets a fresh ``inner``, so ``current`` cannot survive on its
+    own — the restore loop is what carries it. Dropping
+    ``self._inner.current = item.inner`` left the whole repo suite green, while
+    ``selected_id`` fell to ``None`` and ``EmrServerlessPageVM.refresh_job_runs``
+    then re-selected ``runs[0]``. The user's run — and the detail and logs panes
+    following it — jumped to the newest run on every poll. Unlike the
+    applications path there is no selection-store fallback to hide it.
+    """
+    vm, fake = _make()
+    _seed_runs(fake, "a1")
+    vm.set_application("a1")
+    await vm.refresh()
+
+    vm.select("r1")
+    assert vm.selected_id == "r1"
+    first_inner = vm._inner.current  # type: ignore[attr-defined]
+
+    # A poll that actually changes the list is what forces the rebuild. An
+    # identical-data refresh reuses the existing items, so the restore loop is
+    # never reached and the test would pass without it.
+    fake.add_job_run(application_id="a1", job_run_id="r5", state=JobRunState.RUNNING)
+    await vm.refresh()
+
+    assert vm._inner.current is not first_inner, (  # type: ignore[attr-defined]
+        "items were not rebuilt, so this test cannot exercise the restore"
+    )
+    assert vm.selected_id == "r1", "poll silently moved the user's selection"
+
+
+@pytest.mark.asyncio
 async def test_set_application_with_none_clears_list() -> None:
     vm, fake = _make()
     _seed_runs(fake, "a1")

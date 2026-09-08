@@ -16,10 +16,11 @@ from textual.widgets import Static
 from vmx import Message, MessageHub
 
 from aws_tui.infra.redaction import redact_text
+from aws_tui.ui.widgets._worker import DeferredWorkerMixin
 from aws_tui.vm.chrome.quick_look_vm import QuickLookVM
 
 
-class QuickLook(ModalScreen[None]):
+class QuickLook(DeferredWorkerMixin, ModalScreen[None]):
     """Quick Look modal."""
 
     BINDINGS = [  # noqa: RUF012
@@ -60,10 +61,9 @@ class QuickLook(ModalScreen[None]):
                 )
 
     def on_mount(self) -> None:
-        self.run_worker(
-            self._load_preview(),
+        self._run_lifecycle_worker(
+            self._load_preview,
             group="quick-look-preview",
-            exclusive=True,
             exit_on_error=False,
         )
 

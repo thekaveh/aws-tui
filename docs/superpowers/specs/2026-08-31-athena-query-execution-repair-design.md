@@ -1,8 +1,8 @@
-# 1. Athena Query Execution Repair Design
+# Athena Query Execution Repair Design
 
 **Status:** Implemented and verified on 2026-08-31.
 
-## 1.1. Problem
+## 1. Problem
 
 The Athena Query view has two related usability failures on real AWS:
 
@@ -22,7 +22,7 @@ first component of a three-part SQL table name and as
 and table because the handoff resolves and validates the exact Athena catalog
 and database before enabling Run.
 
-## 1.2. Query And Request Contract
+## 2. Query And Request Contract
 
 Glue-generated starter SQL will use a quoted, context-relative table name:
 
@@ -44,7 +44,7 @@ typed, non-retried configuration error.
 No rejected submission is retried automatically. A retry with changed SQL or
 request identity could make an ambiguous network outcome execute twice.
 
-## 1.3. Actionable Safe Errors
+## 3. Actionable Safe Errors
 
 The domain boundary will keep mapping boto errors into app-owned provider
 types. Known `InvalidRequestException` families will gain stable, sanitized
@@ -61,7 +61,7 @@ names, database names, table names, request tokens, or unclassified AWS error
 text. Authentication, authorization, throttling, reachability, and missing
 result configuration keep their existing typed behavior.
 
-## 1.4. Query Controls
+## 4. Query Controls
 
 Run and Stop will use a fixed `5x3` terminal-cell footprint. The visible border
 spans four conventional half-width character intervals and two row intervals,
@@ -73,7 +73,7 @@ Terminal applications cannot know every font's pixel aspect ratio, so the
 contract is exact terminal geometry plus a visually square result under normal
 monospace terminal metrics, rather than a universal pixel-square guarantee.
 
-## 1.5. Verification
+## 5. Verification
 
 Focused tests will cover:
 

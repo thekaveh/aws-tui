@@ -1,4 +1,4 @@
-# 1. aws-tui
+# aws-tui
 
 Cross-platform terminal UI for AWS and S3-compatible services, powered by
 Textual and the VMx MVVM framework.

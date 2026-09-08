@@ -1,4 +1,4 @@
-# 1. EMR Serverless service — v1 design
+# EMR Serverless service — v1 design
 
 **Status:** design accepted in brainstorming session 2026-06-25; PR-A (read-only browser) shipped via PRs #76–#82; the **clone-job-run modal originally scoped to PR-C shipped early in PR #83** alongside the user-feedback batch (it was the most-requested daily-driver action and was small enough to land out-of-band). **PR-B logs surface shipped on branch ``feat/emr-job-run-logs-pane``** (S3 streaming + regex filter + on-demand fetch via `Enter`/`r`/`f` bindings, with cache + progress feedback). PR-B scope: ``stdout`` / ``stderr`` streaming with the default filter set. Out of scope for v1 (logged for v1.1): CloudWatch Logs as an alternative source, tail-follow for live runs, multi-file interleaved view, in-memory re-filter without re-download, slash-search inside the loaded buffer. Remainder of PR-C (vanilla blank-form submit) and PR-D (E2E journey + memory) follow.
 **Author:** assistant, 2026-06-25.
@@ -11,9 +11,9 @@ The design is the second concrete `Service` in the registry (after S3) and valid
 
 ---
 
-## 1.1. Architecture
+## 1. Architecture
 
-### 1.1.1. Module breakdown
+### 1.1. Module breakdown
 
 ```
 src/aws_tui/
@@ -41,13 +41,13 @@ src/aws_tui/
         └── submit_modal.py       ← ConfirmModal-pattern submission form
 ```
 
-### 1.1.2. No speculative Protocol layer
+### 1.2. No speculative Protocol layer
 
 The first draft of this design proposed an `EmrServerlessProvider` Protocol "so tests can swap an in-memory fake". On reflection that's over-engineering: the S3 service does NOT have an "S3 provider Protocol" — `S3FS` is a concrete class that owns its `aioboto3.Session` directly, and tests stub `boto3` calls inline. A Protocol with one implementation adds a layer with zero abstraction value.
 
 **One Protocol does earn its place: `LogSource`** (see §5 Logs). EMR's S3 source and a future CloudWatch Logs source will satisfy the same Protocol, justifying the abstraction — same rationale as `FileSystemProvider` for S3FS/LocalFS.
 
-### 1.1.3. Service registration
+### 1.3. Service registration
 
 `EmrServerlessService.supports(connection)` returns `connection.kind == "aws"`. The EMR service row appears only on AWS connections; on an s3-compatible connection it disappears via the existing `NavMenuVM._rebuild_items()` flow. Registration in `composition.build_app_context`:
 
@@ -57,7 +57,7 @@ emr_service = EmrServerlessService(hub=hub, dispatcher=dispatcher)
 registry.register(cast("Service", emr_service))
 ```
 
-### 1.1.4. Service descriptor
+### 1.4. Service descriptor
 
 ```python
 ServiceDescriptor(
@@ -85,15 +85,15 @@ ServiceDescriptor(
 > current service rail renders `EMR`; `icon` remains reserved descriptor
 > metadata, with Settings as the only rail row that renders its gear icon.
 
-### 1.1.5. VMx lifecycle
+### 1.5. VMx lifecycle
 
 `EmrServerlessPageVM` is built fresh per mount inside `EmrServerlessService.build_vm` — never as a singleton in `ContentHostVM` (per the `vmx-content-host-singleton-trap` memo). All sub-VMs (`ApplicationsVM`, `JobRunsVM`, `JobRunDetailVM`, `LogViewVM`, `SubmitFormVM`) construct under the page VM's `construct()` and dispose in reverse-construction order when ContentHost swaps away.
 
 ---
 
-## 1.2. Layout & navigation
+## 2. Layout & navigation
 
-### 1.2.1. Page composition
+### 2.1. Page composition
 
 ```
 ┌─ EMR Serverless ─────────────────────────────────┐
@@ -117,13 +117,13 @@ ServiceDescriptor(
 └──────────────────┴───────────────────────────────┘
 ```
 
-### 1.2.2. Three resource levels, reachable in two taps max
+### 2.2. Three resource levels, reachable in two taps max
 
 1. **Application** — top-strip dropdown. Arrow keys + Enter navigate, auto-selects last-used per session. Application state glyph appears next to the name.
 2. **Job runs** — LEFT pane. Newest-first sort by `createdAt`. State-glyph chip filter row at top (`✓ SUCCESS`, `● RUNNING`, `⏸ PENDING`, `✗ FAILED`, `⊘ CANCELLED`). Default = all states.
 3. **Job-run detail** — RIGHT pane. Master/detail linked to LEFT cursor.
 
-### 1.2.3. Keybindings
+### 2.3. Keybindings
 
 | Key | Action | Scope |
 |---|---|---|
@@ -141,7 +141,7 @@ ServiceDescriptor(
 
 `1`–`5` is intentionally **pane-scoped** (state filters when LEFT is focused, log-level filters when RIGHT is focused). The HintLegend at the footer shows the active set, so the meaning is always visible.
 
-### 1.2.4. Application picker dropdown
+### 2.4. Application picker dropdown
 
 Textual ships no native dropdown. v1 uses an **`OptionList`-in-a-popover** widget (~1 day to build) that:
 - mounts above the top strip as a floating layer when opened;
@@ -150,7 +150,7 @@ Textual ships no native dropdown. v1 uses an **`OptionList`-in-a-popover** widge
 
 Alternative considered + rejected: horizontal scrolling app-chip row at the top. Rejected because users typically have 5–20 applications and a chip row past ~5 entries needs horizontal scroll, which is worse UX than a dropdown.
 
-### 1.2.5. Empty states
+### 2.5. Empty states
 
 | Condition | Surface |
 |---|---|
@@ -158,17 +158,17 @@ Alternative considered + rejected: horizontal scrolling app-chip row at the top.
 | Selected app has zero job runs | LEFT pane EMPTY state; RIGHT pane prompts `Press [b]+[/] to submit your first job` |
 | No `logUri` configured on application | log pane shows `Log destination not configured on this application — enable S3 logging in the application's monitoring config and re-run` |
 
-### 1.2.6. Tab cycle
+### 2.6. Tab cycle
 
 Two slots exactly: LEFT ↔ RIGHT. Application picker is reached via `a`, never via Tab. This matches PR #66's lesson — a 3-slot cycle reads as "two idle Tab presses inside the rail" and was an active UX bug we fixed on S3.
 
 ---
 
-## 1.3. Design language reuse (consistency commitment)
+## 3. Design language reuse (consistency commitment)
 
 Every EMR surface inherits from existing chrome. No reinvented patterns. If EMR ever drifts from a row in this table, the test for that row is the regression.
 
-### 1.3.1. Pane chrome
+### 3.1. Pane chrome
 
 | Detail | Rule | Reference |
 |---|---|---|
@@ -177,7 +177,7 @@ Every EMR surface inherits from existing chrome. No reinvented patterns. If EMR 
 | Border title | top — live path/identity | matches `Pane._apply_border_title` |
 | Border subtitle | bottom — connection identity (e.g. `kaveh-dev · us-east-1`) | matches `Pane._apply_border_title` |
 
-### 1.3.2. Selected-row look
+### 3.2. Selected-row look
 
 ```css
 .entry-row.-selected { background: $bg-sel; color: $text; }
@@ -185,15 +185,15 @@ Every EMR surface inherits from existing chrome. No reinvented patterns. If EMR 
 
 No `text-style: bold`. Identical to S3 pane rows and NavMenu option highlight per PR #66, with the post-maintenance contrast update that uses `$text` on `$bg-sel`. The chip-filter row uses the same `$bg-sel` + `$text` shape when activated.
 
-### 1.3.3. Tab cycle
+### 3.3. Tab cycle
 
 Exactly two slots on the EMR page: LEFT (job runs) ↔ RIGHT (detail). No NAV detour, no 3-slot or 4-slot variants. Per PR #66.
 
-### 1.3.4. Shortcut commands
+### 3.4. Shortcut commands
 
 All EMR keys registered via the `ActionRegistry` + `KeymapStore` (same path S3 and Settings use). HintLegend at the footer shows the EMR-page chips when the page is active. The BindingResolver path is still deferred (`deferred-from-m6`); v1 declares keys in the page widget's `BINDINGS` and adds them to the existing global keymap — same trick the S3 page uses today.
 
-### 1.3.5. Dialogs / confirmations
+### 3.5. Dialogs / confirmations
 
 Reuses `ConfirmModal` verbatim. No new modal class.
 
@@ -203,13 +203,13 @@ Reuses `ConfirmModal` verbatim. No new modal class.
 
 Buttons follow PR #73's contract: both look neutral at rest; first `right`/`tab` lands on the right button (Confirm/Stop), first `left` lands on the left button (Cancel/Keep). Modal title gets the `margin-bottom: 1` gap from PR #72.
 
-### 1.3.6. Submit modal
+### 3.6. Submit modal
 
 `EmrSubmitJobModal` is a **new** widget but **structurally a `ConfirmModal`-shaped layout**: `Container` with `.modal-title`, body inputs labelled like `.modal-path-label` + `.modal-path-value`, footer with `ModalButton`. Uses the same `ModalButton` widget (neutral at rest, `$accent` on focus). Inputs use `ConnectionFormInline`'s validation pattern (`-invalid` class on bad data).
 
 **Pin:** `EmrSubmitJobModal` must remain a snapshot-test sibling of `ConfirmModal` across all 10 themes. Any visual divergence is a regression.
 
-### 1.3.7. Toasts
+### 3.7. Toasts
 
 All EMR notifications go through `aws_tui.ui.notifications` (PR #75). New `Subject` literal entry: `"Job"`. `Transfer` stays scoped to its existing file-transfer overlay meaning.
 
@@ -225,7 +225,7 @@ All EMR notifications go through `aws_tui.ui.notifications` (PR #75). New `Subje
 | EMR API throttled | `advise` | `Source` | `⚠  Source: EMR throttled — backing off` |
 | Application no longer exists (race with delete) | `advise` | `Job` | `⚠  Job: application no longer exists — picking next` |
 
-### 1.3.8. State indicators
+### 3.8. State indicators
 
 EMR pane state mirrors `PaneState`. Same enum values, same placeholder rendering, same `r`-to-retry contract.
 
@@ -238,7 +238,7 @@ EMR pane state mirrors `PaneState`. Same enum values, same placeholder rendering
 | `AUTH_REQUIRED` | NoCredentialsError / token expired | both panes; suggests `aws sso login --profile X` |
 | `FORBIDDEN` | IAM denied | both panes; surfaces the error text |
 
-### 1.3.9. Theme tokens
+### 3.9. Theme tokens
 
 Every color in EMR-page CSS is one of: `$bg`, `$bg-elev`, `$bg-sel`, `$accent`, `$accent-soft`, `$rule-dim`, `$success`, `$warning`, `$danger`, `$text`, `$text-muted`. **No hex literals.** No `$accent-hot`. Theme-aware state-glyph colors:
 
@@ -252,21 +252,21 @@ Every color in EMR-page CSS is one of: `$bg`, `$bg-elev`, `$bg-sel`, `$accent`, 
 
 Identical to `TransferRowWidget` state colors (PR #50).
 
-### 1.3.10. NavMenu
+### 3.10. NavMenu
 
 `EmrServerlessService` registers in `ServiceRegistry`. The rail picks up the entry, the `▌` ribbon prefix on selection, expand/collapse via `m`, and the tooltip-on-hover (PR #61). No new widget code at this layer.
 
-### 1.3.11. Snapshot tests
+### 3.11. Snapshot tests
 
 Every new EMR widget gets a snapshot PLUS a content-presence guard (per PR #53 / #63). Required at minimum: `application_picker`, `job_runs_pane`, `job_run_detail_pane`, `log_view`, `submit_modal` — each across the 10 themes, each paired with `assert "<expected glyph or label>" in svg`.
 
 ---
 
-## 1.4. Submit-job-run flow
+## 4. Submit-job-run flow
 
 Two entry points, **one modal**: `+` for vanilla (blank form), `c` for clone-and-edit (pre-filled from focused run).
 
-### 1.4.1. Modal layout
+### 4.1. Modal layout
 
 ```
 ┌─ Submit job to etl-pipeline-1 ──────────────────────────┐
@@ -294,7 +294,7 @@ Two entry points, **one modal**: `+` for vanilla (blank form), `c` for clone-and
 └─────────────────────────────────────────────────────────┘
 ```
 
-### 1.4.2. Fields & validation
+### 4.2. Fields & validation
 
 | Field | Type | Required | Validation (`-invalid` trigger) |
 |---|---|---|---|
@@ -306,7 +306,7 @@ Two entry points, **one modal**: `+` for vanilla (blank form), `c` for clone-and
 
 Live validation via `Input.Changed` (same path `ConnectionFormInline` uses). Submit button enabled only when entry point is non-empty AND no field has `-invalid`.
 
-### 1.4.3. Clone-and-edit mode
+### 4.3. Clone-and-edit mode
 
 ```python
 def open_for_clone(self, source: JobRunDetail) -> None:
@@ -321,14 +321,14 @@ def open_for_clone(self, source: JobRunDetail) -> None:
 
 Title changes to `Submit job to <app> · cloned from j-abc`. Behaviourally identical to vanilla beyond pre-filling.
 
-### 1.4.4. Worker pattern
+### 4.4. Worker pattern
 
 `SubmitJobRunCommand` runs in `run_worker(exclusive=True, group="emr-submit")` so a double-click on Submit can't fire twice. The button transitions to a LOADING look (`text-style: dim`, label `Submitting…`) while in flight.
 
 - **On success:** dismiss the modal → `notifications.success(subject="Job", "submitted <new-run-id> to <app>")` → refresh the job-runs list (new RUNNING row appears within ~1s).
 - **On failure:** keep the modal open → inline error banner above footer with boto3's `error_message` → `notifications.error(subject="Job", "submit failed: <code>", action="see log")`. User edits + retries.
 
-### 1.4.5. Boto3 surface
+### 4.5. Boto3 surface
 
 ```python
 EmrServerlessClient.start_job_run(
@@ -348,7 +348,7 @@ EmrServerlessClient.start_job_run(
 
 The `submitted-via=aws-tui` tag gives the user a filter handle in the AWS console and helps distinguish TUI traffic from console traffic.
 
-### 1.4.6. Out of scope for v1
+### 4.6. Out of scope for v1
 
 - Configuration overrides (capacity, network, monitoring) — inherited from the application defaults.
 - Hive-type jobs — Spark only. Modal title says "Submit Spark job to …" so the constraint is explicit.
@@ -356,11 +356,11 @@ The `submitted-via=aws-tui` tag gives the user a filter handle in the AWS consol
 
 ---
 
-## 1.5. Logs surface
+## 5. Logs surface
 
 The "monitor" half of submit/list/monitor. Designed as a reusable primitive: a future CloudWatch Logs service plugs the same `LogViewVM` into a different upstream.
 
-### 1.5.1. Path discovery
+### 5.1. Path discovery
 
 ```
 Application.monitoringConfiguration.s3MonitoringConfiguration.logUri
@@ -370,7 +370,7 @@ Application.monitoringConfiguration.s3MonitoringConfiguration.logUri
 
 If `logUri` is missing (S3 logging disabled), the log pane shows the `Log destination not configured…` placeholder from §2.
 
-### 1.5.2. Auto-refresh strategy (range-GET, not re-download)
+### 5.2. Auto-refresh strategy (range-GET, not re-download)
 
 ```
 loop:
@@ -396,7 +396,7 @@ Range-GET on a growing log means the second tick fetches only the newly-flushed 
 
 S3 logs are gzipped per-flush; each flush boundary is a self-contained gzip stream. We decompress incrementally; if a byte boundary doesn't land on a flush boundary, we buffer the tail and prepend on the next tick.
 
-### 1.5.3. Chip filter row
+### 5.3. Chip filter row
 
 ```
 Levels: [ E ] [ W ] [ I ] [ D ] [ T ]   Grep: [ stage_… ]   [ stderr ▾ ]   ●5s
@@ -411,13 +411,13 @@ Levels: [ E ] [ W ] [ I ] [ D ] [ T ]   Grep: [ stage_… ]   [ stderr ▾ ]   �
 
 Chip styling follows §3: resting `$bg` + `$rule-dim`; active `$bg-sel` + `$text`.
 
-### 1.5.4. View bounds + scrolling
+### 5.4. View bounds + scrolling
 
 - Last **2000 matching lines** retained in a deque; older matching lines page out of view but the tempfile retains everything.
 - New matching lines auto-scroll if cursor is at the bottom; if the user scrolls up, auto-scroll pauses and `(↓ N new lines — Enter to follow)` appears at the bottom row.
 - Deque is mutex-protected — the worker can append while the renderer reads.
 
-### 1.5.5. Filter pipeline
+### 5.5. Filter pipeline
 
 ```
 S3 gzip chunk
@@ -440,7 +440,7 @@ last-2000 deque + view
 
 **Continuation-line rule.** Lines with no recognized level token (continuation lines of multi-line Java stack traces) inherit the level of the previous line. A full stack trace doesn't get half-filtered when only `[E]` is active.
 
-### 1.5.6. State indicators (log pane bottom strip)
+### 5.6. State indicators (log pane bottom strip)
 
 | State | Bottom strip |
 |---|---|
@@ -450,7 +450,7 @@ last-2000 deque + view
 | S3 fetch failed | `⚠ s3 unreachable — press r to retry` |
 | No log configured | `Log destination not configured on this application` |
 
-### 1.5.7. Reusable hooks for CloudWatch Logs
+### 5.7. Reusable hooks for CloudWatch Logs
 
 `LogViewVM` constructor accepts an injected `LogSource` Protocol:
 
@@ -463,7 +463,7 @@ class LogSource(Protocol):
 
 `EmrS3LogSource` (lives in `services/emr_serverless/`) implements this against S3. A future `CloudWatchLogSource` implements it against `boto3.client('logs').get_log_events` paging. The chip row, grep input, view bounds, deque, state indicators all stay in `LogViewVM`/`LogView`. This Protocol earns its place because two real sources will satisfy it.
 
-### 1.5.8. Out of scope for v1
+### 5.8. Out of scope for v1
 
 - Multi-stream multiplex (merge stderr + stdout chronologically) — single-stream switcher.
 - Log download / export-visible-view — defer; users `aws s3 cp` themselves.
@@ -472,9 +472,9 @@ class LogSource(Protocol):
 
 ---
 
-## 1.6. Cancel, state filter, lifecycle, auto-refresh
+## 6. Cancel, state filter, lifecycle, auto-refresh
 
-### 1.6.1. Cancel a job run
+### 6.1. Cancel a job run
 
 ```
 focused run in LEFT pane (state ∈ {PENDING, RUNNING})
@@ -496,7 +496,7 @@ EmrServerlessClient.cancel_job_run(app_id, run_id)
 
 The `[x]` chip mirrors PR #50's `transfer-cancel` chip — 1-cell tall, no `border: round`, accent glyph + `$danger` on hover.
 
-### 1.6.2. State filter (LEFT pane)
+### 6.2. State filter (LEFT pane)
 
 ```
 State: [✓][●][⏸][✗][⊘]    ← multi-select, all-on default
@@ -505,7 +505,7 @@ State: [✓][●][⏸][✗][⊘]    ← multi-select, all-on default
 
 Same chip grammar as log-level chips: resting `$bg`+`$rule-dim`, active `$bg-sel`+`$accent-soft`. Glyph colors follow the §3 state table.
 
-### 1.6.3. Application lifecycle (top strip)
+### 6.3. Application lifecycle (top strip)
 
 | App state | Top-strip button | Hotkey | Confirm? |
 |---|---|---|---|
@@ -515,7 +515,7 @@ Same chip grammar as log-level chips: resting `$bg`+`$rule-dim`, active `$bg-sel
 
 API: `EmrServerlessClient.start_application(app_id)` / `stop_application(app_id)`. Toast on either: `announce(subject="Job", "starting/stopping <app>")`. App-state glyph next to dropdown updates on the next poll tick (≤30s).
 
-### 1.6.4. Auto-refresh schedule
+### 6.4. Auto-refresh schedule
 
 Three independent VMx-worker pollers under the page VM:
 
@@ -527,15 +527,15 @@ Three independent VMx-worker pollers under the page VM:
 
 All three share **one** `EmrServerlessClient` with a 5-second response cache so the detail poller's `get_job_run` doesn't race the list poller's `list_job_runs`. The client is injected via constructor.
 
-### 1.6.5. Throttle handling
+### 6.5. Throttle handling
 
 On `ThrottlingException` the affected poller backs off exponentially (5s → 10s → 30s → 60s cap) and raises `advise(subject="Source", "EMR throttled — backing off")`. The next successful call clears the back-off and dismisses the toast.
 
-### 1.6.6. Manual refresh
+### 6.6. Manual refresh
 
 `r` on a focused pane skips the schedule and forces an immediate poll. Same `r`-to-retry contract as the S3 pane. If the pane is in UNREACHABLE/AUTH_REQUIRED, `r` retries from scratch including re-instantiating the boto3 session — handles the "user just did `aws sso login` in another terminal" case.
 
-### 1.6.7. Error states & propagation
+### 6.7. Error states & propagation
 
 | Triggered by | Pane state | Toast | Recovery |
 |---|---|---|---|
@@ -546,7 +546,7 @@ On `ThrottlingException` the affected poller backs off exponentially (5s → 10s
 | `ValidationException` on submit | modal stays open, inline banner | `error(subject="Job", "submit failed: <message>")` | edit + retry |
 | `ThrottlingException` | (transient) | `advise(subject="Source", "EMR throttled — backing off")` | auto-back-off |
 
-### 1.6.8. Out of scope for v1
+### 6.8. Out of scope for v1
 
 - Bulk cancel ("cancel all RUNNING in this app").
 - Reading job-run metrics (CloudWatch vCPU-hours / memory-hours).
@@ -555,9 +555,9 @@ On `ThrottlingException` the affected poller backs off exponentially (5s → 10s
 
 ---
 
-## 1.7. Tests, decomposition, acceptance
+## 7. Tests, decomposition, acceptance
 
-### 1.7.1. Test tiers
+### 7.1. Test tiers
 
 **Unit tier** (fast, no network):
 
@@ -592,11 +592,11 @@ On `ThrottlingException` the affected poller backs off exponentially (5s → 10s
 
 **E2E** — Journey 6 in `tests/e2e/test_journeys.py`: cold-start with valid SSO → select EMR → pick first application → cancel a RUNNING run → confirm via modal → assert state transitions to CANCELLING. No-network mode using mocked client.
 
-### 1.7.2. Decomposition — four shippable PRs
+### 7.2. Decomposition — four shippable PRs
 
 v1 is too big for a single PR. Four pieces, each independently mergeable, each delivering user-visible value.
 
-#### 1.7.2.1. PR-A — Read-only browser (~3 days, ~1.5k LOC)
+#### 7.2.1. PR-A — Read-only browser (~3 days, ~1.5k LOC)
 - `EmrServerlessClient` with `list_applications`, `list_job_runs`, `get_job_run`
 - `EmrServerlessService`, page VM, application picker, job-runs pane, job-run-detail pane (no log surface yet)
 - State filter chips on LEFT pane
@@ -607,7 +607,7 @@ v1 is too big for a single PR. Four pieces, each independently mergeable, each d
 
 **Acceptance:** user can switch to EMR, pick an app, browse runs by state, drill into detail. No log, no submit, no cancel. The 80% read path of daily monitoring.
 
-#### 1.7.2.2. PR-B — Log surface + cancel + lifecycle (~3 days, ~1.5k LOC)
+#### 7.2.2. PR-B — Log surface + cancel + lifecycle (~3 days, ~1.5k LOC)
 - `LogSource` Protocol + `EmrS3LogSource` impl
 - `LogViewVM` + `LogView` widget with chip row, grep, range-GET polling, decompressed tempfile cache
 - `cancel_job_run` on the client + `x` keybinding + ConfirmModal wiring
@@ -617,7 +617,7 @@ v1 is too big for a single PR. Four pieces, each independently mergeable, each d
 
 **Acceptance:** user can monitor a running job, cancel a misbehaving run, lifecycle an app.
 
-#### 1.7.2.3. PR-C — Submit (vanilla + clone) (~3 days, ~1.2k LOC)
+#### 7.2.3. PR-C — Submit (vanilla + clone) (~3 days, ~1.2k LOC)
 
 > **Status (post-PR-83): the clone half shipped early.** PR #83
 > landed `JobRunCloneVM` + `JobRunCloneModal` +
@@ -650,20 +650,20 @@ v1 is too big for a single PR. Four pieces, each independently mergeable, each d
 
 **Acceptance:** user submits a brand-new job AND clones-and-edits an existing run. Full daily-driver loop closed. (Half closed today — clone works; vanilla submit pending.)
 
-#### 1.7.2.4. PR-D — E2E + memory updates (~half a day, no production code)
+#### 7.2.4. PR-D — E2E + memory updates (~half a day, no production code)
 - Journey 6 in `test_journeys.py`
 - CHANGELOG entry: ⚡ EMR Serverless service v1.0
 - Memory file updates for the new service
 - Add `"Job"` to the `Subject` literal in `notifications.py`
 
-### 1.7.3. Open risks
+### 7.3. Open risks
 
 1. **gunzip CPU on every refresh tick.** Decompressing 100 MB of gzip into a Python deque every 5 s would burn CPU. Mitigation: streaming `GzipFile` over the tempfile descriptor, decode line-by-line, never hold a full decompressed copy in memory. Cost amortised across reads.
 2. **Application picker dropdown widget.** Textual has no native dropdown. PR-A builds the `OptionList`-in-a-popover (~1 day). Alternative — horizontal chip row — rejected because users with >5 apps would need horizontal scroll.
 3. **Boto session sharing across services.** S3 builds its own `aioboto3.Session` per `Connection`. EMR does the same. When the active AWS connection changes, both services rebuild. The existing `ConnectionChangedMessage` hub fanout handles this — regression test `test_switch_aws_connection_rebuilds_emr_client` is in PR-A.
 4. **SSO token expiry mid-poll.** A 5-second detail-poll on a 60-minute job could outlive the SSO token. The error-state propagation in §6 covers this, but the in-flight `LogView` needs to pause polling on AUTH_REQUIRED rather than retry-spam. Handled by the §6 back-off; pinned in a test.
 
-### 1.7.4. What v1 ships
+### 7.4. What v1 ships
 
 - List applications (with state).
 - List job runs per application, filtered by state (multi-select chips).
@@ -674,7 +674,7 @@ v1 is too big for a single PR. Four pieces, each independently mergeable, each d
 - Submit a job — blank form OR cloned-and-edited from any existing run.
 - All design-language commitments from §3 wired across all 10 themes.
 
-### 1.7.5. What v1 deliberately does NOT ship
+### 7.5. What v1 deliberately does NOT ship
 
 - Hive jobs (Spark only).
 - Configuration overrides at submit (capacity, network, monitoring — inherited from app).
@@ -687,6 +687,6 @@ v1 is too big for a single PR. Four pieces, each independently mergeable, each d
 
 ---
 
-## 1.8. Next step
+## 8. Next step
 
 Once this spec is approved, the implementation plan (via the writing-plans skill) decomposes PR-A into per-task work items with file paths, line-level edits where applicable, and pass-criteria. PR-A is the first piece; B/C/D follow in sequence.

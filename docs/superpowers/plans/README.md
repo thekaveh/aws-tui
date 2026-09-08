@@ -1,10 +1,10 @@
-# 1. Implementation Plan Index
+# Implementation Plan Index
 
 This directory contains historical and current implementation plans used to
 stage larger aws-tui changes. These plans are provenance documents: prefer the
 current code, tests, README, and focused specs for the live behavior contract.
 
-## 1.1. Milestone Plans
+## 1. Milestone Plans
 
 1. [Bootstrap M0](2026-06-14-aws-tui-bootstrap-m0.md) — initial repository, packaging, docs, scripts, CI, and source skeleton.
 2. [Infrastructure M1](2026-06-14-aws-tui-infrastructure-m1.md) — config, paths, AWS session, keychain, logging, and infra boundaries.
@@ -14,7 +14,7 @@ current code, tests, README, and focused specs for the live behavior contract.
 6. [UI themes M5](2026-06-14-aws-tui-ui-themes-m5.md) — Textual widgets, themes, snapshots, and app composition.
 7. [Polish M6](2026-06-14-aws-tui-polish-m6.md) — release polish, docs, tests, and final milestone hardening.
 
-## 1.2. Feature And Maintenance Plans
+## 2. Feature And Maintenance Plans
 
 1. [VMx PyPI migration](2026-06-17-vmx-pypi-migration.md) — migration from local/submodule VMx usage to PyPI-resolved VMx.
 2. [Graceful unreachable connections](2026-06-19-graceful-unreachable-connections.md) — unreachable-source state handling and skip-toasts.
@@ -38,10 +38,12 @@ current code, tests, README, and focused specs for the live behavior contract.
 20. [Glue and Athena tab rail](2026-08-23-glue-athena-tab-rail.md) — standalone Glue source framing and selected/focused service tab presentation.
 21. [Glue and Athena segmented tabs and layout fixes](2026-08-23-glue-athena-segmented-tabs-layout-fixes.md) — segmented tab frames, scoped source edges, and responsive command packing.
 22. [Overlay pickers, one-line commands, and Athena handoffs](2026-08-24-overlay-pickers-command-handoffs.md) — implemented stable overlay selectors, compact tooltip-rich commands, and unified Glue-to-Athena table/snapshot actions.
-23. [Athena eager Glue prefill](2026-08-30-athena-eager-glue-prefill.md) — project VM-owned starter SQL before remote Athena setup while gating execution until exact context resolution.
-24. [Athena query execution repair](2026-08-31-athena-query-execution-repair.md) — context-relative Glue SQL, safe actionable Athena rejection categories, and visually square query controls.
+23. [Athena UI contract repair](2026-08-27-athena-ui-contract-repair.md) — repaired the Athena interaction contracts across selectors, tabs, and command routing.
+24. [Athena controls and clickable commands](2026-08-29-athena-controls-clickable-commands.md) — clickable command chips and completed Athena control handoffs.
+25. [Athena eager Glue prefill](2026-08-30-athena-eager-glue-prefill.md) — project VM-owned starter SQL before remote Athena setup while gating execution until exact context resolution.
+26. [Athena query execution repair](2026-08-31-athena-query-execution-repair.md) — context-relative Glue SQL, safe actionable Athena rejection categories, and visually square query controls.
 
-## 1.3. VMx 3.1 Adoption Plans
+## 3. VMx 3.1 Adoption Plans
 
 1. [VMx FormVM S3 settings](2026-07-02-vmx-formvm-s3-settings.md) — replacement of the local settings-form primitive with VMx `FormVM`.
 2. [VMx 3.1 remaining adoption](2026-07-02-vmx-3-1-remaining-adoption.md) — remaining VMx 3.1 substitutions for palette, panes, focus, pagination, modals, and subscriptions.

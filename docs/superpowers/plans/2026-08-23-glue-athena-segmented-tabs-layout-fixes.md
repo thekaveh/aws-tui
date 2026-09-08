@@ -1,4 +1,4 @@
-# 1. Glue and Athena Segmented Tabs and Layout Fixes Implementation Plan
+# Glue and Athena Segmented Tabs and Layout Fixes Implementation Plan
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
@@ -8,7 +8,7 @@
 
 **Tech Stack:** Python 3.12, Textual, VMx, pytest, pytest-textual-snapshot, TCSS, MkDocs.
 
-## 1.1. Global Constraints
+## 1. Global Constraints
 
 - Work only on `codex/fix-segmented-tabs-command-grid`, based on current `develop`.
 - `ServiceTabStrip` remains one logical focus stop; tab ordering, Left/Right wrapping, immediate activation, numeric commands, click, Enter, Space, Tab, and Shift+Tab do not change.
@@ -21,7 +21,7 @@
 
 ---
 
-## 1.2. File Map
+## 2. File Map
 
 - `src/aws_tui/ui/widgets/service_tab_strip.py`: segmented child classes and stable fallback geometry.
 - `src/aws_tui/ui/themes/operational-panes.tcss`: canonical shared segmented-frame colors.
@@ -37,9 +37,9 @@
 
 ---
 
-## 1.3. Task Plan
+## 3. Task Plan
 
-### 1.3.1. Task 1: Render Service Views as One Segmented Frame
+### 3.1. Task 1: Render Service Views as One Segmented Frame
 
 **Files:**
 - Modify: `tests/unit/ui/test_service_tab_strip.py`
@@ -216,7 +216,7 @@ git commit -m "fix(ui): frame service tabs as segments"
 
 ---
 
-### 1.3.2. Task 2: Remove the Detached Glue Source Edge
+### 3.2. Task 2: Remove the Detached Glue Source Edge
 
 **Files:**
 - Modify: `src/aws_tui/ui/themes/amber.tcss`
@@ -306,7 +306,7 @@ git commit -m "fix(ui): scope source header edge to EMR"
 
 ---
 
-### 1.3.3. Task 3: Restore Responsive Athena Command Packing
+### 3.3. Task 3: Restore Responsive Athena Command Packing
 
 **Files:**
 - Modify: `tests/unit/ui/test_chrome_widgets.py`
@@ -391,7 +391,7 @@ git commit -m "fix(ui): pack prime command counts responsively"
 
 ---
 
-### 1.3.4. Task 4: Refresh Visual Contracts and Canonical Documentation
+### 3.4. Task 4: Refresh Visual Contracts and Canonical Documentation
 
 **Files:**
 - Modify: `docs/architecture.md`

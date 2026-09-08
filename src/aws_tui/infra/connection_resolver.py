@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import builtins
 import configparser
+import logging
 import os
 from dataclasses import dataclass
 from pathlib import Path
@@ -23,6 +24,33 @@ from typing import Final
 from aws_tui.infra.config_store import ConfigStore, ConnectionEntry
 from aws_tui.infra.keychain import KeychainBackend
 from aws_tui.infra.redaction import safe_endpoint_display
+
+_logger = logging.getLogger(__name__)
+
+
+def _read_ini(parser: configparser.ConfigParser, path: Path) -> bool:
+    """Read an AWS ini file, tolerating a malformed one.
+
+    ``~/.aws/config`` is written by other tools and by hand, so a duplicate
+    option or a bad encoding is an ordinary state, not an exceptional one.
+    Letting ``configparser`` raise here escaped through
+    ``ConnectionResolver.list()`` into every caller. ``app.py`` guards the call
+    sites it owns so boot survives, but ``S3ConnectionsVM.connections`` is read
+    from ``S3ConnectionsPanel.compose()`` — and a ``compose()`` failure is not
+    delivered to the mount awaiter, so it bypassed the mount guard and reached
+    ``_handle_exception``, tearing the session down. Opening Settings, the one
+    screen that could repair the connections, killed the app.
+    """
+    try:
+        parser.read(path, encoding="utf-8-sig")
+    except (configparser.Error, OSError, UnicodeDecodeError) as exc:
+        _logger.warning(
+            "ignoring unreadable AWS ini file",
+            extra={"path": str(path), "error_type": type(exc).__name__},
+        )
+        return False
+    return True
+
 
 SOURCE_CONFIG: Final[str] = "config"
 SOURCE_AUTO: Final[str] = "auto-aws-profile"
@@ -239,7 +267,7 @@ class ConnectionResolver:
 
         cfg_parser = configparser.ConfigParser()
         if self._aws_config_path.is_file():
-            cfg_parser.read(self._aws_config_path, encoding="utf-8-sig")
+            _read_ini(cfg_parser, self._aws_config_path)
             for section in cfg_parser.sections():
                 if section == "default":
                     name = "default"
@@ -253,7 +281,7 @@ class ConnectionResolver:
 
         creds_parser = configparser.ConfigParser()
         if self._aws_credentials_path.is_file():
-            creds_parser.read(self._aws_credentials_path, encoding="utf-8-sig")
+            _read_ini(creds_parser, self._aws_credentials_path)
             for section in creds_parser.sections():
                 profiles.setdefault(section, None)
 
@@ -303,7 +331,8 @@ class ConnectionResolver:
         if not self._aws_credentials_path.is_file():
             return None, None, None
         parser = configparser.ConfigParser()
-        parser.read(self._aws_credentials_path, encoding="utf-8-sig")
+        if not _read_ini(parser, self._aws_credentials_path):
+            return None, None, None
         if not parser.has_section(profile):
             return None, None, None
         return (

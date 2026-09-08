@@ -1,28 +1,28 @@
-# 1. VMx toolkit adoption — design spec
+# VMx toolkit adoption — design spec
 
 | Field | Value |
 |---|---|
 | Status | Drafted, awaiting brainstorm → plan → execution |
 | Date | 2026-06-28 |
 | Owner | TBD at brainstorm |
-| Driver | Architectural review session 2026-06-28 — see §1.2 |
+| Driver | Architectural review session 2026-06-28 — see §2 |
 | Related | [docs/superpowers/specs/2026-06-13-aws-tui-design.md](2026-06-13-aws-tui-design.md) (M0 design baseline), [docs/architecture.md](../../architecture.md) (current five-layer model), [VMx 2.6.1 source](https://github.com/thekaveh/VMx) |
 | Estimated effort | 4–6 PRs over 2–3 calendar weeks at the project's typical cadence (Phases 1–6) + 1 PR for Phase 7 (focus coordinator) |
 | Target VMx version | `>=2.6.0,<3.0.0` (no version bump required) |
 
 ---
 
-## 1.1. How to use this spec — reading guide for the next worker
+## 1. How to use this spec — reading guide for the next worker
 
 > **Read this entire section before doing anything else.** The spec is the
 > output of three review rounds; trying to act on it without reading the
-> mistakes record (§1.3) and the discipline rules below has a high chance
+> mistakes record (§3) and the discipline rules below has a high chance
 > of repeating those mistakes.
 
 **Read sections in this order:**
 
-1. **§1.1** — what the work delivers and why (two architectural gaps).
-2. **§1.3 — every numbered mistake.** Eight mistakes the prior review went
+1. **§1** — what the work delivers and why (two architectural gaps).
+2. **§3 — every numbered mistake.** Eight mistakes the prior review went
    through. Each one is a trap the next worker can also fall into. Read
    them as "do not".
 3. **§3.2.bis** — the ten parallel sources of focus / selection state.
@@ -40,7 +40,7 @@
 
 **Discipline rules — non-negotiable.**
 
-These are not aspirational. The methodology mistakes recorded in §1.3
+These are not aspirational. The methodology mistakes recorded in §3
 (specifically 1, 4, 6, 8) are all the same shape: someone opined on a
 VMx primitive or an aws-tui VM without reading the source first. Every
 brainstorming decision, every per-VM PR, every spec amendment must
@@ -67,7 +67,7 @@ record:
   `uv run python -c "from vmx import <Symbol>; print(<Symbol>)"`
 
 If a claim is made without one of those commands behind it, the spec's
-§1.3 mistakes 1, 4, 6 are repeating. The reviewer of any PR or
+§3 mistakes 1, 4, 6 are repeating. The reviewer of any PR or
 amendment should reject on those grounds.
 
 **Brainstorming-session guardrails.**
@@ -78,7 +78,7 @@ questions. It does NOT:
 - Propose new VMx primitives (mistake 2: VMx already ships everything we
   need; see §2).
 - Re-litigate decisions captured in §4 or §5 (the spec is canonical;
-  amendments require an explicit reason recorded in §1.3 as "mistake N").
+  amendments require an explicit reason recorded in §3 as "mistake N").
 - Expand scope to include features not listed in §4.2 / §4.3
   (mistake 8 was scope creep in the opposite direction; do not over-
   correct).
@@ -90,7 +90,7 @@ questions. It does NOT:
   scope creep or re-litigation.
 
 If brainstorming finds the spec genuinely wrong on a point (a 9th
-mistake), record it as such with the same format §1.3 uses, then
+mistake), record it as such with the same format §3 uses, then
 proceed.
 
 **Workflow assumptions** — see Appendix A. **Per-VM cross-reference table**
@@ -98,9 +98,9 @@ proceed.
 
 ---
 
-## 1.2. Background
+## 2. Background
 
-### 1.2.1. The recurring bug pattern that motivated this work
+### 2.1. The recurring bug pattern that motivated this work
 
 Between PR #98 and PR #103 (a span of six PRs over four days in late June 2026),
 the project shipped the same shape of fix repeatedly:
@@ -118,7 +118,7 @@ the project shipped the same shape of fix repeatedly:
 Every fix landed entirely in the View layer (`src/aws_tui/ui/widgets/...` and
 the per-theme `.tcss` files). Surface-read, this looks like a polish phase
 ironing out View-side details. **The deeper read, surfaced in the 2026-06-28
-review session and recorded in §1.2, is that several of these bugs were
+review session and recorded in §2, is that several of these bugs were
 symptoms of TWO related architectural gaps**:
 
 1. The project hand-rolls the observable-list-with-cursor pattern in every
@@ -152,7 +152,7 @@ no cross-instance hub broadcast for the View to filter on.
 
 This spec proposes the case-by-case retrofit.
 
-### 1.2.2. The conversation that surfaced the design
+### 2.2. The conversation that surfaced the design
 
 The work is the output of a structured architectural review held during the
 maintenance branch's review window. The conversation walked through:
@@ -173,7 +173,7 @@ Question 6 is what unblocked the design. The answer turned out to be "yes,
 and `CompositeVM` has been sitting unused in 90% of aws-tui's list-shaped
 VMs since the project began."
 
-### 1.2.3. Mistakes made during the review session — record so the next worker
+### 2.3. Mistakes made during the review session — record so the next worker
        does not repeat them
 
 > **Update — amendment after a second review round (also 2026-06-28).** The
@@ -408,13 +408,13 @@ boilerplate + elimination of two recurring bug categories
 (forgot-to-broadcast on mutation; forgot-to-dispose child VM on
 collection removal), not "the current code is broken."**
 
-## 1.3. What VMx 2.6.1 actually provides
+## 3. What VMx 2.6.1 actually provides
 
 A walk through `vmx/__init__.py`'s re-exports as of 2.6.1, with the
 contracts each primitive enforces. This section is the reference the next
 worker should consult while planning the per-VM migration in §4.
 
-### 1.3.1. `CompositeVM[VM]` (and `CompositeVMOf[M, VM]`)
+### 3.1. `CompositeVM[VM]` (and `CompositeVMOf[M, VM]`)
 
 **File:** `vmx/composites/composite_vm.py`
 **Lifecycle:** `_ComponentVMBase` subclass; participates in
@@ -460,7 +460,7 @@ emission.
 **This is the primitive that subsumes every hand-rolled list-with-cursor
 VM in aws-tui.**
 
-### 1.3.2. `ObservableList[T]`
+### 3.2. `ObservableList[T]`
 
 **File:** `vmx/collections/observable_list.py`
 
@@ -478,7 +478,7 @@ Use this when the list elements are raw values (filter chip states,
 recent-paths breadcrumbs, etc.) and lifting them into per-item VMs would
 be overkill.
 
-### 1.3.3. `PagedComposition`
+### 3.3. `PagedComposition`
 
 **File:** `vmx/collections/paged_composition.py`
 
@@ -490,7 +490,7 @@ prev_page() / current_page` semantics. Use for boto3-style
 is forward-only token-driven; verify `PagedComposition` accommodates that
 mode (vs index-based pagination). Adapter layer may be required.
 
-### 1.3.4. `FormVM[TM]` (and `FormVMBuilder`)
+### 3.4. `FormVM[TM]` (and `FormVMBuilder`)
 
 **File:** `vmx/forms/form_vm.py`
 
@@ -506,7 +506,7 @@ Typed model `TM` form VM. Built-in:
 Replaces the hand-rolled `is_dirty` tracking and validator chains in
 `s3_connections_vm.py` and `settings_vm.py`.
 
-### 1.3.5. `IDialogService` / `DialogService` / `NullDialogService`
+### 3.5. `IDialogService` / `DialogService` / `NullDialogService`
 
 **File:** `vmx/dialogs/`
 
@@ -519,7 +519,7 @@ choice — used by tests).
 Replaces the bespoke `push_screen_wait` plumbing in `confirm_vm.py`,
 `resume_vm.py`, `crash_vm.py`, and `first_run_vm.py`.
 
-### 1.3.6. `HierarchicalVM[TModel, TVM]` (and `HierarchicalVMBuilder`)
+### 3.6. `HierarchicalVM[TModel, TVM]` (and `HierarchicalVMBuilder`)
 
 **File:** `vmx/hierarchical/hierarchical_vm.py`
 **Tree-walk utilities:** `vmx/tree/walk.py` — `walk`, `find`, `walk_expanded`
@@ -571,7 +571,7 @@ aws-tui's S3 file pane sits exactly on the boundary between these cases —
 see §4.2.2 for the explicit evaluation.
 
 
-### 1.3.7. `GroupVM` (and `GroupVMBuilder`)
+### 3.7. `GroupVM` (and `GroupVMBuilder`)
 
 **File:** `vmx/groups/`
 
@@ -580,7 +580,7 @@ target for the EMR state-filter chip strip (each `JobRunState` is a
 "group"), but the current `_KEY_TO_STATE` mapping is fine. Investigate
 only if the chip strip grows in complexity.
 
-### 1.3.8. `ServicedObservableCollection`
+### 3.8. `ServicedObservableCollection`
 
 **File:** `vmx/collections/serviced_observable_collection.py`
 
@@ -589,7 +589,7 @@ an item from the collection automatically calls the item's `dispose()`.
 The "automatic dispose-on-remove" the `transfers_vm.py` and `toast_stack_vm.py`
 currently hand-roll.
 
-### 1.3.9. `ForwardingComponentVM` / `ForwardingCompositeVM`
+### 3.9. `ForwardingComponentVM` / `ForwardingCompositeVM`
 
 **File:** `vmx/forwarding/`
 
@@ -601,16 +601,16 @@ inner. The pattern several aws-tui chrome VMs already manually implement
 `ForwardingComponentVM` would let those chrome VMs drop their lifecycle
 trampoline boilerplate.
 
-### 1.3.10. `Batch` and `ObservableDictionary`
+### 3.10. `Batch` and `ObservableDictionary`
 
 `Batch` is a context manager for batched mutations across observable
 collections. `ObservableDictionary` is the key-indexed analog of
 `ObservableList`. Investigate during Phase 0 if a per-key access pattern
 emerges as common in any aws-tui VM (e.g., per-connection cache lookups).
 
-## 1.4. Current state in aws-tui
+## 4. Current state in aws-tui
 
-### 1.4.1. Inventory: what we currently hand-roll
+### 4.1. Inventory: what we currently hand-roll
 
 The VM layer at HEAD `5ee16b9` is 7,339 LOC across 35 files. The single
 existing `CompositeVM` use is in `vm/nav_menu_vm.py`. The following
@@ -643,7 +643,7 @@ across the VM layer; most are list-mutation broadcasts that
 `ConstructionStatus`, lifecycle methods) — many of those would either go
 away or fall behind the `CompositeVM` abstraction after migration.
 
-### 1.4.2. 3.2.bis. View-side state that should live in the VM layer
+### 4.2. 3.2.bis. View-side state that should live in the VM layer
        — regardless of VMx
 
 This section is the MVVM-principle question, independent of which framework
@@ -700,7 +700,7 @@ is the implementation detail.
 §4.3 below adds the focus-coordinator design (was §8.3's "follow-up
 spec"; promoted into this spec at review round 3).
 
-### 1.4.3. LOC analysis
+### 4.3. LOC analysis
 
 Today, by layer (`find … -name '*.py' | xargs wc -l | tail -1`):
 
@@ -726,12 +726,12 @@ These are rough numbers; the Phase 0 spike will validate them. The
 genuine value is not LOC delta but **eliminating the
 forgot-to-broadcast / forgot-to-dispose-child bug families**.
 
-## 1.5. Target architecture
+## 5. Target architecture
 
-### 1.5.1. Principles
+### 5.1. Principles
 
 1. **Re-evaluate each existing hand-rolled VM against the toolkit
-   before re-writing it.** The mistake §1.3 records is exactly this:
+   before re-writing it.** The mistake §3 records is exactly this:
    assume the framework lacks a primitive without checking. Every
    per-VM migration starts by `cat`-ing the candidate VMx primitive's
    source and asking, in writing on the PR, "does this VM's contract
@@ -761,14 +761,14 @@ forgot-to-broadcast / forgot-to-dispose-child bug families**.
    matters.** Transfers and toast stack. Skip for collections whose
    children outlive the collection.
 
-### 1.5.2. Per-VM target shape
+### 5.2. Per-VM target shape
 
-> **Methodology reminder (from §1.3 mistake 5).** Every entry below carries
+> **Methodology reminder (from §3 mistake 5).** Every entry below carries
 > three explicit answers: **(1) primitives evaluated**, **(2) chosen primitive
 > and reason**, **(3) what was read to know**. The next worker should
 > reproduce this discipline for any VM the spec does not pre-evaluate.
 
-#### 1.5.2.1. `NavMenuVM` — finish the incomplete adoption
+#### 5.2.1. `NavMenuVM` — finish the incomplete adoption
 
 **Primitives evaluated:** `CompositeVM[ComponentVMOf[ServiceDescriptor]]`
 (currently used for the children list), `HierarchicalVM` (rejected — the
@@ -831,7 +831,7 @@ This becomes the **reference implementation** for §4.2.1–§4.2.7 — but only
 after this finish-the-adoption work lands. Until then, NavMenuVM is the
 **partial** adoption, not the model.
 
-#### 1.5.2.2. `JobRunsVM` → `CompositeVM[JobRunVM]` (PagedComposition dropped)
+#### 5.2.2. `JobRunsVM` → `CompositeVM[JobRunVM]` (PagedComposition dropped)
 
 > **RESOLVED — see §9.bis.2.** Brainstorm verified that `PagedComposition`
 > is index-based, cannot observe a `CompositeVM` source, and does not
@@ -878,7 +878,7 @@ load_more, on filter change.
 
 **LOC delta estimate:** −250.
 
-#### 1.5.2.3. `PaneVM` — `CompositeVM` vs `HierarchicalVM` evaluation
+#### 5.2.3. `PaneVM` — `CompositeVM` vs `HierarchicalVM` evaluation
 
 > **RESOLVED — see §9.bis.1: Option A (`CompositeVM[EntryVM]`).** The
 > "Open question for Phase 0" verdict in §4.2.2 below is now closed.
@@ -890,7 +890,7 @@ load_more, on filter change.
 `HierarchicalVM[FileSystemNode, FileSystemNodeVM]`, `ObservableList[FileEntry]`
 (rejected — entries are per-row VMs, not raw values).
 
-This is the case where the choice is non-obvious and where mistake 5 (§1.3)
+This is the case where the choice is non-obvious and where mistake 5 (§3)
 was made — the first draft defaulted to `CompositeVM` without explicitly
 considering `HierarchicalVM`. The user's review pushback was on exactly this
 question. The honest answer is the choice depends on a design call that has
@@ -976,7 +976,7 @@ scaffold; old `_entries` tuple co-exists behind a flag; both broadcast in
 parallel for one release" + "remove old path" if the diff exceeds 600
 lines.
 
-#### 1.5.2.4. `ApplicationsVM` → `CompositeVM[ApplicationVM]`
+#### 5.2.4. `ApplicationsVM` → `CompositeVM[ApplicationVM]`
 
 **Today:** ~200 LOC. Hand-rolls `_apps` + `_selected_id` + sorted view
 (STARTED first per PR #90).
@@ -991,7 +991,7 @@ lines.
 
 **LOC delta estimate:** −150.
 
-#### 1.5.2.5. `TransfersVM` → `ServicedObservableCollection[TransferVM]`
+#### 5.2.5. `TransfersVM` → `ServicedObservableCollection[TransferVM]`
 
 > **CORRECTED — see §9.bis.7 and §9.bis.8 (Mistake 9).** The "auto-
 > disposes" claim below was paraphrased from outside the source and is
@@ -1015,7 +1015,7 @@ dispose in `_run_one_transfer`'s finally block.
 dispose savings dissolved; remaining savings come from the `Batch`
 pattern).
 
-#### 1.5.2.6. `ToastStackVM` → `CompositeVM[ToastVM]`
+#### 5.2.6. `ToastStackVM` → `CompositeVM[ToastVM]`
 
 **Today:** ~120 LOC, hand-rolled.
 
@@ -1024,7 +1024,7 @@ Dismiss/expire becomes `remove(toast)`.
 
 **LOC delta estimate:** −50.
 
-#### 1.5.2.7. `S3ConnectionsVM` → `FormVM<S3Connection>`
+#### 5.2.7. `S3ConnectionsVM` → `FormVM<S3Connection>`
 
 **Today:** ~180 LOC of hand-rolled fields + validators + dirty tracking.
 
@@ -1034,7 +1034,7 @@ mode.
 
 **LOC delta estimate:** −200.
 
-#### 1.5.2.8. Modal VMs → custom aws-tui VMs composing VMx (all four)
+#### 5.2.8. Modal VMs → custom aws-tui VMs composing VMx (all four)
 
 > **SUPERSEDED — see §9.bis.11 (round 3, 2026-06-29).** Under the
 > maintainer's "compose, don't reject" directive, no VM stays
@@ -1070,7 +1070,7 @@ mode.
 
 **LOC delta estimate:** **−60 × 2 = −120** (revised down from −240).
 
-#### 1.5.2.9. `CommandPaletteVM` + `ThemePickerVM`
+#### 5.2.9. `CommandPaletteVM` + `ThemePickerVM`
 
 **Today:** ~240 + ~190 LOC. Each is a list + cursor + filter + side
 effects (palette executes actions; theme picker live-previews).
@@ -1087,14 +1087,14 @@ decision.
 **LOC delta estimate:** −150 if it fits; **0 and a documented "fits
 poorly" if it doesn't**.
 
-#### 1.5.2.10. ~~`NavMenuVM`~~ — see §4.2.0
+#### 5.2.10. ~~`NavMenuVM`~~ — see §4.2.0
 
 (Was "NavMenuVM is the reference implementation". Removed at review
 round 2 once §4.2.0 documented the incomplete adoption — the existing
 `CompositeVM` use lacks the `current` slot wiring. Phase 1 finishes
 the adoption per §4.2.0. There is no separate §4.2.9 work.)
 
-#### 1.5.2.11. Out of scope
+#### 5.2.11. Out of scope
 
 - `RootVM` / `ContentHostVM` — orchestrators, not list-shaped.
 - `ChromeVM` — orchestrator.
@@ -1112,7 +1112,7 @@ the adoption per §4.2.0. There is no separate §4.2.9 work.)
 - `TransferVM` (the child VM) — the leaf doesn't change shape; only its
   parent's container does.
 
-### 1.5.3. The FocusCoordinatorVM — promoted into this spec
+### 5.3. The FocusCoordinatorVM — promoted into this spec
 
 Was §8.3 "out of scope, parallel follow-up". Promoted into this spec at
 review round 3 because §3.2.bis showed it is part of the same MVVM
@@ -1233,13 +1233,13 @@ observes uniform `current` slots, not five hand-rolled `_selected_id`
 fields. Phases 4–6 (forms, dialogs, palette) can land in any order
 relative to Phase 7 — they don't intersect with focus.
 
-## 1.6. Phased migration plan
+## 6. Phased migration plan
 
-### 1.6.1. Ordering decision — does the focus / selection refactor come BEFORE
+### 6.1. Ordering decision — does the focus / selection refactor come BEFORE
        the toolkit adoption, or AFTER?
 
 (Recorded as §5.0 because the user's review explicitly asked. Mistake 7 in
-§1.3 was not having addressed it.)
+§3 was not having addressed it.)
 
 **The two candidates for "first":**
 
@@ -1312,7 +1312,7 @@ existing hand-rolled surface for as long as that surface exists. The
 ordering puts the structural cure first and the focus-architecture
 follow-up at the point where it benefits most.
 
-### 1.6.2. Phase 0 — bench setup + spike
+### 6.2. Phase 0 — bench setup + spike
 
 One PR, no shipped behavior change.
 
@@ -1332,7 +1332,7 @@ Deliverables:
 Verification: the spike must run `uv run pytest tests/unit/vm/chrome/`
 green after the migration.
 
-### 1.6.3. Phase 1 — leaf-VM migrations + finish NavMenu adoption
+### 6.3. Phase 1 — leaf-VM migrations + finish NavMenu adoption
 
 One PR per VM, in order:
 
@@ -1350,7 +1350,7 @@ is chosen so that any framework-quirk learned in PR 1 informs PR 2 and 3.
 
 Cumulative LOC delta: −300.
 
-### 1.6.4. Phase 2 — pagination + the EMR runs train
+### 6.4. Phase 2 — pagination + the EMR runs train
 
 One PR, `JobRunsVM` → `CompositeVM[JobRunVM]` + `PagedComposition`.
 
@@ -1361,7 +1361,7 @@ acceptance gate.
 
 Cumulative LOC delta: −550.
 
-### 1.6.5. Phase 3 — `PaneVM`
+### 6.5. Phase 3 — `PaneVM`
 
 One PR. The biggest single migration. Consider splitting into:
 - "Introduce `CompositeVM[EntryVM]` scaffold; old `_entries` tuple co-
@@ -1371,14 +1371,14 @@ One PR. The biggest single migration. Consider splitting into:
 
 Cumulative LOC delta: −850.
 
-### 1.6.6. Phase 4 — Forms
+### 6.6. Phase 4 — Forms
 
 One PR, `S3ConnectionsVM` + the form portion of `SettingsVM` →
 `FormVM<TConnection>`.
 
 Cumulative LOC delta: −1,100.
 
-### 1.6.7. Phase 5 — Dialog service
+### 6.7. Phase 5 — Dialog service
 
 One PR with four commits — one per modal. Touches `composition.py` to
 inject the service (or wires the existing modal-push helper as the
@@ -1387,14 +1387,14 @@ service implementation), then migrates each of `ConfirmationVM`,
 
 Cumulative LOC delta: −1,340.
 
-### 1.6.8. Phase 6 — Command palette + theme picker
+### 6.8. Phase 6 — Command palette + theme picker
 
 One PR. Highest risk of revert (see §4.2.8). Accept the possibility that
 one or both stays hand-rolled.
 
 Cumulative LOC delta: −1,490 if both ship; smaller if one reverts.
 
-### 1.6.9. Phase 7 — `FocusCoordinatorVM`
+### 6.9. Phase 7 — `FocusCoordinatorVM`
 
 One PR. Lands AFTER at least Phase 1 (NavMenu, Toast, Transfers,
 Applications) AND Phase 2 (JobRuns) AND Phase 3 (PaneVM) — the
@@ -1420,14 +1420,14 @@ Cumulative LOC delta: **−1,490 to −1,690 from base**. Phase 7 by itself
 is roughly LOC-neutral to slightly negative (new coordinator vs removed
 scattered hand-roll), but the bug-class elimination is substantial.
 
-## 1.7. Validation strategy
+## 7. Validation strategy
 
-### 1.7.1. Per-phase gate
+### 7.1. Per-phase gate
 
 Every PR runs the full pytest + snapshot + ruff + mypy + check-layers
 suite before merge. Existing project standard; no new tooling required.
 
-### 1.7.2. Shape tests
+### 7.2. Shape tests
 
 Each migrated VM gets a small **shape test** that pins the
 `on_collection_changed` (or equivalent) event sequence under standard
@@ -1446,14 +1446,14 @@ These are 5–10 lines each, pin the framework contract from the app's
 side, and catch silent regressions in either direction (the app misusing
 the framework, or the framework changing semantics in a future minor).
 
-### 1.7.3. LOC accounting
+### 7.3. LOC accounting
 
 Per-PR commit message records the actual LOC delta vs the estimate in
 this spec. If delta is GREATER than zero (the migration grew the VM),
 **revert and document** — this is the case-by-case rejection §4.1
 principle 6 mandates.
 
-### 1.7.4. Regression anchors from prior bug train
+### 7.4. Regression anchors from prior bug train
 
 The bugs that motivated this spec are themselves the strongest
 regression anchors. Each phase's PR explicitly references one or more
@@ -1475,9 +1475,9 @@ recur because mechanism X no longer exists in the code" acceptance
 check. Use §9.bis.9 as the per-Phase acceptance-criterion source when
 writing the Phase PRs.
 
-## 1.8. Risks
+## 8. Risks
 
-### 1.8.1. `PagedComposition` may not fit token-pagination — CLOSED
+### 8.1. `PagedComposition` may not fit token-pagination — CLOSED
 
 > **CLOSED — see §9.bis.2.** Brainstorm verified from
 > `vmx/collections/paged_composition.py` source that `PagedComposition`
@@ -1497,7 +1497,7 @@ that's the case, the migration of `JobRunsVM` would need:
 
 Investigated in Phase 0 spike.
 
-### 1.8.2. Filter coupling — CLOSED
+### 8.2. Filter coupling — CLOSED
 
 > **CLOSED — see §9.bis.3.** Adopted resolution: Option C (derived
 > view stays at the VM as a @property; CompositeVM holds unfiltered
@@ -1519,7 +1519,7 @@ not a global filter on the children list. Options:
 
 Decided in Phase 0 spike per the specific VM.
 
-### 1.8.3. Lifecycle propagation surprises
+### 8.3. Lifecycle propagation surprises
 
 `CompositeVM` cascades `construct/destruct/dispose` to children. Some
 hand-rolled VMs intentionally do not dispose children (e.g., when
@@ -1533,7 +1533,7 @@ interruption-diagnostics flow: a transfer journal entry can outlive the
 must NOT dispose the journal entry when the transfer leaves the live
 list. Verify with `test_transfer_journal` suite as the acceptance gate.
 
-### 1.8.4. Adoption resistance — the "abstraction tax"
+### 8.4. Adoption resistance — the "abstraction tax"
 
 Adopting a framework primitive trades hand-rolled clarity for an
 abstraction the next reader has to learn. Some readers will find the
@@ -1550,7 +1550,7 @@ roll for a specific VM, that VM stays hand-rolled and the decision is
 documented in the PR description and this spec gets a follow-up
 amendment.
 
-### 1.8.5. Time budget
+### 8.5. Time budget
 
 4–6 PRs over 2–3 weeks is the estimate. This is non-trivial. The
 project's typical PR cadence is high (several PRs per active day in the
@@ -1559,9 +1559,9 @@ mid-phase, the **branch must be merge-mergeable** at every PR boundary —
 no in-flight half-migrations. The phased plan respects this by making
 every phase a complete merge unit.
 
-## 1.9. Out of scope
+## 9. Out of scope
 
-### 1.9.1. View layer changes
+### 9.1. View layer changes
 
 The View layer's `subscribe_to_vm` mixin already speaks
 `PropertyChangedMessage` and works unchanged with `CompositeVM`'s
@@ -1573,17 +1573,17 @@ self-contained.
 
 No CSS / layout / theming work is in scope.
 
-### 1.9.2. Domain layer changes
+### 9.2. Domain layer changes
 
 Pure adoption of an existing framework primitive in the VM layer.
 Domain stays as-is.
 
-### 1.9.3. ~~`FocusCoordinatorVM`~~ — was here, promoted into the spec at
+### 9.3. ~~`FocusCoordinatorVM`~~ — was here, promoted into the spec at
        review round 3
 
 (Was "out of scope — write a separate follow-up spec".) After review
 round 3 surfaced that the View-side focus / selection state is part of
-the SAME MVVM-principle refactor as the toolkit adoption (see §1.3
+the SAME MVVM-principle refactor as the toolkit adoption (see §3
 mistake 8 and §3.2.bis), the FocusCoordinatorVM is now §4.3 of this
 spec and lands as Phase 7 (§5.8).
 
@@ -1592,7 +1592,7 @@ runtime's `app.focused` remains Textual's concern. The coordinator
 keeps Textual in sync with the VM-side `focused_slot`; it does not
 replace Textual's focus.
 
-### 1.9.4. Performance optimisation
+### 9.4. Performance optimisation
 
 `CompositeVM`'s emission semantics may be slightly different from the
 current hand-rolled approach (granular events vs single
@@ -1600,13 +1600,13 @@ PropertyChanged). For most aws-tui views this is a wash. If a specific
 view turns out to be re-render-sensitive, address in a follow-up PR
 under a different spec.
 
-### 1.9.5. New service additions
+### 9.5. New service additions
 
 Not a feature-add spec. The seven existing services
 (`s3`, `emr-serverless`, `settings`, the three modal flows, the chrome
 overlays) keep their current contracts.
 
-## 1.10. Open questions
+## 10. Open questions
 
 To be answered during the Phase 0 spike:
 
@@ -1635,7 +1635,7 @@ Each answered question becomes an amendment to this spec (preferred) or
 a note in the corresponding plan task (acceptable if the answer is
 narrow and per-task).
 
-## 1.11. 9.bis. Resolutions from the brainstorm session — 2026-06-28
+## 11. 9.bis. Resolutions from the brainstorm session — 2026-06-28
 
 This section closes §9's seven open questions, records the spec
 amendments each resolution triggers, surfaces the MVVM-half open
@@ -1665,7 +1665,7 @@ Each resolution lists, per §0's discipline rules: which VMx
 primitive(s) were evaluated, what was inspected (file + line ranges),
 and why the resolution fits.
 
-### 1.11.1. 9.bis.1. Q7 / §4.2.2 — PaneVM: choose Option A (`CompositeVM[EntryVM]`)
+### 11.1. 9.bis.1. Q7 / §4.2.2 — PaneVM: choose Option A (`CompositeVM[EntryVM]`)
 
 **Decision:** Option A.
 
@@ -1702,7 +1702,7 @@ recorded so they can be closed before a tree-view consumer arrives.
 
 ---
 
-### 1.11.2. 9.bis.2. Q1 / §4.2.1 — JobRunsVM: drop `PagedComposition`
+### 11.2. 9.bis.2. Q1 / §4.2.1 — JobRunsVM: drop `PagedComposition`
 
 **Decision:** Replace §4.2.1's `CompositeVM[JobRunVM]` + `PagedComposition`
 target with **`CompositeVM[JobRunVM]` alone**, plus a VM-level
@@ -1747,7 +1747,7 @@ of hand-rolling.
 
 ---
 
-### 1.11.3. 9.bis.3. Q2 / §7.2 — Filter coupling: Option C (derived view as a VM @property)
+### 11.3. 9.bis.3. Q2 / §7.2 — Filter coupling: Option C (derived view as a VM @property)
 
 **Decision:** For both `PaneVM` and `CommandPaletteVM`:
 `CompositeVM[EntryVM]` holds the unfiltered list with cursor +
@@ -1776,7 +1776,7 @@ the primitive, ~50–80 LOC hand-roll wrapper would have been required,
 and cursor-mapping between outer and inner adds duplicated state.
 Option B (filter at the View) was rejected: pushes filter logic into
 widget code, breaks the "VM layer reusable by a second View" property
-the spec's §1.2 q4 asked about.
+the spec's §2 q4 asked about.
 
 **Spec amendments:** §7.2 risk closed with "Option C adopted for both
 VMs". §4.2.2 (already updated by 12.1) reads consistently. §4.2.8
@@ -1790,7 +1790,7 @@ for the palette's fuzzy-match scoring) would let aws-tui delete the
 
 ---
 
-### 1.11.4. 9.bis.4. Q3 — `auto_construct_on_add=True` composes with `ToastVM`
+### 11.4. 9.bis.4. Q3 — `auto_construct_on_add=True` composes with `ToastVM`
 
 **Decision:** `auto_construct_on_add=True` fits as-is. No adapter.
 
@@ -1805,7 +1805,7 @@ one-line shape test asserting `toast_stack.append(toast)` leaves
 
 ---
 
-### 1.11.5. 9.bis.5. Q4 — `FormVM` cross-field validators: fits via custom predicate
+### 11.5. 9.bis.5. Q4 — `FormVM` cross-field validators: fits via custom predicate
 
 **Decision:** Wrap S3ConnectionsVM around `FormVM<S3Connection>`. The
 cross-field invariant ("`endpoint_url` set IFF `force_path_style`") is
@@ -1834,7 +1834,7 @@ the wrapping VM delete the `_is_valid_invariants` boilerplate.
 
 ---
 
-### 1.11.6. 9.bis.6. Q5 / §4.2.7 — `IDialogService` for the four modal VMs: 2 adopt, 2 stay
+### 11.6. 9.bis.6. Q5 / §4.2.7 — `IDialogService` for the four modal VMs: 2 adopt, 2 stay
 
 **Decision:**
 
@@ -1871,7 +1871,7 @@ re-platform too.
 
 ---
 
-### 1.11.7. 9.bis.7. Q6 — `ServicedObservableCollection`: premise was wrong; mistake 9 recorded
+### 11.7. 9.bis.7. Q6 — `ServicedObservableCollection`: premise was wrong; mistake 9 recorded
 
 **Decision:** No new primitive needed. `ServicedObservableCollection`
 is **already** the non-owning observable — its name suggested
@@ -1894,7 +1894,7 @@ TransfersVM's `finally: vm.dispose()` block stays". LOC delta revised
 from `−100` to **`−60`** (the remaining savings come from a `Batch`
 block on pre-registration, not from auto-dispose). Appendix C cheat
 sheet entry for `ServicedObservableCollection` is corrected
-accordingly. **Mistake 9 (below) is added to §1.3** as the audit-
+accordingly. **Mistake 9 (below) is added to §3** as the audit-
 trail entry.
 
 **Upstream ask:** Item 6 in the vNext feedback report — rename to
@@ -1905,7 +1905,7 @@ auto-dispose-on-remove.
 
 ---
 
-### 1.11.8. 9.bis.8. Mistake 9 (recorded against §1.3)
+### 11.8. 9.bis.8. Mistake 9 (recorded against §3)
 
 **Mistake 9: spec Appendix C entry for `ServicedObservableCollection`
 was paraphrased from an unspecified source — likely an upstream doc —
@@ -1926,7 +1926,7 @@ per §0's discipline rules, regardless of what Appendix C says.
 
 ---
 
-### 1.11.9. 9.bis.9. MVVM-half re-classification of today's bug train
+### 11.9. 9.bis.9. MVVM-half re-classification of today's bug train
 
 §9 only posed VMx-primitive-fit questions; the MVVM-discipline half
 (§3.2.bis / §4.3 / §5.0 / §5.8) was treated as "designed, Phase-0-
@@ -2051,7 +2051,7 @@ now CONCRETE (named PR/file/line) rather than abstract.
 
 **Mistake 10 recorded.** §9's question set was VMx-fit-scoped; the
 MVVM-half open questions implicit in §3.2.bis / §4.3 / §5.8 were not
-called out. See §1.3 amendment for the canonical record.
+called out. See §3 amendment for the canonical record.
 
 **Spec amendments triggered by this subsection:**
 
@@ -2062,10 +2062,10 @@ called out. See §1.3 amendment for the canonical record.
   explicit "PR #X cannot recur" checks).
 - §4.3 risk note (slot priority table; projection timing) gains
   cross-references to Q-MVVM-A, Q-MVVM-B, Q-MVVM-C.
-- §1.3 gains a Mistake 10 amendment block (next subsection ties it
+- §3 gains a Mistake 10 amendment block (next subsection ties it
   together with the existing record).
 
-### 1.11.10. 9.bis.10. Mistake 10 (recorded against §1.3)
+### 11.10. 9.bis.10. Mistake 10 (recorded against §3)
 
 **Mistake 10: §9's open-questions set was scoped only to VMx-
 primitive-fit; the MVVM-half open questions implicit in §3.2.bis /
@@ -2092,7 +2092,7 @@ explicitly span both halves. A single §9 question list reads as
 the brainstorm will silently scope down to the question set's
 implicit framing.
 
-### 1.11.11. 9.bis.11. Round 3 — directive "compose, don't reject" applied (2026-06-29)
+### 11.11. 9.bis.11. Round 3 — directive "compose, don't reject" applied (2026-06-29)
 
 The brainstorm continued one day after the round-1/round-2 commits.
 The maintainer's directive, delivered verbatim:
@@ -2110,7 +2110,7 @@ The maintainer's directive, delivered verbatim:
 
 This supersedes the implicit "VMx fits → adopt; doesn't fit → leave
 hand-rolled" dichotomy rounds 1 and 2 operated on (recorded as
-Mistake 11 in §9.bis.12 and as a §1.3 amendment block).
+Mistake 11 in §9.bis.12 and as a §3 amendment block).
 
 **The VMx-use ladder applied to each VM need:**
 
@@ -2130,7 +2130,7 @@ migration is unchanged in every case. The directive changes
 **where the boundary sits** between aws-tui-side code and VMx
 primitive surface.
 
-#### 1.11.11.1. §9.bis.2 (Q1 JobRunsVM) — re-framed
+#### 11.11.1. §9.bis.2 (Q1 JobRunsVM) — re-framed
 
 Was: "drop `PagedComposition`; `CompositeVM[JobRunVM]` + VM-level
 `next_token` field + `load_more` command."
@@ -2146,7 +2146,7 @@ materialises later. Either way, `CompositeVM` is NOT exposed in the
 custom VM's public surface. The View binds only to the custom
 abstraction's surface.
 
-#### 1.11.11.2. §9.bis.3 (Q2 filter coupling) — re-framed
+#### 11.11.2. §9.bis.3 (Q2 filter coupling) — re-framed
 
 Was: "Option C — derived filter view stays as a VM `@property`;
 CompositeVM holds unfiltered + cursor; VM snaps cursor to first
@@ -2162,7 +2162,7 @@ additionally composes a `ScoredFilteredCompositeVM` variant if the
 fuzzy-match score logic doesn't fit comfortably in the same
 abstraction (Phase 0 spike decides shape, not whether).
 
-#### 1.11.11.3. §9.bis.5 (Q4 `FormVM` cross-field validators) — re-framed
+#### 11.11.3. §9.bis.5 (Q4 `FormVM` cross-field validators) — re-framed
 
 Was: "cross-field invariant via custom `approve_command.predicate` +
 persister raise; ~5 LOC per cross-field rule on each consuming VM."
@@ -2175,7 +2175,7 @@ fn)` / `model_validator(fn)` registration + reactive
 NOT exposed in the custom VM's public surface. `S3ConnectionsVM`
 and every future form-shaped VM consume `ValidatingFormVM`.
 
-#### 1.11.11.4. §9.bis.6 (Q5 modal VMs) — re-framed (significant: no VM stays hand-rolled)
+#### 11.11.4. §9.bis.6 (Q5 modal VMs) — re-framed (significant: no VM stays hand-rolled)
 
 Was: "`ConfirmationVM` + `CrashVM` adopt `IDialogService` directly;
 `ResumeVM` + `FirstRunVM` stay hand-rolled with documented 'no fit'
@@ -2217,7 +2217,7 @@ FirstRun are small — ~30 LOC each of added behaviour — so the net
 recovers most of the round-1 estimate). Phase 0 spike confirms
 once the wrapper shapes are sketched.
 
-#### 1.11.11.5. Other resolutions — unchanged under the directive
+#### 11.11.5. Other resolutions — unchanged under the directive
 
 - **§9.bis.1 (Q7 PaneVM = `CompositeVM`, not `HierarchicalVM`)** —
   primitive choice; the directive doesn't change which primitive
@@ -2254,7 +2254,7 @@ once the wrapper shapes are sketched.
   could ship these natively so consumers skip the wrapper"
   rather than "we couldn't use these primitives".
 
-### 1.11.12. 9.bis.12. Mistake 11 (recorded against §1.3)
+### 11.12. 9.bis.12. Mistake 11 (recorded against §3)
 
 **Mistake 11: brainstorm rounds 1 and 2 operated on an implicit
 "VMx fits → adopt; doesn't fit → hand-roll" dichotomy.**
@@ -2282,7 +2282,7 @@ exposing the primitive in its public surface. The upstream feedback
 report then captures the recurring composition shapes as candidate
 primitives for vNext.
 
-### 1.11.13. 9.bis.13. Upstream feedback artifact
+### 11.13. 9.bis.13. Upstream feedback artifact
 
 The seven resolutions above identified five places (Items 1–5 in the
 vNext report) where a VMx primitive almost fit but didn't quite, plus
@@ -2298,7 +2298,7 @@ addressed to the VMx maintainer.
 
 ---
 
-## 1.12. Definition of done
+## 12. Definition of done
 
 The migration is complete when:
 
@@ -2332,7 +2332,7 @@ The migration is complete when:
 11. This spec is updated with the actual per-VM disposition (migrated /
     kept) and the actual LOC delta vs the estimate.
 
-## 1.13. References
+## 13. References
 
 - VMx 2.6.1 source: `.venv/lib/python3.11/site-packages/vmx/`
 - `docs/architecture.md` — current five-layer model
@@ -2350,12 +2350,12 @@ The migration is complete when:
 
 ---
 
-## 1.14. Appendix A — Workflow & project conventions
+## 14. Appendix A — Workflow & project conventions
 
 The next worker should know these without having to discover them in a
 PR review.
 
-### 1.14.1. A.1. Python environment
+### 14.1. A.1. Python environment
 
 - Project floor: Python 3.11 (`pyproject.toml::requires-python`).
 - CI matrix: `[macos-14, ubuntu-24.04, windows-latest] × [3.11, 3.12, 3.13]`
@@ -2366,7 +2366,7 @@ PR review.
   3.11.0 due to this. **It's an env issue, not a repo issue.** Bump to
   3.11.1 or use uv's installed 3.12.
 
-### 1.14.2. A.2. Test invocation
+### 14.2. A.2. Test invocation
 
 ```bash
 # Full default suite. The pyproject marker filter excludes MinIO
@@ -2384,7 +2384,7 @@ Expect every default-tier test to pass. Recount the current inventory
 with `uv run pytest --collect-only -q | tail -1`; recount snapshot
 goldens with `find tests/snapshot/__snapshots__ -name '*.raw' | wc -l`.
 
-### 1.14.3. A.3. Lint, type, layers
+### 14.3. A.3. Lint, type, layers
 
 - **Lint:** `uv run ruff check src/ tests/` — strict; all of src/ + tests/.
 - **Format:** `uv run ruff format src/ tests/`.
@@ -2398,7 +2398,7 @@ goldens with `find tests/snapshot/__snapshots__ -name '*.raw' | wc -l`.
 - **Pre-commit:** `uv run pre-commit run --all-files` runs every hook
   CI runs, in one command.
 
-### 1.14.4. A.4. PR conventions
+### 14.4. A.4. PR conventions
 
 - **Branch naming:** `<kind>/<topic>` — e.g., `fix/runs-picker-flicker`,
   `feat/nav-enter-shifts-focus`, `docs/vmx-toolkit-adoption-spec`,
@@ -2415,7 +2415,7 @@ goldens with `find tests/snapshot/__snapshots__ -name '*.raw' | wc -l`.
 - **Heredoc commits:** every multi-line commit message uses
   `git commit -m "$(cat <<'EOF' ... EOF)"` for safe formatting.
 
-### 1.14.5. A.5. Repo state at spec time
+### 14.5. A.5. Repo state at spec time
 
 - Latest tag: `v0.7.0`.
 - `version.py` + `pyproject.toml`: `0.8.0` (PyPI publish blocked on
@@ -2426,7 +2426,7 @@ goldens with `find tests/snapshot/__snapshots__ -name '*.raw' | wc -l`.
 
 ---
 
-## 1.15. Appendix B — Per-VM cross-reference table
+## 15. Appendix B — Per-VM cross-reference table
 
 The "I'm migrating X" → "open these files" index. Each row maps to
 exactly one §4 entry.
@@ -2455,7 +2455,7 @@ pattern), `JobRunDetailVM`, `JobRunLogsVM`, `JobRunCloneVM`.
 
 ---
 
-## 1.16. Appendix C — VMx primitive cheat sheet (for quick lookup during brainstorm)
+## 16. Appendix C — VMx primitive cheat sheet (for quick lookup during brainstorm)
 
 | Primitive | File | When to reach for it |
 |---|---|---|

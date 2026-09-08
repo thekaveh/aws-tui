@@ -1,10 +1,10 @@
-# 1. Theming
+# Theming
 
 > Mirror of spec §4.5. Ten built-in themes ship (4 dark + 3 light +
 > 3 popular community palettes); the default is configurable; full
 > `.tcss` overrides are supported.
 
-## 1.1. Built-in themes
+## 1. Built-in themes
 | Theme | Vibe | Borders | Accent |
 |---|---|---|---|
 | `carbon` (default) | Near-monochrome, macOS-quietness | rounded | ice-blue (`#6fb8ff`) |
@@ -24,7 +24,7 @@ for narrow, meaningful uses (`success` only on auth + transfer status;
 `danger` only on "cannot be undone" affordances; `warning` only on
 numerics in Quick Look).
 
-## 1.2. Selecting a theme
+## 2. Selecting a theme
 In config:
 
 ```toml
@@ -59,8 +59,8 @@ has the same effect as `Shift+T`. Per-theme dynamic entries such as
 `theme switch ▸ voidline` remain deferred and are not registered, so use
 **Theme picker** to select a specific built-in or custom theme.
 
-## 1.3. User overrides
-### 1.3.1. Single-token overrides
+## 3. User overrides
+### 3.1. Single-token overrides
 Drop `<config-dir>/theme.tcss` to override individual tokens of
 the active built-in. The overlay layers on top of the built-in CSS so
 you can adjust one or two colors without forking the whole theme:
@@ -77,7 +77,7 @@ Screen {
 }
 ```
 
-### 1.3.2. Full custom themes
+### 3.2. Full custom themes
 Drop a full `.tcss` file under `<config-dir>/themes/<name>.tcss` and select
 it with `t` or `:` then **Theme picker**. A full replacement bypasses the
 built-in composition, so use a repository checkout to compose the raw
@@ -96,7 +96,7 @@ styling that built-in themes receive automatically. Per-theme dynamic entries
 such as `theme switch ▸ voidline` remain deferred and are not a way to select
 a custom theme.
 
-## 1.4. Palette tokens
+## 4. Palette tokens
 The Carbon palette tokens (full spec table in §4.5):
 
 | Token | Hex | Use |
@@ -116,7 +116,7 @@ The Carbon palette tokens (full spec table in §4.5):
 
 See spec §4.5 for the matching Voidline / Lattice / Amber tables.
 
-## 1.5. How the loader works
+## 5. How the loader works
 `infra/theme_store.py` reads the active theme by:
 
 1. Loading the raw built-in `<name>.tcss` from package data via
@@ -133,7 +133,7 @@ See spec §4.5 for the matching Voidline / Lattice / Amber tables.
 The overlay layering means you can keep the built-in look and adjust
 just one or two colors without copying the entire theme.
 
-## 1.6. Snapshot tests
+## 6. Snapshot tests
 The ten themes are pinned by snapshot goldens in
 `tests/snapshot/__snapshots__/` across the checked-in snapshot suites.
 Recount with:

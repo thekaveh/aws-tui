@@ -94,6 +94,10 @@ class JobRunLogsVM:
         self._lines: tuple[str, ...] = ()
         self._bytes_read: int = 0
         self._lines_scanned: int = 0
+        # Total matches the stream reported, which exceeds len(self._lines)
+        # once the line cap trims. Reporting the trimmed length as "matches"
+        # gave a wrong answer to the question the user's filter asked.
+        self._matched_count: int = 0
         self._filter: LogFilter = DEFAULT_LOG_FILTER
         self._disposed: bool = False
         self._operations = OperationOwner()
@@ -115,7 +119,7 @@ class JobRunLogsVM:
         # application switch in :meth:`set_target`.
         self._cache: OrderedDict[
             tuple[str, str, str, int | None, tuple[str, ...], FilterMode, bool],
-            tuple[tuple[str, ...], bool, int, int],
+            tuple[tuple[str, ...], bool, int, int, int],
         ] = OrderedDict()
 
     # ── Properties (snapshot accessors) ─────────────────────────────────────
@@ -147,6 +151,16 @@ class JobRunLogsVM:
     @property
     def lines_scanned(self) -> int:
         return self._lines_scanned
+
+    @property
+    def matched_count(self) -> int:
+        """Total matches found, including any the display cap dropped."""
+        return self._matched_count
+
+    @property
+    def matches_capped(self) -> bool:
+        """True when the retained lines are only the tail of the matches."""
+        return self._matched_count > len(self._lines)
 
     @property
     def filter(self) -> LogFilter:
@@ -193,6 +207,7 @@ class JobRunLogsVM:
         self._lines = ()
         self._bytes_read = 0
         self._lines_scanned = 0
+        self._matched_count = 0
         self._error_text = None
         if app_id is None or run_id is None:
             self._set_state(LogsState.EMPTY_TARGET)
@@ -218,6 +233,7 @@ class JobRunLogsVM:
         self._lines = ()
         self._bytes_read = 0
         self._lines_scanned = 0
+        self._matched_count = 0
         self._notify("current_file")
         self._notify("lines")
 
@@ -230,6 +246,7 @@ class JobRunLogsVM:
         self._lines = ()
         self._bytes_read = 0
         self._lines_scanned = 0
+        self._matched_count = 0
         self._notify("current_file")
         self._notify("lines")
 
@@ -329,13 +346,19 @@ class JobRunLogsVM:
                 # "newest" end so eviction targets the least-recently
                 # used entry when the cache fills up.
                 self._cache.move_to_end(cache_key)
-                cached_lines, cached_truncated, cached_bytes, cached_scanned = self._cache[
-                    cache_key
-                ]
+                (
+                    cached_lines,
+                    cached_truncated,
+                    cached_bytes,
+                    cached_scanned,
+                    cached_matched,
+                ) = self._cache[cache_key]
                 self._lines = cached_lines
                 self._bytes_read = cached_bytes
                 self._lines_scanned = cached_scanned
+                self._matched_count = cached_matched
                 self._notify("lines")
+                self._notify("matched_count")
                 self._notify("progress")
                 self._set_state(LogsState.TRUNCATED if cached_truncated else LogsState.READY)
                 return
@@ -358,12 +381,14 @@ class JobRunLogsVM:
                 if (self._application_id, self._job_run_id, self._log_uri) != target:
                     return
                 buffered.extend(chunk.lines)
+                self._matched_count += chunk.matched_count
                 if len(buffered) > _MAX_MATCHED_LINES:
                     buffered = buffered[-_MAX_MATCHED_LINES:]
                 self._lines = tuple(buffered)
                 self._bytes_read = chunk.bytes_read
                 self._lines_scanned = chunk.lines_scanned
                 self._notify("lines")
+                self._notify("matched_count")
                 self._notify("progress")
                 truncated = chunk.truncated
             if (self._application_id, self._job_run_id, self._log_uri) != target:
@@ -376,6 +401,7 @@ class JobRunLogsVM:
                 truncated,
                 self._bytes_read,
                 self._lines_scanned,
+                self._matched_count,
             )
             # LRU eviction: drop the oldest entry until back under cap.
             while len(self._cache) > _CACHE_MAX_ENTRIES:

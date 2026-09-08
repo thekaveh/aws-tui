@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from collections.abc import Awaitable, Callable
 from functools import partial
 from typing import ClassVar, cast
 
@@ -11,11 +10,11 @@ from textual.containers import Container, Horizontal, VerticalScroll
 from textual.css.query import NoMatches
 from textual.widget import Widget
 from textual.widgets import Button, DataTable, OptionList, TextArea
-from textual.worker import Worker
 from vmx import Message, MessageHub
 
 from aws_tui.infra.keymap_store import KeymapStore
 from aws_tui.ui.widgets._subscriber import HubSubscriberMixin
+from aws_tui.ui.widgets._worker import DeferredWorkerMixin
 from aws_tui.ui.widgets.athena.history_view import AthenaHistoryView
 from aws_tui.ui.widgets.athena.load_more_button import AthenaLoadMoreButton
 from aws_tui.ui.widgets.athena.query_view import AthenaQueryView
@@ -57,7 +56,7 @@ _ContextControls = tuple[
 ]
 
 
-class AthenaPage(HubSubscriberMixin, Widget):
+class AthenaPage(DeferredWorkerMixin, HubSubscriberMixin, Widget):
     DEFAULT_CSS: ClassVar[str] = """
     AthenaPage {
         height: 1fr;
@@ -337,17 +336,6 @@ class AthenaPage(HubSubscriberMixin, Widget):
                 loader,
                 group=f"{event.button.id}-load",
             )
-
-    def _run_lifecycle_worker(
-        self,
-        work: Callable[[], Awaitable[None]],
-        *,
-        group: str,
-    ) -> Worker[None]:
-        async def deferred() -> None:
-            await work()
-
-        return self.run_worker(deferred, exclusive=True, group=group)
 
     async def action_select_view(self, view: str) -> None:
         selected = cast(AthenaView, view)

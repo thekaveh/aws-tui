@@ -1,4 +1,4 @@
-# 1. Keybindings
+# Keybindings
 
 > Mirror of spec §4.2. `[keybindings]` entries in
 > `<config-dir>/config.toml` are validated by `KeymapStore` and
@@ -15,9 +15,9 @@ as the universal escape hatch.
 > remain valid action IDs, but `BindingResolver` leaves them unbound
 > until the matching handler ships.
 
-## 1.1. Default bindings
+## 1. Default bindings
 
-### 1.1.1. Navigation
+### 1.1. Navigation
 
 | Action | Default | Notes |
 |---|---|---|
@@ -26,7 +26,7 @@ as the universal escape hatch.
 | Ascend one level | `Backspace` or `left` | |
 | Switch pane focus | `Tab` / `Shift+Tab` | |
 
-### 1.1.2. Selection
+### 1.2. Selection
 
 | Action | Default | Notes |
 |---|---|---|
@@ -37,7 +37,7 @@ as the universal escape hatch.
 | Select all | `pane.select_all` action — *(deferred)* | Spec'd on `a` (in multi-select); not wired |
 | Clear selection | no shipped command — *(deferred)* | Persistent marks can be toggled individually; a keyboard clear-all action is not registered. |
 
-### 1.1.3. File operations
+### 1.3. File operations
 
 | Action | Default | Notes |
 |---|---|---|
@@ -48,7 +48,7 @@ as the universal escape hatch.
 | Rename in place | `pane.move` action — *(deferred)* | Bundled into the move handler; not wired |
 | Refresh pane | `r` | |
 
-### 1.1.4. Overlays
+### 1.4. Overlays
 
 | Action | Default | Notes |
 |---|---|---|
@@ -60,7 +60,7 @@ as the universal escape hatch.
 | Cycle to next theme (no modal) | `Shift+T` (`T`) | |
 | Help overlay | `?` | |
 
-### 1.1.5. Pane chrome
+### 1.5. Pane chrome
 
 | Action | Default | Notes |
 |---|---|---|
@@ -74,7 +74,7 @@ as the universal escape hatch.
 > `BindingResolver` does not emit `m` because the deferred `pane.move`
 > action has no registered handler (§1.3).
 
-### 1.1.6. Connection and Authentication
+### 1.6. Connection and Authentication
 
 | Action | Default | Notes |
 |---|---|---|
@@ -84,14 +84,14 @@ as the universal escape hatch.
 The command palette opens today with `:` or `Ctrl+K`; only the dynamic
 connection-switch entries in the row above remain deferred.
 
-### 1.1.7. App
+### 1.7. App
 
 | Action | Default | Notes |
 |---|---|---|
 | Cancel / dismiss modal | `Esc` | Modal-owned; works on every modal that ships in v0.8.x |
 | Quit | `q` or `Ctrl+C` | |
 
-### 1.1.8. EMR Serverless
+### 1.8. EMR Serverless
 
 These actions are wired by `EmrServerlessPage`. The EMR page is mounted in
 place of the S3 dual-pane when the **EMR** navigation row is selected.
@@ -122,7 +122,7 @@ focused editable widget can consume text first.
 > right-side surface: detail focus reloads the selected job-run detail;
 > logs focus re-fetches logs from S3.
 
-### 1.1.9. AWS Glue
+### 1.9. AWS Glue
 
 Glue is a single-context AWS service. It keeps one active connection
 and region for the whole page; S3-compatible connections are excluded. The
@@ -162,7 +162,7 @@ Glue's forward focus order is:
 Disabled Iceberg load-more/retry/time-travel controls are omitted. `Shift+Tab`
 walks the same active ring in reverse.
 
-### 1.1.10. Amazon Athena
+### 1.10. Amazon Athena
 
 Athena is a single-context AWS service; its controls do not appear for
 S3-compatible connections. Source, Workgroup, Catalog, and Database are four
@@ -203,7 +203,7 @@ Bare printable bindings, including `i`, `W`, `C`, and `D`, are deliberately
 non-priority: a focused Athena editor receives them as text. Use the command
 palette or move focus outside the editor to invoke those actions.
 
-## 1.2. Customizing
+## 2. Customizing
 
 A binding can be a single keystroke or a list of fallback keystrokes:
 
@@ -253,7 +253,7 @@ The bindings that are wired today include `q`,
 `Ctrl+Enter`, `Esc`, `l`,
 `Shift+↑`, and `Shift+↓`.
 
-## 1.3. Action IDs
+## 3. Action IDs
 
 The `wired?` column marks whether `AwsTuiApp` currently registers a
 matching `ActionRegistry` handler. `(deferred)` rows are valid action
@@ -271,7 +271,7 @@ unbound until a handler ships.
 | `app.swap_source` | `S` (`shift+s`) | yes | Switch the focused S3 pane source, or rebuild the current single-context AWS service under the next profile |
 | `pane.move_up` / `pane.move_down` | `up` / `down` (also `k` / `j`) | yes | Move cursor |
 | `pane.descend` | `enter` | yes | Descend into folder / bucket |
-| `pane.ascend` | `backspace` / `left` | yes | Parent path |
+| `pane.ascend` | `backspace` | yes | Parent path |
 | `pane.mark_up` | `shift+up` | yes | Extend the marked selection upward |
 | `pane.mark_down` | `shift+down` | yes | Extend the marked selection downward |
 | `pane.switch_focus` | `tab` | yes | Cycle the active page's focus ring |
@@ -345,7 +345,7 @@ including `Shift+↑` / `Shift+↓` for extend-selection. Their
 > chips remain inert. Chips do not enter the Tab sequence. Hidden actions remain
 > bound and palette-visible.
 
-## 1.4. Modal Forwarding for Enter Escape and Arrow Keys
+## 4. Modal Forwarding for Enter Escape and Arrow Keys
 
 Textual dispatches App-level `priority=True` bindings *before* modal
 screen bindings. Without that, pressing `Enter` inside the theme
@@ -360,7 +360,7 @@ result: `Enter` confirms in any modal, `Esc` (or `Backspace`) cancels,
 and `↑/↓` navigate the picker even though the app reserves them for
 the dual-pane cursor.
 
-## 1.5. Layer separation
+## 5. Layer separation
 
 Views route through action IDs and `BindingResolver`; service-neutral
 VM messages handle cross-service requests. Keep new keyed actions in

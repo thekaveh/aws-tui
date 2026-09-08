@@ -1,16 +1,16 @@
 from __future__ import annotations
 
-from collections.abc import Awaitable, Callable
 from functools import partial
 from typing import ClassVar
 
 from reactivex.abc import DisposableBase
 from textual.app import ComposeResult
 from textual.containers import VerticalScroll
+from textual.css.query import NoMatches
 from textual.widget import Widget
 from textual.widgets import OptionList
-from textual.worker import Worker
 
+from aws_tui.ui.widgets._worker import DeferredWorkerMixin
 from aws_tui.ui.widgets.glue.detail_rows import (
     DetailRows,
     DetailValue,
@@ -21,7 +21,7 @@ from aws_tui.ui.widgets.glue.detail_rows import (
 from aws_tui.vm.glue.page_vm import GluePageVM
 
 
-class GlueCrawlersView(Widget):
+class GlueCrawlersView(DeferredWorkerMixin, Widget):
     DEFAULT_CSS: ClassVar[str] = """
     GlueCrawlersView {
         height: 1fr;
@@ -79,17 +79,6 @@ class GlueCrawlersView(Widget):
                 group="glue-select-crawler",
             )
 
-    def _run_lifecycle_worker(
-        self,
-        work: Callable[[], Awaitable[None]],
-        *,
-        group: str,
-    ) -> Worker[None]:
-        async def deferred() -> None:
-            await work()
-
-        return self.run_worker(deferred, exclusive=True, group=group)
-
     def _on_vm_changed(self, _property_name: str) -> None:
         self.call_after_refresh(self._refresh_all)
 
@@ -97,28 +86,36 @@ class GlueCrawlersView(Widget):
         try:
             crawlers = self.query_one("#glue-crawlers-pane", ResourceListPane)
             detail = self.query_one("#glue-crawler-detail-pane", DetailRows)
-        except Exception:
+        except NoMatches:
             return
-        crawlers.replace(
-            tuple(
-                (
-                    row.name,
-                    f"{row.state:<9}  {row.name}",
-                )
-                for row in self._vm.crawlers
-            ),
-            selected_id=self._vm.selected_crawler_name,
-            state=self._vm.state,
-            error_text=self._vm.error_text,
-            has_more=self._vm.has_more_crawlers,
-            limit_reached=self._vm.limit_reached,
-        )
-        detail.replace(
-            self._detail_values(),
-            state=self._vm.detail_state,
-            error_text=self._vm.detail_error_text,
-            empty_text="select a crawler",
-        )
+        # The panes resolved above can still be mounted while their inner
+        # OptionList has already been removed: `ResourceListPane.replace`
+        # calls `query_one(OptionList)`, so `NoMatches` escapes into the
+        # Textual message pump and takes the app down. `glue/catalog_view`
+        # and `athena/history_view` already double-guard for this reason.
+        try:
+            crawlers.replace(
+                tuple(
+                    (
+                        row.name,
+                        f"{row.state:<9}  {row.name}",
+                    )
+                    for row in self._vm.crawlers
+                ),
+                selected_id=self._vm.selected_crawler_name,
+                state=self._vm.state,
+                error_text=self._vm.error_text,
+                has_more=self._vm.has_more_crawlers,
+                limit_reached=self._vm.limit_reached,
+            )
+            detail.replace(
+                self._detail_values(),
+                state=self._vm.detail_state,
+                error_text=self._vm.detail_error_text,
+                empty_text="select a crawler",
+            )
+        except NoMatches:
+            return
 
     def _detail_values(self) -> tuple[DetailValue, ...]:
         detail = self._vm.crawler_detail

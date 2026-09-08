@@ -639,6 +639,32 @@ async def test_load_lines_capped_at_max_matched_lines(monkeypatch: pytest.Monkey
     assert len(vm.lines) == _MAX_MATCHED_LINES
     # The tail is kept — the last line of the second chunk must be present.
     assert vm.lines[-1] == last_line
+    # The retained count is NOT the answer to the user's filter. Reporting
+    # len(lines) as "matches" understated it by every dropped line, and for an
+    # error-first filter the dropped head is the originating stack trace.
+    assert vm.matched_count == over + 1
+    assert vm.matches_capped is True
+    vm.dispose()
+
+
+async def test_matched_count_is_not_capped_when_under_the_display_limit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def _list_files(**kwargs: object) -> list[LogFile]:
+        return [_STDERR_FILE]
+
+    async def _stream(**kwargs: object):  # type: ignore[return]
+        yield _ONE_CHUNK
+
+    monkeypatch.setattr("aws_tui.domain.emr_logs.list_log_files", _list_files, raising=False)
+    monkeypatch.setattr("aws_tui.domain.emr_logs.stream_log", _stream, raising=False)
+
+    vm = _make()
+    vm.set_target("app1", "run1", _LOG_URI)
+    await vm.load()
+
+    assert vm.matched_count == len(vm.lines)
+    assert vm.matches_capped is False
     vm.dispose()
 
 
@@ -785,3 +811,82 @@ async def test_dispose_clears_cache(monkeypatch: pytest.MonkeyPatch) -> None:
     assert len(vm._cache) == 1  # type: ignore[attr-defined]
     vm.dispose()
     assert vm._cache == {}  # type: ignore[attr-defined]
+
+
+@pytest.mark.asyncio
+async def test_a_target_switch_mid_list_drops_the_previous_runs_file_list(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The stale-list guard after ``list_files`` was pinned by nothing.
+
+    ``load()`` captures ``target`` before awaiting ``list_files`` and re-checks
+    it afterwards — the comment calls it "target changed mid-flight; drop the
+    stale list". Neutralising that check survived the whole repo suite: run A's
+    file list would be written into ``_available_files`` after the user had
+    already switched to run B, driving B's file selection and poisoning the LRU
+    cache under B's key, so the logs pane showed another run's output.
+    """
+    switched = asyncio.Event()
+    released = asyncio.Event()
+
+    async def _list_files(**_kwargs: object) -> list[LogFile]:
+        switched.set()
+        await released.wait()
+        return [_STDERR_FILE]
+
+    monkeypatch.setattr(
+        "aws_tui.domain.emr_logs.list_log_files",
+        _list_files,
+        raising=False,
+    )
+
+    vm = _make()
+    vm.set_target("app1", "run1", _LOG_URI)
+    load_task = asyncio.create_task(vm.load())
+
+    # Let run1's list_files start, then switch the pane to run2 while it is
+    # still in flight.
+    await asyncio.wait_for(switched.wait(), timeout=2)
+    vm.set_target("app1", "run2", _LOG_URI)
+    released.set()
+    await asyncio.wait_for(load_task, timeout=2)
+
+    assert vm.available_files == (), "run1's file list was applied after the pane switched to run2"
+    assert vm.current_file is None
+
+
+@pytest.mark.asyncio
+async def test_set_target_with_unchanged_ids_keeps_the_loaded_log_buffer(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A no-op ``set_target`` must not blank the pane.
+
+    The page re-invokes ``set_target`` with unchanged ids on every
+    detail-to-logs sync, so this early return runs constantly. Removing it
+    survived the whole repo suite while each poll cleared ``_lines``,
+    ``_bytes_read``, ``_lines_scanned`` and ``_available_files`` and reset the
+    state — the user's loaded log buffer blanked underneath them.
+    """
+
+    async def _list_files(**_kwargs: object) -> list[LogFile]:
+        return [_STDERR_FILE]
+
+    monkeypatch.setattr(
+        "aws_tui.domain.emr_logs.list_log_files",
+        _list_files,
+        raising=False,
+    )
+
+    vm = _make()
+    vm.set_target("app1", "run1", _LOG_URI)
+    await vm.load()
+
+    loaded_files = vm.available_files
+    loaded_state = vm.state
+    assert loaded_files, "precondition: the pane has a loaded file list"
+
+    # Exactly what the page's detail->logs sync does on every poll.
+    vm.set_target("app1", "run1", _LOG_URI)
+
+    assert vm.available_files == loaded_files, "a no-op target sync cleared the pane"
+    assert vm.state is loaded_state

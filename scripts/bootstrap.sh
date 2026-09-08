@@ -72,7 +72,14 @@ uv python install 3.11
 echo "==> uv sync --locked --all-groups"
 uv sync --locked --all-groups
 
-echo "==> installing pre-commit hooks"
-uv run pre-commit install
+if [ -d .git ]; then
+  echo "==> installing pre-commit hooks"
+  uv run pre-commit install
+else
+  # `pre-commit install` needs a git dir and exits non-zero without one, which
+  # under `set -e` aborted bootstrap after a successful sync for anyone working
+  # from a downloaded tarball or zip.
+  echo "==> skipping pre-commit hooks (not a git checkout)"
+fi
 
 echo "==> bootstrap complete; try:  uv run pytest"

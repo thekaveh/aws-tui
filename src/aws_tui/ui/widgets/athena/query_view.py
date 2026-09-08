@@ -9,11 +9,12 @@ from textual.containers import Horizontal, VerticalScroll
 from textual.widget import Widget
 from textual.widgets import Button, Static, TextArea
 
+from aws_tui.ui.widgets._worker import DeferredWorkerMixin
 from aws_tui.ui.widgets.glue.detail_rows import display_value
 from aws_tui.vm.athena.page_vm import AthenaPageVM
 
 
-class AthenaQueryView(Widget):
+class AthenaQueryView(DeferredWorkerMixin, Widget):
     BINDINGS: ClassVar[list[BindingType]] = [
         Binding("tab", "focus_next", show=False),
         Binding("shift+tab", "focus_previous", show=False),
@@ -125,15 +126,13 @@ class AthenaQueryView(Widget):
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
         if event.button.id == "athena-execute":
-            self.run_worker(
-                self._vm.execute(),
-                exclusive=True,
+            self._run_lifecycle_worker(
+                self._vm.execute,
                 group="athena-query-execute",
             )
         elif event.button.id == "athena-cancel":
-            self.run_worker(
-                self._vm.cancel(),
-                exclusive=True,
+            self._run_lifecycle_worker(
+                self._vm.cancel,
                 group="athena-query-cancel",
             )
 

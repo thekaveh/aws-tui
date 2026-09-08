@@ -198,21 +198,39 @@ async def test_sticky_toast_does_not_auto_dismiss() -> None:
 
 
 async def test_dispose_cancels_auto_dismiss_timer() -> None:
-    """Disposing the stack mid-timer shouldn't raise / leak the asyncio task."""
+    """Disposing the stack mid-timer must cancel the task, not merely not raise.
+
+    This test had no assertions at all: it constructed, raised, disposed and
+    slept. Replacing ``self._cancel_all_timers()`` in ``dispose`` with ``pass``
+    left it green while three 600-second timers survived their VM, holding
+    references to disposed objects until the loop closed. Assert the tasks are
+    actually cancelled.
+    """
     stack = _stack()
     stack.construct()
-    stack.raise_toast(
-        ToastModel(
-            id="cancelable",
-            text="x",
-            level=ToastLevel.INFO,
-            sticky=False,
-            timeout_seconds=1.0,  # would not fire in this test window
-            action_label=None,
-            action_action=None,
+    for index in range(3):
+        stack.raise_toast(
+            ToastModel(
+                id=f"cancelable-{index}",
+                text="x",
+                level=ToastLevel.INFO,
+                sticky=False,
+                timeout_seconds=600.0,  # would not fire in this test window
+                action_label=None,
+                action_action=None,
+            )
         )
-    )
+    timers = tuple(stack._timers.values())
+    assert len(timers) == 3
+    assert not any(task.done() for task in timers)
+
     stack.dispose()
+    await asyncio.sleep(0)
+
+    assert stack._timers == {}
+    assert all(task.cancelled() or task.done() for task in timers), (
+        "auto-dismiss timers outlived the disposed stack"
+    )
     # Give the loop a tick to settle.
     await asyncio.sleep(0)
 

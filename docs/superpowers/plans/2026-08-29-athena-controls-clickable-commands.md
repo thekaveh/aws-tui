@@ -1,4 +1,4 @@
-# 1. Athena Controls and Clickable Commands Implementation Plan
+# Athena Controls and Clickable Commands Implementation Plan
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
@@ -8,7 +8,7 @@
 
 **Tech Stack:** Python 3.11-3.13, Textual 8.2.8, VMx 3.23.0, pytest, pytest-asyncio, pytest-textual-snapshot, Ruff, mypy.
 
-## 1.1. Global Constraints
+## 1. Global Constraints
 
 - Work on `codex/athena-controls-clickable-commands`, branched from synchronized `develop` commit `dc70d2e2`.
 - Preserve query view order and the editor -> Run -> Stop -> execution detail Tab sequence.
@@ -21,7 +21,7 @@
 
 ---
 
-## 1.2. Task 1: Prove and Repair Query-Control Geometry
+## 2. Task 1: Prove and Repair Query-Control Geometry
 
 **Files:**
 - Modify: `tests/snapshot/apps/athena.py`
@@ -38,7 +38,7 @@
 - [x] Increase the controls grid track and restore standard three-row button geometry without changing focus order.
 - [x] Run focused unit and snapshot tests and confirm they pass.
 
-## 1.3. Task 2: Make Starter SQL a Visible Handoff Completion Contract
+## 3. Task 2: Make Starter SQL a Visible Handoff Completion Contract
 
 **Files:**
 - Modify: `tests/integration/test_glue_athena_navigation.py`
@@ -54,7 +54,7 @@
 - [x] Add the smallest public Athena-page projection hook and call it after `open_table()` under the existing generation guard.
 - [x] Verify exact VM/editor SQL, active Query view, enabled Run command, and no execution.
 
-## 1.4. Task 3: Dispatch Clickable Command Hints
+## 4. Task 3: Dispatch Clickable Command Hints
 
 **Files:**
 - Modify: `tests/unit/ui/test_chrome_widgets.py`
@@ -70,7 +70,7 @@
 - [x] Handle `_HintChip` primary clicks by dispatching the named action and scheduling awaitables through an app-owned worker group.
 - [x] Run legend geometry, rebuild-race, tooltip, and full-app routing tests.
 
-## 1.5. Task 4: Verify the Complete Repair
+## 5. Task 4: Verify the Complete Repair
 
 **Files:**
 - Modify: snapshots only when approved geometry changes require regeneration.

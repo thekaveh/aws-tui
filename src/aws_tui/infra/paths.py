@@ -11,8 +11,8 @@ To avoid silent data loss for existing macOS/Linux users who have a legacy
 ``~/.config/aws-tui`` or ``~/.cache/aws-tui`` populated from earlier
 releases, we prefer the legacy XDG location when it already exists on disk.
 The native ``platformdirs`` location is only used if the legacy directory
-is absent. Tests can override both via the keyword arguments on
-``config_home`` / ``cache_home``.
+is absent. Neither function takes arguments; tests override the location by
+monkeypatching ``platformdirs``' resolver or ``Path.home``.
 """
 
 from __future__ import annotations

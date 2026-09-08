@@ -1,6 +1,6 @@
-# 1. Demo Mode — Design
+# Demo Mode — Design
 
-## 1.1. Goal
+## 1. Goal
 
 Let anyone run aws-tui end-to-end without real AWS credentials or
 a local S3-compatible service. Triggered by an environment
@@ -13,7 +13,7 @@ genuinely test every feature, not just browse.
 The headline target: `pipx install aws-tui && AWS_TUI_DEMO=1
 aws-tui` produces a fully functional app.
 
-## 1.2. Non-goals
+## 2. Non-goals
 
 - Persistent demo state across launches — fresh per launch.
 - Configurable demo seeds (`AWS_TUI_DEMO_SEED=large` etc.) — one
@@ -23,9 +23,9 @@ aws-tui` produces a fully functional app.
 - Localized demo content.
 - Multi-tenant demo isolation — single-process state.
 
-## 1.3. Architecture — 5 components
+## 3. Architecture — 5 components
 
-### 1.3.1. Public API (`src/aws_tui/demo/__init__.py`)
+### 3.1. Public API (`src/aws_tui/demo/__init__.py`)
 
 ```python
 DEMO_ENV_VAR: Final[str] = "AWS_TUI_DEMO"
@@ -38,7 +38,7 @@ Truthy values: `"1"`, `"true"`, `"yes"` (case-insensitive); all
 others false. The `argv` parameter is for testing; defaults to
 `sys.argv`.
 
-### 1.3.2. In-memory fakes (`demo/in_memory_fs.py`, `demo/in_memory_emr.py`)
+### 3.2. In-memory fakes (`demo/in_memory_fs.py`, `demo/in_memory_emr.py`)
 
 Moved from `tests/unit/domain/_in_memory_*.py`. Public symbols
 renamed: `_InMemoryFS` → `InMemoryFS`, `_InMemoryEmr` →
@@ -77,7 +77,7 @@ downstream paths continue to pass without edits:
 from aws_tui.demo.in_memory_emr import InMemoryEmr as _InMemoryEmr  # noqa: F401
 ```
 
-### 1.3.3. Demo data seeds (`demo/seeds.py`)
+### 3.3. Demo data seeds (`demo/seeds.py`)
 
 Pure-data fixtures, no logic:
 
@@ -110,7 +110,7 @@ def seeded_demo_emr(profile: str = "demo-dev") -> InMemoryEmr: ...
   production demo fixture; that earlier design note is superseded by
   the no-log state above.
 
-### 1.3.4. Demo connection resolver (`demo/connections.py`)
+### 3.4. Demo connection resolver (`demo/connections.py`)
 
 ```python
 def demo_connections() -> tuple[Connection, ...]:
@@ -134,7 +134,7 @@ class DemoConnectionResolver:
 Shift+S cycle, Settings panel, and boot-chain all treat these as
 real.
 
-### 1.3.5. Composition-root branch (`app.py` + `main()`)
+### 3.5. Composition-root branch (`app.py` + `main()`)
 
 The `main()` entrypoint and `build_app_context()` each get a
 single conditional:
@@ -175,7 +175,7 @@ visible on the selected run.
 - `aws-tui --version` prints `demo: enabled` when env var is set,
   so a stuck shell rc surfaces on the first version check.
 
-### 1.3.6. Layer rules update (`scripts/check-layers.sh`)
+### 3.6. Layer rules update (`scripts/check-layers.sh`)
 
 Add `aws_tui.demo` as an allowed-but-restricted layer:
 - `aws_tui.demo` CAN import from `aws_tui.domain`,
@@ -185,19 +185,19 @@ Add `aws_tui.demo` as an allowed-but-restricted layer:
   `aws_tui.demo`.
 - Only `aws_tui.app` and `tests/` are allowed importers.
 
-## 1.4. Triggers
+## 4. Triggers
 
 - `AWS_TUI_DEMO=1` env var (truthy values: `1`, `true`, `yes`).
 - `--demo` long flag on `aws-tui`.
 - Either alone enables demo. No conflict if both set.
 
-## 1.5. Persistence
+## 5. Persistence
 
 Fresh AWS/S3/EMR demo state per launch. The S3 and EMR fakes do not
 survive exit. The Local file pane is the user's real `LocalFS` root,
 so local file operations are real host filesystem operations.
 
-## 1.6. Risks and mitigations
+## 6. Risks and mitigations
 
 - **User confuses demo for real.** Persistent `DEMO MODE` chip in
   the BrandBanner subtitle (warning color, never goes away), plus
@@ -216,7 +216,7 @@ so local file operations are real host filesystem operations.
   `DEMO MODE` chip is the visible cue; `aws-tui --version`
   prints `demo: enabled` so a stuck env var surfaces.
 
-## 1.7. Rollback
+## 7. Rollback
 
 - Per-session off: `unset AWS_TUI_DEMO && aws-tui`.
 - Feature kill switch: hardcode `is_demo_mode_enabled()` to
@@ -225,7 +225,7 @@ so local file operations are real host filesystem operations.
   the runtime feature ships; a full rollback of the composition-
   root branch leaves the test shims intact.
 
-## 1.8. Testing strategy
+## 8. Testing strategy
 
 - **Unit (existing 140+ tests)** keep passing via the re-export
   shims, no edits.
@@ -253,7 +253,7 @@ so local file operations are real host filesystem operations.
   across panes, submit a clone, watch its state progress, edit
   the filter.
 
-## 1.9. What we have when done
+## 9. What we have when done
 
 - `aws-tui --version` mentions `demo: enabled` in demo mode.
 - `AWS_TUI_DEMO=1 aws-tui` (or `aws-tui --demo`) launches with 4

@@ -852,3 +852,44 @@ AthenaPage .glue-detail-row.-state-cancelled { color: $danger; }
 AthenaPage .glue-detail-row.-state-running,
 AthenaPage .glue-detail-row.-state-queued { color: $accent; }
 AthenaPage .glue-detail-row.-state-succeeded { color: $success; }
+
+/* ── Disabled and focus affordances (a11y) ──────────────────────────────
+ * Textual styles `:disabled` only for `Button`; `ModalButton` and the hint
+ * chips are `Static`, so a disabled control rendered pixel-identical to an
+ * enabled one — measured identical on every attribute. That made the crash
+ * modal's disabled "continue" look like a hang, and advertised unavailable
+ * commands in the legend at full strength.
+ *
+ * The Settings row chips relied on `background-tint` alone for focus, which
+ * measured 1.01-1.13:1 against the blurred state across every theme — below
+ * the 3:1 non-text contrast bar, and one of those tab stops deletes a
+ * connection. Give focus a border and a reverse text style so it does not
+ * depend on colour discrimination at all.
+ */
+ModalButton:disabled,
+ModalButton.-disabled {
+    color: $text-dim;
+    text-style: dim;
+}
+
+HintLegend .hint-key.-disabled,
+HintLegend .hint-label.-disabled {
+    color: $text-dim;
+    text-style: dim;
+}
+
+S3ConnectionsPanel .row-chip-edit:focus,
+S3ConnectionsPanel .row-chip-delete:focus {
+    border: tall $accent;
+    text-style: bold reverse;
+}
+
+ConnectionFormInline .form-error {
+    /* Hidden until a field actually has an error; `_apply_error_classes`
+       sets `.display` explicitly, which overrides this. Without it the empty
+       slots reserved a blank line under every field. */
+    display: none;
+    color: $danger;
+    text-style: italic;
+    padding: 0 0 0 1;
+}

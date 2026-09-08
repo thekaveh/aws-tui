@@ -1,10 +1,10 @@
-# 1. Three-surface documentation for aws-tui — design
+# Three-surface documentation for aws-tui — design
 
 **Date:** 2026-07-10
 **Status:** Implemented; retained as the historical design record
 **Skill:** `three-surface-docs` (adapted — no notebook subsystem)
 
-## 1.1. Goal
+## 1. Goal
 
 Project **one canonical documentation source** (the repo's own `docs/*.md`)
 into **three self-contained surfaces** that stay in sync *by construction*:
@@ -20,7 +20,7 @@ surface links to another (self-containment is absolute).
 Non-goal: the skill's notebook subsystem (Zeppelin/Scala/PySpark, `notebooks.py`,
 per-notebook `spec.yaml`) is **out of scope** — aws-tui has no notebooks.
 
-## 1.2. Scope decisions (locked)
+## 2. Scope decisions (locked)
 
 | Decision | Choice |
 | --- | --- |
@@ -31,7 +31,7 @@ per-notebook `spec.yaml`) is **out of scope** — aws-tui has no notebooks.
 | Page set | Publish all `docs/*.md` **except** `recording-todo.md` + `superpowers/**` |
 | Tooling | **`uv`-native** — `[dependency-groups] docs`, `uv run` everywhere (not pip/`docs-requirements.txt`) |
 
-## 1.3. Architecture (the shape)
+## 3. Architecture (the shape)
 
 ```
 CANONICAL (committed)                    GENERATED (gitignored)          SURFACE
@@ -49,7 +49,7 @@ links; repo ✗ site/wiki links. `README.md` is gated too. MkDocs gets **no**
 `repo_url` / `repo_name` / `edit_uri`. In-repo README may link to repo files but
 gains **no** links to the site or wiki.
 
-## 1.4. Canonical layout
+## 4. Canonical layout
 
 New files added under `docs/`:
 
@@ -71,7 +71,7 @@ root `mkdocs.yml`, `site/`.
 Existing doc headings are **not renumbered** — every doc keeps its per-file
 `# 1. Title` / `## 1.x` scheme.
 
-## 1.5. The manifest (`docs/manifest.yaml`)
+## 5. The manifest (`docs/manifest.yaml`)
 
 Titles-only nav: `title:` is the nav/sidebar label (no leading number). Manifest
 order drives nav order. A section is **either** a `source` leaf **or** a
@@ -112,7 +112,7 @@ diagrams:
 `docs/recording-todo.md`, `docs/superpowers/**`. `check_docs` knows this set and
 does **not** flag them as unreferenced.
 
-## 1.6. Pipeline (`scripts/docs/`)
+## 6. Pipeline (`scripts/docs/`)
 
 A Python package + unit tests, one job each. **No `notebooks.py`.**
 
@@ -170,7 +170,7 @@ A Python package + unit tests, one job each. **No `notebooks.py`.**
   the key file), `WIKI_REMOTE`, and optional `WIKI_KNOWN_HOSTS`. The default
   GitHub remote uses GitHub's published Ed25519 host key.
 
-## 1.7. The one diagram
+## 7. The one diagram
 
 `docs/diagrams/architecture.html` is authored via the **architecture-diagram
 skill** (dark theme, inline `<svg>`) depicting aws-tui's layered VMx/Textual
@@ -181,7 +181,7 @@ in-repo + wiki. `docs/architecture.md` embeds the PNG with a canonical relative
 path (`diagrams/img/architecture.png`); the surface renderers rewrite it
 (site → `assets/img/architecture.svg`, wiki → `img/architecture.png`).
 
-## 1.8. Tooling integration (`uv`-native)
+## 8. Tooling integration (`uv`-native)
 
 - `pyproject.toml`: add `[dependency-groups] docs = ["mkdocs-material>=9.6,<10.0",
   "pyyaml>=6.0,<7.0", "cairosvg>=2.7,<3.0"]`. (ruff + pytest already present.)
@@ -199,7 +199,7 @@ path (`diagrams/img/architecture.png`); the surface renderers rewrite it
 - `.gitignore`: add `/generated/`, `/mkdocs.yml`, `/site/`.
 - ruff already lints `scripts/**`; the new modules must be clean.
 
-## 1.9. CI (matches existing conventions: `uv`, pinned action SHAs)
+## 9. CI (matches existing conventions: `uv`, pinned action SHAs)
 
 - **`.github/workflows/ci.yml` `docs` job** — required PR/push gate on
   **`[main, develop]`**. The unconditional aggregate `ci gate` depends on it,
@@ -214,7 +214,7 @@ path (`diagrams/img/architecture.png`); the surface renderers rewrite it
   `wiki` job (`needs: deploy`, `if: ref == main`): write `WIKI_DEPLOY_KEY` secret to
   `~/.ssh/wiki_key`, `build_docs --wiki`, `push_wiki --push`.
 
-## 1.10. Tests (`tests/docs/`, one file per module, TDD)
+## 10. Tests (`tests/docs/`, one file per module, TDD)
 
 `test_manifest` (parse/validate/`ManifestError`, leaf-vs-group), `test_links`
 (3×3 matrix + wiki-contains-repo-substring), `test_transforms` (source-map site/wiki
@@ -232,7 +232,7 @@ Tests run under the existing `uv run pytest`. Because `pyproject` `testpaths =
 `aws_tui` unit tests, so they must not require the app import path — they import
 `scripts.docs.*` (enabled by `pythonpath = ["src", "."]`).
 
-## 1.11. Phase 2 — external / publish steps (each gated on explicit approval)
+## 11. Phase 2 — external / publish steps (each gated on explicit approval)
 
 Performed **after** the pipeline is committed and green locally. Not part of the
 build phase.
@@ -246,7 +246,7 @@ build phase.
 4. First `push_wiki --push` bootstraps `aws-tui.wiki.git` (pushes **`master`**).
 5. A `develop → main` merge triggers `pages.yml` → publishes site + wiki.
 
-## 1.12. Verification (before merge)
+## 12. Verification (before merge)
 
 - `make docs-check` → verify the generated hero + diagrams, run `check_docs`,
   and run `mkdocs build --strict`
@@ -256,7 +256,7 @@ build phase.
 - After Phase 2: `curl` the `.io` site (HTTP 200) and the wiki; `grep` the generated
   trees for expected content.
 
-## 1.13. Gotchas carried forward (from the skill)
+## 13. Gotchas carried forward (from the skill)
 
 `master` for the wiki (#1); CI git-identity default (#2); `libcairo2` in CI (#3);
 invoke as `python -m scripts.docs.*` (#4); sanitize non-XML SVG entities (#5); image

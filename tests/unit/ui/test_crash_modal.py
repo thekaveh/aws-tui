@@ -9,7 +9,7 @@ import pytest
 from textual.app import App, ComposeResult
 from vmx import MessageHub, RxDispatcher
 
-from aws_tui.ui.widgets.crash_modal import CrashModal
+from aws_tui.ui.widgets.crash_modal import CrashChoice, CrashModal
 from aws_tui.ui.widgets.modal_button import ModalButton
 from aws_tui.vm.chrome.crash_vm import CrashReport, CrashVM
 
@@ -25,6 +25,54 @@ def _report(*, can_continue: bool) -> CrashReport:
         dump_path=Path("/tmp/aws-tui/crash/2026-06-14T10-00-00.txt"),
         can_continue=can_continue,
     )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("key", ["c", "enter"])
+async def test_crash_modal_keyboard_cannot_continue_after_an_unsafe_crash(key: str) -> None:
+    """The ``c`` binding must respect ``can_continue``, not just the button.
+
+    ``ModalButton.can_focus = not disabled`` keeps the mouse and Tab away from a
+    disabled Continue button, and that IS tested. But ``c`` is bound directly to
+    ``action_continue`` on the modal, so it bypasses the button entirely.
+    Neutralising the guard inside ``action_continue`` left 125 tests green while
+    ``c`` dismissed the modal after a crash inside a write command — dropping
+    the user back into a corrupted app AND stranding the crash-recovery
+    coroutine, since the modal that offered ``q`` was gone.
+    """
+    hub: MessageHub = MessageHub()
+    dispatcher = RxDispatcher.immediate()
+    vm = CrashVM(_report(can_continue=False), hub=hub, dispatcher=dispatcher)
+    vm.construct()
+    try:
+        answered: list[object] = []
+
+        class _App(App[None]):
+            def compose(self) -> ComposeResult:
+                yield from ()
+
+            async def on_mount(self) -> None:
+                self.push_screen(CrashModal(vm, hub=hub), answered.append)
+
+        app = _App()
+        async with app.run_test(size=(100, 30)) as pilot:
+            await pilot.pause()
+            modal = app.screen
+            assert isinstance(modal, CrashModal)
+            assert not vm.can_continue
+
+            await pilot.press(key)
+            await pilot.pause()
+
+            if key == "c":
+                # ``c`` is a no-op: there is nothing safe to continue into.
+                assert app.screen is modal, "c dismissed the crash modal"
+            # ``enter`` legitimately falls through to View trace, which does
+            # dismiss. What neither key may ever do is CONTINUE.
+            assert CrashChoice.CONTINUE not in answered
+    finally:
+        vm.dispose()
+        hub.dispose()
 
 
 @pytest.mark.asyncio

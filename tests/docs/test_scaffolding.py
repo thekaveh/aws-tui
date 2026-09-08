@@ -640,19 +640,102 @@ def test_glue_operation_ledger_matches_domain_adapter_exactly() -> None:
 
 def test_unreleased_changelog_allows_develop_before_main_promotion() -> None:
     changelog = _read("CHANGELOG.md")
-    unreleased_intro = changelog.split("### 1.1.1. Added", maxsplit=1)[0]
+    # Bound the intro at the first subsection so the assertions below cannot
+    # pass by matching text from a later release section.
+    unreleased_intro = changelog.split("\n## [Unreleased]", maxsplit=1)[1].split(
+        "\n### ", maxsplit=1
+    )[0]
     assert "may reside on ``develop`` before promotion to ``main``" in unreleased_intro
     assert "does not by itself claim that every entry has landed on ``main``" in unreleased_intro
     assert "These changes have landed on ``main``" not in unreleased_intro
     assert "historical v0.8.0 staging commit" in _squash(unreleased_intro)
 
 
+def _opening_prose(text: str) -> list[str]:
+    """Prose paragraphs above the first section heading.
+
+    Poster/screenshot markup and the status blockquote are dropped: their
+    relative asset paths and repository links legitimately differ between the
+    repository README and the landing page the site and wiki are built from.
+    """
+    head = text.split("\n## ", maxsplit=1)[0]
+    head = re.sub(r"<p align=\"center\">.*?</p>", "", head, flags=re.DOTALL)
+    paragraphs = []
+    for block in head.split("\n\n"):
+        lines = [line for line in block.splitlines() if line.strip()]
+        if not lines or lines[0].startswith(("#", ">", "<")):
+            continue
+        paragraphs.append(" ".join(line.strip() for line in lines))
+    return paragraphs
+
+
 def test_readme_and_published_index_share_the_product_summary() -> None:
-    summary = (
-        "The application combines a Norton-Commander-style S3 file manager, an EMR\n"
-        "Serverless console, and Unreleased AWS Glue, Amazon Athena, and Iceberg\n"
-        "inspection workflows."
+    """The landing page is projected to the site and the wiki, so a README that
+    drifts from it leaves the three surfaces telling different stories.
+
+    Comparing extracted prose rather than a hard-coded literal means editing the
+    pitch cannot quietly pass by updating one surface and the test together.
+    """
+    readme = _opening_prose(_read("README.md"))
+    index = _opening_prose(_read("docs/index.md"))
+
+    assert readme == index
+    assert len(readme) >= 2, f"expected a tagline and a summary, got {readme}"
+    assert 100 <= len(" ".join(readme).split()) <= 150
+
+
+def test_every_test_directory_holding_modules_is_an_importable_package() -> None:
+    """A test directory without ``__init__.py`` gets its modules imported twice.
+
+    ``tests/unit/vm/athena/test_page_vm.py`` is imported by package path from
+    four other tiers. While that directory lacked a marker, one pytest session
+    held both ``test_page_vm`` and ``tests.unit.vm.athena.test_page_vm`` — the
+    module body ran twice and its ``PageClient`` was two unrelated classes, so a
+    cross-boundary ``isinstance`` check was silently false. The bug is invisible
+    in test results, which is why it needs a structural guard rather than a
+    behavioural one.
+    """
+    tests_root = REPO_ROOT / "tests"
+    missing = sorted(
+        str(directory.relative_to(REPO_ROOT))
+        for directory in tests_root.rglob("*")
+        if directory.is_dir()
+        and directory.name != "__pycache__"
+        and "__pycache__" not in directory.parts
+        and "__snapshots__" not in directory.parts
+        and any(directory.glob("test_*.py"))
+        and not (directory / "__init__.py").exists()
     )
 
-    assert summary in _read("README.md")
-    assert summary in _read("docs/index.md")
+    assert missing == [], (
+        "test directories containing modules but no __init__.py; pytest will "
+        f"import their modules twice under two names: {missing}"
+    )
+
+
+def test_no_test_module_hand_copies_the_built_in_theme_list() -> None:
+    """Three modules each kept their own literal copy of ``BUILTIN_NAMES``.
+
+    A hand-copied list does not fail when it drifts. Adding a built-in theme
+    just shrinks the parametrization: the remaining cases still pass, the new
+    theme is never rendered, and nothing reports the gap. Every list is now
+    derived from ``ThemeStore.BUILTIN_NAMES``, so pin that.
+    """
+    from aws_tui.infra.theme_store import ThemeStore
+
+    # Two names identify a copy of the list rather than an incidental
+    # single-theme reference (a targeted regression test is legitimate). They
+    # are assembled rather than written out so this guard does not flag itself.
+    sentinels = ("gruvbox" + "-dark", "solarized" + "-light")
+    offenders = []
+    for path in sorted((REPO_ROOT / "tests").rglob("*.py")):
+        if "__snapshots__" in path.parts:
+            continue
+        text = path.read_text(encoding="utf-8")
+        if all(f'"{name}"' in text for name in sentinels):
+            offenders.append(str(path.relative_to(REPO_ROOT)))
+
+    assert offenders == [], (
+        "test modules embedding a literal copy of ThemeStore.BUILTIN_NAMES "
+        f"({len(ThemeStore.BUILTIN_NAMES)} themes); derive it instead: {offenders}"
+    )

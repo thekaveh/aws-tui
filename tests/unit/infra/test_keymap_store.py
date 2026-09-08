@@ -166,3 +166,38 @@ def test_single_ascii_punctuation_matches_public_textual_normalization(key: str)
 
     runtime_key = next(iter(BindingsMap([(key, "noop")]).key_to_bindings))
     assert textual_key_name(key) == runtime_key
+
+
+@pytest.mark.parametrize(
+    ("configured", "expected"),
+    [
+        ("Ctrl+K", "ctrl+k"),
+        ("ctrl+k", "ctrl+k"),
+        ("PageUp", "pageup"),
+        ("F1", "f1"),
+        ("Escape", "escape"),
+    ],
+)
+def test_multi_character_keys_fold_to_textual_casing(configured: str, expected: str) -> None:
+    """Textual key names are all lowercase and are matched verbatim.
+
+    ``docs/cookbook.md`` documents ``"app.command_palette" = ["Ctrl+K", ":"]``.
+    Passing that casing through unchanged bound a key no event ever emits, and
+    because an overlay replaces the defaults wholesale it silently unbound the
+    action instead of failing.
+    """
+    assert textual_key_name(configured) == expected
+
+
+@pytest.mark.parametrize("key", ["K", "k", "Z", "z"])
+def test_single_character_keys_keep_their_case(key: str) -> None:
+    """``K`` and ``k`` are distinct keys, so folding must not reach them."""
+    assert textual_key_name(key) == key
+
+
+def test_documented_uppercase_overlay_reaches_the_runtime_key() -> None:
+    store = KeymapStore(overlay={"app.command_palette": ["Ctrl+K", ":"]})
+
+    resolved = [textual_key_name(key) for key in store.resolve("app.command_palette")]
+
+    assert "ctrl+k" in resolved

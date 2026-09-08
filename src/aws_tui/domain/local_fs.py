@@ -364,10 +364,12 @@ class LocalFS:
             # already had this catch; add the same here.
             raise _map_os_error(exc, host.as_posix()) from exc
 
+        claimed_original: AnyioPath | None = None
         if expected_etag is not None:
             if not _local_revision_matches(_local_etag(host_stat), expected_etag):
                 raise ConflictError(f"source changed: {host.as_posix()}")
             original = host
+            claimed_original = original
             quarantine = AnyioPath(
                 Path(host.as_posix()).with_name(
                     f".{Path(host.as_posix()).name}.aws-tui-delete-{uuid4().hex}"
@@ -403,10 +405,32 @@ class LocalFS:
             host_stat = quarantined_stat
 
         try:
-            if stat.S_ISDIR(host_stat.st_mode) and not stat.S_ISLNK(host_stat.st_mode):
-                await anyio.to_thread.run_sync(shutil.rmtree, str(host))
-            else:
-                await host.unlink()
+            # The inner block restores the quarantine claim before the outer
+            # handlers map the failure, so the error taxonomy is unchanged and
+            # a failed delete no longer leaves the caller's entry renamed to a
+            # hidden `.<name>.aws-tui-delete-<uuid>` with nothing to put it
+            # back. The rooted sibling `_rooted_delete_empty_directory` already
+            # does this; reachable in production through `CrossFsMove`, whose
+            # source delete passes `expected_etag`.
+            try:
+                if stat.S_ISDIR(host_stat.st_mode) and not stat.S_ISLNK(host_stat.st_mode):
+                    await anyio.to_thread.run_sync(shutil.rmtree, str(host))
+                else:
+                    await host.unlink()
+            except BaseException:
+                if claimed_original is not None:
+                    try:
+                        await anyio.to_thread.run_sync(
+                            _rename_no_replace,
+                            host.as_posix(),
+                            claimed_original.as_posix(),
+                        )
+                    except OSError as restore_exc:
+                        raise ProviderError(
+                            "delete failed and the original could not be restored "
+                            f"from {host.as_posix()}: {restore_exc}"
+                        ) from restore_exc
+                raise
         except FileNotFoundError as exc:
             raise NotFoundError(host.as_posix()) from exc
         except PermissionError as exc:

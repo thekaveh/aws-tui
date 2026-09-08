@@ -1,4 +1,4 @@
-# 1. VMx 3.1 Remaining Adoption Implementation Plan
+# VMx 3.1 Remaining Adoption Implementation Plan
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
@@ -8,7 +8,7 @@
 
 **Tech Stack:** Python 3.11+, VMx 3.1.0, reactivex, Textual, pytest, pytest-cov, ruff, mypy.
 
-## 1.1. Global Constraints
+## 1. Global Constraints
 
 - Runtime dependency remains `vmx>=3.1.0,<4.0.0`.
 - Public aws-tui VM/view APIs remain stable unless a test explicitly records an intentional behavior change.
@@ -19,7 +19,7 @@
 
 ---
 
-## 1.2. File Structure
+## 2. File Structure
 
 - Modify `src/aws_tui/vm/chrome/command_palette_vm.py`: replace manual `_filtered` recompute machinery with VMx `ScoredFilteredCompositeVM`; evaluate localized `AsyncRelayCommand` for async palette actions.
 - Modify `src/aws_tui/vm/file_manager/pane_vm.py`: replace local aws-tui `FilteredCompositeVM` with VMx `FilteredCompositeVM` and `FilteredCursorPolicy`.
@@ -34,9 +34,9 @@
 
 ---
 
-## 1.3. Tasks
+## 3. Tasks
 
-### 1.3.1. Task 1: CommandPaletteVM Uses ScoredFilteredCompositeVM
+### 3.1. Task 1: CommandPaletteVM Uses ScoredFilteredCompositeVM
 
 **Files:**
 - Modify: `tests/unit/vm/chrome/test_command_palette.py`
@@ -141,7 +141,7 @@ git commit -m "refactor: use VMx scored filter for command palette"
 
 ---
 
-### 1.3.2. Task 2: PaneVM Uses VMx FilteredCompositeVM
+### 3.2. Task 2: PaneVM Uses VMx FilteredCompositeVM
 
 **Files:**
 - Modify: `tests/unit/vm/file_manager/test_pane_vm.py`
@@ -246,7 +246,7 @@ git commit -m "refactor: use VMx filtered composite for panes"
 
 ---
 
-### 1.3.3. Task 3: FocusCoordinatorVM Uses DiscriminatorVM
+### 3.3. Task 3: FocusCoordinatorVM Uses DiscriminatorVM
 
 **Files:**
 - Modify: `tests/unit/vm/chrome/test_focus_coordinator_vm.py`
@@ -305,7 +305,7 @@ git commit -m "refactor: use VMx discriminator for focus coordination"
 
 ---
 
-### 1.3.4. Task 4: JobRunsVM Uses TokenPagedComposition
+### 3.4. Task 4: JobRunsVM Uses TokenPagedComposition
 
 **Files:**
 - Modify: `tests/unit/vm/emr_serverless/test_job_runs_vm.py`
@@ -363,7 +363,7 @@ git commit -m "refactor: use VMx token pager for job runs"
 
 ---
 
-### 1.3.5. Task 5: Modal Facades Use ModalVM
+### 3.5. Task 5: Modal Facades Use ModalVM
 
 **Files:**
 - Modify: `tests/unit/vm/chrome/test_confirm.py`
@@ -417,7 +417,7 @@ git commit -m "refactor: use VMx ModalVM for chrome modals"
 
 ---
 
-### 1.3.6. Task 6: Shared Hub Subscribers Use when_property_changed
+### 3.6. Task 6: Shared Hub Subscribers Use when_property_changed
 
 **Files:**
 - Modify: `tests/unit/ui/test_overlay_widgets.py`
@@ -455,7 +455,7 @@ git commit -m "refactor: use VMx property-change subscriptions"
 
 ---
 
-### 1.3.7. Task 7: Final Verification And Roll-Up
+### 3.7. Task 7: Final Verification And Roll-Up
 
 **Files:**
 - Modify: `docs/superpowers/specs/2026-07-02-vmx-3-1-adoption-audit.md`

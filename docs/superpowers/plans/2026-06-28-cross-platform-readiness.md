@@ -1,4 +1,4 @@
-# 1. Cross-Platform Readiness Implementation Plan
+# Cross-Platform Readiness Implementation Plan
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
@@ -8,7 +8,7 @@
 
 **Tech Stack:** GitHub Actions (matrix expansion), `platformdirs` + `pathlib` (already in place — audit only), `uv` (release tool used in CI), `pipx` (documented install path), Homebrew (existing tap repo bring-up flow — uses the existing PR #95 pipeline).
 
-## 1.1. Global Constraints
+## 1. Global Constraints
 
 - Spec: `docs/superpowers/specs/2026-06-28-cross-platform-readiness-design.md`.
 - Repo conventions: VMx MVVM, Textual, pytest tiers (unit/integration/snapshot/e2e), 10 themes, snapshot content-presence guards, ruff + mypy strict.
@@ -23,7 +23,7 @@
 
 ---
 
-## 1.2. File Structure
+## 2. File Structure
 
 | Path | Lifecycle | Owner task |
 |---|---|---|
@@ -38,7 +38,7 @@ No source code under `src/` is touched. No test files under `tests/` are added o
 
 ---
 
-### 1.2.1. Task 1: Audit platform-sensitive surfaces
+### 2.1. Task 1: Audit platform-sensitive surfaces
 
 **Goal:** Produce a single source-of-truth document — `docs/cross-platform-audit-2026-06-28.md` — listing every platform-sensitive surface in the codebase with a verdict (`clean` / `risky` / `broken`), the concrete file:line citations that back the verdict, and the proposed fix (if any). No code changes.
 
@@ -268,7 +268,7 @@ git commit -m "docs(cross-platform): audit platform-sensitive surfaces (Task 1)"
 
 ---
 
-### 1.2.2. Task 2: Expand CI matrix for `lint-type` + `pkg` jobs
+### 2.2. Task 2: Expand CI matrix for `lint-type` + `pkg` jobs
 
 **Goal:** Run lint, type-check, layer rules, build, and twine-check on all three OSes × all three supported Python versions. Catch platform-specific lint/type/build regressions before they reach a release.
 
@@ -460,7 +460,7 @@ When CI is green on every matrix leg, Task 2 is done.
 
 ---
 
-### 1.2.3. Task 3: Per-platform install paths documented
+### 2.3. Task 3: Per-platform install paths documented
 
 **Goal:** Create `docs/installing.md` — the single source of truth for "how do I install aws-tui on platform X." Each install path is concrete (exact command), tested by hand on the platform, and pinned with a "verified on `YYYY-MM-DD` against vX.Y.Z" note.
 
@@ -700,7 +700,7 @@ git commit -m "docs(cross-platform): per-platform install paths (Task 3)"
 
 ---
 
-### 1.2.4. Task 4: Release-time smoke install gate
+### 2.4. Task 4: Release-time smoke install gate
 
 **Goal:** Add a `smoke-install` matrix job to `.github/workflows/release.yml` that downloads the just-built wheel and runs the "Recommended: pipx" install on each of `{macos-14, ubuntu-24.04, windows-latest}`. The PyPI publish step waits on it; a smoke-install failure blocks the publish.
 
@@ -836,7 +836,7 @@ git commit -m "ci(cross-platform): smoke-install gate before PyPI publish (Task 
 
 ---
 
-### 1.2.5. Task 5: README install section restructure + per-platform polish
+### 2.5. Task 5: README install section restructure + per-platform polish
 
 **Goal:** The README is the front door — restructure the "Install" section so a first-time visitor on any of the three OSes sees their command verbatim, without scrolling past the other two. Cross-link to `docs/installing.md` for the full per-path matrix. Add a one-line "Terminal recommendation" callout for Windows.
 
@@ -940,7 +940,7 @@ git commit -m "docs(cross-platform): per-platform README install section (Task 5
 
 ---
 
-## 1.3. Self-Review
+## 3. Self-Review
 
 **1. Spec coverage**
 

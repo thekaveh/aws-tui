@@ -5,13 +5,16 @@ import pytest
 import scripts.docs.render_diagrams as render_diagrams
 from scripts.docs.build_docs import (
     _assert_dirs_equal,
+    _copy_referenced_assets,
+    _referenced_assets,
+    _rewrite_images,
     build,
     render_mkdocs_yml,
     render_package_readme,
     render_site,
     render_wiki,
 )
-from scripts.docs.manifest import parse_manifest
+from scripts.docs.manifest import ManifestError, parse_manifest
 from scripts.docs.render_diagrams import render_all
 
 
@@ -22,12 +25,12 @@ def _fixture(tmp_path: Path):
     font_dir.mkdir(parents=True)
     (font_dir / "FiraCode-Regular.ttf").write_bytes(b"test-regular-font")
     (font_dir / "FiraCode-Bold.ttf").write_bytes(b"test-bold-font")
-    (docs / "index.md").write_text("# 1. aws-tui\n\nWelcome.\n")
+    (docs / "index.md").write_text("# aws-tui\n\nWelcome.\n")
     (docs / "architecture.md").write_text(
-        "# 1. Architecture\n\n![arch](diagrams/img/architecture.png)\n\n"
+        "# Architecture\n\n![arch](diagrams/img/architecture.png)\n\n"
         "See [keys](keybindings.md) and [repo](https://github.com/thekaveh/aws-tui/blob/main/x).\n"
     )
-    (docs / "keybindings.md").write_text("# 1. Keybindings\n\nKeys.\n")
+    (docs / "keybindings.md").write_text("# Keybindings\n\nKeys.\n")
     (docs / "stylesheets" / "extra.css").write_text("/* theme */\n")
     (docs / "diagrams" / "img").mkdir(parents=True)
     (docs / "diagrams" / "img" / "architecture.png").write_bytes(b"\x89PNG\r\n\x1a\nX")
@@ -162,8 +165,8 @@ def test_assert_dirs_equal_detects_difference(tmp_path):
 def test_package_surface_is_generated_and_checked(tmp_path):
     docs = tmp_path / "docs"
     docs.mkdir()
-    (docs / "index.md").write_text("# 1. Overview\n", encoding="utf-8")
-    (docs / "package.md").write_text("# 1. Package\n\nCanonical.\n", encoding="utf-8")
+    (docs / "index.md").write_text("# Overview\n", encoding="utf-8")
+    (docs / "package.md").write_text("# Package\n\nCanonical.\n", encoding="utf-8")
     manifest_path = docs / "manifest.yaml"
     manifest_path.write_text(
         textwrap.dedent(
@@ -189,3 +192,47 @@ def test_package_surface_is_generated_and_checked(tmp_path):
     (tmp_path / "PYPI.md").write_text("stale\n", encoding="utf-8")
     with pytest.raises(AssertionError, match="package README is stale"):
         build(manifest_path, tmp_path, check=True)
+
+
+def test_rewrite_images_rewrites_every_asset_not_just_the_screenshot():
+    """A single hard-coded filename left the poster unrewritten on both surfaces."""
+    md = (
+        '<img src="../assets/aws-tui-poster.png" width="100%">\n'
+        '<img src="../assets/screenshots/aws-tui-running.png" width="100%">\n'
+    )
+
+    site = _rewrite_images(md, "site")
+    wiki = _rewrite_images(md, "wiki")
+
+    assert 'src="assets/img/aws-tui-poster.png"' in site
+    assert 'src="assets/img/aws-tui-running.png"' in site
+    assert 'src="img/aws-tui-poster.png"' in wiki
+    assert 'src="img/aws-tui-running.png"' in wiki
+    assert "../assets/" not in site + wiki
+
+
+def test_referenced_assets_reports_nested_and_top_level_embeds():
+    md = (
+        '<img src="../assets/aws-tui-poster.png">\n'
+        '<img src="../assets/screenshots/aws-tui-running.png">\n'
+    )
+
+    assert _referenced_assets(md) == {
+        "aws-tui-poster.png",
+        "screenshots/aws-tui-running.png",
+    }
+
+
+def test_copy_referenced_assets_fails_when_an_embedded_asset_is_missing(tmp_path):
+    with pytest.raises(ManifestError, match="does not exist"):
+        _copy_referenced_assets(tmp_path, {"absent.png"}, tmp_path / "out")
+
+
+def test_copy_referenced_assets_rejects_a_basename_collision(tmp_path):
+    for rel in ("a/logo.png", "b/logo.png"):
+        target = tmp_path / "assets" / rel
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(b"x")
+
+    with pytest.raises(ManifestError, match="share the basename"):
+        _copy_referenced_assets(tmp_path, {"a/logo.png", "b/logo.png"}, tmp_path / "out")

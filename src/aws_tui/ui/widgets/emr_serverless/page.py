@@ -27,6 +27,7 @@ from vmx import Message, MessageHub
 
 from aws_tui.infra.keymap_store import KeymapStore
 from aws_tui.ui import notifications
+from aws_tui.ui.widgets._worker import DeferredWorkerMixin
 from aws_tui.ui.widgets.context_picker import ContextPicker
 from aws_tui.ui.widgets.emr_serverless.application_picker import ApplicationPicker
 from aws_tui.ui.widgets.emr_serverless.clone_modal import JobRunCloneModal
@@ -40,7 +41,7 @@ from aws_tui.vm.emr_serverless.page_vm import EmrServerlessPageVM
 from aws_tui.vm.service_source_vm import ServiceSourceContext
 
 
-class EmrServerlessPage(Widget):
+class EmrServerlessPage(DeferredWorkerMixin, Widget):
     DEFAULT_CSS: ClassVar[str] = """
     EmrServerlessPage {
         height: 1fr;
@@ -310,21 +311,21 @@ class EmrServerlessPage(Widget):
     def _tick_applications(self) -> None:
         # The latest tick supersedes any in-flight refresh in this group;
         # cancellation guards keep the older result from mutating the VM.
-        self.run_worker(
-            self._vm.refresh_focused("applications"), exclusive=True, group="emr-poll-apps"
+        self._run_lifecycle_worker(
+            partial(self._vm.refresh_focused, "applications"), group="emr-poll-apps"
         )
 
     def _tick_runs(self) -> None:
         # Cadence-decay: when no active runs, only refresh every 6th tick (~6 min).
         if not self._vm.job_runs.has_active_runs() and self._poll_runs_decay():
             return
-        self.run_worker(self._vm.refresh_job_runs(), exclusive=True, group="emr-poll-runs")
+        self._run_lifecycle_worker(self._vm.refresh_job_runs, group="emr-poll-runs")
 
     def _tick_detail(self) -> None:
         # Only poll while the run is non-terminal.
         if self._vm.job_run_detail.is_terminal_state():
             return
-        self.run_worker(self._vm.refresh_job_run_detail(), exclusive=True, group="emr-poll-detail")
+        self._run_lifecycle_worker(self._vm.refresh_job_run_detail, group="emr-poll-detail")
 
     def _poll_runs_decay(self) -> bool:
         """Return True if THIS tick should be skipped (6:1 decay)."""
@@ -386,10 +387,8 @@ class EmrServerlessPage(Widget):
         change but the runs pane below kept showing the old app's
         runs.
         """
-        self.run_worker(
-            self._vm.select_application(event.app_id),
-            exclusive=True,
-            group="emr-select-app",
+        self._run_lifecycle_worker(
+            partial(self._vm.select_application, event.app_id), group="emr-select-app"
         )
 
     def on_application_picker_open_changed(self, event: ApplicationPicker.OpenChanged) -> None:
@@ -508,11 +507,7 @@ class EmrServerlessPage(Widget):
             self._post_clone_success_toast(new_id)
             # Re-fresh the runs list so the new SUBMITTED row appears
             # immediately rather than waiting for the next 60-s tick.
-            self.run_worker(
-                self._vm.refresh_job_runs(),
-                exclusive=True,
-                group="emr-poll-runs",
-            )
+            self._run_lifecycle_worker(self._vm.refresh_job_runs, group="emr-poll-runs")
         finally:
             clone_vm.dispose()
 
@@ -665,13 +660,6 @@ class EmrServerlessPage(Widget):
         """Project an app-coordinated focus slot onto this page."""
         self._project_focus_slot(slot)
 
-    def commit_open_application_picker(self) -> bool:
-        """Commit the highlighted application when its selector is open."""
-        if self._picker is None or not self._picker.has_class("-open"):
-            return False
-        self._picker.action_commit()
-        return True
-
     def _sync_focused_widget(self, focused: Widget) -> None:
         if self._focus_coordinator is None:
             return
@@ -704,8 +692,8 @@ class EmrServerlessPage(Widget):
     # ── Message routing ─────────────────────────────────────────────────────
 
     def on_job_runs_pane_run_selected(self, event: JobRunsPane.RunSelected) -> None:
-        self.run_worker(
-            self._vm.select_job_run(event.run_id), exclusive=True, group="emr-select-run"
+        self._run_lifecycle_worker(
+            partial(self._vm.select_job_run, event.run_id), group="emr-select-run"
         )
 
     def on_job_runs_pane_refresh_requested(self, _event: JobRunsPane.RefreshRequested) -> None:
@@ -718,42 +706,38 @@ class EmrServerlessPage(Widget):
         # PropertyChangedMessage — two concurrent calls produced a
         # double UI redraw and an extra ``list_job_runs`` round-trip
         # per overlap.
-        self.run_worker(self._vm.refresh_focused("runs"), exclusive=True, group="emr-poll-runs")
+        self._run_lifecycle_worker(partial(self._vm.refresh_focused, "runs"), group="emr-poll-runs")
 
     def on_job_run_detail_pane_refresh_requested(
         self, _event: JobRunDetailPane.RefreshRequested
     ) -> None:
         """User pressed r while the detail pane owns focus."""
-        self.run_worker(self._vm.refresh_focused("detail"), exclusive=True, group="emr-poll-detail")
+        self._run_lifecycle_worker(
+            partial(self._vm.refresh_focused, "detail"), group="emr-poll-detail"
+        )
 
     def on_job_runs_pane_load_more_requested(self, _event: JobRunsPane.LoadMoreRequested) -> None:
         """User asked for the next page of runs (PgDn or click on
         the bottom sentinel). The latest request supersedes an in-flight
         request in the same worker group."""
-        self.run_worker(
-            self._vm.load_more_job_runs(),
-            exclusive=True,
-            group="emr-load-more",
-        )
+        self._run_lifecycle_worker(self._vm.load_more_job_runs, group="emr-load-more")
 
     def on_job_run_logs_pane_load_requested(self, _event: JobRunLogsPane.LoadRequested) -> None:
         """User pressed Enter to load logs."""
-        self.run_worker(self._vm.job_run_logs.load(), exclusive=True, group="emr-logs")
+        self._run_lifecycle_worker(self._vm.job_run_logs.load, group="emr-logs")
 
     def on_job_run_logs_pane_refresh_requested(
         self, _event: JobRunLogsPane.RefreshRequested
     ) -> None:
         """User pressed r to refresh/reload logs."""
-        self.run_worker(
-            self._vm.job_run_logs.load(use_cache=False),
-            exclusive=True,
-            group="emr-logs",
+        self._run_lifecycle_worker(
+            partial(self._vm.job_run_logs.load, use_cache=False), group="emr-logs"
         )
 
     def on_job_run_logs_pane_log_file_selected(self, event: JobRunLogsPane.LogFileSelected) -> None:
         """User selected a different log file from the chip strip."""
         self._vm.job_run_logs.select_log_file_key(event.key)
-        self.run_worker(self._vm.job_run_logs.load(), exclusive=True, group="emr-logs")
+        self._run_lifecycle_worker(self._vm.job_run_logs.load, group="emr-logs")
 
     async def on_job_run_logs_pane_open_filter_requested(
         self, _event: JobRunLogsPane.OpenFilterRequested
@@ -767,7 +751,7 @@ class EmrServerlessPage(Widget):
             new_filter = await self.app.push_screen_wait(modal)
             if new_filter is not None and new_filter != current_filter:
                 self._vm.job_run_logs.set_filter(new_filter)
-                self.run_worker(self._vm.job_run_logs.load(), exclusive=True, group="emr-logs")
+                self._run_lifecycle_worker(self._vm.job_run_logs.load, group="emr-logs")
         except Exception as exc:
             # Modal raised mid-flight (rare — usually a test-harness
             # teardown race). Surface an advisory toast so the user
@@ -784,7 +768,7 @@ class EmrServerlessPage(Widget):
         if self._vm.job_run_logs.filter == DEFAULT_LOG_FILTER:
             return
         self._vm.job_run_logs.set_filter(DEFAULT_LOG_FILTER)
-        self.run_worker(self._vm.job_run_logs.load(), exclusive=True, group="emr-logs")
+        self._run_lifecycle_worker(self._vm.job_run_logs.load, group="emr-logs")
 
 
 __all__ = ["EmrServerlessPage"]

@@ -1,4 +1,4 @@
-# 1. aws-tui M4 (VM file manager + S3 service) Implementation Plan
+# aws-tui M4 (VM file manager + S3 service) Implementation Plan
 
 > **For agentic workers:** Compact-plan format. Spec is the source of truth — read §4 (UI), §5 (MVVM), §6 (lifecycle), §7 (errors → pane states). VMx Python API: read `docs/superpowers/notes/2026-06-14-vmx-python-cheatsheet.md` (M3 spike output) and use the facade pattern documented there.
 
@@ -12,7 +12,7 @@
 
 ---
 
-## 1.1. Task 1: `vm/file_manager/entry_vm.py` — single entry facade
+## 1. Task 1: `vm/file_manager/entry_vm.py` — single entry facade
 
 **Files:**
 - Create: `src/aws_tui/vm/file_manager/entry_vm.py`
@@ -55,7 +55,7 @@ class EntryVM:
 
 ---
 
-## 1.2. Task 2: `vm/file_manager/pane_vm.py` — single pane
+## 2. Task 2: `vm/file_manager/pane_vm.py` — single pane
 
 **Files:**
 - Create: `src/aws_tui/vm/file_manager/pane_vm.py`
@@ -131,7 +131,7 @@ class PaneVM:
 
 ---
 
-## 1.3. Task 3: `vm/file_manager/dual_pane_vm.py`
+## 3. Task 3: `vm/file_manager/dual_pane_vm.py`
 
 **Files:**
 - Create: `src/aws_tui/vm/file_manager/dual_pane_vm.py`
@@ -175,7 +175,7 @@ class DualPaneVM:
 
 ---
 
-## 1.4. Task 4: `vm/file_manager/transfer_vm.py` + `transfers_vm.py`
+## 4. Task 4: `vm/file_manager/transfer_vm.py` + `transfers_vm.py`
 
 **Files:**
 - Create: `src/aws_tui/vm/file_manager/transfer_vm.py`
@@ -234,7 +234,7 @@ Subscribes to `TransferProgressMessage` from the hub and updates the matching Tr
 
 ---
 
-## 1.5. Task 5: `services/s3/service.py` — first concrete service
+## 5. Task 5: `services/s3/service.py` — first concrete service
 
 **Files:**
 - Create: `src/aws_tui/services/s3/service.py`
@@ -277,7 +277,7 @@ Register at `services/__init__.py` import time via `ServiceRegistry`.
 
 ---
 
-## 1.6. Task 6: VMx contract / capability tests for PaneVM
+## 6. Task 6: VMx contract / capability tests for PaneVM
 
 **Files:**
 - Create: `tests/unit/vm/file_manager/test_pane_vm_contracts.py`
@@ -293,7 +293,7 @@ If VMx ships `vmx.testing.conformance` with `selectable_contract` / `filterable_
 
 ---
 
-## 1.7. Task 7: M4 integration test
+## 7. Task 7: M4 integration test
 
 **Files:**
 - Create: `tests/unit/vm/file_manager/test_m4_integration.py`
@@ -307,7 +307,7 @@ Compose: ServiceRegistry → S3Service registered → RootVM with the registry �
 
 ---
 
-## 1.8. Task 8: commit, push, tag v0.5.0
+## 8. Task 8: commit, push, tag v0.5.0
 
 - One commit per task (1-7), CHANGELOG bump, push, watch CI green, tag `v0.5.0` ("v0.5.0 — vm file manager + s3 service (M4)"), gh release.
 
@@ -315,7 +315,7 @@ Compose: ServiceRegistry → S3Service registered → RootVM with the registry �
 
 ---
 
-## 1.9. Watch-outs
+## 9. Watch-outs
 
 - **Apply the M3 facade pattern.** All VMs wrap a VMx primitive as `_inner`; do not subclass `ComponentVM` directly. Reference `docs/superpowers/notes/2026-06-14-vmx-python-cheatsheet.md`.
 - **PaneVM does work asynchronously.** `provider.list()` is async; spawn an asyncio task during `setup()` / `navigate_to()`. Set `state = LOADING` synchronously, then transition to `IDLE` on completion. Use the spec's 200ms delay before showing the loading spinner (caller's concern; VM just exposes the state).

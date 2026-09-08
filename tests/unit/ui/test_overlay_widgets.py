@@ -74,6 +74,60 @@ async def test_command_palette_renders_entries() -> None:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("danger", "expected_button", "resolves_to"),
+    [(True, "cancel", False), (False, "confirm", True)],
+)
+async def test_confirm_modal_reflex_enter_routes_to_the_safe_side(
+    danger: bool, expected_button: str, resolves_to: bool
+) -> None:
+    """A danger prompt must answer a bare Enter with Cancel, not Confirm.
+
+    Nothing pinned this. Flipping the default to ``"confirm"`` left 131 tests
+    and 50 modal snapshots green, because ``-focused`` is deliberately not
+    painted at mount so every snapshot is byte-identical either way — while a
+    reflex Enter on a delete prompt would have destroyed the selected file.
+    Asserting the resolved OUTCOME rather than the focus ring, since the ring
+    is intentionally invisible here.
+    """
+    hub: MessageHub = MessageHub()
+    dispatcher = RxDispatcher.immediate()
+    vm = ConfirmationVM(hub=hub, dispatcher=dispatcher)
+    vm.construct()
+    try:
+        request = ConfirmRequest(
+            title="Delete 1 object?",
+            confirm_label="Delete",
+            cancel_label="Cancel",
+            danger=danger,
+        )
+
+        answered: list[bool | None] = []
+
+        class _App(App[None]):
+            def compose(self) -> ComposeResult:
+                yield from ()
+
+            async def on_mount(self) -> None:
+                self.push_screen(ConfirmModal(vm, request, hub=hub), answered.append)
+
+        app = _App()
+        async with app.run_test(size=(80, 24)) as pilot:
+            await pilot.pause()
+            modal = app.screen
+            assert isinstance(modal, ConfirmModal)
+            assert modal._focused_button_id == expected_button
+
+            # A bare Enter, with no navigation first.
+            modal.action_commit_focused()
+            await pilot.pause()
+
+        assert answered == [resolves_to]
+    finally:
+        vm.dispose()
+        hub.dispose()
+
+
 async def test_confirm_modal_renders_request() -> None:
     hub: MessageHub = MessageHub()
     dispatcher = RxDispatcher.immediate()
@@ -111,7 +165,10 @@ async def test_confirm_modal_renders_request() -> None:
 
 @pytest.mark.asyncio
 async def test_help_modal_renders_active_keymap() -> None:
-    keymap = KeymapStore(overlay={"app.help": "h", "app.command_palette": "p"})
+    # f9/f10 rather than single letters: "h" and "p" occur incidentally in
+    # "this", "open" and "pane", so the old needles were satisfied by the
+    # surrounding prose and the injected keymap was never actually read.
+    keymap = KeymapStore(overlay={"app.help": "f9", "app.command_palette": "f10"})
 
     class _App(App[None]):
         def compose(self) -> ComposeResult:
@@ -123,16 +180,19 @@ async def test_help_modal_renders_active_keymap() -> None:
     app = _App()
     async with app.run_test(size=(100, 36)) as pilot:
         await pilot.pause()
-        rendered = "\n".join(str(row.render()) for row in app.screen.query(".help-row"))
+        rows = [str(row.render()) for row in app.screen.query(".help-row")]
+        rendered = "\n".join(rows)
 
     assert "open Settings" in rendered
     assert "delete selected entry" in rendered
     assert "cycle the focused pane source" in rendered
     assert "extend selection" in rendered
-    assert "h" in rendered
-    assert "open this help overlay" in rendered
-    assert "p" in rendered
-    assert "open the command palette" in rendered
+    # Assert the configured key lands on the row for ITS action, not merely
+    # somewhere in the overlay.
+    help_row = next(row for row in rows if "open this help overlay" in row)
+    palette_row = next(row for row in rows if "open the command palette" in row)
+    assert "f9" in help_row
+    assert "f10" in palette_row
     assert "?  or  :" not in rendered
 
 

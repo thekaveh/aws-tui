@@ -773,3 +773,116 @@ async def test_stream_log_wraps_access_denied_from_body_read() -> None:
             filter_=DEFAULT_LOG_FILTER,
         ):
             pass
+
+
+async def test_stream_log_batches_do_not_duplicate_or_inflate_matches() -> None:
+    """Crossing the batch boundary must reset the buffer, or counts fabricate.
+
+    `stream_log` yields a chunk every `_LINE_BUFFER_BATCH` (200) matches and
+    then clears the buffer. With the clear removed, every subsequent chunk
+    re-carried all earlier matches: a log with exactly 250 matching lines
+    reported 11,725 matches across 52 chunks. No existing test crossed the
+    boundary, so the reset was unpinned. This one uses 250 matches and asserts
+    the batching arithmetic exactly.
+    """
+    from aws_tui.domain.emr_logs import (
+        DEFAULT_LOG_FILTER,
+        LogFile,
+        LogFileKind,
+        stream_log,
+    )
+
+    log_lines = [f"ERROR failure {index}" for index in range(250)]
+    gz_payload = gzip.compress("\n".join(log_lines).encode())
+    stub = _StubS3(gz_payload)
+    session = _StubSession(stub)
+    log_file = LogFile(
+        key="logs/applications/a/jobs/r/SPARK_DRIVER/stderr.gz",
+        kind=LogFileKind.DRIVER_STDERR,
+    )
+
+    chunks = []
+    async for chunk in stream_log(
+        session=session,  # type: ignore[arg-type]
+        region_name="us-east-1",
+        log_file=log_file,
+        bucket="b",
+        max_bytes=1024 * 1024,
+        filter_=DEFAULT_LOG_FILTER,
+    ):
+        chunks.append(chunk)
+
+    all_lines = [line for chunk in chunks for line in chunk.lines]
+    assert len(all_lines) == 250, f"emitted {len(all_lines)} lines for 250 matches"
+    assert all_lines == log_lines, "lines were duplicated or reordered"
+    assert sum(chunk.matched_count for chunk in chunks) == 250, (
+        f"chunks reported {sum(c.matched_count for c in chunks)} matches for 250"
+    )
+    # 250 matches at a batch size of 200 is exactly one full chunk + one tail.
+    assert [chunk.matched_count for chunk in chunks] == [200, 50]
+
+
+async def test_a_torn_gzip_body_is_flagged_truncated() -> None:
+    """A gzip stream that never reaches EOF must carry the truncation flag.
+
+    S3 can serve a log object whose gzip body was torn mid-upload. The lines
+    that decompressed cleanly are still shown, but without the flag the pane
+    presents a partial log as complete — the user reads 12 of 50 lines with no
+    banner saying anything is missing. Neutralising `truncated = True` on the
+    not-EOF path survived the whole suite: no test fed the stream a torn body.
+    """
+    from aws_tui.domain.emr_logs import (
+        DEFAULT_LOG_FILTER,
+        LogFile,
+        LogFileKind,
+        stream_log,
+    )
+
+    log_lines = [f"ERROR line {index}" for index in range(50)]
+    full = gzip.compress("\n".join(log_lines).encode())
+    torn = full[: len(full) // 2]  # cut mid-stream: decompressor never sees EOF
+    stub = _StubS3(torn)
+    session = _StubSession(stub)
+    log_file = LogFile(
+        key="logs/applications/a/jobs/r/SPARK_DRIVER/stderr.gz",
+        kind=LogFileKind.DRIVER_STDERR,
+    )
+
+    chunks = []
+    async for chunk in stream_log(
+        session=session,  # type: ignore[arg-type]
+        region_name="us-east-1",
+        log_file=log_file,
+        bucket="b",
+        max_bytes=1024 * 1024,
+        filter_=DEFAULT_LOG_FILTER,
+    ):
+        chunks.append(chunk)
+
+    assert chunks, "a torn body should still deliver what decompressed"
+    delivered = [line for chunk in chunks for line in chunk.lines]
+    assert 0 < len(delivered) < 50, "precondition: the tear lost some lines"
+    assert chunks[-1].truncated is True, (
+        f"{len(delivered)} of 50 lines shown with no truncation banner"
+    )
+
+
+def test_log_filter_rejects_an_invalid_regex_at_construction() -> None:
+    """`LogFilter.__post_init__` validates eagerly so the Apply modal can catch it.
+
+    Without the eager compile, `LogFilter(patterns=("ERROR", "[unclosed"))`
+    constructs fine and `stream_log` then crashes mid-iteration with
+    `re.error: unterminated character set` — surfacing through the VM's
+    bottom-of-stack handler as an opaque "unexpected error" with every match
+    collected so far dropped. Exactly the failure the source comment says the
+    validation exists to prevent; both its mutants survived.
+    """
+    from aws_tui.domain.emr_logs import FilterMode, LogFilter
+
+    with pytest.raises(ValueError, match="invalid regex"):
+        LogFilter(mode=FilterMode.MATCH, patterns=("ERROR", "[unclosed"))
+
+    # Positive control: valid patterns construct and match.
+    valid = LogFilter(mode=FilterMode.MATCH, patterns=("ERROR",))
+    assert valid.matches("ERROR boom")
+    assert not valid.matches("INFO fine")

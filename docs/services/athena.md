@@ -1,10 +1,10 @@
-# 1. Amazon Athena
+# Amazon Athena
 
 The Athena service is an AWS-only, read-only query console. It combines local
 fail-closed SQL validation with workgroup-aware execution, history, paged
 results, saved queries, and exact-source handoffs to Glue and S3.
 
-## 1.1. Query context
+## 1. Query context
 
 Source, Workgroup, Catalog, and Database are four individually framed,
 dependent overlay selectors in one unframed row. `Shift+S` rebuilds the page
@@ -17,7 +17,7 @@ active view; enabled load-more controls appear immediately after their selector.
 The segmented frame contains Query (`1`), History (`2`), Results (`3`), and
 Saved (`4`). Unavailable controls are omitted from the active focus ring.
 
-## 1.2. Read-only execution policy
+## 2. Read-only execution policy
 
 `Ctrl+Enter` dispatches exactly one statement only after the local SQLGlot
 Athena-dialect policy accepts it. The allowlist covers bounded read forms such
@@ -26,11 +26,11 @@ safe `EXPLAIN`. DDL, DML, unload, call, transaction, analysis, and multiple
 statements fail closed before `StartQueryExecution`.
 
 The complete grammar and examples are maintained in the
-[Cookbook](../cookbook.md#163-exact-read-only-sql-grammar). IAM, Lake
+[Cookbook](../cookbook.md#63-exact-read-only-sql-grammar). IAM, Lake
 Formation, workgroup, S3, bucket, and KMS policy remain the authorization
 boundary after local validation.
 
-## 1.3. Query lifecycle and results
+## 3. Query lifecycle and results
 
 The Query VM records an app-owned execution identity and polls until a terminal
 state. `Esc` interrupts query submission or stops the active app-owned execution. Results load at most
@@ -50,7 +50,7 @@ terminal width. Glue table and Iceberg snapshot handoffs prefill a quoted
 `SELECT *` starter ending in `LIMIT 5`; the transaction explicitly projects the
 starter into the mounted editor and never executes it.
 
-## 1.4. Cross-service handoffs
+## 4. Cross-service handoffs
 
 Glue table and Iceberg snapshot requests prefill the editor under the same
 connection and region. `i` inserts a copied table reference only when its
@@ -58,7 +58,7 @@ source identity matches the active Athena context. The command palette can
 open one unambiguous query table in Glue or a validated successful result
 artifact in S3. None of these handoffs substitutes another profile.
 
-## 1.5. Architecture and verification
+## 5. Architecture and verification
 
 `AthenaService` composes `AthenaPageVM` from query, history, results, and saved
 VMs. VMx owns commands, observable state, and lifecycle. Athena's app-owned

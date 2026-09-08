@@ -1,4 +1,4 @@
-# 1. Athena Query Execution Repair Implementation Plan
+# Athena Query Execution Repair Implementation Plan
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
@@ -8,7 +8,7 @@
 
 **Tech Stack:** Python 3.11+, boto/aiobotocore-compatible Athena facade, sqlglot, VMx commands, Textual, pytest, Ruff, mypy.
 
-## 1.1. Global Constraints
+## 1. Global Constraints
 
 - Generated SQL remains one quoted read-only statement with `LIMIT 5` and optional non-negative Iceberg `FOR VERSION AS OF`.
 - Enforced S3 and managed-results workgroups receive no caller-side output override.
@@ -18,7 +18,7 @@
 
 ---
 
-## 1.2. Task 1: Context-Relative Glue Starter SQL
+## 2. Task 1: Context-Relative Glue Starter SQL
 
 **Files:**
 - Modify: `src/aws_tui/domain/sql_policy.py`
@@ -76,7 +76,7 @@ git add src/aws_tui/domain/sql_policy.py tests/unit/domain/test_sql_policy.py te
 git commit -m "fix: align generated Athena SQL with query context"
 ```
 
-## 1.3. Task 2: Safe Actionable Athena Rejections
+## 3. Task 2: Safe Actionable Athena Rejections
 
 **Files:**
 - Modify: `src/aws_tui/domain/athena.py`
@@ -138,7 +138,7 @@ git add src/aws_tui/domain/athena.py src/aws_tui/domain/athena_runner.py src/aws
 git commit -m "fix: explain Athena start-query rejections safely"
 ```
 
-## 1.4. Task 3: Visually Square Query Controls
+## 4. Task 3: Visually Square Query Controls
 
 **Files:**
 - Modify: `src/aws_tui/ui/widgets/athena/query_view.py`
@@ -191,7 +191,7 @@ git add src/aws_tui/ui/widgets/athena/query_view.py tests/unit/ui/athena/test_pa
 git commit -m "fix: render square Athena query controls"
 ```
 
-## 1.5. Task 4: Documentation And Full Verification
+## 5. Task 4: Documentation And Full Verification
 
 **Files:**
 - Modify: `CHANGELOG.md`

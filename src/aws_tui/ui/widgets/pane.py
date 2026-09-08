@@ -219,11 +219,16 @@ class EntryRow(HubSubscriberMixin, Widget):
 # Property names on PaneVM that warrant a full body re-mount (entry-list
 # identity changed or placeholder swap). Cursor moves and viewmodel-only
 # updates are handled by per-row subscriptions + chrome updates.
-_BODY_REFRESH_PROPS: frozenset[str] = frozenset({"entries", "state", "path"})
+# ``filter_text`` belongs here, not in the chrome set: ``_render_body`` mounts
+# ``vm.filtered_entries``, so a chrome-only refresh left non-matching rows
+# mounted and clickable while the VM's cursor indices addressed the filtered
+# list — the user saw one listing and the VM addressed another.
+# ``_refresh_all`` updates chrome as well, so nothing is lost by promoting it.
+_BODY_REFRESH_PROPS: frozenset[str] = frozenset({"entries", "state", "path", "filter_text"})
 
 # Property names that only require updating the breadcrumb / header /
 # footer Static widgets — cheap, no re-mount.
-_CHROME_REFRESH_PROPS: frozenset[str] = frozenset({"viewmodel", "filter_text"})
+_CHROME_REFRESH_PROPS: frozenset[str] = frozenset({"viewmodel"})
 
 # Property names that just need the cursor to be scrolled into view (no
 # re-mount, no Static update). The per-row hub subs handle the actual

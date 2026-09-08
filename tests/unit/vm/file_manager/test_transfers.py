@@ -319,3 +319,46 @@ def test_transfers_register_vm_before_parent_construction_attaches_once() -> Non
     assert child.is_constructed
     assert tvms.transfers == (child,)
     tvms.dispose()
+
+
+def test_dispose_detaches_the_vm_from_the_hub() -> None:
+    """Disposal must release the subscription, not just set a flag.
+
+    ``_on_message`` short-circuits on ``self._disposed``, so a leaked
+    subscription is invisible from the outside: messages keep arriving and are
+    ignored. Dropping ``self._subscription.dispose()`` therefore survived the
+    whole repo suite while the disposed VM stayed attached to the hub's observer
+    list for the process lifetime. Assert the detachment itself by counting the
+    hub's observers.
+    """
+    hub = _hub()
+    tvms = TransfersVM(hub=hub, dispatcher=NULL_DISPATCHER)
+    tvms.construct()
+    subscription = tvms._subscription  # type: ignore[attr-defined]
+    assert not subscription.is_disposed
+
+    tvms.dispose()
+
+    assert subscription.is_disposed, "disposed TransfersVM is still attached to the hub"
+
+
+def test_finished_history_at_exactly_the_cap_is_not_trimmed() -> None:
+    """The boundary itself: 100 finished transfers must all survive.
+
+    Note the sweep's `excess <= 0` -> `excess < 0` mutant is EQUIVALENT, not a
+    defect: at ``excess == 0`` the mutant iterates a ``[:0]`` slice, so no test
+    can distinguish it. This pins the cap against a constant mutation instead —
+    an off-by-one in ``_MAX_FINISHED_TRANSFERS`` itself would trim a transfer
+    here.
+    """
+    vm = TransfersVM(hub=_hub(), dispatcher=NULL_DISPATCHER)
+    vm.construct()
+    try:
+        for index in range(100):
+            vm.register(_model(id=f"t{index}", state=TransferState.COMPLETED))
+
+        assert len(vm.finished) == 100
+        assert vm.finished[0].id == "t0", "a transfer was trimmed at the cap"
+        assert vm.finished[-1].id == "t99"
+    finally:
+        vm.dispose()

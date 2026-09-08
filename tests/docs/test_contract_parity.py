@@ -109,11 +109,22 @@ def _text(path: str) -> str:
     return (ROOT / path).read_text(encoding="utf-8")
 
 
-def _numbered_section(text: str, heading: str) -> str:
-    marker = f"## {heading}"
-    _, separator, remainder = text.partition(marker)
-    assert separator, f"missing section: {heading}"
-    return remainder.partition("\n## ")[0]
+def _s3mock_image_from(text: str) -> str:
+    """Return the single ``adobe/s3mock`` tag+digest pin named in ``text``."""
+    pins = set(re.findall(r"adobe/s3mock:[0-9][^\s\"'`]*@sha256:[0-9a-f]{64}", text))
+    assert len(pins) == 1, f"expected exactly one S3Mock pin, found {sorted(pins)}"
+    return pins.pop()
+
+
+def _numbered_section(text: str, title: str) -> str:
+    """Return the body of the ``## N. <title>`` section, ignoring its number.
+
+    Matching on the title rather than the rendered number keeps these contract
+    assertions stable when sections are inserted, reordered, or renumbered.
+    """
+    match = re.search(rf"^## [\d.]+\. {re.escape(title)}\s*$", text, flags=re.MULTILINE)
+    assert match, f"missing section: {title}"
+    return text[match.end() :].partition("\n## ")[0]
 
 
 def _module(path: str) -> ast.Module:
@@ -181,9 +192,7 @@ def _text_ledger_block(text: str, heading: str) -> tuple[str, ...]:
 
 def _action_id_table_actions(text: str) -> tuple[str, ...]:
     """Extract action IDs from the first table under the Action IDs heading."""
-    heading = "## 1.3. Action IDs"
-    assert heading in text, f"missing Action IDs heading: {heading}"
-    section = text.split(heading, maxsplit=1)[1].split("\n## ", maxsplit=1)[0]
+    section = _numbered_section(text, "Action IDs")
     table_lines = [line for line in section.splitlines() if line.startswith("|")]
     assert len(table_lines) >= 3, "missing Action IDs table"
 
@@ -252,35 +261,64 @@ def test_dependency_ledger_matches_locked_runtime_and_build_versions() -> None:
     project = tomllib.loads(_text("pyproject.toml"))
     ledger = _numbered_section(
         _text("docs/contract-ledger.md"),
-        "1.5. 2026-08-25 maintenance pass",
+        "2026-08-25 maintenance pass",
     )
 
     for name in (
+        "aiobotocore",
+        "aiofiles",
         "aioboto3",
+        "anyio",
         "botocore",
         "hatchling",
         "keyring",
         "platformdirs",
+        "reactivex",
+        "rich",
         "sqlglot",
         "testcontainers",
         "textual",
         "textual-dev",
+        "tomli-w",
         "vmx",
     ):
         assert f"`{name}=={versions[name]}`" in ledger
 
     build_requirement = project["build-system"]["requires"][0]
     assert f"`build-system.requires` constrained to `{build_requirement}`" in ledger
-    assert (
-        "`adobe/s3mock:5.2.0@sha256:"
-        "7a37f0d796e81a28b970c892dcae532797014616b3312b467af8f0274ebf0c26`"
-    ) in ledger
+    # Derive the S3Mock pin from the harness rather than restating it, so the
+    # literal cannot agree with itself while the compose file moves on. The
+    # docker-compose ecosystem only rewrites the compose file, so these four
+    # sites are exactly what a dependabot bump splits apart.
+    harness_image = _s3mock_image_from(_text("tests/integration/conftest.py"))
+    assert f"`{harness_image}`" in ledger
+    assert _s3mock_image_from(_text("scripts/test-services/s3/docker-compose.yml")) == harness_image
+    assert harness_image in _text("docs/cookbook.md")
+
+
+def test_pre_commit_revisions_are_recorded_in_the_current_ledger_pass() -> None:
+    """Every pinned hook rev must appear in the current ledger pass.
+
+    A dependabot pre-commit bump touches only ``.pre-commit-config.yaml``. With
+    nothing comparing that file to the ledger, the ruff-pre-commit ref silently
+    drifted a whole release behind while every tier stayed green.
+    """
+    ledger = _numbered_section(
+        _text("docs/contract-ledger.md"),
+        "2026-08-25 maintenance pass",
+    )
+    config = _text(".pre-commit-config.yaml")
+    revisions = re.findall(r"^\s*rev:\s*([0-9a-f]{40})\b", config, flags=re.MULTILINE)
+
+    assert revisions, "expected pinned 40-character hook revisions"
+    missing = [rev for rev in revisions if rev not in ledger]
+    assert not missing, f"pre-commit revs absent from the current ledger pass: {missing}"
 
 
 def test_numbered_section_excludes_historical_dependency_decoys() -> None:
-    ledger = "## 1.4. Old\n`package==1`\n\n## 1.5. Current\n`package==2`\n\n## 1.6. Next\n"
+    ledger = "## 4. Old\n`package==1`\n\n## 5. Current\n`package==2`\n\n## 6. Next\n"
 
-    current = _numbered_section(ledger, "1.5. Current")
+    current = _numbered_section(ledger, "Current")
 
     assert "`package==2`" in current
     assert "`package==1`" not in current
