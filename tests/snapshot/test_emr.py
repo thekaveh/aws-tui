@@ -82,9 +82,15 @@ def test_emr_page_populated_renders_expected_glyphs_and_labels(theme: str) -> No
     themes (per PR #53 lesson). The fixture seeds one application
     ``etl-pipeline-1``, a SUCCESS run ``nightly-2026-06-25``, and a detail
     with ``EmrJobRole`` in the execution role ARN; assert those strings
-    survive the render. The fixed-width source trigger is deliberately
-    ellipsized at this size, so source identity is covered by the fixture's
-    live widget state instead of raw SVG text.
+    survive the render.
+
+    The source value is asserted here too. It used to be excluded on the
+    reasoning that the trigger was "deliberately ellipsized at this size,
+    so source identity is covered by the fixture's live widget state" --
+    but the trigger was not ellipsized, it was rendering nothing at all,
+    and no snapshot assertion looked. A pre-fix golden contains the
+    ``source`` border label and the application name while containing zero
+    occurrences of ``demo-prod``. Assert the value, not just the label.
 
     The job-run NAME column is 1fr of a narrow LEFT pane, so a long
     run name like ``nightly-2026-06-25`` ellipsizes to
@@ -99,7 +105,11 @@ def test_emr_page_populated_renders_expected_glyphs_and_labels(theme: str) -> No
     )
     assert p.is_file(), f"expected snapshot {p.name} on disk; run --snapshot-update first"
     svg = p.read_text()
-    assert "etl-pipelin" in svg, f"application name missing for theme {theme!r}"
+    assert "etl-pipel" in svg, f"application name missing for theme {theme!r}"
+    # Source identity: the picker renders ``demo-prod·us-east-1``, ellipsized
+    # to fit its cell. The prefix is still uniquely the seeded connection, and
+    # its absence is exactly the defect this guard exists to catch.
+    assert "demo-prod" in svg, f"source context value missing for theme {theme!r}"
     # The job-run NAME column is 1fr of a narrow LEFT pane (now 2/7
     # of total width post-PR-batch-7items), so the long fixture
     # name ``nightly-2026-06-25`` ellipsizes to ``nightly-2…`` in
@@ -161,6 +171,9 @@ def test_emr_page_responsive_states_keep_context_visible(theme: str, terminal_in
 
     populated_svg = populated.read_text()
     assert "etl-" in populated_svg
+    # 80-column runs ellipsize the source to ``demo-pr…``; the prefix is still
+    # uniquely the seeded connection and still proves the value rendered.
+    assert "demo-pr" in populated_svg, "source context value missing"
     assert "EmrJobRole" in populated_svg
 
     empty_svg = empty.read_text()

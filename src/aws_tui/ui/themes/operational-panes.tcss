@@ -39,6 +39,17 @@ ContextPicker.-error:focus-within {
     border: solid $error;
 }
 
+/* The EMR application picker sits beside the source ContextPicker in the EMR
+   context row and is a peer cell, so it carries the same border treatment. */
+ApplicationPicker {
+    border: solid $rule-dim;
+}
+ApplicationPicker:focus,
+ApplicationPicker:focus-within,
+ApplicationPicker.-open {
+    border: heavy $accent;
+}
+
 GluePage GlueIcebergView,
 AthenaPage TextArea,
 AthenaPage #athena-query-controls,

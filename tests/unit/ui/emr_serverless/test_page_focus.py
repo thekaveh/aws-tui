@@ -93,7 +93,6 @@ async def test_application_picker_overlay_preserves_page_geometry_through_escape
         picker = app.query_one(ApplicationPicker)
         widgets = (
             picker,
-            app.query_one("#emr-app-box"),
             app.query_one(".emr-context-row", Horizontal),
             app.query_one(ServiceSourceHeader),
             app.query_one(JobRunsPane),
@@ -128,7 +127,6 @@ async def test_source_picker_overlay_preserves_every_page_region(
         widgets = (
             source_picker,
             app.query_one(ApplicationPicker),
-            app.query_one("#emr-app-box"),
             app.query_one(".emr-context-row", Horizontal),
             app.query_one(ServiceSourceHeader),
             app.query_one(JobRunsPane),
@@ -194,6 +192,32 @@ async def test_application_picker_overlay_closes_when_focus_leaves(
         assert not picker.is_open
 
 
+async def _opened_source_picker(pilot: object, app: EmrPageOpenSourcePickerApp) -> ContextPicker:
+    """Return the source picker, open, without depending on mount timing.
+
+    ``EmrPageOpenSourcePickerApp`` auto-opens the list from a mount-time
+    ``call_after_refresh`` that races page setup: while the page is still
+    settling ``ContextPicker.open`` is a silent no-op (the picker reports
+    loading) and a queued open-intent reconcile can close it again. Sibling
+    tests in this file already call ``picker.open()`` themselves for exactly
+    that reason.
+
+    The product path is a keystroke and is synchronous -- only the mount-time
+    auto-open is racy -- and these tests are about what happens *after* the
+    list is open, so they should establish that precondition rather than
+    inherit it from how fast the runner settles. Observed on windows-latest
+    py3.11 and py3.12, where the fixture's single attempt lost the race and
+    the first assertion failed before the behaviour under test ever ran.
+    """
+    picker = app.query_one("#emr-source-header-picker", ContextPicker)
+    for _ in range(50):
+        if picker.is_open:
+            return picker
+        app.query_one(ServiceSourceHeader).open()
+        await pilot.pause()  # type: ignore[attr-defined]
+    raise AssertionError("source picker never opened")
+
+
 @pytest.mark.asyncio
 async def test_keyboard_opening_application_picker_closes_source_picker(
     monkeypatch: pytest.MonkeyPatch,
@@ -203,9 +227,8 @@ async def test_keyboard_opening_application_picker_closes_source_picker(
     async with app.run_test() as pilot:
         await pilot.pause()
         page = app.query_one(EmrServerlessPage)
-        source_picker = app.query_one("#emr-source-header-picker", ContextPicker)
+        source_picker = await _opened_source_picker(pilot, app)
         application_picker = app.query_one(ApplicationPicker)
-        assert source_picker.is_open
         app.set_focus(source_picker.query_one(OptionList))
         await pilot.pause()
         assert app.focused is source_picker.query_one(OptionList)
@@ -332,8 +355,7 @@ async def test_tab_cycle_closes_departed_source_picker() -> None:
     async with app.run_test() as pilot:
         await pilot.pause()
         page = app.query_one(EmrServerlessPage)
-        picker = app.query_one("#emr-source-header-picker", ContextPicker)
-        assert picker.is_open
+        picker = await _opened_source_picker(pilot, app)
         app.set_focus(picker.query_one(OptionList))
         await pilot.pause()
 

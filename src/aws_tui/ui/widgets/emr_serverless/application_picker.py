@@ -149,6 +149,9 @@ class ApplicationPicker(Widget, can_focus=True):
         classes: str | None = None,
     ) -> None:
         super().__init__(id=id, classes=classes)
+        # The picker is a bordered peer of the source ContextPicker in the EMR
+        # context row, and ContextPicker labels its own border the same way.
+        self.border_title = "application"
         self._vm: ApplicationsVM = vm
         self._sub: DisposableBase | None = None
         self._focus_intent = PickerFocusIntent()
