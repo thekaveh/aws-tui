@@ -1,4 +1,4 @@
-# 1. VMx 3.23 maintenance audit for aws-tui
+# VMx 3.23 maintenance audit for aws-tui
 
 | Field | Value |
 |---|---|
@@ -10,7 +10,7 @@
 | Runtime implementation | `6d0321d8` |
 | Historical audit | [VMx 3.1.0 adoption audit](2026-07-02-vmx-3-1-adoption-audit.md) |
 
-## 1.1. Scope and method
+## 1. Scope and method
 
 This audit rechecked the VM and its Textual adapters against the installed VMx
 3.23 public surface. It compared each existing VMx use with the closest current
@@ -21,7 +21,7 @@ line-count impact, and test impact. It does not treat a smaller diff as a reason
 to weaken aws-tui's domain-specific stale-result, source-identity, or shutdown
 contracts.
 
-## 1.2. Adopted substitutions
+## 2. Adopted substitutions
 
 | Area | Prior shape | VMx 3.23 shape | Result |
 |---|---|---|---|
@@ -37,7 +37,7 @@ The existing VMx 3.1 substitutions remain the best fitting choices in 3.23:
 result-bearing modal state, and `when_property_changed` for typed hub
 subscriptions.
 
-## 1.3. Compatibility fixes accompanying the bump
+## 3. Compatibility fixes accompanying the bump
 
 - The dependency floor and lock now resolve VMx 3.23.0.
 - Settings widgets rebuild a complete form VM when validator-bearing UI state
@@ -49,7 +49,7 @@ subscriptions.
 - Test-only stand-ins were removed where they masked the installed package's
   actual command and component behavior.
 
-## 1.4. Candidates retained or rejected
+## 4. Candidates retained or rejected
 
 | Candidate | Decision | Rationale |
 |---|---|---|
@@ -59,7 +59,7 @@ subscriptions.
 | Remove the `S3ConnectionFormVM` facade | Rejected | The facade owns S3 field names, normalized form-to-config mapping, dynamically supplied UI validators, and domain-specific model rules. `FormVM` is the validation engine, not the domain API. |
 | Replace `ContentHostVM` with a generic composite | Rejected | Hosted services require async worker drain before disposal and app-owned setup/shutdown behavior beyond a generic child collection. |
 
-## 1.5. Production line-count metric
+## 5. Production line-count metric
 
 The metric compares the branch point (`746a94c4`) with the runtime maintenance
 commit (`6d0321d8`) using `git diff --numstat`, restricted to the directly
@@ -83,7 +83,7 @@ removes eight production lines while strengthening lifecycle behavior. This
 metric intentionally does not claim that tests removed from the repository are
 production savings.
 
-## 1.6. Test impact
+## 6. Test impact
 
 The maintenance slice adds or updates focused coverage for:
 
@@ -100,7 +100,7 @@ integration, snapshot, E2E, package, type, lint, and documentation tiers; those
 results belong in the branch maintenance report rather than this dependency
 decision record.
 
-## 1.7. Conclusion
+## 7. Conclusion
 
 The VM layer uses VMx 3.23 wherever its public abstractions fit the actual
 contract. The remaining aws-tui facades carry application-specific behavior

@@ -3,11 +3,14 @@ from pathlib import Path
 
 from scripts.docs.check_docs import (
     INTERNAL_DOCS,
+    check_assets,
     check_completeness,
     check_local_anchors,
     check_numbering,
     check_placeholders,
+    check_section_references,
     check_self_containment,
+    check_titles,
 )
 from scripts.docs.manifest import parse_manifest
 
@@ -27,8 +30,8 @@ MANIFEST = parse_manifest(
 
 def _write_docs(root: Path) -> None:
     (root / "docs").mkdir()
-    (root / "docs" / "index.md").write_text("# 1. aws-tui\n\n## 1.1. Intro\n")
-    (root / "docs" / "architecture.md").write_text("# 1. Architecture\n\n## 1.1. Layers\n")
+    (root / "docs" / "index.md").write_text("# aws-tui\n\n## 1. Intro\n")
+    (root / "docs" / "architecture.md").write_text("# Architecture\n\n## 1. Layers\n")
 
 
 def _write_mkdocs_config(root: Path) -> None:
@@ -145,20 +148,50 @@ def test_placeholders_flags_todo_in_readme(tmp_path):
     assert any("README.md" in finding.message for finding in findings)
 
 
-def test_numbering_flags_wrong_h1(tmp_path):
-    (tmp_path / "docs").mkdir()
-    (tmp_path / "docs" / "index.md").write_text("# 2. Wrong\n")
-    (tmp_path / "docs" / "architecture.md").write_text("# 1. Architecture\n## 1.1. Layers\n")
+def test_numbering_flags_a_numbered_page_title(tmp_path):
+    """The manifest owns a page's position; an H1 number is a second source."""
+    _write_docs(tmp_path)
+    (tmp_path / "docs" / "index.md").write_text("# 1. aws-tui\n\n## 1. Intro\n")
+
     findings = check_numbering(MANIFEST, tmp_path)
-    assert any("index.md" in f.message for f in findings)
+
+    assert any("page title must not be numbered" in f.message for f in findings)
 
 
-def test_numbering_flags_wrong_h2(tmp_path):
-    (tmp_path / "docs").mkdir()
-    (tmp_path / "docs" / "index.md").write_text("# 1. aws-tui\n## 2.1. Bad\n")
-    (tmp_path / "docs" / "architecture.md").write_text("# 1. Architecture\n## 1.1. Layers\n")
+def test_numbering_flags_a_section_number_one_level_too_deep(tmp_path):
+    _write_docs(tmp_path)
+    (tmp_path / "docs" / "index.md").write_text("# aws-tui\n\n## 1.1. Bad\n")
+
     findings = check_numbering(MANIFEST, tmp_path)
-    assert any("index.md" in f.message for f in findings)
+
+    assert any("does not match H2" in f.message for f in findings)
+
+
+def test_numbering_flags_an_unnumbered_section(tmp_path):
+    _write_docs(tmp_path)
+    (tmp_path / "docs" / "index.md").write_text("# aws-tui\n\n## Intro\n")
+
+    findings = check_numbering(MANIFEST, tmp_path)
+
+    assert any("must be hierarchically numbered" in f.message for f in findings)
+
+
+def test_numbering_exempts_release_history_and_the_vendored_code_of_conduct(tmp_path):
+    """Changelog headings are version names; renumbering them churns every release."""
+    _write_docs(tmp_path)
+    (tmp_path / "CHANGELOG.md").write_text("# Changelog\n\n## [Unreleased]\n\n### Added\n")
+    (tmp_path / "CODE_OF_CONDUCT.md").write_text("# Code of Conduct\n\n## Our Pledge\n")
+
+    assert check_numbering(MANIFEST, tmp_path) == []
+
+
+def test_numbering_rejects_a_numbered_heading_in_an_exempt_document(tmp_path):
+    _write_docs(tmp_path)
+    (tmp_path / "CHANGELOG.md").write_text("# Changelog\n\n## 1. [Unreleased]\n")
+
+    findings = check_numbering(MANIFEST, tmp_path)
+
+    assert any("must not be numbered" in f.message for f in findings)
 
 
 def test_numbering_clean(tmp_path):
@@ -170,7 +203,7 @@ def test_numbering_checks_nested_historical_docs(tmp_path):
     _write_docs(tmp_path)
     specs = tmp_path / "docs" / "superpowers" / "specs"
     specs.mkdir(parents=True)
-    (specs / "history.md").write_text("# 1. History\n\n### 1.2.1. Missing parent\n")
+    (specs / "history.md").write_text("# History\n\n### 2.1. Missing parent\n")
 
     findings = check_numbering(MANIFEST, tmp_path)
 
@@ -179,19 +212,17 @@ def test_numbering_checks_nested_historical_docs(tmp_path):
 
 def test_numbering_rejects_duplicate_section_numbers(tmp_path):
     _write_docs(tmp_path)
-    (tmp_path / "docs" / "index.md").write_text(
-        "# 1. aws-tui\n\n## 1.1. Intro\n\n## 1.1. Duplicate\n"
-    )
+    (tmp_path / "docs" / "index.md").write_text("# aws-tui\n\n## 1. Intro\n\n## 1. Duplicate\n")
 
     findings = check_numbering(MANIFEST, tmp_path)
 
-    assert any("duplicate heading number 1.1" in finding.message for finding in findings)
+    assert any("duplicate heading number 1" in finding.message for finding in findings)
 
 
 def test_numbering_ignores_nested_fences_in_four_tick_markdown_block(tmp_path):
     _write_docs(tmp_path)
     (tmp_path / "docs" / "index.md").write_text(
-        "# 1. aws-tui\n\n````markdown\n# Example\n\n```sh\n# shell comment\n```\n````\n"
+        "# aws-tui\n\n````markdown\n# Example\n\n```sh\n# shell comment\n```\n````\n"
     )
 
     assert check_numbering(MANIFEST, tmp_path) == []
@@ -271,3 +302,76 @@ def test_local_anchors_ignore_links_inside_fenced_code_blocks(tmp_path):
     )
 
     assert check_local_anchors(tmp_path) == []
+
+
+def test_assets_flag_an_embedded_image_missing_from_the_surface(tmp_path):
+    """The poster went missing from site and wiki with every other gate green."""
+    site = tmp_path / "site"
+    site.mkdir(parents=True)
+    (site / "index.md").write_text('<img src="assets/img/poster.png" width="100%">\n')
+
+    findings = check_assets(tmp_path)
+
+    assert any("poster.png is missing" in finding.message for finding in findings)
+
+
+def test_assets_accept_an_embedded_image_the_surface_carries(tmp_path):
+    site = tmp_path / "site"
+    (site / "assets" / "img").mkdir(parents=True)
+    (site / "assets" / "img" / "poster.png").write_bytes(b"png")
+    (site / "index.md").write_text('<img src="assets/img/poster.png" width="100%">\n')
+
+    assert check_assets(tmp_path) == []
+
+
+def test_assets_ignore_remote_images(tmp_path):
+    site = tmp_path / "site"
+    site.mkdir(parents=True)
+    (site / "index.md").write_text('<img src="https://example.invalid/x.png">\n')
+
+    assert check_assets(tmp_path) == []
+
+
+def test_titles_flag_an_h1_that_disagrees_with_the_manifest(tmp_path):
+    """A wiki page named Platforms opened with '# Supported platforms'."""
+    _write_docs(tmp_path)
+    (tmp_path / "docs" / "architecture.md").write_text("# Layers\n\n## 1. Layers\n")
+
+    findings = check_titles(MANIFEST, tmp_path)
+
+    assert any("does not match manifest title 'Architecture'" in f.message for f in findings)
+
+
+def test_titles_accept_matching_h1_and_exempt_the_landing_page(tmp_path):
+    """The landing page's H1 is the product name; its nav entry reads Overview."""
+    _write_docs(tmp_path)
+
+    assert check_titles(MANIFEST, tmp_path) == []
+
+
+def test_section_references_flag_a_reference_with_no_such_section(tmp_path):
+    """Plain-prose refs are rewritten by nothing and seen by no link checker."""
+    _write_docs(tmp_path)
+    (tmp_path / "docs" / "index.md").write_text("# aws-tui\n\n## 1. Intro\n\nSee §4.2.\n")
+
+    findings = check_section_references(MANIFEST, tmp_path)
+
+    assert any("§4.2 has no such section" in finding.message for finding in findings)
+
+
+def test_section_references_accept_a_resolving_reference(tmp_path):
+    _write_docs(tmp_path)
+    (tmp_path / "docs" / "index.md").write_text(
+        "# aws-tui\n\n## 1. Intro\n\n### 1.1. Detail\n\nSee §1.1.\n"
+    )
+
+    assert check_section_references(MANIFEST, tmp_path) == []
+
+
+def test_section_references_leave_external_spec_citations_alone(tmp_path):
+    _write_docs(tmp_path)
+    (tmp_path / "docs" / "index.md").write_text(
+        "# aws-tui\n\n## 1. Intro\n\nMirror of spec §4.2.\n"
+    )
+
+    assert check_section_references(MANIFEST, tmp_path) == []

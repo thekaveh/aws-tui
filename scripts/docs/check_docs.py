@@ -20,6 +20,11 @@ from scripts.docs.manifest import Manifest, load_manifest
 INTERNAL_DOCS: frozenset[str] = frozenset({"docs/recording-todo.md"})
 INTERNAL_DOC_PREFIXES: tuple[str, ...] = ("docs/superpowers/",)
 
+# Release history and the vendored Code of Conduct are never section-numbered:
+# changelog headings are version names that would renumber on every release, and
+# the Contributor Covenant is reproduced verbatim.
+UNNUMBERED_DOCS: frozenset[str] = frozenset({"CHANGELOG.md", "CODE_OF_CONDUCT.md"})
+
 _PLACEHOLDER_RE = re.compile(r"\b(TODO|TBD|FIXME|XXX)\b")
 _HEADING_RE = re.compile(r"^(#{1,6})\s+(\d+(?:\.\d+)*)\.\s+\S")
 _MARKDOWN_HEADING_RE = re.compile(r"^#{1,6}\s+(.+?)\s*#*\s*$")
@@ -98,7 +103,125 @@ def check_placeholders(
     return findings
 
 
+_EMBED_RE = re.compile(r"<img\s+[^>]*\bsrc=[\"']([^\"']+)[\"']|!\[[^\]]*\]\(\s*([^)\s]+)\s*\)")
+
+
+def check_assets(generated_root: str | Path) -> list[Finding]:
+    """Reject generated pages that embed an image the surface does not carry.
+
+    ``mkdocs build --strict`` validates Markdown links but not the ``src`` of a
+    raw ``<img>`` tag, so a poster or screenshot can go missing from a published
+    surface while every other gate stays green.
+    """
+    generated_root = Path(generated_root)
+    findings: list[Finding] = []
+    for md_path in sorted(generated_root.rglob("*.md")):
+        rel = md_path.relative_to(generated_root)
+        for line_number, line in enumerate(
+            md_path.read_text(encoding="utf-8").splitlines(), start=1
+        ):
+            for match in _EMBED_RE.finditer(line):
+                target = match.group(1) or match.group(2)
+                if urlsplit(target).scheme or target.startswith("//"):
+                    continue
+                resolved = (md_path.parent / unquote(urlsplit(target).path)).resolve()
+                if not resolved.is_file():
+                    findings.append(
+                        Finding("error", f"{rel}:{line_number}: embedded image {target} is missing")
+                    )
+    return findings
+
+
+# The landing page's H1 is the product name while its nav entry reads "Overview".
+# Every other page carries one title across the nav, the wiki sidebar, the wiki
+# filename, and its own H1.
+TITLE_EXEMPT_IDS: frozenset[str] = frozenset({"overview"})
+
+
+def check_titles(manifest: Manifest, repo_root: str | Path) -> list[Finding]:
+    """Reject a page whose H1 disagrees with the title the manifest publishes.
+
+    The manifest title names the page in the site nav, the wiki sidebar, and the
+    wiki filename; the H1 names it on the page itself. Two sources drift
+    silently — a wiki page called ``Platforms`` opened with ``# Supported
+    platforms`` for as long as nothing compared them.
+    """
+    repo_root = Path(repo_root)
+    findings: list[Finding] = []
+    for leaf in manifest.leaves():
+        if leaf.source is None or leaf.id in TITLE_EXEMPT_IDS:
+            continue
+        path = repo_root / leaf.source
+        if not path.is_file():
+            continue
+        heading = next(
+            (
+                line
+                for line in path.read_text(encoding="utf-8").splitlines()
+                if line.startswith("# ")
+            ),
+            None,
+        )
+        if heading is None:
+            findings.append(Finding("error", f"{leaf.source}: no H1 to compare with the manifest"))
+            continue
+        title = heading[2:].strip()
+        if title != leaf.title:
+            findings.append(
+                Finding(
+                    "error",
+                    f"{leaf.source}: H1 {title!r} does not match manifest title {leaf.title!r}",
+                )
+            )
+    return findings
+
+
+_SECTION_REF_RE = re.compile(r"§ ?(\d+(?:\.\d+)+)")
+
+
+def check_section_references(manifest: Manifest, repo_root: str | Path) -> list[Finding]:
+    """Reject a ``§N.M`` cross-reference with no such section in its own document.
+
+    These are plain prose, so nothing rewrites them when sections are renumbered
+    and no link checker sees them. Seven were already stale before the numbering
+    was standardized. A reference whose line cites the design spec is external
+    and is left alone.
+    """
+    repo_root = Path(repo_root)
+    findings: list[Finding] = []
+    for leaf in manifest.leaves():
+        if leaf.source is None:
+            continue
+        path = repo_root / leaf.source
+        if not path.is_file():
+            continue
+        lines = path.read_text(encoding="utf-8").splitlines()
+        numbers = {match.group(2) for match in (_HEADING_RE.match(line) for line in lines) if match}
+        for line_number, line in enumerate(lines, start=1):
+            if "spec" in line.casefold():
+                continue
+            for match in _SECTION_REF_RE.finditer(line):
+                if match.group(1) not in numbers:
+                    findings.append(
+                        Finding(
+                            "error",
+                            f"{leaf.source}:{line_number}: section reference "
+                            f"§{match.group(1)} has no such section in this document",
+                        )
+                    )
+    return findings
+
+
 def check_numbering(manifest: Manifest, repo_root: str | Path) -> list[Finding]:
+    """Enforce unnumbered page titles with hierarchically numbered sections.
+
+    The page's position in the published hierarchy is owned by the manifest and
+    rendered into the site nav and the wiki sidebar; baking it into the H1 too
+    would be a second source that drifts silently. Section numbers therefore
+    restart per document and sit one level shallower than their heading: ``##``
+    carries ``N.``, ``###`` carries ``N.M.``. Release history and the vendored
+    Code of Conduct carry no numbering at all.
+    """
     if manifest.numbering != "per-doc":
         return [Finding("error", f"unsupported numbering mode: {manifest.numbering}")]
     repo_root = Path(repo_root)
@@ -106,6 +229,7 @@ def check_numbering(manifest: Manifest, repo_root: str | Path) -> list[Finding]:
     markdown = sorted(repo_root.glob("*.md")) + sorted((repo_root / "docs").rglob("*.md"))
     for path in markdown:
         rel = path.relative_to(repo_root)
+        unnumbered = rel.as_posix() in UNNUMBERED_DOCS
         seen: set[tuple[int, ...]] = set()
         fence_length: int | None = None
         for line_number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
@@ -118,9 +242,23 @@ def check_numbering(manifest: Manifest, repo_root: str | Path) -> list[Finding]:
                 elif ticks >= fence_length and not fence.group(2).strip():
                     fence_length = None
                 continue
-            if fence_length is not None or not re.match(r"^#{1,6}\s+", line):
+            level_match = re.match(r"^(#{1,6})\s+", line)
+            if fence_length is not None or level_match is None:
                 continue
+            level = len(level_match.group(1))
             match = _HEADING_RE.match(line)
+            if unnumbered:
+                if match is not None:
+                    findings.append(
+                        Finding("error", f"{rel}:{line_number}: heading must not be numbered")
+                    )
+                continue
+            if level == 1:
+                if match is not None:
+                    findings.append(
+                        Finding("error", f"{rel}:{line_number}: page title must not be numbered")
+                    )
+                continue
             if match is None:
                 findings.append(
                     Finding(
@@ -128,9 +266,8 @@ def check_numbering(manifest: Manifest, repo_root: str | Path) -> list[Finding]:
                     )
                 )
                 continue
-            level = len(match.group(1))
             number = tuple(int(part) for part in match.group(2).split("."))
-            if len(number) != level or number[0] != 1:
+            if len(number) != level - 1:
                 findings.append(
                     Finding(
                         "error",
@@ -138,7 +275,7 @@ def check_numbering(manifest: Manifest, repo_root: str | Path) -> list[Finding]:
                     )
                 )
                 continue
-            if level > 1 and number[:-1] not in seen:
+            if level > 2 and number[:-1] not in seen:
                 findings.append(
                     Finding(
                         "error",
@@ -305,7 +442,10 @@ def check(repo_root: str | Path, generated_root: str | Path) -> int:
     findings += check_self_containment(generated_root, repo_root)
     findings += check_completeness(manifest, repo_root)
     findings += check_placeholders(generated_root, repo_root)
+    findings += check_assets(generated_root)
     findings += check_numbering(manifest, repo_root)
+    findings += check_titles(manifest, repo_root)
+    findings += check_section_references(manifest, repo_root)
     findings += check_local_anchors(repo_root)
     for f in findings:
         print(f"[{f.severity}] {f.message}", file=sys.stderr)

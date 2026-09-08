@@ -1,4 +1,4 @@
-# 1. Overlay pickers, one-line commands, and Glue-to-Athena handoffs design
+# Overlay pickers, one-line commands, and Glue-to-Athena handoffs design
 
 **Status:** Implemented and integrated into `develop` on 2026-08-25.
 
@@ -7,7 +7,7 @@ requested after hands-on review of Glue and Athena on `develop`. It builds on th
 approved Glue/Athena interaction and segmented-tab designs without changing their
 view order, typed focus order, AWS resolver order, or read-only operating model.
 
-## 1.1. Problems and evidence
+## 1. Problems and evidence
 
 The current UI has four related shortcomings.
 
@@ -46,7 +46,7 @@ inconsistently:
   clicks the real Iceberg button and proves that the resulting Athena editor
   contains the expected snapshot query.
 
-## 1.2. Goals
+## 2. Goals
 
 The change must:
 
@@ -64,7 +64,7 @@ The change must:
 8. preserve the existing MVVM, VMx, source-resolution, and read-only safety
    boundaries.
 
-## 1.3. Scope and terminology
+## 3. Scope and terminology
 
 For this design, an **inline dropdown** is a compact trigger that temporarily
 reveals a set of choices. The affected widgets are:
@@ -81,9 +81,9 @@ The handoff work affects Glue Catalog, Glue Iceberg metadata, Athena Query, the
 app action registry, the keymap, and the command legend. It does not add an AWS
 write operation.
 
-## 1.4. Overlay dropdown contract
+## 4. Overlay dropdown contract
 
-### 1.4.1. Stable collapsed geometry
+### 4.1. Stable collapsed geometry
 
 An inline dropdown's trigger retains a fixed compact footprint while closed and
 open. For the existing context controls, that footprint remains three terminal
@@ -95,7 +95,7 @@ The current `height: auto` expansion behavior is removed. `ContextPicker` and
 `ApplicationPicker` keep their specialized presentation and state handling; this
 change does not replace them wholesale with Textual `Select`.
 
-### 1.4.2. Screen overlay behavior
+### 4.2. Screen overlay behavior
 
 The option list uses Textual's proven screen-overlay mechanism:
 
@@ -109,7 +109,7 @@ The option list uses Textual's proven screen-overlay mechanism:
 Opening near the right or bottom edge must remain inside the viewport. Closing
 must reveal the exact pre-open layout, with no cleanup resize needed.
 
-### 1.4.3. Open and close behavior
+### 4.3. Open and close behavior
 
 Only one inline dropdown may be open at a time. Opening a second picker closes
 the first before revealing the second overlay.
@@ -130,7 +130,7 @@ in that case no stale refocus callback may target the old widget.
 Mouse and keyboard opening remain equivalent. Existing `Enter`, `Space`, arrow,
 commit, cancel, Tab, Shift+Tab, and direct picker-command behavior remains intact.
 
-### 1.4.4. Focus and semantic-state precedence
+### 4.4. Focus and semantic-state precedence
 
 Selectors use the following visual precedence:
 
@@ -153,9 +153,9 @@ styling, then restores the idle border after focus leaves.
 This state model ensures that when Iceberg metadata owns focus, AWS source is
 visibly idle rather than appearing selected at the same time.
 
-## 1.5. One-line Commands contract
+## 5. One-line Commands contract
 
-### 1.5.1. Geometry and packing
+### 5.1. Geometry and packing
 
 `HintLegend` remains a framed Commands pane with one inner content row. Its
 height never grows because of command count.
@@ -175,7 +175,7 @@ scrolling. Width fitting runs when:
 
 Hover, focus elsewhere, and tooltip display must not recompute or shift the row.
 
-### 1.5.2. Compact labels
+### 5.2. Compact labels
 
 Labels are short operational cues rather than descriptions. Representative
 Athena labels are:
@@ -200,7 +200,7 @@ The displayed capital letters mean the existing Textual convention of
 `Shift + letter`. Tooltips spell that out; users are not expected to infer it
 from case alone.
 
-### 1.5.3. Detailed tooltips
+### 5.3. Detailed tooltips
 
 Every visible command chip has a tooltip. A tooltip includes, in this order:
 
@@ -223,7 +223,7 @@ service-scoped command palette for full descriptions.
 is resolved by `HintLegendVM`; the Textual widget owns only rendering and
 geometry-based fitting.
 
-### 1.5.4. Narrow-width fitting and overflow
+### 5.4. Narrow-width fitting and overflow
 
 At the repository's representative wide viewport, all applicable Athena and
 Glue commands must fit in one row using the compact labels and tight spacing.
@@ -248,9 +248,9 @@ Disabled commands may remain visible when they fit. Their tooltips explain why
 they are disabled. A disabled hint may be removed before an enabled action of the
 same priority when space is constrained.
 
-## 1.6. Glue-to-Athena handoffs
+## 6. Glue-to-Athena handoffs
 
-### 1.6.1. Table query handoff
+### 6.1. Table query handoff
 
 `glue.query_in_athena` gains the default shortcut `Q` (`Shift + Q`) and appears
 as `[Q] Athena` in the Glue command row when applicable.
@@ -268,7 +268,7 @@ LIMIT 100
 
 The handoff never starts a query automatically.
 
-### 1.6.2. Snapshot time-travel handoff
+### 6.2. Snapshot time-travel handoff
 
 `glue.time_travel_in_athena` retains `V` (`Shift + V`) and appears as
 `[V] snapshot` when the Iceberg metadata surface is available.
@@ -295,7 +295,7 @@ When there are no snapshots, the arrow button and command are disabled. Their
 tooltip states that a snapshot row must be selected. An empty table header or
 placeholder is not treated as a selected snapshot.
 
-### 1.6.3. Unified action dispatch
+### 6.3. Unified action dispatch
 
 The Iceberg arrow button, `Shift + V`, and the palette entry converge on the same
 registered `glue.time_travel_in_athena` application action. `Shift + Q` and the
@@ -310,7 +310,7 @@ Invalid, empty, stale, or unmounted selections produce the established advisory
 behavior and do not navigate or mutate Athena editor state. Superseded handoffs
 continue to use the existing generation-based serialized navigation safeguards.
 
-### 1.6.4. Command availability
+### 6.4. Command availability
 
 Glue command-state recomputation covers all three selection-dependent actions:
 
@@ -322,7 +322,7 @@ Availability updates after table selection, metadata-view changes, snapshot-row
 selection, pagination, refresh, errors, source changes, and page shutdown. The
 legend and button must agree at all times.
 
-## 1.7. Architecture and VMx ownership
+## 7. Architecture and VMx ownership
 
 The current ownership boundaries remain the best-fitting abstractions:
 
@@ -347,7 +347,7 @@ custom wrappers because they already encode titled borders, source identity,
 loading/error states, EMR state-rich options, and application-specific commit
 semantics that native `Select` does not replace without substantial adaptation.
 
-## 1.8. Failure and lifecycle behavior
+## 8. Failure and lifecycle behavior
 
 - A picker whose owner unmounts closes without scheduling focus back to a stale
   widget.
@@ -363,12 +363,12 @@ semantics that native `Select` does not replace without substantial adaptation.
 - Tooltip generation must tolerate remapped keys, absent optional bindings, and
   disabled actions without displaying stale default shortcuts.
 
-## 1.9. Verification strategy
+## 9. Verification strategy
 
 Implementation follows test-driven development. Behavioral assertions lead;
 snapshots supplement them rather than serving as the sole proof.
 
-### 1.9.1. Picker tests
+### 9.1. Picker tests
 
 For both `ContextPicker` and `ApplicationPicker`, verify:
 
@@ -387,7 +387,7 @@ For both `ContextPicker` and `ApplicationPicker`, verify:
 Run page-level coverage for Glue Catalog, Jobs, Crawlers, Athena Query, and EMR
 Serverless because they exercise distinct picker compositions.
 
-### 1.9.2. Command legend tests
+### 9.2. Command legend tests
 
 Verify:
 
@@ -402,7 +402,7 @@ Verify:
 - disabled prerequisites are accurate; and
 - all supported themes preserve identical structural geometry.
 
-### 1.9.3. Handoff tests
+### 9.3. Handoff tests
 
 Add a full-app integration test that:
 
@@ -418,7 +418,7 @@ Run equivalent behavior through `Shift + V` and the palette entry. Cover
 `Shift + Q` table handoff, source switching, stale/empty selections, disabled
 state transitions, pagination, page shutdown, and superseded requests.
 
-### 1.9.4. Visual and manual review
+### 9.4. Visual and manual review
 
 Review Glue Catalog with source idle and Iceberg focused, each Glue filter open,
 Athena with each context picker open, and EMR with its application picker open.
@@ -433,7 +433,7 @@ Manual acceptance must confirm:
 - tooltips are readable and complete; and
 - both Glue-to-Athena actions navigate and prefill without execution.
 
-## 1.10. Documentation
+## 10. Documentation
 
 Update canonical documentation wherever it describes picker expansion, command
 layout, key bindings, or Glue/Athena workflows. At minimum this includes:
@@ -451,7 +451,7 @@ Documentation must explicitly say that `Shift + Q` and `Shift + V` prefill but d
 not execute Athena queries. Generated documentation and screenshots must be
 regenerated from the canonical source rather than patched independently.
 
-## 1.11. Out of scope
+## 11. Out of scope
 
 This change does not:
 
@@ -466,7 +466,7 @@ This change does not:
 - introduce a new VMx abstraction where the existing specialized owner already
   fits.
 
-## 1.12. Acceptance criteria
+## 12. Acceptance criteria
 
 The work is complete when:
 

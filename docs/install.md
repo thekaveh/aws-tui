@@ -1,10 +1,10 @@
-# 1. Installation
+# Installation
 
 aws-tui supports Python 3.11, 3.12, and 3.13 on macOS, Linux, and Windows.
 Until the first PyPI release is published, install the application directly
 from its Git repository.
 
-## 1.1. Isolated application install
+## 1. Isolated application install
 
 Use either `pipx` or `uv tool` so aws-tui and its dependencies remain isolated
 from system Python packages:
@@ -23,7 +23,7 @@ Verify the installed console entry point:
 aws-tui --version
 ```
 
-## 1.2. Development install
+## 2. Development install
 
 ```bash
 git clone https://github.com/thekaveh/aws-tui.git
@@ -37,7 +37,7 @@ The lockfile is the reproducibility baseline for development and CI. See
 [Connections](connections.md) to configure AWS profiles or S3-compatible
 endpoints.
 
-## 1.3. Demo mode
+## 3. Demo mode
 
 Launch the complete interface against deterministic in-memory providers when
 AWS credentials are unavailable:
@@ -50,7 +50,7 @@ Demo mode does not write the user's aws-tui configuration and does not issue
 AWS requests. Its local filesystem pane still points at the real local
 filesystem.
 
-## 1.4. Release channels
+## 4. Release channels
 
 The repository contains PyPI, TestPyPI, GitHub Release, and Homebrew automation,
 but the public PyPI package and Homebrew tap are not yet available. The Git

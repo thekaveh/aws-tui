@@ -1,4 +1,4 @@
-# 1. Athena UI contract repair design
+# Athena UI contract repair design
 
 **Status:** Approved for implementation on 2026-08-27.
 
@@ -8,7 +8,7 @@ presentation and starter-query details in the 2026-08-24 overlay-picker design.
 The existing read-only operating model, resolver order, source transaction,
 segmented tabs, focus coordinator, and VMx-based MVVM boundaries remain intact.
 
-## 1.1. Problems and evidence
+## 1. Problems and evidence
 
 The current interface has five related contract failures.
 
@@ -41,7 +41,7 @@ cancel command's `can_execute` predicate excludes the submitting phase even
 though the VM's cancellation method can interrupt that phase. Presentation,
 keyboard behavior, and VM state therefore disagree.
 
-## 1.2. Goals
+## 2. Goals
 
 The change must:
 
@@ -58,7 +58,7 @@ The change must:
    lifecycle; and
 8. update tests, snapshots, and all affected documentation contracts.
 
-## 1.3. Non-goals
+## 3. Non-goals
 
 This work does not:
 
@@ -69,7 +69,7 @@ This work does not:
 - redesign Glue's already approved context row; or
 - introduce a new shared context-header abstraction solely for visual reuse.
 
-## 1.4. Command-row alignment
+## 4. Command-row alignment
 
 `HintLegend` keeps its existing width measurement, compact labels, priority
 fitting, overflow command, and tooltip behavior. After fitting, `#hint-strip`
@@ -87,9 +87,9 @@ When the fitted commands consume the full width, centering naturally has no
 visible effect. Geometry tests cover both spare-width and constrained-width
 cases.
 
-## 1.5. Athena context row
+## 5. Athena context row
 
-### 1.5.1. Presentation
+### 5.1. Presentation
 
 Athena's source, workgroup, catalog, and database controls remain children of one
 horizontal layout container, renamed or restyled as an unframed context row. The
@@ -102,7 +102,7 @@ This follows Glue's established convention while retaining Athena-specific
 widths and load-more controls. The load-more buttons remain associated with
 their selectors and appear only when applicable.
 
-### 1.5.2. Focus and interaction
+### 5.2. Focus and interaction
 
 The semantic order remains:
 
@@ -127,7 +127,7 @@ focus ring, and overlay behavior mutually consistent.
 Regression tests exercise real clicks and routed keyboard actions in the full
 Athena page. Direct calls to `ContextPicker.open()` are insufficient proof.
 
-## 1.6. Persistent service selection
+## 6. Persistent service selection
 
 `NavMenuVM.selected_id` remains the canonical active service. Every matching
 `NavRow` retains `-selected` whenever its descriptor id equals that value,
@@ -145,7 +145,7 @@ must not decide whether the service is selected. Consequently:
 Tests cover selection while the rail owns focus and while focus is in each
 representative service surface.
 
-## 1.7. Glue-to-Athena starter query
+## 7. Glue-to-Athena starter query
 
 For an ordinary selected Glue table, the handoff produces:
 
@@ -173,7 +173,7 @@ This section supersedes prior examples and tests that specify `LIMIT 100` for
 generated starter SQL. It does not change user-authored query limits or result
 pagination limits.
 
-## 1.8. Query controls and editor layout
+## 8. Query controls and editor layout
 
 Athena Query uses the following vertical order:
 
@@ -203,7 +203,7 @@ Run, Stop, then execution detail even though the compact controls are rendered
 above the editor. This preserves existing keyboard muscle memory while adopting
 the approved controls-before-editor visual layout.
 
-## 1.9. VMx command-state contract
+## 9. VMx command-state contract
 
 The View does not duplicate query lifecycle policy. It continues to set button
 availability from VMx command predicates:
@@ -223,7 +223,7 @@ The existing VMx `AsyncRelayCommand` remains the best-fitting abstraction; this
 work corrects its predicate rather than introducing view-local booleans or a new
 command type.
 
-## 1.10. Error handling and lifecycle
+## 10. Error handling and lifecycle
 
 Existing provider-error mapping, toast behavior, handoff rollback, cancellation
 ownership, generation guards, and shutdown semantics remain unchanged.
@@ -234,7 +234,7 @@ handoff must not overwrite a newer editor value. Deferred view refresh
 callbacks must verify that the widget remains mounted and that the VM
 notification still belongs to the current page.
 
-## 1.11. Test strategy
+## 11. Test strategy
 
 Implementation follows focused test-driven development.
 
@@ -263,7 +263,7 @@ wide and narrow terminal sizes. Visual review checks centered commands,
 unambiguous selected service, selector borders, compact controls, and absence of
 overlap or clipping.
 
-## 1.12. Documentation and compatibility
+## 12. Documentation and compatibility
 
 Affected canonical documentation includes the Athena service guide, keybindings
 and focus model, architecture and contract ledger where starter-query behavior
@@ -275,7 +275,7 @@ Documentation must no longer describe Athena selectors as living in one framed
 The change is otherwise backward compatible: action ids, default keybindings,
 message types, stored selections, and public VM APIs remain stable.
 
-## 1.13. Delivery
+## 13. Delivery
 
 Work is performed on `fix/athena-ui-contracts`, created from synchronized
 `develop` commit `49ac96dc`. The implementation, tests, snapshots, and documents

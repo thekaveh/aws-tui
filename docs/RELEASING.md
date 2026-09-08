@@ -1,4 +1,4 @@
-# 1. Releasing aws-tui
+# Releasing aws-tui
 
 How to cut a release. Five minutes of human time per version.
 
@@ -14,7 +14,7 @@ approve `pypi` environment in GitHub Actions (one click)
 merge auto-opened Homebrew bump PR (skim diff first)
 ```
 
-## 1.1. Routine release
+## 1. Routine release
 
 From a clean `main`:
 
@@ -42,7 +42,7 @@ gh pr create --title "chore(release): cut vX.Y.Z" --fill
 
 Review the PR like any other change. Merge when CI is green.
 
-### 1.1.1. Pre-tag checklist
+### 1.1. Pre-tag checklist
 
 - **PyPI project status.** Confirm the public project page is reachable, note
   the latest published version, and verify that the intended new version is
@@ -168,7 +168,7 @@ Skim the Homebrew PR and merge it when one is created.
 
 Done.
 
-## 1.2. Rehearsing the TestPyPI Pipeline
+## 2. Rehearsing the TestPyPI Pipeline
 
 Use this whenever the release machinery itself changes — a new
 job, a tweaked artifact layout, anything that risks burning a
@@ -207,7 +207,7 @@ the exact `X.Y.Z.dev<N>` version is intentional: once `X.Y.Z` exists on
 PyPI, an unpinned install may prefer the final PyPI release over the
 TestPyPI rehearsal.
 
-## 1.3. Rollback
+## 3. Rollback
 
 **PyPI does not allow republishing the same version.** Recovery
 is always "fix forward, never overwrite":
@@ -234,7 +234,7 @@ is always "fix forward, never overwrite":
 - **Tag/version mismatch.** The `verify` job fails fast and
   publishes nothing. Fix `version.py`, retag.
 
-## 1.4. One-time bring-up
+## 4. One-time bring-up
 
 These five console steps are not automatable. The maintainer
 does them once before the first release through this pipeline.
@@ -242,7 +242,7 @@ PyPI/TestPyPI Trusted Publisher and GitHub environments may already
 exist; the Homebrew bootstrap waits until the first PyPI artifact is
 actually published.
 
-### 1.4.1. PyPI Trusted Publisher
+### 4.1. PyPI Trusted Publisher
 
 1. Log into [pypi.org](https://pypi.org) → **Your projects** →
    `aws-tui` → **Settings** → **Publishing** → **Add a new pending
@@ -257,7 +257,7 @@ actually published.
 Repeat for [test.pypi.org](https://test.pypi.org) with environment
 name `testpypi`.
 
-### 1.4.2. GitHub Environments
+### 4.2. GitHub Environments
 
 In `thekaveh/aws-tui` → Settings → **Environments** → New
 environment:
@@ -265,7 +265,7 @@ environment:
 - `pypi` — add **Required reviewers** = `thekaveh` (you).
 - `testpypi` — no protection rules.
 
-### 1.4.3. Homebrew tap repo
+### 4.3. Homebrew tap repo
 
 1. Create empty repo `thekaveh/homebrew-aws-tui` on GitHub.
 2. After the first PyPI release lands, bootstrap the
@@ -273,7 +273,7 @@ environment:
    From the next release onward the `bump-homebrew` workflow opens PRs
    automatically.
 
-### 1.4.4. Homebrew tap token
+### 4.4. Homebrew tap token
 
 The `bump-homebrew` workflow needs to push branches and open PRs
 in a DIFFERENT repo than the one running the workflow. The default
@@ -299,7 +299,7 @@ fine-grained PAT scoped to the tap repo only:
 Token lifespan is the only routine recurring chore — set the
 calendar reminder for the expiry date.
 
-## 1.5. Version policy
+## 5. Version policy
 
 Semantic Versioning. Pre-1.0 we're explicit:
 

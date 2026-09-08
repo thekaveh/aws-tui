@@ -1,17 +1,18 @@
-# 1. Recording TODO
+# Recording TODO
 
 > Items the maintainer (i.e. **you**) needs to record manually before
 > the v0.9.0 development docs feel complete. These artifacts require a
 > manual terminal recording session, so this file is a hand-off list. Each
 > item lists where it lands in the docs and the rough recipe.
 
-Place finished artifacts under `docs/assets/` (create if missing) and
+Place finished recordings under `assets/recordings/` (create if missing) and
+screenshots alongside the existing one in `assets/screenshots/`, then
 embed them at the section named in each item:
 
 - For `.cast` files: `[![asciicast](https://asciinema.org/a/<id>.svg)](https://asciinema.org/a/<id>)`
-- For PNG: `\![<alt>](assets/<file>.png)` (remove the leading backslash when embedding it)
+- For PNG: `\![<alt>](../assets/screenshots/<file>.png)` (remove the leading backslash when embedding it)
 
-## 1.1. Quickstart launch (`README.md` hero)
+## 1. Quickstart launch (`README.md` hero)
 
 Format: asciinema, 30 seconds, 100×30.
 
@@ -19,7 +20,7 @@ Recipe:
 
 ```bash
 asciinema rec -t "aws-tui quickstart" --idle-time-limit 1 \
-    docs/assets/quickstart.cast
+    assets/recordings/quickstart.cast
 # inside the recording:
 aws-tui
 # wait for the dual-pane to render with default Carbon theme
@@ -30,7 +31,7 @@ aws-tui
 Embed under the README hero image / status block if a fresh terminal
 recording is still useful after the current hero asset.
 
-## 1.2. First-run startup placeholder (`README.md` Quickstart section)
+## 2. First-run startup placeholder (`README.md` Quickstart section)
 
 Format: PNG screenshot at 120×40.
 
@@ -42,7 +43,7 @@ tmp_home="$(mktemp -d)"
 HOME="$tmp_home" aws-tui
 # take a screenshot of the local-only/no-connection placeholder
 # (macOS: Cmd+Shift+4, drag the terminal window). Save as
-# docs/assets/first-run-voidline.png.
+# assets/screenshots/first-run-voidline.png.
 # Cleanup after the recording:
 rm -rf "$tmp_home"
 ```
@@ -53,7 +54,7 @@ the config of the temp HOME for a more striking image.
 The current capture should show only shipped behavior; there is no separate
 welcome-modal recording.
 
-## 1.3. S3 to local copy walkthrough (cookbook: connect to S3Mock)
+## 3. S3 to local copy walkthrough (cookbook: connect to S3Mock)
 
 Format: asciinema, 60 seconds, 120×40.
 
@@ -61,7 +62,7 @@ Recipe:
 
 ```bash
 asciinema rec -t "aws-tui: S3Mock to local copy" \
-    docs/assets/s3mock-copy.cast
+    assets/recordings/s3mock-copy.cast
 # inside:
 aws-tui
 # Shift+S until the left pane title shows dev-s3
@@ -74,9 +75,9 @@ aws-tui
 ```
 
 Embed below the "Use it" step of the S3Mock recipe in
-[cookbook.md](cookbook.md#115-use-it).
+[cookbook.md](cookbook.md#15-use-it).
 
-## 1.4. Theme switch (cookbook: switch theme)
+## 4. Theme switch (cookbook: switch theme)
 
 Format: asciinema, 20 seconds, 120×40.
 
@@ -84,7 +85,7 @@ Recipe:
 
 ```bash
 asciinema rec -t "aws-tui: theme switch" \
-    docs/assets/theme-switch.cast
+    assets/recordings/theme-switch.cast
 # inside:
 aws-tui
 # t
@@ -97,7 +98,7 @@ aws-tui
 
 Embed below the "One-off (session-only)" step of the theme recipe.
 
-## 1.5. Transfer-journal diagnostics
+## 5. Transfer-journal diagnostics
 
 Format: asciinema, 60 seconds, 120×40.
 
@@ -113,7 +114,7 @@ cat > "$CACHE_DIR/transfers/5eedabc05eedabc0.jsonl" <<'EOF'
 EOF
 
 asciinema rec -t "aws-tui: transfer journal diagnostics" \
-    docs/assets/transfer-journal.cast
+    assets/recordings/transfer-journal.cast
 # inside:
 ls -l "$CACHE_DIR/transfers"
 aws-tui
@@ -126,7 +127,7 @@ Cleanup after recording: `rm "$CACHE_DIR/transfers/5eedabc05eedabc0.jsonl"`.
 Do not imply that an interactive resume modal exists; recovery remains a
 journal and cleanup contract until a new user-facing flow is designed.
 
-## 1.6. Crash dump (interactive modal deferred)
+## 6. Crash dump (interactive modal deferred)
 
 Format: terminal text or PNG screenshot of the generated dump path.
 
@@ -141,7 +142,7 @@ temporary exception before committing.
 
 Embed the resulting artifact below the "What gets dumped on a crash" section.
 
-## 1.7. When you're done
+## 7. When you're done
 
 Once the artifacts land, embed them in the target sections named above
 and (optionally) delete this file. The CHANGELOG entry for the

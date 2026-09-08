@@ -1,4 +1,4 @@
-# 1. Glue and Athena segmented tabs and layout fixes design
+# Glue and Athena segmented tabs and layout fixes design
 
 **Status:** Implemented on 2026-08-23. The shared segmented-frame and layout
 regression decisions remain authoritative; the later overlay-picker design
@@ -11,7 +11,7 @@ header edge and pathological wrapping of Athena's command legend. All existing
 focus order, view ordering, activation, commands, VM ownership, and AWS service
 behavior remain authoritative and unchanged.
 
-## 1.1. Problems
+## 1. Problems
 
 The underline-only Glue and Athena view rail reads as a horizontal separator,
 not as a tab control. It does not provide a sufficiently complete visual
@@ -27,9 +27,9 @@ Textual reduces a regular grid's column count until every row has the same
 number of items. Because 17 is prime, a wide Athena legend collapses to one
 column and consumes most of the screen vertically.
 
-## 1.2. Decisions
+## 2. Decisions
 
-### 1.2.1. Shared segmented tab frame
+### 2.1. Shared segmented tab frame
 
 `ServiceTabStrip` becomes a shared segmented frame:
 
@@ -50,7 +50,7 @@ The old underline-only cue is removed. This is a segmented control presentation,
 not a return of the titled `Views` pane: the frame has no title and does not own
 or frame the service content below it.
 
-### 1.2.2. Glue source framing
+### 2.2. Glue source framing
 
 Glue retains its unframed context layout row. The `AWS source` picker keeps its
 own complete border and remains an independent focus target. The additional
@@ -61,7 +61,7 @@ title, or parent focus decoration is reintroduced.
 Athena's grouped context frame and EMR's existing source-header presentation
 remain unchanged.
 
-### 1.2.3. Responsive command legend
+### 2.3. Responsive command legend
 
 `HintLegend` uses non-regular responsive packing. It fills the available width
 with as many stable minimum-width command cells as fit, then wraps the remainder
@@ -73,7 +73,7 @@ view scoping, and `HintLegendVM` ownership do not change. At narrow widths,
 commands may use more rows, but every chip must remain within the legend bounds
 without overlap or clipping.
 
-## 1.3. Architecture and VMx
+## 3. Architecture and VMx
 
 The existing ownership boundaries are already the best fit:
 
@@ -87,7 +87,7 @@ The existing ownership boundaries are already the best fit:
 No new VM, parallel selection state, focus state, command model, or VMx
 abstraction is introduced.
 
-## 1.4. Verification
+## 4. Verification
 
 Automated coverage must prove:
 
@@ -114,7 +114,7 @@ Query at wide and narrow terminal sizes. It must confirm that the segmented
 frame reads as one control, the active segment remains clear, the Glue source
 has exactly one complete frame, and Athena commands flow horizontally.
 
-## 1.5. Scope boundary
+## 5. Scope boundary
 
 This work does not change:
 
@@ -126,7 +126,7 @@ This work does not change:
 - Glue/Athena view models or data gateways;
 - S3, EMR, navigation rail, or content-pane layouts.
 
-## 1.6. Acceptance criteria
+## 6. Acceptance criteria
 
 The change is complete when the segmented frame, Glue edge correction, and
 responsive Athena command layout match this design; focused behavior and layout

@@ -1,14 +1,14 @@
-# 1. Pull request
+# Pull request
 
-## 1.1. Summary
+## Summary
 
 <!-- 1-3 bullet points describing the change -->
 
-## 1.2. Linked spec / plan section
+## Linked spec / plan section
 
 <!-- e.g. "Implements spec §6.4 Flow 3 (SSO login)" or "Closes #42" -->
 
-## 1.3. Test plan
+## Test plan
 
 - [ ] Unit tests added / updated
 - [ ] Integration tests added / updated (if AWS or S3-compat path changed)
@@ -16,6 +16,6 @@
 - [ ] Manually launched the TUI and verified the golden path
 - [ ] No new layer violations (`./scripts/check-layers.sh` or `uv run pre-commit run --all-files` passes)
 
-## 1.4. Notes for reviewer
+## Notes for reviewer
 
 <!-- anything non-obvious -->
