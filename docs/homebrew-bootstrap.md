@@ -1,4 +1,4 @@
-# Bootstrapping the Homebrew formula
+# Homebrew Bootstrap
 
 Run this **once**, immediately after the first PyPI release lands.
 The v0.9.0 development work is present in the repository, but the tag and PyPI

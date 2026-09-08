@@ -1,4 +1,4 @@
-# Adding a new service
+# Adding a New Service
 
 > The current tree ships `s3`, `emr-serverless`, `glue`, and `athena`;
 > Glue and Athena are linked by immutable table-navigation messages, and EMR includes

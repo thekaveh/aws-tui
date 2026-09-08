@@ -9,6 +9,7 @@ from scripts.docs.check_docs import (
     check_numbering,
     check_placeholders,
     check_self_containment,
+    check_titles,
 )
 from scripts.docs.manifest import parse_manifest
 
@@ -328,3 +329,20 @@ def test_assets_ignore_remote_images(tmp_path):
     (site / "index.md").write_text('<img src="https://example.invalid/x.png">\n')
 
     assert check_assets(tmp_path) == []
+
+
+def test_titles_flag_an_h1_that_disagrees_with_the_manifest(tmp_path):
+    """A wiki page named Platforms opened with '# Supported platforms'."""
+    _write_docs(tmp_path)
+    (tmp_path / "docs" / "architecture.md").write_text("# Layers\n\n## 1. Layers\n")
+
+    findings = check_titles(MANIFEST, tmp_path)
+
+    assert any("does not match manifest title 'Architecture'" in f.message for f in findings)
+
+
+def test_titles_accept_matching_h1_and_exempt_the_landing_page(tmp_path):
+    """The landing page's H1 is the product name; its nav entry reads Overview."""
+    _write_docs(tmp_path)
+
+    assert check_titles(MANIFEST, tmp_path) == []

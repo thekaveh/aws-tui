@@ -1,4 +1,4 @@
-# AWS Glue and Iceberg metadata
+# AWS Glue and Iceberg Metadata
 
 The Glue service is an AWS-only, read-only operations console for Data Catalog
 tables, ETL jobs, crawlers, and bounded Apache Iceberg metadata inspection. It

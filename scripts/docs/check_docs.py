@@ -132,6 +132,50 @@ def check_assets(generated_root: str | Path) -> list[Finding]:
     return findings
 
 
+# The landing page's H1 is the product name while its nav entry reads "Overview".
+# Every other page carries one title across the nav, the wiki sidebar, the wiki
+# filename, and its own H1.
+TITLE_EXEMPT_IDS: frozenset[str] = frozenset({"overview"})
+
+
+def check_titles(manifest: Manifest, repo_root: str | Path) -> list[Finding]:
+    """Reject a page whose H1 disagrees with the title the manifest publishes.
+
+    The manifest title names the page in the site nav, the wiki sidebar, and the
+    wiki filename; the H1 names it on the page itself. Two sources drift
+    silently — a wiki page called ``Platforms`` opened with ``# Supported
+    platforms`` for as long as nothing compared them.
+    """
+    repo_root = Path(repo_root)
+    findings: list[Finding] = []
+    for leaf in manifest.leaves():
+        if leaf.source is None or leaf.id in TITLE_EXEMPT_IDS:
+            continue
+        path = repo_root / leaf.source
+        if not path.is_file():
+            continue
+        heading = next(
+            (
+                line
+                for line in path.read_text(encoding="utf-8").splitlines()
+                if line.startswith("# ")
+            ),
+            None,
+        )
+        if heading is None:
+            findings.append(Finding("error", f"{leaf.source}: no H1 to compare with the manifest"))
+            continue
+        title = heading[2:].strip()
+        if title != leaf.title:
+            findings.append(
+                Finding(
+                    "error",
+                    f"{leaf.source}: H1 {title!r} does not match manifest title {leaf.title!r}",
+                )
+            )
+    return findings
+
+
 def check_numbering(manifest: Manifest, repo_root: str | Path) -> list[Finding]:
     """Enforce unnumbered page titles with hierarchically numbered sections.
 
@@ -364,6 +408,7 @@ def check(repo_root: str | Path, generated_root: str | Path) -> int:
     findings += check_placeholders(generated_root, repo_root)
     findings += check_assets(generated_root)
     findings += check_numbering(manifest, repo_root)
+    findings += check_titles(manifest, repo_root)
     findings += check_local_anchors(repo_root)
     for f in findings:
         print(f"[{f.severity}] {f.message}", file=sys.stderr)

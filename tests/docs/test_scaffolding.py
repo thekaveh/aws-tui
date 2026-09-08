@@ -640,22 +640,48 @@ def test_glue_operation_ledger_matches_domain_adapter_exactly() -> None:
 
 def test_unreleased_changelog_allows_develop_before_main_promotion() -> None:
     changelog = _read("CHANGELOG.md")
-    unreleased_intro = changelog.split("### 1.1.1. Added", maxsplit=1)[0]
+    # Bound the intro at the first subsection so the assertions below cannot
+    # pass by matching text from a later release section.
+    unreleased_intro = changelog.split("\n## [Unreleased]", maxsplit=1)[1].split(
+        "\n### ", maxsplit=1
+    )[0]
     assert "may reside on ``develop`` before promotion to ``main``" in unreleased_intro
     assert "does not by itself claim that every entry has landed on ``main``" in unreleased_intro
     assert "These changes have landed on ``main``" not in unreleased_intro
     assert "historical v0.8.0 staging commit" in _squash(unreleased_intro)
 
 
-def test_readme_and_published_index_share_the_product_summary() -> None:
-    summary = (
-        "The application combines a Norton-Commander-style S3 file manager, an EMR\n"
-        "Serverless console, and AWS Glue, Amazon Athena, and Iceberg inspection\n"
-        "workflows, which are unreleased."
-    )
+def _opening_prose(text: str) -> list[str]:
+    """Prose paragraphs above the first section heading.
 
-    assert summary in _read("README.md")
-    assert summary in _read("docs/index.md")
+    Poster/screenshot markup and the status blockquote are dropped: their
+    relative asset paths and repository links legitimately differ between the
+    repository README and the landing page the site and wiki are built from.
+    """
+    head = text.split("\n## ", maxsplit=1)[0]
+    head = re.sub(r"<p align=\"center\">.*?</p>", "", head, flags=re.DOTALL)
+    paragraphs = []
+    for block in head.split("\n\n"):
+        lines = [line for line in block.splitlines() if line.strip()]
+        if not lines or lines[0].startswith(("#", ">", "<")):
+            continue
+        paragraphs.append(" ".join(line.strip() for line in lines))
+    return paragraphs
+
+
+def test_readme_and_published_index_share_the_product_summary() -> None:
+    """The landing page is projected to the site and the wiki, so a README that
+    drifts from it leaves the three surfaces telling different stories.
+
+    Comparing extracted prose rather than a hard-coded literal means editing the
+    pitch cannot quietly pass by updating one surface and the test together.
+    """
+    readme = _opening_prose(_read("README.md"))
+    index = _opening_prose(_read("docs/index.md"))
+
+    assert readme == index
+    assert len(readme) >= 2, f"expected a tagline and a summary, got {readme}"
+    assert 100 <= len(" ".join(readme).split()) <= 150
 
 
 def test_every_test_directory_holding_modules_is_an_importable_package() -> None:

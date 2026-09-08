@@ -1,4 +1,4 @@
-# Connections for AWS Profiles and S3-Compatible Storage
+# Connections
 
 > Mirror of spec §6.1–6.3 and §6.5. See also the
 > [cookbook](cookbook.md) for the "connect to local S3Mock" walkthrough.

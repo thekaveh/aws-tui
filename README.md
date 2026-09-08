@@ -8,14 +8,29 @@
   <img src="assets/screenshots/aws-tui-running.png" alt="aws-tui in demo mode with the S3, EMR, Glue, and Athena service rail; the Glue catalog is showing an Iceberg table, its metadata tabs, and snapshot history." width="100%">
 </p>
 
+<p align="center">
+  <img src="https://img.shields.io/badge/python-3.11%20%7C%203.12%20%7C%203.13-3776AB?logo=python&logoColor=white" alt="Python 3.11, 3.12, and 3.13">
+  <img src="https://img.shields.io/badge/platforms-macOS%20%7C%20Linux%20%7C%20Windows-4c566a" alt="Runs on macOS, Linux, and Windows">
+  <img src="https://img.shields.io/badge/built%20with-Textual%20%2B%20VMx-5a4fcf" alt="Built with Textual and the VMx MVVM framework">
+  <img src="https://img.shields.io/badge/license-Apache--2.0-3DA639" alt="Apache-2.0 licensed">
+</p>
+
 Cross-platform TUI for AWS and S3-compatible services — runs on macOS,
 Linux, and Windows. Powered by
 [Textual](https://textual.textualize.io/) and the
 [VMx](https://github.com/thekaveh/VMx) MVVM framework.
 
-The application combines a Norton-Commander-style S3 file manager, an EMR
-Serverless console, and AWS Glue, Amazon Athena, and Iceberg inspection
-workflows, which are unreleased.
+aws-tui puts the AWS work that usually means switching between the web console
+and a shell behind a single keyboard-driven terminal interface: a
+Norton-Commander-style dual-pane file manager for S3 and S3-compatible storage,
+an EMR Serverless console, and read-only operations consoles for AWS Glue and
+Amazon Athena. What sets it apart is that those services are wired to each
+other rather than merely bundled together — a Glue catalog table generates the
+Athena SQL that reads it, Athena results hand back to the S3 pane as artifacts,
+and Iceberg table metadata is reachable from both directions. Destructive
+operations always confirm first, long operations run on cancellable background
+workers, and one keystroke re-points the whole application at a different AWS
+profile or S3 endpoint.
 
 > **Status: v0.9.0 development; no package release published** — install from Git
 > until the `aws-tui` project name is available on PyPI. Glue, Athena, and
@@ -275,37 +290,14 @@ are indexed below for contributors and repository review.
    2. [Adding a new service](docs/adding-a-service.md) — the `Service` protocol + per-layer wiring.
    3. [VMx Python cheatsheet](docs/superpowers/notes/2026-06-14-vmx-python-cheatsheet.md) — facade pattern, message-protocol shape, lifecycle gotchas.
    4. [Three-surface publish runbook](docs/superpowers/notes/2026-07-10-three-surface-docs-phase2-runbook.md) — gated Pages and wiki enablement, first publish, and verification steps.
-3. **Spec + plans**
+3. **Design specs and implementation plans**
 
-   Historical superpowers specs, plans, and notes are indexed here for
-   provenance; headings are numbered for repository-wide navigation.
-   1. [v0.1.0 design spec](docs/superpowers/specs/2026-06-13-aws-tui-design.md) — historical foundation; current code, tests, and focused specs define live behavior.
-   2. [Settings as a first-class nav page](docs/superpowers/specs/2026-06-20-settings-as-first-class-nav-page-design.md) — design + post-ship amendments (PR #54 / #55 / #56). Supersedes the modal-overlay design at [`docs/superpowers/specs/2026-06-20-app-settings-shell-and-s3-panel-design.md`](docs/superpowers/specs/2026-06-20-app-settings-shell-and-s3-panel-design.md) (kept for git-history continuity, marked SUPERSEDED in-file).
-   3. [Modal & toast polish](docs/superpowers/specs/2026-06-19-modal-toast-polish-design.md) — PR #47 modal/toast surface rework.
-   4. [Graceful unreachable connections](docs/superpowers/specs/2026-06-19-graceful-unreachable-connections.md) — PR #48/#49 design.
-   5. [EMR Serverless service v1 design](docs/superpowers/specs/2026-06-25-emr-serverless-service-design.md) — decomposed PR-A read-only browser, PR-B cancel + logs, PR-C submit (vanilla + clone), PR-D E2E. Shipped through PRs #76–#84 for the read-only browser, clone-job-run modal, and logs pane/filter work; cancel and vanilla submit remain deferred in the spec's "Status" note.
-   6. [Public release pipeline](docs/superpowers/specs/2026-06-27-public-release-pipeline-design.md) — `release.yml` build + Sigstore-signed PyPI publish + Homebrew tap bump, design landing alongside the v0.8.0 cut (PR #95).
-   7. [Cross-platform readiness](docs/superpowers/specs/2026-06-28-cross-platform-readiness-design.md) — macOS / Linux / Windows parity audit and the install / smoke / docs plan for matching all three.
-   8. [Demo mode](docs/superpowers/specs/2026-06-28-demo-mode-design.md) — `AWS_TUI_DEMO=1` (or `--demo`) boots the full UI against seeded in-memory fakes; ships in PRs #97 / #104.
-   9. [VMx toolkit adoption](docs/superpowers/specs/2026-06-28-vmx-toolkit-adoption-design.md) — historical case-by-case retrofit of the VM layer to use VMx 2.6.1-era `CompositeVM` / `FormVM` / `IDialogService` primitives; records the analytical mistakes the design review went through (§1.3) so future VMx migration work does not repeat them.
-   10. [VMx vNext upstream asks](docs/superpowers/specs/2026-06-28-vmx-upstream-vnext-asks.md) — feedback report for VMx maintainers, derived from the aws-tui toolkit-adoption review and focused on primitives that would reduce custom wrapper code.
-   11. [VMx 3.1.0 adoption audit](docs/superpowers/specs/2026-07-02-vmx-3-1-adoption-audit.md) — historical bump report mapping the VMx 3.1.0 primitives adopted by aws-tui; retained as the baseline for later VMx audits.
-   12. [Implementation plan index](docs/superpowers/plans/README.md) — per-milestone and post-tag implementation plans with one-line descriptions; superseded plans (e.g. PR #52 modal-overlay) are kept in-tree but marked.
-   13. [Three-surface documentation](docs/superpowers/specs/2026-07-10-three-surface-docs-design.md) — implemented canonical-source projection for repository, site, and wiki documentation.
-   14. [Binding resolver](docs/superpowers/specs/2026-07-21-binding-resolver-keystone-design.md) — implemented runtime keymap materialization design.
-   15. [Command palette wiring](docs/superpowers/specs/2026-07-21-command-palette-wiring-design.md) — implemented curated command-palette integration.
-   16. [Quick Look wiring](docs/superpowers/specs/2026-07-21-quick-look-wiring-design.md) — implemented bounded file-preview flow.
-   17. [Glue and Athena services](docs/superpowers/specs/2026-07-22-glue-athena-services-design.md) — implemented read-only service architecture and Iceberg integration foundation.
-   18. [Glue/Athena interaction polish](docs/superpowers/specs/2026-07-30-glue-athena-interaction-polish-design.md) — implemented source selectors, focus rings, borders, and typed clipboard flows.
-   19. [Post-merge audit remediation](docs/superpowers/specs/2026-07-30-post-merge-audit-remediation-design.md) — implemented runtime, documentation, and verification follow-up.
-   20. [Glue/Athena tab rail](docs/superpowers/specs/2026-08-23-glue-athena-tab-rail-design.md) — implemented context-framing design whose underline-only rail was later superseded by the segmented frame.
-   21. [Glue/Athena segmented tabs](docs/superpowers/specs/2026-08-23-glue-athena-segmented-tabs-layout-fixes-design.md) — implemented shared segmented-frame and command-legend layout correction.
-   22. [Overlay pickers and command handoffs](docs/superpowers/specs/2026-08-24-overlay-pickers-command-handoffs-design.md) — implemented overlay selector, compact command hint, and Glue/Athena handoff design.
-   23. [VMx 3.23 maintenance audit](docs/superpowers/specs/2026-08-25-vmx-3-23-maintenance-audit.md) — current compatibility, substitution, line-count, and test-impact record for the VMx 3.23 upgrade.
-   24. [Athena UI contract repair](docs/superpowers/specs/2026-08-27-athena-ui-contract-repair-design.md) — implemented repair of the Athena interaction contracts.
-   25. [Athena controls and clickable commands](docs/superpowers/specs/2026-08-29-athena-controls-clickable-commands-design.md) — implemented clickable command chips and Athena control handoffs.
-   26. [Athena eager Glue prefill](docs/superpowers/specs/2026-08-30-athena-eager-glue-prefill-design.md) — implemented starter-SQL projection into the mounted editor before remote context resolution.
-   27. [Athena query execution repair](docs/superpowers/specs/2026-08-31-athena-query-execution-repair-design.md) — implemented context-relative generated SQL, redacted start-query rejection categories, and square Run/Stop geometry.
+   Design specs, implementation plans, and working notes live in-tree under
+   `docs/superpowers/` for provenance. They record how a feature was designed
+   at a point in time and are not maintained as user documentation — the code,
+   its tests, and the pages above define current behavior. The
+   [implementation plan index](docs/superpowers/plans/README.md) carries the
+   annotated list.
 4. **Maintainer-facing**
    1. [Recording todo](docs/recording-todo.md) — asciinema + screenshot artifacts the maintainer still needs to record manually.
    2. [Release procedure](docs/RELEASING.md) — cut-a-release checklist: version bump, CHANGELOG, tag, publish, Homebrew bump.

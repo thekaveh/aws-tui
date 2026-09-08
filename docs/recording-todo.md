@@ -5,11 +5,12 @@
 > manual terminal recording session, so this file is a hand-off list. Each
 > item lists where it lands in the docs and the rough recipe.
 
-Place finished artifacts under `docs/assets/` (create if missing) and
+Place finished recordings under `assets/recordings/` (create if missing) and
+screenshots alongside the existing one in `assets/screenshots/`, then
 embed them at the section named in each item:
 
 - For `.cast` files: `[![asciicast](https://asciinema.org/a/<id>.svg)](https://asciinema.org/a/<id>)`
-- For PNG: `\![<alt>](assets/<file>.png)` (remove the leading backslash when embedding it)
+- For PNG: `\![<alt>](../assets/screenshots/<file>.png)` (remove the leading backslash when embedding it)
 
 ## 1. Quickstart launch (`README.md` hero)
 
@@ -19,7 +20,7 @@ Recipe:
 
 ```bash
 asciinema rec -t "aws-tui quickstart" --idle-time-limit 1 \
-    docs/assets/quickstart.cast
+    assets/recordings/quickstart.cast
 # inside the recording:
 aws-tui
 # wait for the dual-pane to render with default Carbon theme
@@ -42,7 +43,7 @@ tmp_home="$(mktemp -d)"
 HOME="$tmp_home" aws-tui
 # take a screenshot of the local-only/no-connection placeholder
 # (macOS: Cmd+Shift+4, drag the terminal window). Save as
-# docs/assets/first-run-voidline.png.
+# assets/screenshots/first-run-voidline.png.
 # Cleanup after the recording:
 rm -rf "$tmp_home"
 ```
@@ -61,7 +62,7 @@ Recipe:
 
 ```bash
 asciinema rec -t "aws-tui: S3Mock to local copy" \
-    docs/assets/s3mock-copy.cast
+    assets/recordings/s3mock-copy.cast
 # inside:
 aws-tui
 # Shift+S until the left pane title shows dev-s3
@@ -84,7 +85,7 @@ Recipe:
 
 ```bash
 asciinema rec -t "aws-tui: theme switch" \
-    docs/assets/theme-switch.cast
+    assets/recordings/theme-switch.cast
 # inside:
 aws-tui
 # t
@@ -113,7 +114,7 @@ cat > "$CACHE_DIR/transfers/5eedabc05eedabc0.jsonl" <<'EOF'
 EOF
 
 asciinema rec -t "aws-tui: transfer journal diagnostics" \
-    docs/assets/transfer-journal.cast
+    assets/recordings/transfer-journal.cast
 # inside:
 ls -l "$CACHE_DIR/transfers"
 aws-tui

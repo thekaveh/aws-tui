@@ -1,4 +1,4 @@
-# Supported platforms
+# Supported Platforms
 
 aws-tui runs on macOS, Linux, and Windows through one shared application and
 service architecture. Platform adapters handle native config and cache paths,
