@@ -517,7 +517,6 @@ async def test_emr_application_picker_overlay_preserves_global_geometry(tmp_path
 
             widgets = (
                 app.query_one(ApplicationPicker),
-                app.query_one("#emr-app-box"),
                 app.query_one(".emr-context-row"),
                 app.query_one(ServiceSourceHeader),
                 app.query_one(JobRunsPane),

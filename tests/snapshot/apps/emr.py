@@ -146,14 +146,13 @@ class EmrPageOpenPickerApp(EmrPageApp):
     async def open_picker_with_geometry_check(self, pilot: Pilot) -> None:
         await pilot.pause()
         picker = self.query_one(ApplicationPicker)
-        app_box = self.query_one("#emr-app-box")
         context_row = self.query_one(".emr-context-row", Horizontal)
         source = self.query_one(ServiceSourceHeader)
         runs = self.query_one(JobRunsPane)
         detail = self.query_one(JobRunDetailPane)
         logs = self.query_one(JobRunLogsPane)
         host = self.query_one("#content-host")
-        widgets = (picker, app_box, context_row, source, runs, detail, logs, host)
+        widgets = (picker, context_row, source, runs, detail, logs, host)
         closed_regions = tuple(widget.region for widget in widgets)
 
         picker.toggle_open()

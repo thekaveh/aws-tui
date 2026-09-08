@@ -171,11 +171,29 @@ def test_muted_text_is_readable_on_both_content_backgrounds(name: str) -> None:
 
 
 @pytest.mark.parametrize("name", ALL_THEMES)
-def test_brand_banner_titles_use_readable_text_token(name: str) -> None:
-    bodies = _bodies_for_selector(ThemeStore().load(name), "BrandBanner")
+def test_brand_banner_titles_match_pane_border_chrome(name: str) -> None:
+    """The banner's tagline and pedigree are passive chrome, like every Pane.
 
-    assert any("border-title-color: $text;" in body for body in bodies)
-    assert any("border-subtitle-color: $text;" in body for body in bodies)
+    These previously used ``$text``, which rendered them brighter than any
+    other border text in the app and made the attribution line compete with
+    the banner art. They now use ``$text-dim``, the same token ``Pane`` uses
+    for its own border title and subtitle.
+
+    This is a deliberate legibility trade: ``$text-dim`` sits between 2.47:1
+    and 5.30:1 against ``$bg`` depending on theme, below the 4.5:1 that
+    ``test_muted_text_is_readable_on_both_content_backgrounds`` enforces for
+    body text. Border chrome is not body text, and the app already holds every
+    pane title to exactly this contrast -- so the banner matching it is the
+    consistent choice. Raising it is a theme-wide ``$text-dim`` decision, not
+    a banner-only one.
+    """
+    banner = _bodies_for_selector(ThemeStore().load(name), "BrandBanner")
+    pane = _bodies_for_selector(ThemeStore().load(name), "Pane")
+
+    assert any("border-title-color: $text-dim;" in body for body in banner)
+    assert any("border-subtitle-color: $text-dim;" in body for body in banner)
+    # Pin the relationship, not just the literal: the banner tracks Pane.
+    assert any("border-title-color: $text-dim;" in body for body in pane)
 
 
 def test_docs_accent_meets_light_and_dark_theme_contrast() -> None:
@@ -250,6 +268,9 @@ def test_service_tab_strip_structure_is_shared_theme_owned() -> None:
             "background: $bg-sel;",
             "color: $text;",
         ),
+        # The EMR application picker is a bordered peer of the source
+        # ContextPicker, so it takes the same treatment from the shared sheet.
+        "ApplicationPicker": ("border: solid $rule-dim;",),
     }
 
     for selector, declarations in expected.items():
@@ -259,13 +280,20 @@ def test_service_tab_strip_structure_is_shared_theme_owned() -> None:
 
 
 @pytest.mark.parametrize("name", ALL_THEMES)
-def test_source_header_edge_is_scoped_to_emr(name: str) -> None:
+def test_source_header_carries_no_page_scoped_override(name: str) -> None:
+    """The source picker is styled uniformly on every service page.
+
+    EMR used to declare ``EmrServerlessPage ServiceSourceHeader`` with a
+    ``border-left`` because its source and application pickers shared one
+    bordered box and needed a divider between them. That box is gone -- the
+    two are now independent, equal-width bordered cells, matching GluePage
+    and AthenaPage -- so neither a global nor a page-scoped override should
+    remain. The shared ``ContextPicker`` rules supply the border.
+    """
     content = _raw_builtin_theme(name)
 
     assert not _bodies_for_selector(content, "ServiceSourceHeader")
-    bodies = _bodies_for_selector(content, "EmrServerlessPage ServiceSourceHeader")
-    assert bodies
-    assert any("border-left: solid $rule-dim;" in body for body in bodies)
+    assert not _bodies_for_selector(content, "EmrServerlessPage ServiceSourceHeader")
 
 
 @pytest.mark.parametrize("name", ALL_THEMES)

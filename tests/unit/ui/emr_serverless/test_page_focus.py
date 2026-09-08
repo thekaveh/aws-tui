@@ -93,7 +93,6 @@ async def test_application_picker_overlay_preserves_page_geometry_through_escape
         picker = app.query_one(ApplicationPicker)
         widgets = (
             picker,
-            app.query_one("#emr-app-box"),
             app.query_one(".emr-context-row", Horizontal),
             app.query_one(ServiceSourceHeader),
             app.query_one(JobRunsPane),
@@ -128,7 +127,6 @@ async def test_source_picker_overlay_preserves_every_page_region(
         widgets = (
             source_picker,
             app.query_one(ApplicationPicker),
-            app.query_one("#emr-app-box"),
             app.query_one(".emr-context-row", Horizontal),
             app.query_one(ServiceSourceHeader),
             app.query_one(JobRunsPane),
