@@ -323,6 +323,13 @@ class CommandPaletteVM:
         self._close_command.dispose()
         self._execute_selected_command.dispose()
         self._move_selection_command.dispose()
+        # Dispose the scored filter BEFORE the registry it subscribes to, so
+        # its subscription unwinds against a live source. `PaneVM.dispose`
+        # documents the same ordering for its `FilteredCompositeVM`; this
+        # class had drifted and left the filter — and therefore a live rx
+        # subscription onto the disposed registry plus strong references to
+        # every disposed entry — alive for the process lifetime.
+        self._scored_filter.dispose()
         self._inner_registry.dispose()
         self._inner.dispose()
 

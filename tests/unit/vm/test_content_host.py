@@ -811,3 +811,36 @@ def test_initial_state() -> None:
     assert host.current is None
     assert host.current_id is None
     host.dispose()
+
+
+async def test_destruct_tolerates_a_hosted_vm_without_destruct() -> None:
+    """Only ``DualPaneVM`` implements ``destruct``.
+
+    The EMR, Glue and Athena page VMs expose construct/setup/shutdown/dispose
+    and no ``destruct``, so calling it unconditionally raised ``AttributeError``
+    for three of the four hosted services — aborting the ``RootVM.destruct``
+    cascade mid-way and leaving later children un-destructed.
+    """
+
+    class _NoDestructVM:
+        def __init__(self) -> None:
+            self.status = ConstructionStatus.DESTRUCTED
+            self.disposed = False
+
+        def construct(self) -> None:
+            self.status = ConstructionStatus.CONSTRUCTED
+
+        async def setup(self) -> None:
+            return
+
+        def dispose(self) -> None:
+            self.disposed = True
+
+    host = _build()
+    vm = _NoDestructVM()
+    await host.set_content(cast("ComponentVM", vm), service_id="emr")
+
+    host.destruct()
+
+    host.dispose()
+    assert vm.disposed

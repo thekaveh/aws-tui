@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import logging
 from collections.abc import Iterator
+from dataclasses import dataclass
 from pathlib import Path
 
 import pytest
@@ -194,3 +195,26 @@ def test_overlapping_stdlib_captures_restore_logger_after_final_close(
         second.close()
         logger.setLevel(previous_level)
         logger.propagate = previous_propagate
+
+
+def test_non_serializable_values_are_redacted_before_stringification(
+    sink: LogSink, tmp_path: Path
+) -> None:
+    """The ``default=`` fallback must not bypass redaction.
+
+    ``redact_mapping`` returns any value that is not a str/Mapping/Sequence
+    untouched, and ``json.dumps(default=str)`` then stringified it AFTER
+    redaction — so an object whose repr carried a credential reached the durable
+    log verbatim.
+    """
+
+    @dataclass
+    class _Credentials:
+        aws_secret_access_key: str = "wJalrXUtnFEMISECRET"
+
+    sink.info("boot", connection=_Credentials(), nested={"inner": _Credentials()})
+
+    written = (tmp_path / "aws-tui.log").read_text(encoding="utf-8")
+
+    assert "wJalrXUtnFEMISECRET" not in written
+    assert "[REDACTED]" in written

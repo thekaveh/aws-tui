@@ -36,33 +36,54 @@ class CrashChoice(StrEnum):
 #: composition root tracks the last command id in :class:`RootVM` (or a
 #: small adjacent ring buffer) and consults this set to decide whether
 #: ``can_continue`` is True.
+#:
+#: These MUST be ids that ``AwsTuiApp.record_action`` actually emits. An earlier
+#: version named a parallel vocabulary (``pane.cursor_up``, ``quick_look.open``,
+#: ``theme.switch``, …) that the app never records, so only two entries ever
+#: matched and ``can_continue`` was False after essentially every read-only
+#: action. ``test_safe_continue_actions_are_recorded_ids`` pins the two lists
+#: together.
+#:
+#: Deliberately EXCLUDED because they mutate state or end the session:
+#: ``pane.copy``, ``pane.delete``, ``athena.execute``, ``athena.cancel``,
+#: ``emr.clone``, ``app.open_settings``, ``app.quit``.
 SAFE_CONTINUE_ACTIONS: Final[frozenset[str]] = frozenset(
     {
-        "pane.navigate",
+        # Navigation and cursor movement.
+        "pane.move_up",
+        "pane.move_down",
+        "pane.mark_up",
+        "pane.mark_down",
+        "pane.ascend",
+        "pane.descend",
         "pane.refresh",
-        "pane.filter",
-        "pane.cursor_up",
-        "pane.cursor_down",
-        "pane.cursor_top",
-        "pane.cursor_bottom",
-        "pane.page_up",
-        "pane.page_down",
-        "pane.toggle_select",
-        "pane.select_all",
-        "pane.clear_selection",
-        "pane.set_filter",
-        "pane.toggle_hidden",
         "pane.switch_focus",
-        "command_palette.open",
-        "command_palette.close",
-        "command_palette.move",
-        "quick_look.open",
-        "quick_look.close",
-        "quick_look.scroll",
-        "quick_look.find",
-        "services_menu.switch_service",
-        "theme.switch",
-        "app.focus",
+        "pane.switch_focus_back",
+        "pane.quick_look",
+        "pane.modal_left",
+        "pane.modal_right",
+        # Chrome and display.
+        "app.command_palette",
+        "app.themes",
+        "app.cycle_theme",
+        "app.help",
+        "app.swap_source",
+        # Read-only service views and selectors.
+        "athena.choose_workgroup",
+        "athena.choose_catalog",
+        "athena.choose_database",
+        "athena.insert_table_ref",
+        "athena.load_more",
+        "athena.open_in_glue",
+        "athena.open_result_location",
+        "glue.choose_crawler_state",
+        "glue.choose_run_state",
+        "glue.copy_table_ref",
+        "glue.query_in_athena",
+        "glue.time_travel_in_athena",
+        "glue.open_s3_location",
+        "emr.logs.filter",
+        "emr.next_application",
     }
 )
 

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import os
 from collections.abc import AsyncIterator
 from pathlib import Path
 
@@ -1865,3 +1866,309 @@ async def test_directory_overwrite_rejects_provider_without_atomic_tree_replace(
             PathRef.from_posix("/target"),
             on_conflict=ConflictResolution.OVERWRITE,
         )
+
+
+@pytest.mark.skipif(
+    os.name == "nt",
+    reason=(
+        "SUSPECTED WINDOWS DEFECT, not a test artifact. A real LocalFS directory "
+        "publish goes through _windows_atomic_publish_directory_no_replace — a "
+        "separate Win32-handle implementation from the POSIX path — and raises "
+        "PermissionDeniedError there. Every pre-existing OVERWRITE test uses "
+        "InMemoryFS, so these are the first to exercise that path and the "
+        "behaviour was previously unobserved. The POSIX fix these tests pin is "
+        "correct and verified; the Windows path needs a Windows machine to "
+        "diagnose. Filed in the maintenance report — do not delete this skip "
+        "without investigating."
+    ),
+)
+@pytest.mark.parametrize("mover", [False, True], ids=["copy", "move"])
+async def test_overwrite_onto_a_non_empty_directory_cleans_up_its_backup(
+    tmp_path: Path, mover: bool
+) -> None:
+    """A directory OVERWRITE must not orphan the previous destination.
+
+    `_cleanup_stage_manifest` walks the manifest deepest-first, so a directory's
+    own children are removed before the directory entry is inspected. A local
+    revision encodes size and mtime/ctime, so comparing the captured revision
+    there could never succeed for a directory that held anything: cleanup always
+    raised "stage changed", the caller surfaced "overwrite committed but backup
+    cleanup failed", and the previous destination content stayed on disk forever
+    under `.<name>.aws-tui-backup-<uuid>`.
+
+    An EMPTY destination directory happened to pass, which is why the existing
+    OVERWRITE tests did not catch it. This one gives the destination a child.
+    """
+    src_root = tmp_path / "src"
+    dst_root = tmp_path / "dst"
+    (src_root / "tree").mkdir(parents=True)
+    (src_root / "tree" / "new.txt").write_bytes(b"new")
+    (dst_root / "tree").mkdir(parents=True)
+    (dst_root / "tree" / "stale.txt").write_bytes(b"stale")
+
+    src = LocalFS(root=src_root)
+    dst = LocalFS(root=dst_root)
+    engine = (
+        CrossFsMove(source=src, destination=dst)
+        if mover
+        else CrossFsCopy(source=src, destination=dst)
+    )
+    operation = engine.move if mover else engine.copy
+
+    await operation(
+        PathRef.from_posix("/tree"),
+        PathRef.from_posix("/tree"),
+        on_conflict=ConflictResolution.OVERWRITE,
+    )
+
+    assert (dst_root / "tree" / "new.txt").read_bytes() == b"new"
+    assert not (dst_root / "tree" / "stale.txt").exists(), "OVERWRITE kept a stale file"
+    leftovers = [entry.name for entry in dst_root.iterdir() if entry.name.startswith(".")]
+    assert leftovers == [], f"orphaned backup or stage directories: {leftovers}"
+    if mover:
+        assert not (src_root / "tree").exists(), "move left the source behind"
+
+
+async def test_a_directory_copy_that_aborts_leaves_no_stage_residue(tmp_path: Path) -> None:
+    """The same root cause as the OVERWRITE case, reached a different way.
+
+    When a directory copy fails partway, `_copy_directory_transaction` unwinds
+    through the same `_cleanup_stage_manifest`. While that compared a directory's
+    captured revision, the unwind could not complete: the caller saw a compound
+    `ProviderError: directory stage cleanup failed: …` and
+    `.<name>.aws-tui-stage-<uuid>/payload` stayed on disk permanently. The user
+    is left with hidden residue after every failed folder copy.
+
+    A symlink inside the source is the simplest genuine abort — the engine
+    refuses to copy one — so the error surfaced here should be that refusal
+    alone, not a cleanup failure wrapped around it.
+    """
+    src_root = tmp_path / "src"
+    dst_root = tmp_path / "dst"
+    (src_root / "tree").mkdir(parents=True)
+    (src_root / "tree" / "ok.txt").write_bytes(b"fine")
+    (src_root / "tree" / "link").symlink_to(src_root / "tree" / "ok.txt")
+    dst_root.mkdir()
+
+    src = LocalFS(root=src_root)
+    dst = LocalFS(root=dst_root)
+
+    with pytest.raises(ProviderError) as caught:
+        await CrossFsCopy(source=src, destination=dst).copy(
+            PathRef.from_posix("/tree"), PathRef.from_posix("/tree")
+        )
+
+    assert "stage cleanup failed" not in str(caught.value), (
+        f"the abort was masked by a cleanup failure: {caught.value}"
+    )
+    residue = [entry.name for entry in dst_root.iterdir() if entry.name.startswith(".")]
+    assert residue == [], f"a failed directory copy left stage residue: {residue}"
+
+
+@pytest.mark.skipif(
+    os.name == "nt",
+    reason=(
+        "SUSPECTED WINDOWS DEFECT, not a test artifact. A real LocalFS directory "
+        "publish goes through _windows_atomic_publish_directory_no_replace — a "
+        "separate Win32-handle implementation from the POSIX path — and raises "
+        "PermissionDeniedError there. Every pre-existing OVERWRITE test uses "
+        "InMemoryFS, so these are the first to exercise that path and the "
+        "behaviour was previously unobserved. The POSIX fix these tests pin is "
+        "correct and verified; the Windows path needs a Windows machine to "
+        "diagnose. Filed in the maintenance report — do not delete this skip "
+        "without investigating."
+    ),
+)
+async def test_move_of_a_nested_tree_removes_every_level_of_the_source(
+    tmp_path: Path,
+) -> None:
+    """A move must not leave a half-deleted source behind.
+
+    `_observe_tree` recurses into child directories so `_delete_observed_tree`
+    can remove the source depth-first after a successful copy. Stopping that
+    recursion (the `kind == DIRECTORY` test, or the `observed.extend(...)` that
+    collects the recursion's result) left the whole repo suite green while the
+    move removed only the top-level files and then failed on the non-empty
+    subdirectory — reporting `ConflictError: directory is not empty` for a move
+    whose copy had already succeeded, with the user's source tree partially
+    destroyed.
+
+    The existing move tests use flat directories, which is why the recursion was
+    unguarded.
+    """
+    src_root = tmp_path / "src"
+    dst_root = tmp_path / "dst"
+    deep = src_root / "tree" / "level1" / "level2"
+    deep.mkdir(parents=True)
+    (src_root / "tree" / "top.txt").write_bytes(b"top")
+    (src_root / "tree" / "level1" / "mid.txt").write_bytes(b"mid")
+    (deep / "leaf.txt").write_bytes(b"leaf")
+    dst_root.mkdir()
+
+    src = LocalFS(root=src_root)
+    dst = LocalFS(root=dst_root)
+
+    moved = await CrossFsMove(source=src, destination=dst).move(
+        PathRef.from_posix("/tree"), PathRef.from_posix("/tree")
+    )
+
+    assert moved is True, "move reported failure after succeeding"
+    assert (dst_root / "tree" / "top.txt").read_bytes() == b"top"
+    assert (dst_root / "tree" / "level1" / "mid.txt").read_bytes() == b"mid"
+    assert (dst_root / "tree" / "level1" / "level2" / "leaf.txt").read_bytes() == b"leaf"
+    assert not (src_root / "tree").exists(), (
+        "the source tree was left behind, wholly or partially: "
+        f"{sorted(p.relative_to(src_root).as_posix() for p in src_root.rglob('*'))}"
+    )
+
+
+async def test_merge_move_reports_success_and_clears_the_emptied_source(
+    tmp_path: Path,
+) -> None:
+    """The merge branch returns `moved_all` and removes the emptied source.
+
+    `return moved_all` -> `pass` made a successful merge-move return `None`,
+    which the UI reads as "not moved"; and dropping the
+    `delete_empty_directory(src)` left the emptied source directory on disk.
+    Both survived the whole suite.
+    """
+    src_root = tmp_path / "src"
+    dst_root = tmp_path / "dst"
+    (src_root / "tree").mkdir(parents=True)
+    (src_root / "tree" / "new.txt").write_bytes(b"new")
+    (dst_root / "tree").mkdir(parents=True)
+    (dst_root / "tree" / "existing.txt").write_bytes(b"existing")
+
+    src = LocalFS(root=src_root)
+    dst = LocalFS(root=dst_root)
+
+    moved = await CrossFsMove(source=src, destination=dst).move(
+        PathRef.from_posix("/tree"),
+        PathRef.from_posix("/tree"),
+        on_conflict=ConflictResolution.SKIP,
+    )
+
+    assert moved is True, "a successful merge-move did not report success"
+    assert (dst_root / "tree" / "new.txt").read_bytes() == b"new"
+    assert (dst_root / "tree" / "existing.txt").read_bytes() == b"existing"
+    assert not (src_root / "tree").exists(), "the emptied source directory was left behind"
+
+
+@pytest.mark.parametrize("mover", [False, True], ids=["copy", "move"])
+async def test_a_same_path_transfer_on_one_provider_is_refused_intact(
+    tmp_path: Path, mover: bool
+) -> None:
+    """Copying or moving a file onto itself must refuse, not destroy.
+
+    The canonical-host same-path guard was survivable: with it neutered, an
+    OVERWRITE onto the same physical path proceeds into stage-and-publish,
+    where the backup taken of the "destination" IS the source — and for a move
+    the source delete then runs against the just-published file. The file must
+    survive with its content intact and a ConflictError raised.
+    """
+    (tmp_path / "f.txt").write_bytes(b"original")
+    fs = LocalFS(root=tmp_path)
+    engine = (
+        CrossFsMove(source=fs, destination=fs) if mover else CrossFsCopy(source=fs, destination=fs)
+    )
+    operation = engine.move if mover else engine.copy
+
+    with pytest.raises(ConflictError, match="same path"):
+        await operation(
+            PathRef.from_posix("/f.txt"),
+            PathRef.from_posix("/f.txt"),
+            on_conflict=ConflictResolution.OVERWRITE,
+        )
+
+    assert (tmp_path / "f.txt").read_bytes() == b"original"
+
+
+async def test_nested_absent_directory_in_a_merge_is_preflighted_before_bytes_move() -> None:
+    """The fail-before-bytes contract holds for SUBTREES, not just the root.
+
+    When the destination root exists (a merge) but a nested source directory is
+    absent at the destination, the copy must refuse before any byte moves. The
+    existing guard test only covers a fully-absent root.
+
+    Scope honesty: this pins the CONTRACT (refusal with zero mutations), not
+    one specific guard. The nested `_require_directory_transaction` at the
+    merge-preflight site can still be deleted with this test green, because a
+    second capability check downstream also rejects this topology — layered
+    defence. The sweep's report that deleting the nested check lets bytes move
+    used a topology this test does not reproduce; that specific isolation
+    remains filed.
+    """
+
+    class _StripPublishers:
+        """Implements only the base surface; none of the publisher protocols.
+
+        Spelled out method by method on purpose: `runtime_checkable` isinstance
+        is a `hasattr` check on the instance, so `__getattr__` delegation would
+        SATISFY the protocols this fake exists to strip — the first version of
+        this test did exactly that and the copy sailed through.
+        """
+
+        def __init__(self) -> None:
+            self.inner = InMemoryFS()
+            self.mutations: list[str] = []
+
+        async def list(self, path: PathRef) -> list[FileEntry]:
+            return await self.inner.list(path)
+
+        async def stat(self, path: PathRef) -> FileEntry:
+            return await self.inner.stat(path)
+
+        async def mkdir(self, path: PathRef) -> None:
+            self.mutations.append(f"mkdir {path.as_posix()}")
+            await self.inner.mkdir(path)
+
+        async def delete(self, path: PathRef, *, expected_etag: str | None = None) -> None:
+            self.mutations.append(f"delete {path.as_posix()}")
+            await self.inner.delete(path, expected_etag=expected_etag)
+
+        async def delete_empty_directory(self, path: PathRef) -> None:
+            self.mutations.append(f"rmdir {path.as_posix()}")
+            await self.inner.delete_empty_directory(path)
+
+        async def rename(self, src_path: PathRef, dst_path: PathRef) -> None:
+            self.mutations.append(f"rename {src_path.as_posix()}")
+            await self.inner.rename(src_path, dst_path)
+
+        async def read_stream(
+            self, path: PathRef, *, chunk_size: int = 8 * 1024 * 1024
+        ) -> AsyncIterator[bytes]:
+            return await self.inner.read_stream(path, chunk_size=chunk_size)
+
+        async def write_stream(
+            self,
+            path: PathRef,
+            source: AsyncIterator[bytes],
+            *,
+            total_size: int | None = None,
+            progress: object | None = None,
+            overwrite: bool = True,
+        ) -> None:
+            self.mutations.append(f"write {path.as_posix()}")
+            await self.inner.write_stream(
+                path,
+                source,
+                total_size=total_size,
+                progress=progress,  # type: ignore[arg-type]
+                overwrite=overwrite,
+            )
+
+    src = InMemoryFS()
+    await src.mkdir(PathRef.from_posix("/tree"))
+    await src.mkdir(PathRef.from_posix("/tree/nested"))
+    await _put_file(src, PathRef.from_posix("/tree/nested/leaf"), b"payload")
+
+    dst = _StripPublishers()
+    # The ROOT exists at the destination -> merge path; "nested" does not.
+    await dst.inner.mkdir(PathRef.from_posix("/tree"))
+
+    with pytest.raises(ProviderError, match="transactional directory publication"):
+        await CrossFsCopy(source=src, destination=dst).copy(  # type: ignore[arg-type]
+            PathRef.from_posix("/tree"), PathRef.from_posix("/tree")
+        )
+
+    assert dst.mutations == [], f"bytes moved before the preflight refused: {dst.mutations}"

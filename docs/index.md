@@ -1,6 +1,10 @@
 # 1. aws-tui
 
 <p align="center">
+  <img src="../assets/aws-tui-poster.png" alt="A wireframe cloud of teal light anchored by golden tethers to a glowing point on a dark sea, the AWS-TUI wordmark seated at its luminous core." width="100%">
+</p>
+
+<p align="center">
   <img src="../assets/screenshots/aws-tui-running.png" alt="aws-tui in demo mode with the S3, EMR, Glue, and Athena service rail; the Glue catalog is showing an Iceberg table, its metadata tabs, and snapshot history." width="100%">
 </p>
 
@@ -10,8 +14,8 @@ Linux, and Windows. Powered by
 [VMx](https://github.com/thekaveh/VMx) MVVM framework.
 
 The application combines a Norton-Commander-style S3 file manager, an EMR
-Serverless console, and Unreleased AWS Glue, Amazon Athena, and Iceberg
-inspection workflows.
+Serverless console, and AWS Glue, Amazon Athena, and Iceberg inspection
+workflows, which are unreleased.
 
 ## 1.1. What it does
 
@@ -42,10 +46,14 @@ Athena editor for review and never executes automatically.
 
 ## 1.2. Where to start
 
-- New here? Start with **Installation**, then **Platforms** and
-  **Connections**.
-- Daily use: **Keybindings**, the **Cookbook**, and **Theming**.
-- Service behavior: **S3 and Local File Manager**, **EMR Serverless**,
-  **AWS Glue and Iceberg Metadata**, and **Amazon Athena**.
-- Contributing or extending: **Architecture**, **Adding a Service**, and
-  the **Contract Ledger**.
+- New here? Start with [Installation](install.md), then
+  [Platforms](platforms.md) and [Connections](connections.md).
+- Daily use: [Keybindings](keybindings.md), the [Cookbook](cookbook.md), and
+  [Theming](theming.md).
+- Service behavior: [S3 and Local File Manager](services/s3.md),
+  [EMR Serverless](services/emr-serverless.md),
+  [AWS Glue and Iceberg Metadata](services/glue.md), and
+  [Amazon Athena](services/athena.md).
+- Contributing or extending: [Architecture](architecture.md),
+  [Adding a Service](adding-a-service.md), and the
+  [Contract Ledger](contract-ledger.md).

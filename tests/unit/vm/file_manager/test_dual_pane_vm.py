@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import logging
 from collections.abc import AsyncIterator
 from pathlib import Path
 from typing import cast
@@ -17,7 +18,7 @@ from aws_tui.demo.in_memory_fs import InMemoryFS
 from aws_tui.domain.cross_fs import ConflictResolution
 from aws_tui.domain.filesystem import NotFoundError, PathRef, ProviderError
 from aws_tui.domain.transfer_journal import TransferJournal
-from aws_tui.vm.file_manager.dual_pane_vm import DualPaneVM, FocusedPane
+from aws_tui.vm.file_manager.dual_pane_vm import DualPaneVM, FocusedPane, _drain_refresh_exception
 from aws_tui.vm.file_manager.pane_vm import PaneVM
 from aws_tui.vm.messages import (
     TransferCancelRequestedMessage,
@@ -780,3 +781,73 @@ async def test_dual_copy_command_requires_marks(tmp_path: Path) -> None:
     dp.left.select_all_command.execute()
     assert dp.copy_across_command.can_execute()
     dp.dispose()
+
+
+@pytest.mark.asyncio
+async def test_failed_background_refresh_is_logged_not_swallowed(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A background refresh that dies must leave a log line.
+
+    `_drain_refresh_exception` retrieves the exception to silence asyncio's
+    "never retrieved" warning. Its own comment records why the retrieval alone
+    was not enough: discarding the exception left a refresh that died on expired
+    credentials or a dropped connection with no toast and no log line, so the
+    pane kept showing a stale listing. Nothing pinned the logging half, so that
+    fix could be undone silently — which is how it was lost the first time.
+    """
+
+    async def boom() -> None:
+        raise ProviderError("credentials expired")
+
+    task = asyncio.create_task(boom())
+    with contextlib.suppress(ProviderError):
+        await task
+
+    with caplog.at_level(logging.WARNING, logger="aws_tui.vm.file_manager.dual_pane_vm"):
+        _drain_refresh_exception(task)
+
+    assert [record.message for record in caplog.records] == ["pane background refresh failed"]
+    assert caplog.records[0].error_type == "ProviderError"  # type: ignore[attr-defined]
+
+
+@pytest.mark.asyncio
+async def test_cancelled_background_refresh_is_not_logged(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Cancellation is ordinary teardown, not a failure worth a log line."""
+
+    async def forever() -> None:
+        await asyncio.Event().wait()
+
+    task = asyncio.create_task(forever())
+    await asyncio.sleep(0)
+    task.cancel()
+    with contextlib.suppress(asyncio.CancelledError):
+        await task
+
+    with caplog.at_level(logging.WARNING, logger="aws_tui.vm.file_manager.dual_pane_vm"):
+        _drain_refresh_exception(task)
+
+    assert caplog.records == []
+
+
+@pytest.mark.asyncio
+async def test_dispose_releases_the_transfer_cancel_subscription(
+    tmp_path: Path,
+) -> None:
+    """The cancel subscription must not outlive the VM.
+
+    Same class as ``TransfersVM``: the handler short-circuits on a disposed
+    flag, so a leaked subscription is invisible behaviourally and dropping
+    ``self._cancel_sub.dispose()`` survived the whole repo suite. Assert the
+    disposable's own state.
+    """
+    dp, _ = await _make_dual(tmp_path)
+    subscription = dp._cancel_sub  # type: ignore[attr-defined]
+    assert subscription is not None
+    assert not subscription.is_disposed
+
+    dp.dispose()
+
+    assert subscription.is_disposed, "cancel subscription outlived the VM"

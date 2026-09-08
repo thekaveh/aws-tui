@@ -25,6 +25,7 @@ from aws_tui.domain.iceberg import (
     IcebergSnapshot,
 )
 from aws_tui.ui.actions import ActionDispatcher
+from aws_tui.ui.widgets._worker import DeferredWorkerMixin
 from aws_tui.ui.widgets.glue.detail_rows import display_time, display_value, state_placeholder
 from aws_tui.vm.file_manager.pane_vm import PaneState
 from aws_tui.vm.glue.iceberg_vm import GlueIcebergVM, IcebergRow, IcebergView
@@ -75,7 +76,7 @@ class _IcebergTab(Static, can_focus=True):
         self.post_message(self.Selected(self.view))
 
 
-class GlueIcebergView(Widget):
+class GlueIcebergView(DeferredWorkerMixin, Widget):
     DEFAULT_CSS: ClassVar[str] = """
     GlueIcebergView {
         width: 1fr;
@@ -245,17 +246,6 @@ class GlueIcebergView(Widget):
             )
         elif event.button.id == "glue-iceberg-time-travel":
             self._time_travel_selected()
-
-    def _run_lifecycle_worker(
-        self,
-        work: Callable[[], Awaitable[bool]],
-        *,
-        group: str,
-    ) -> Worker[bool]:
-        async def deferred() -> bool:
-            return await work()
-
-        return self.run_worker(deferred, exclusive=True, group=group)
 
     def _on_vm_changed(self, _property_name: str) -> None:
         if self._refresh_pending:

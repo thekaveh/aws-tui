@@ -1676,3 +1676,242 @@ def test_athena_module_exports_public_client_records_and_errors() -> None:
         "ResultConfigurationRequiredError",
         "map_athena_error",
     }
+
+
+def test_credential_retrieval_failure_never_carries_the_process_output() -> None:
+    """botocore renders credential-process output into the exception message.
+
+    `CredentialRetrievalError` is the one credential exception whose `str()`
+    embeds whatever the configured `credential_process` printed — routinely the
+    literal `aws_secret_access_key <secret>`. Every other branch of this mapper
+    passes `str(exc)` through `_sanitize_message`; this one deliberately does
+    not, returning fixed copy instead.
+
+    Nothing pinned that. Removing the branch let the raw output reach
+    `log_sink`'s rotating file and `crash_dump`'s durable dumps. Redaction is
+    now a second line of defence, but the message must not carry the secret in
+    the first place.
+    """
+    leaked = "wJalrXUtnFEMIK7MDENGbPxRfiCY"
+    exc = botocore.exceptions.CredentialRetrievalError(
+        provider="custom-process",
+        error_msg=f"command output: aws_secret_access_key {leaked}",
+    )
+
+    mapped = map_athena_error(exc)
+
+    assert isinstance(mapped, AuthRequiredError)
+    assert leaked not in str(mapped)
+    assert "command output" not in str(mapped)
+    assert str(mapped) == "credential process failed"
+
+
+def test_other_credential_failures_still_report_their_reason() -> None:
+    """Positive control: only the credential-process case is blanked.
+
+    A `NoCredentialsError` must still explain itself, or the guard above could
+    be satisfied by discarding every credential message.
+    """
+    mapped = map_athena_error(botocore.exceptions.NoCredentialsError())
+
+    assert isinstance(mapped, AuthRequiredError)
+    assert str(mapped), "the message was blanked entirely"
+    assert str(mapped) != "credential process failed"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("context", "axis"),
+    [
+        # Name differs, region matches the active connection.
+        (QueryContext("prod", "us-east-1", "analysts", "AwsDataCatalog", "analytics"), "name"),
+        # Region differs, name matches.
+        (QueryContext("dev", "eu-west-1", "analysts", "AwsDataCatalog", "analytics"), "region"),
+    ],
+)
+async def test_start_query_rejects_a_single_axis_context_mismatch(
+    context: QueryContext, axis: str
+) -> None:
+    """Each operand of the connection guard must reject on its own.
+
+    The sibling test above mismatches name AND region together, so either
+    operand alone still rejected it — and a mutation sweep found both operands
+    individually survivable. With one neutered, a context built for another
+    account (or another region) is submitted through THIS connection's client:
+    the query runs against the wrong account with the wrong workgroup and
+    database.
+    """
+    client, boto, session = _athena_client()
+
+    with pytest.raises(ValidationError, match="query context"):
+        await client.start_query("SELECT 1", context, request_token="token-123")
+
+    boto.start_query_execution.assert_not_awaited(), axis
+    assert session.requests == []
+
+
+@pytest.mark.asyncio
+async def test_query_detail_for_a_different_execution_id_is_rejected() -> None:
+    """A detail response must belong to the execution that was asked for.
+
+    `get_query_execution` trusts the service to echo the id back; the identity
+    check is the only thing stopping a mismatched response being attributed to
+    the requested execution. It was pinned by nothing — with it removed, asking
+    for one id returned another execution's detail as if it were the requested
+    one.
+    """
+    client, _boto, _session = _athena_client(
+        "get_query_execution",
+        {
+            "QueryExecution": {
+                "QueryExecutionId": "OTHER-EXECUTION",
+                "Status": {"State": "SUCCEEDED"},
+                "WorkGroup": "analysts",
+                "Query": "SELECT 1",
+                "StatusUpdateDateTime": None,
+            }
+        },
+    )
+
+    with pytest.raises(ProviderError):
+        await client.get_query_execution("REQUESTED-EXECUTION")
+
+
+async def test_first_page_without_a_header_row_keeps_every_data_row() -> None:
+    """The header heuristic must compare, not assume.
+
+    Athena includes the column-name header row only for queries that produce
+    one; a first page whose row 0 is real data must keep it. Forcing the
+    name-comparison to True survived the whole suite — the existing first-page
+    test uses a response whose row 0 IS the header, so dropping row 0
+    unconditionally looked identical. Under that mutation the first data row of
+    every headerless first page was silently discarded.
+    """
+    response = {
+        "ResultSet": {
+            "ResultSetMetadata": {
+                "ColumnInfo": [
+                    {"Name": "event_id", "Type": "varchar"},
+                    {"Name": "count", "Type": "bigint"},
+                ]
+            },
+            "Rows": [
+                {"Data": [{"VarCharValue": "row-1"}, {"VarCharValue": "10"}]},
+                {"Data": [{"VarCharValue": "row-2"}, {"VarCharValue": "20"}]},
+            ],
+        }
+    }
+    client, _boto, _session = _athena_client("get_query_results", response)
+
+    page = await client.get_results_page("q-123")
+
+    assert page.rows == (("row-1", "10"), ("row-2", "20")), (
+        "a data row was mistaken for the header and dropped"
+    )
+
+
+async def test_empty_first_result_page_is_an_empty_table_not_an_error() -> None:
+    """A SELECT with zero rows must render as empty, not raise.
+
+    Forcing the `rows` truthiness operand made an empty first page reach
+    `rows[0]` and surface `ValidationError: malformed Athena response` — an
+    empty result set reported as a broken one.
+    """
+    response = {
+        "ResultSet": {
+            "ResultSetMetadata": {"ColumnInfo": [{"Name": "event_id", "Type": "varchar"}]},
+            "Rows": [],
+        }
+    }
+    client, _boto, _session = _athena_client("get_query_results", response)
+
+    page = await client.get_results_page("q-123")
+
+    assert page.rows == ()
+    assert page.columns == (ResultColumn("event_id", "varchar", "UNKNOWN"),)
+
+
+async def test_a_full_history_page_of_exactly_50_ids_is_accepted() -> None:
+    """The batch cap must be `>`, not `>=`: 50 ids IS a full page.
+
+    `list_query_executions_page` returns pages of exactly `_PAGE_SIZE` (50)
+    ids, and history hydration feeds each page straight into this batch call.
+    Flipping the comparison to `>=` rejected every full page with
+    "Athena history batches support at most 50 ids" — history stopped loading
+    for any workgroup with 50+ executions. No test hydrated a full page.
+    """
+    executions = []
+    for index in range(50):
+        execution = cast(dict[str, object], _query_execution("SUCCEEDED")["QueryExecution"])
+        execution = dict(execution)
+        execution["QueryExecutionId"] = f"q-{index}"
+        executions.append(execution)
+    client, boto, _ = _athena_client(
+        "batch_get_query_execution",
+        {"QueryExecutions": executions, "UnprocessedQueryExecutionIds": []},
+    )
+    ids = [f"q-{index}" for index in range(50)]
+
+    details = await client.get_query_executions(ids)
+
+    assert len(details) == 50
+    boto.batch_get_query_execution.assert_awaited_once_with(QueryExecutionIds=ids)
+
+
+async def test_a_history_batch_of_51_ids_is_still_rejected() -> None:
+    """Positive control for the cap itself."""
+    client, boto, _ = _athena_client()
+
+    with pytest.raises(ValidationError, match="at most 50"):
+        await client.get_query_executions([f"q-{index}" for index in range(51)])
+
+    boto.batch_get_query_execution.assert_not_awaited()
+
+
+async def test_an_unprocessed_batch_id_surfaces_its_actual_error() -> None:
+    """An AccessDenied on one execution must not become "malformed response".
+
+    `_unprocessed_query_execution_error` maps the per-id error code to the
+    typed taxonomy. Neutralising it let the generic
+    `ValidationError: malformed Athena response` replace an actionable
+    permission error — the user loses the one message that explains what to fix.
+    """
+    execution = cast(dict[str, object], _query_execution("SUCCEEDED")["QueryExecution"])
+    client, _boto, _session = _athena_client(
+        "batch_get_query_execution",
+        {
+            "QueryExecutions": [execution],
+            "UnprocessedQueryExecutionIds": [
+                {
+                    "QueryExecutionId": "q-denied",
+                    "ErrorCode": "AccessDeniedException",
+                    "ErrorMessage": "not authorized to view q-denied",
+                }
+            ],
+        },
+    )
+
+    with pytest.raises(PermissionDeniedError):
+        await client.get_query_executions(["q-1", "q-denied"])
+
+
+async def test_a_cancelled_stop_request_propagates_as_cancellation() -> None:
+    """A cancelled stop must not read as a successful stop.
+
+    `stop_query`'s `except BaseException` re-raise exists so a CancelledError
+    from the SDK call propagates instead of falling through to
+    `_retire_app_started_query` — which would tell the UI the query was
+    cancelled when the stop request itself never completed. Replacing the
+    re-raise with `pass` survived the whole suite.
+    """
+    import asyncio
+
+    client, boto, _session = _athena_client(
+        "start_query_execution",
+        {"QueryExecutionId": "q-started"},
+    )
+    boto.stop_query_execution.side_effect = asyncio.CancelledError()
+    await client.start_query("SELECT 1", CONTEXT, request_token="token-123")
+
+    with pytest.raises(asyncio.CancelledError):
+        await client.stop_query("q-started")

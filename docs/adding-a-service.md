@@ -227,7 +227,8 @@ shipped service and demonstrates the richer per-service pattern:
   screen-overlaid option list, so opening or closing it leaves the runs, detail,
   and logs regions unchanged.
 - Three independent production `set_interval` pollers (apps 60 s /
-  runs 60 s with terminal-state suppression / detail 30 s). Demo mode
+  runs 60 s with 6:1 cadence decay while no run is active /
+  detail 30 s with terminal-state suppression). Demo mode
   uses shorter 30 s / 30 s / 5 s cadences so sample data feels live.
 - **Service-specific modal pattern** (PR #83). `JobRunCloneModal`
   is pushed via `app.push_screen` from the page binding

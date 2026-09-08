@@ -302,14 +302,34 @@ async def test_application_picker_live_refresh_error_propagates(
 
 
 async def test_application_picker_refresh_is_safe_after_child_teardown() -> None:
+    """A detached option list must be left alone, not rebuilt into.
+
+    This test previously had no assertions at all: it called
+    ``_refresh_options`` and relied on "did not raise", which stays true with
+    the ``is_attached`` guard deleted, because ``set_options`` on a detached
+    widget does not raise either. Assert the guard's observable effect instead.
+    """
     vm, hub = _make_vm()
     async with _PickerApp(vm, hub).run_test() as pilot:
         await pilot.pause()
         picker = pilot.app.query_one(ApplicationPicker)
         options = picker.query_one("#app-options", OptionList)
         await options.remove()
+        await pilot.pause()
 
+        # Precondition: it is the ``is_attached`` arm of the guard under test,
+        # not the ``is None`` arm -- the reference is assigned in compose and
+        # is never cleared.
+        assert picker._option_list is options  # type: ignore[attr-defined]
+        assert not options.is_attached
+
+        options.clear_options()
         picker._refresh_options()  # type: ignore[attr-defined]
+
+        assert options.option_count == 0, (
+            "refresh repopulated a detached option list; the is_attached guard "
+            "is not doing anything"
+        )
 
 
 # ── action_commit (highlighted option → vm.select) ────────────────────────────

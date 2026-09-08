@@ -588,3 +588,93 @@ class TestS3CompatibleCredentialDispatch:
         assert isinstance(c, Connection)
         assert c.access_key_id is None
         assert c.secret_access_key is None
+
+
+def test_malformed_aws_config_is_tolerated(tmp_path: Path, store: ConfigStore) -> None:
+    """A duplicate option in ``~/.aws/config`` must not escape the resolver.
+
+    That file is written by other tools and by hand, so a malformed one is an
+    ordinary state. Letting ``configparser`` raise reached every caller;
+    ``app.py`` guards the sites it owns so boot survived, but
+    ``S3ConnectionsVM.connections`` is read from ``S3ConnectionsPanel.compose()``
+    — and a ``compose()`` failure bypasses the mount guard — so opening
+    Settings, the one screen that could repair the connections, killed the app.
+    """
+    aws_config = tmp_path / "config"
+    aws_config.write_text(
+        "[profile broken]\nregion = us-east-1\nregion = us-west-2\n", encoding="utf-8"
+    )
+    credentials = tmp_path / "credentials"
+    credentials.write_text("", encoding="utf-8")
+    resolver = ConnectionResolver(
+        config_store=store,
+        aws_config_path=aws_config,
+        aws_credentials_path=credentials,
+    )
+
+    # Must not raise. configparser retains whatever it consumed before the
+    # duplicate, so the profile is still discovered with its first region —
+    # degrading to partial data rather than losing the file entirely.
+    connections = resolver.list()
+
+    assert [connection.name for connection in connections] == ["broken"]
+    assert connections[0].region == "us-east-1"
+
+
+def test_explicit_aws_entry_without_a_region_inherits_the_profile_region(
+    tmp_path: Path,
+    store: ConfigStore,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Step 2 of the documented region chain was pinned by nothing.
+
+    ``docs/connections.md`` states region resolution follows the explicit
+    connection region, then the selected profile's configured region, then
+    ``AWS_DEFAULT_REGION``, then ``us-east-1``. Every existing region test
+    exercises the AUTO-DISCOVERED path or supplies an explicit region, so
+    neutralising ``or self._profile_region(entry.profile)`` survived the whole
+    suite — an explicit ``[connections.*]`` entry with no region silently fell
+    through to ``us-east-1`` and every Glue/Athena/EMR/S3 call for that
+    connection targeted the wrong region.
+    """
+    config, credentials = _write_aws_files(
+        tmp_path,
+        config_body="[profile prod]\nregion = eu-west-1\n",
+        credentials_body="",
+    )
+    monkeypatch.setenv("AWS_CONFIG_FILE", str(config))
+    monkeypatch.setenv("AWS_SHARED_CREDENTIALS_FILE", str(credentials))
+    monkeypatch.delenv("AWS_DEFAULT_REGION", raising=False)
+
+    store.add_connection(
+        ConnectionEntry(name="prod-explicit", kind="aws", profile="prod", region=None)
+    )
+    resolver = ConnectionResolver(config_store=store)
+
+    regions = {item.name: item.region for item in resolver.list()}
+    assert regions["prod-explicit"] == "eu-west-1", (
+        "explicit entry did not inherit its profile's region"
+    )
+
+
+def test_explicit_region_still_wins_over_the_profile_region(
+    tmp_path: Path,
+    store: ConfigStore,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Positive control for the precedence order: step 1 beats step 2."""
+    config, credentials = _write_aws_files(
+        tmp_path,
+        config_body="[profile prod]\nregion = eu-west-1\n",
+        credentials_body="",
+    )
+    monkeypatch.setenv("AWS_CONFIG_FILE", str(config))
+    monkeypatch.setenv("AWS_SHARED_CREDENTIALS_FILE", str(credentials))
+
+    store.add_connection(
+        ConnectionEntry(name="pinned", kind="aws", profile="prod", region="ap-south-1")
+    )
+    resolver = ConnectionResolver(config_store=store)
+
+    regions = {item.name: item.region for item in resolver.list()}
+    assert regions["pinned"] == "ap-south-1"

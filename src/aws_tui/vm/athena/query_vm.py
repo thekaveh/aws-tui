@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import logging
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager, suppress
 from dataclasses import dataclass, field
@@ -43,6 +44,8 @@ from aws_tui.vm.athena._errors import map_provider_error, map_unexpected_error
 from aws_tui.vm.athena.results_vm import AthenaResultsSnapshot, AthenaResultsVM
 from aws_tui.vm.file_manager.pane_vm import PaneState
 from aws_tui.vm.service_diagnostics import report_unexpected_service_error
+
+_logger = logging.getLogger(__name__)
 
 _QUERY_ERROR = "Athena query request failed"
 _CONTEXT_ERROR = "Athena returned a query outside the active context"
@@ -387,9 +390,13 @@ class AthenaQueryVM:
         if snapshot.state in {QueryState.QUEUED, QueryState.RUNNING}:
             return False
         if snapshot.execution_ref is None:
+            # A submission interrupted before ``start_query`` returned an id is
+            # legitimately CANCELLED with no ref. Any other state without a ref
+            # is incoherent.
+            if snapshot.state not in (None, QueryState.CANCELLED):
+                return False
             if (
-                snapshot.state is not None
-                or snapshot.statistics != _EMPTY_STATISTICS
+                snapshot.statistics != _EMPTY_STATISTICS
                 or snapshot.query_error is not None
                 or snapshot.state_reason is not None
                 or snapshot.output_location is not None
@@ -410,7 +417,20 @@ class AthenaQueryVM:
         if snapshot.state not in _TERMINAL_QUERY_STATES:
             return False
         if snapshot.pane_state is not PaneState.IDLE or snapshot.error_text is not None:
-            return False
+            cancelled_with_reported_stop_failure = (
+                snapshot.state is QueryState.CANCELLED
+                and bool(snapshot.error_text)
+                and snapshot.pane_state
+                in {
+                    PaneState.AUTH_REQUIRED,
+                    PaneState.FORBIDDEN,
+                    PaneState.UNREACHABLE,
+                    PaneState.ERROR,
+                }
+            )
+            if not cancelled_with_reported_stop_failure:
+                return False
+            return snapshot.query_error is None and snapshot.results.execution_id is None
         if snapshot.state is QueryState.SUCCEEDED:
             return (
                 snapshot.query_error is None
@@ -645,6 +665,12 @@ class AthenaQueryVM:
             self._state = QueryState.CANCELLED
             self._is_submitting = False
             self._results.clear()
+            if ref is None:
+                # Nothing was ever started, so there is no poll to settle the
+                # pane. Leaving it LOADING showed an indefinite spinner for a
+                # finished operation and made the snapshot unexportable.
+                self._pane_state = PaneState.EMPTY
+                self._notify("pane_state")
             self._notify("owns_active_query")
             self._notify("state")
             self._notify("is_submitting")
@@ -773,6 +799,24 @@ class AthenaQueryVM:
         self._notify_execution()
 
     def _apply_provider_error(self, exc: ProviderError) -> None:
+        # ProviderError covers throttling, AccessDenied, malformed SQL and a
+        # denied result location — i.e. essentially every real query failure.
+        # Only `_apply_unexpected_error` reported anything, so an operator
+        # answering "my query failed" found nothing whatsoever in the durable
+        # log. Record the execution identity; `LogSink` redacts the message and
+        # the SQL never enters the record.
+        ref = self._execution_ref
+        _logger.warning(
+            "athena query failed",
+            extra={
+                "execution_id": ref.execution_id if ref is not None else None,
+                "workgroup": self._context.workgroup,
+                "catalog": self._context.catalog,
+                "database": self._context.database,
+                "error_type": type(exc).__name__,
+                "error": str(exc),
+            },
+        )
         self._pane_state, self._error_text = map_provider_error(
             exc,
             fallback=_QUERY_ERROR,

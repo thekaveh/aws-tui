@@ -1,13 +1,16 @@
 from __future__ import annotations
 
+from functools import partial
 from typing import ClassVar
 
 from reactivex.abc import DisposableBase
 from textual.app import ComposeResult
 from textual.containers import Vertical
+from textual.css.query import NoMatches
 from textual.widget import Widget
 from textual.widgets import Button, OptionList
 
+from aws_tui.ui.widgets._worker import DeferredWorkerMixin
 from aws_tui.ui.widgets.athena.load_more_button import AthenaLoadMoreButton
 from aws_tui.ui.widgets.glue.detail_rows import (
     DetailRows,
@@ -20,7 +23,7 @@ from aws_tui.vm.athena.page_vm import AthenaPageVM
 from aws_tui.vm.athena.saved_vm import SavedQueryKind
 
 
-class AthenaSavedView(Widget):
+class AthenaSavedView(DeferredWorkerMixin, Widget):
     DEFAULT_CSS: ClassVar[str] = """
     AthenaSavedView {
         height: 1fr;
@@ -109,38 +112,33 @@ class AthenaSavedView(Widget):
                 self._vm.selected_kind is not SavedQueryKind.NAMED
                 or option_id != self._vm.selected_query_id
             ):
-                self.run_worker(
-                    self._page_vm.select_named_query(option_id),
-                    exclusive=True,
+                self._run_lifecycle_worker(
+                    partial(self._page_vm.select_named_query, option_id),
                     group="athena-select-saved",
                 )
         elif event.option_list.id == "athena-prepared-pane-options" and (
             self._vm.selected_kind is not SavedQueryKind.PREPARED
             or option_id != self._vm.selected_query_id
         ):
-            self.run_worker(
-                self._page_vm.select_prepared_statement(option_id),
-                exclusive=True,
+            self._run_lifecycle_worker(
+                partial(self._page_vm.select_prepared_statement, option_id),
                 group="athena-select-saved",
             )
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
         if event.button.id == "athena-open-editor":
-            self.run_worker(
-                self._page_vm.open_saved_in_editor(),
-                exclusive=True,
+            self._run_lifecycle_worker(
+                self._page_vm.open_saved_in_editor,
                 group="athena-open-saved",
             )
         elif event.button.id == "athena-more-named":
-            self.run_worker(
-                self._vm.load_more_named_queries(),
-                exclusive=True,
+            self._run_lifecycle_worker(
+                self._vm.load_more_named_queries,
                 group="athena-more-named",
             )
         elif event.button.id == "athena-more-prepared":
-            self.run_worker(
-                self._vm.load_more_prepared_statements(),
-                exclusive=True,
+            self._run_lifecycle_worker(
+                self._vm.load_more_prepared_statements,
                 group="athena-more-prepared",
             )
 
@@ -161,65 +159,73 @@ class AthenaSavedView(Widget):
                 "#athena-more-prepared",
                 AthenaLoadMoreButton,
             )
-        except Exception:
+        except NoMatches:
             return
-        named.replace(
-            tuple(
-                (
-                    row.query_id,
-                    f"{row.name}  {row.database}",
-                )
-                for row in self._vm.named_queries
-            ),
-            selected_id=(
-                self._vm.selected_query_id
-                if self._vm.selected_kind is SavedQueryKind.NAMED
-                else None
-            ),
-            state=self._vm.named_state,
-            error_text=self._vm.named_error_text,
-            has_more=self._vm.has_more_named_queries,
-            limit_reached=self._vm.named_limit_reached,
-        )
-        prepared.replace(
-            tuple(
-                (
-                    row.name,
-                    f"{row.name}  {display_time(row.last_modified_at)}",
-                )
-                for row in self._vm.prepared_statements
-            ),
-            selected_id=(
-                self._vm.selected_query_id
-                if self._vm.selected_kind is SavedQueryKind.PREPARED
-                else None
-            ),
-            state=self._vm.prepared_state,
-            error_text=self._vm.prepared_error_text,
-            has_more=self._vm.has_more_prepared_statements,
-            limit_reached=self._vm.prepared_limit_reached,
-        )
-        detail.replace(
-            self._detail_values(),
-            state=self._vm.detail_state,
-            error_text=self._vm.detail_error_text,
-            empty_text="Select a saved query",
-        )
-        open_editor.disabled = self._vm.selected_sql() is None
-        load_more_named.sync(
-            has_more=self._vm.has_more_named_queries,
-            busy=self._vm.is_loading_more_named_queries,
-            state=self._vm.named_state,
-            error_text=self._vm.named_error_text,
-            limit_reached=self._vm.named_limit_reached,
-        )
-        load_more_prepared.sync(
-            has_more=self._vm.has_more_prepared_statements,
-            busy=self._vm.is_loading_more_prepared_statements,
-            state=self._vm.prepared_state,
-            error_text=self._vm.prepared_error_text,
-            limit_reached=self._vm.prepared_limit_reached,
-        )
+        # The panes resolved above can still be mounted while their inner
+        # OptionList has already been removed: `ResourceListPane.replace`
+        # calls `query_one(OptionList)`, so `NoMatches` escapes into the
+        # Textual message pump. `glue/catalog_view` and `athena/history_view`
+        # already double-guard for this reason.
+        try:
+            named.replace(
+                tuple(
+                    (
+                        row.query_id,
+                        f"{row.name}  {row.database}",
+                    )
+                    for row in self._vm.named_queries
+                ),
+                selected_id=(
+                    self._vm.selected_query_id
+                    if self._vm.selected_kind is SavedQueryKind.NAMED
+                    else None
+                ),
+                state=self._vm.named_state,
+                error_text=self._vm.named_error_text,
+                has_more=self._vm.has_more_named_queries,
+                limit_reached=self._vm.named_limit_reached,
+            )
+            prepared.replace(
+                tuple(
+                    (
+                        row.name,
+                        f"{row.name}  {display_time(row.last_modified_at)}",
+                    )
+                    for row in self._vm.prepared_statements
+                ),
+                selected_id=(
+                    self._vm.selected_query_id
+                    if self._vm.selected_kind is SavedQueryKind.PREPARED
+                    else None
+                ),
+                state=self._vm.prepared_state,
+                error_text=self._vm.prepared_error_text,
+                has_more=self._vm.has_more_prepared_statements,
+                limit_reached=self._vm.prepared_limit_reached,
+            )
+            detail.replace(
+                self._detail_values(),
+                state=self._vm.detail_state,
+                error_text=self._vm.detail_error_text,
+                empty_text="Select a saved query",
+            )
+            open_editor.disabled = self._vm.selected_sql() is None
+            load_more_named.sync(
+                has_more=self._vm.has_more_named_queries,
+                busy=self._vm.is_loading_more_named_queries,
+                state=self._vm.named_state,
+                error_text=self._vm.named_error_text,
+                limit_reached=self._vm.named_limit_reached,
+            )
+            load_more_prepared.sync(
+                has_more=self._vm.has_more_prepared_statements,
+                busy=self._vm.is_loading_more_prepared_statements,
+                state=self._vm.prepared_state,
+                error_text=self._vm.prepared_error_text,
+                limit_reached=self._vm.prepared_limit_reached,
+            )
+        except NoMatches:
+            return
 
     def _detail_values(self) -> tuple[DetailValue, ...]:
         named = self._vm.selected_named_query

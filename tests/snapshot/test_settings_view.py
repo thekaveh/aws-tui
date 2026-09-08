@@ -6,24 +6,15 @@ from pathlib import Path
 
 import pytest
 
+from aws_tui.infra.theme_store import ThemeStore
 from tests.snapshot.apps.settings_view import (
     SettingsViewEmptyApp,
     SettingsViewFormOpenApp,
     SettingsViewPopulatedApp,
 )
 
-THEMES = [
-    "carbon",
-    "voidline",
-    "lattice",
-    "amber",
-    "solarized-light",
-    "github-light",
-    "one-light",
-    "nord",
-    "dracula",
-    "gruvbox-dark",
-]
+#: Derived from the source of truth; see tests/snapshot/conftest.py::THEMES.
+THEMES = ThemeStore.BUILTIN_NAMES
 TERMINAL_SIZE = (90, 40)
 
 

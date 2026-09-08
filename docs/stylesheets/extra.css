@@ -6,8 +6,22 @@
 [data-md-color-scheme="slate"] {
   --md-default-bg-color: #0b0f14;
   --md-code-bg-color: #11161d;
-  --md-primary-fg-color: #22d3ee;
+  /* Material paints .md-header with --md-primary-fg-color. Holding the luminous
+     cyan there produced a full-bleed saturated masthead over a near-black page.
+     Keep the header on the page ground and spend the accent on links and active
+     state instead, so the chrome reads as a hairline rather than a slab. */
+  --md-primary-fg-color: #0b0f14;
   --md-accent-fg-color: #67e8f9;
+  --md-typeset-a-color: #22d3ee;
+}
+[data-md-color-scheme="slate"] .md-header,
+[data-md-color-scheme="slate"] .md-tabs {
+  border-bottom: 1px solid #1c2530;
+  box-shadow: none;
+}
+[data-md-color-scheme="slate"] .md-typeset pre > code,
+[data-md-color-scheme="slate"] .md-typeset table:not([class]) {
+  border: 1px solid #1c2530;
 }
 .md-typeset table:not([class]) {
   font-size: 0.72rem;

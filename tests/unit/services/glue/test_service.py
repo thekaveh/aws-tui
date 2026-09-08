@@ -86,6 +86,11 @@ class _IcebergAthena:
         self.workgroups = workgroups
         self.workgroup_calls = 0
         self.start_calls = 0
+        # Record the context the runner actually submitted. Without this the
+        # workgroup chosen by GlueService is unobservable, and the
+        # profile-scoped preference in service.py could be deleted outright
+        # with this whole file staying green.
+        self.started_workgroups: list[str] = []
 
     async def list_workgroups_page(
         self,
@@ -102,6 +107,8 @@ class _IcebergAthena:
 
     async def start_query(self, *args, **kwargs):  # type: ignore[no-untyped-def]
         self.start_calls += 1
+        context = args[1] if len(args) > 1 else kwargs["context"]
+        self.started_workgroups.append(context.workgroup)
         raise PermissionDeniedError("athena metadata denied")
 
     async def get_query_execution(self, execution_id: str):  # type: ignore[no-untyped-def]
@@ -175,6 +182,9 @@ async def test_glue_service_prefers_profile_scoped_selected_athena_workgroup() -
 
     assert athena.workgroup_calls == 1
     assert athena.start_calls == 1
+    # The point of the test: "selected" is remembered for this profile scope
+    # and must win over the first ENABLED workgroup ("first").
+    assert athena.started_workgroups == ["selected"]
     assert page.catalog.iceberg.state is PaneState.FORBIDDEN
     assert page.catalog.table_detail is not None
     page.dispose()

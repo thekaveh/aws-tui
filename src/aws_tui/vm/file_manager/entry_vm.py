@@ -36,6 +36,12 @@ def _format_size(size: int | None, kind: EntryKind) -> str:
         value /= 1024.0
         if value < 1024.0:
             return f"{value:.1f} {unit}"
+    # The loop divides once per unit it offers, so reaching here means the value
+    # is still in tebibytes; the petabyte label needs its own division. Without
+    # it a 1 PiB entry rendered "1024.0 P". Unreachable through S3, whose
+    # objects cap at 5 TiB (``s3_fs._MAX_OBJECT_SIZE``), but reachable in
+    # principle through LocalFS.
+    value /= 1024.0
     return f"{value:.1f} P"
 
 
@@ -43,22 +49,6 @@ def _format_modified(when: datetime | None) -> str:
     if when is None:
         return "-"
     return when.strftime("%Y-%m-%d %H:%M")
-
-
-# Column widths chosen so a typical 120-col terminal (two ~58-col panes)
-# fits the row without wrapping. Name truncates with ``…`` so the size
-# and modified columns line up across rows regardless of name length.
-_NAME_WIDTH = 40
-_SIZE_WIDTH = 12
-_MODIFIED_WIDTH = 18
-
-
-def _truncate(text: str, max_width: int) -> str:
-    if len(text) <= max_width:
-        return text
-    if max_width <= 1:
-        return text[:max_width]
-    return text[: max_width - 1] + "…"
 
 
 @dataclass(frozen=True, slots=True)
@@ -152,28 +142,13 @@ class EntryVM:
         return entry.name
 
     @property
-    def name_column(self) -> str:
-        """Name truncated to ``_NAME_WIDTH`` with an ``…`` suffix when it
-        overflows. Always exactly ``_NAME_WIDTH`` characters so neighboring
-        columns line up across rows."""
-        return f"{_truncate(self.display_name, _NAME_WIDTH):<{_NAME_WIDTH}}"
-
-    @property
     def size_display(self) -> str:
         entry = self._inner.model.entry
         return _format_size(entry.size, entry.kind)
 
     @property
-    def size_column(self) -> str:
-        return f"{self.size_display:>{_SIZE_WIDTH}}"
-
-    @property
     def modified_display(self) -> str:
         return _format_modified(self._inner.model.entry.modified)
-
-    @property
-    def modified_column(self) -> str:
-        return f"{self.modified_display:<{_MODIFIED_WIDTH}}"
 
     @property
     def mark_glyph(self) -> str:

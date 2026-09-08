@@ -644,3 +644,50 @@ def test_emr_boto_config_pins_timeout_and_retry_shape() -> None:
     assert _EMR_BOTO_CONFIG.read_timeout == 60
     assert _EMR_BOTO_CONFIG.retries == {"total_max_attempts": 6, "mode": "adaptive"}
     assert EMR_BOTO_CONFIG is _EMR_BOTO_CONFIG
+
+
+@pytest.mark.asyncio
+async def test_list_job_runs_page_forwards_token_and_maps_the_page() -> None:
+    """The real client's paging method had no direct test at all — 26/26 of its
+    mutants survived. The VM tests use fakes, and the domain tests only covered
+    the bulk `list_job_runs`. Dropping the `nextToken` forwarding made the Job
+    Runs pane re-fetch page 1 forever — the exact user complaint quoted in the
+    method's own docstring.
+    """
+    stub = _StubClient()
+    stub.list_job_runs.return_value = {
+        "jobRuns": [
+            {
+                "applicationId": "app-1",
+                "id": "run-51",
+                "name": "nightly",
+                "state": "SUCCESS",
+                "createdAt": datetime(2026, 6, 25, tzinfo=UTC),
+                "updatedAt": datetime(2026, 6, 25, 1, tzinfo=UTC),
+            }
+        ],
+        "nextToken": "page-3",
+    }
+    client = EmrServerlessClient(session=_StubSession(stub))  # type: ignore[arg-type]
+
+    runs, token = await client.list_job_runs_page("app-1", start_token="page-2")
+
+    assert [run.job_run_id for run in runs] == ["run-51"]
+    assert token == "page-3", "the next page's token was not surfaced"
+    stub.list_job_runs.assert_awaited_once_with(
+        applicationId="app-1", maxResults=50, nextToken="page-2"
+    )
+
+
+@pytest.mark.asyncio
+async def test_list_job_runs_page_first_page_omits_the_token() -> None:
+    """Positive control: no `nextToken` key on the first request."""
+    stub = _StubClient()
+    stub.list_job_runs.return_value = {"jobRuns": []}
+    client = EmrServerlessClient(session=_StubSession(stub))  # type: ignore[arg-type]
+
+    runs, token = await client.list_job_runs_page("app-1")
+
+    assert runs == []
+    assert token is None
+    stub.list_job_runs.assert_awaited_once_with(applicationId="app-1", maxResults=50)

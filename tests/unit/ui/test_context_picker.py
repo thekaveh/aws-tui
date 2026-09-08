@@ -392,8 +392,14 @@ async def test_context_picker_semantic_and_disabled_states_override_active_theme
     picker = _picker()
 
     async with _ThemedPickerHost(picker).run_test() as pilot:
+        # Settle the initial mount before touching focus: `open()` defers
+        # `_focus_options` through `call_after_refresh`, and that focus change
+        # flips the `:focus` pseudo-class that decides `border_top` — the value
+        # asserted below.
+        await pilot.pause()
         picker.focus()
         picker.open()
+        await pilot.pause()
         await pilot.pause()
 
         assert picker.styles.border_top == ("heavy", Color.parse("#6fb8ff"))

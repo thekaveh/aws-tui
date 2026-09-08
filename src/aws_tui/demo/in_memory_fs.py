@@ -251,6 +251,15 @@ class InMemoryFS:
             raise NotFoundError(src.as_posix())
         if dst in self._tree:
             raise ConflictError(f"destination exists: {dst.as_posix()}")
+        # A destination INSIDE the source is not a move — the prefix rewrite
+        # below would relocate the subtree under itself and orphan every key,
+        # leaving the root listing empty. `LocalFS` raises for this and
+        # `S3FS.rename` refuses directory renames outright, so without this the
+        # fake was the only provider that silently destroyed data.
+        if dst.segments[: len(src.segments)] == src.segments:
+            raise ConflictError(
+                f"destination is inside source: {src.as_posix()} -> {dst.as_posix()}"
+            )
         # Ensure dst's parent exists.
         parent = dst.parent()
         if not parent.is_root and parent not in self._tree:

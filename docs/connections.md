@@ -88,7 +88,10 @@ an `(auto)` badge in the picker.
 Set `AWS_CONFIG_FILE` or `AWS_SHARED_CREDENTIALS_FILE` to override the two
 shared AWS files; aws-tui expands `~` and environment variables in either
 path. Startup selection follows `[defaults].connection`,
-`AWS_DEFAULT_PROFILE`, `AWS_PROFILE`, then the first discovered profile.
+`AWS_DEFAULT_PROFILE`, `AWS_PROFILE`, then the first connection in resolver
+order. That order is every explicit `[connections.*]` entry — s3-compatible
+entries included — followed by auto-discovered AWS profiles, so an explicit
+connection wins the fallback over any profile.
 For AWS connections, region resolution follows the explicit connection
 region, the selected profile's configured region, `AWS_DEFAULT_REGION`, then
 `us-east-1`. This matches the botocore profile and region environment

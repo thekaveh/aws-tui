@@ -14,6 +14,7 @@ from vmx import Message, MessageHub
 
 from aws_tui.infra.keymap_store import KeymapStore
 from aws_tui.ui.widgets._subscriber import HubSubscriberMixin
+from aws_tui.ui.widgets._worker import DeferredWorkerMixin
 from aws_tui.ui.widgets.context_picker import ContextOption, ContextPicker
 from aws_tui.ui.widgets.glue.catalog_view import GlueCatalogView
 from aws_tui.ui.widgets.glue.crawlers_view import GlueCrawlersView
@@ -75,7 +76,7 @@ _ICEBERG_FOCUS_SLOTS = {
 }
 
 
-class GluePage(HubSubscriberMixin, Widget):
+class GluePage(DeferredWorkerMixin, HubSubscriberMixin, Widget):
     DEFAULT_CSS: ClassVar[str] = """
     GluePage {
         height: 1fr;
@@ -243,17 +244,15 @@ class GluePage(HubSubscriberMixin, Widget):
         if event.control.id == "glue-run-state-filter":
             states = frozenset() if event.value == "ALL" else frozenset((event.value,))
             if states != self._vm.jobs.run_state_filter:
-                self.run_worker(
-                    self._vm.set_job_run_states(states),
-                    exclusive=True,
+                self._run_lifecycle_worker(
+                    partial(self._vm.set_job_run_states, states),
                     group="glue-filter-runs",
                 )
         elif event.control.id == "glue-crawler-state-filter":
             state = None if event.value == "ALL" else event.value
             if state != self._vm.crawlers.state_filter:
-                self.run_worker(
-                    self._vm.set_crawler_state(state),
-                    exclusive=True,
+                self._run_lifecycle_worker(
+                    partial(self._vm.set_crawler_state, state),
                     group="glue-filter-crawlers",
                 )
 

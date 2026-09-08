@@ -666,12 +666,18 @@ async def test_glue_sync_is_safe_during_page_teardown() -> None:
     async with app.run_test() as pilot:
         await pilot.pause()
         page = app.query_one(GluePage)
-        removal = app.screen.remove_children(GluePage)
-        assert not page.display
+        # AWAIT the removal before driving the sync. Without this the widget is
+        # merely display=False with its DOM fully intact, so
+        # ``_focus_projection_available`` returns early on ``display`` alone and
+        # the ``is_attached`` clause -- the one that matters during a real
+        # teardown -- is never exercised. Forcing that helper to True used to
+        # leave this test green, i.e. the queries below could not have raised.
+        await app.screen.remove_children(GluePage)
+        await pilot.pause()
+        assert not page.is_attached
 
         page._sync_view()  # type: ignore[attr-defined]
         page._sync_context()  # type: ignore[attr-defined]
-        await removal
 
 
 @pytest.mark.asyncio
@@ -1016,3 +1022,37 @@ async def test_selected_job_detail_is_retained_when_filter_has_no_matching_runs(
         assert "Script          s3://scripts/nightly.py" in detail_text
         assert run_placeholder.id == "__placeholder__"
         assert str(run_placeholder.prompt) == "no runs"
+
+
+@pytest.mark.asyncio
+async def test_view_refresh_is_safe_when_only_the_inner_option_list_is_gone() -> None:
+    """A pane can outlive its own OptionList during teardown.
+
+    `ResourceListPane.replace` calls `query_one(OptionList)`, so guarding only
+    the top-level pane lookups leaves `NoMatches` free to escape from the
+    `.replace(...)` calls into the Textual message pump — which takes the app
+    down. `glue/catalog_view` and `athena/history_view` already double-guard for
+    this reason; crawlers, jobs and the Athena saved view did not.
+    """
+    from textual.widgets import OptionList
+
+    from aws_tui.ui.widgets.glue.crawlers_view import GlueCrawlersView
+    from aws_tui.ui.widgets.glue.jobs_view import GlueJobsView
+
+    vm, _fake = _build_vm()
+    await vm.setup()
+    app = _GlueApp(vm)
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        page = app.query_one(GluePage)
+
+        for view_type in (GlueCrawlersView, GlueJobsView):
+            view = page.query_one(view_type)
+            for option_list in list(view.query(OptionList)):
+                await option_list.remove()
+            await pilot.pause()
+
+            # The panes themselves are still mounted; only their inner
+            # OptionLists are gone. This is the exact partial-teardown shape.
+            view._refresh_all()  # type: ignore[attr-defined]

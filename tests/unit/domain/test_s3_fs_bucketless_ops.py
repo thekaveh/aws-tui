@@ -195,3 +195,29 @@ def test_to_aware_coerces_naive_to_utc() -> None:
     other_tz = timezone(timedelta(hours=5))
     aware_other = datetime(2026, 1, 1, 12, 30, 45, tzinfo=other_tz)
     assert _to_aware(aware_other) is aware_other
+
+
+async def test_bucketless_listing_uses_a_slash_terminated_prefix(s3_endpoint: str) -> None:
+    """`dir` and `dir/` are different queries to S3, and only one is right.
+
+    The bucketless provider (the SHIPPED configuration — `S3Service` builds
+    `S3FS(bucket=None)`) lists `bucket/dir` by querying a prefix. Dropping the
+    slash normalisation queried `Prefix="dir"` with a delimiter, so
+    `CommonPrefixes`/`Contents` from sibling prefixes (`dirfoo/`, `dirty.txt`)
+    were folded into the pane under names sliced at the wrong offset — the user
+    sees, selects, copies and deletes rows belonging to a different prefix.
+    Survived the whole suite: no bucketless test seeded string-prefix siblings.
+    """
+    session = _session()
+    async with session.client("s3", endpoint_url=s3_endpoint) as c:
+        await c.create_bucket(Bucket="prefixbkt")
+        await c.put_object(Bucket="prefixbkt", Key="dir/inside.txt", Body=b"mine")
+        await c.put_object(Bucket="prefixbkt", Key="dirfoo/other.txt", Body=b"not mine")
+        await c.put_object(Bucket="prefixbkt", Key="dirty.txt", Body=b"also not mine")
+    fs = _bucketless_fs(s3_endpoint)
+
+    entries = await fs.list(PathRef.from_posix("/prefixbkt/dir"))
+
+    assert sorted(entry.name for entry in entries) == ["inside.txt"], (
+        "the listing folded in rows from sibling prefixes"
+    )

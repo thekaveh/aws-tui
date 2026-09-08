@@ -175,11 +175,11 @@ class TransferVM:
         # update unless the new state is itself terminal (so a late
         # FAILED can still be recorded alongside a prior CANCELLED).
         #
-        # User-initiated transitions out of a terminal state (the
-        # retry button → PENDING) bypass this guard by going through
-        # :meth:`_reset_to_pending`; do NOT add ``PENDING`` to the
-        # allow-list below or stale progress events from a finished
-        # transfer's lingering generator would silently revive it.
+        # There is no retry affordance today, so nothing legitimately
+        # leaves a terminal state. Should one arrive it must NOT be added
+        # to the allow-list below: it needs its own entry point through
+        # ``_apply_update_unchecked``, or stale progress events from a
+        # finished transfer's lingering generator would silently revive it.
         if self.is_finished:
             new_is_terminal = state in (
                 TransferState.COMPLETED,
@@ -206,9 +206,9 @@ class TransferVM:
     ) -> None:
         """Lower-level mutator that skips terminal-state stickiness.
 
-        Used by :meth:`_retry` (which deliberately transitions out of a
-        terminal state in response to a user command) and tests that
-        need to drive arbitrary transitions.
+        Reserved for a user-initiated transition out of a terminal state,
+        which no current caller performs; today only ``apply_update`` above
+        and tests that need to drive arbitrary transitions use it.
         """
         self._record_sample(bytes_done)
         new = replace(

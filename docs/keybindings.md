@@ -271,7 +271,7 @@ unbound until a handler ships.
 | `app.swap_source` | `S` (`shift+s`) | yes | Switch the focused S3 pane source, or rebuild the current single-context AWS service under the next profile |
 | `pane.move_up` / `pane.move_down` | `up` / `down` (also `k` / `j`) | yes | Move cursor |
 | `pane.descend` | `enter` | yes | Descend into folder / bucket |
-| `pane.ascend` | `backspace` / `left` | yes | Parent path |
+| `pane.ascend` | `backspace` | yes | Parent path |
 | `pane.mark_up` | `shift+up` | yes | Extend the marked selection upward |
 | `pane.mark_down` | `shift+down` | yes | Extend the marked selection downward |
 | `pane.switch_focus` | `tab` | yes | Cycle the active page's focus ring |

@@ -373,3 +373,44 @@ async def test_dispose_requests_state_walk_cancellation() -> None:
 
     assert all(task.cancelled() for task in tasks)
     assert not emr._state_tasks
+
+
+@pytest.mark.parametrize(
+    ("profile", "workgroup", "database", "table"),
+    [
+        ("demo-dev", "dev-analytics", "dev_analytics", "dev_events_iceberg"),
+        ("demo-prod", "prod-reporting", "prod_warehouse", "prod_sales_iceberg"),
+        ("demo-shared", "shared-insights", "shared_lake", "shared_metrics_iceberg"),
+    ],
+)
+async def test_glue_handoff_starter_sql_is_runnable_in_demo(
+    profile: str,
+    workgroup: str,
+    database: str,
+    table: str,
+) -> None:
+    """The query the Glue handoff prefills must have a demo fixture.
+
+    ``select_starter_sql`` moved to two-part quoting, and only the
+    ``FOR VERSION AS OF`` variant was re-seeded. The plain starter — what
+    "Query table in Athena" actually prefills — had no fixture, so the headline
+    cross-service demo filled the editor and then failed on Run with
+    "Athena demo query fixture is unavailable".
+    """
+    from uuid import uuid4
+
+    from aws_tui.domain.data_catalog import TableRef
+    from aws_tui.domain.query import QueryContext
+    from aws_tui.domain.sql_policy import select_starter_sql
+
+    athena = seeded_demo_athena(profile)
+    ref = TableRef("AwsDataCatalog", database, table, athena.connection_name, athena.region)
+    context = QueryContext(
+        athena.connection_name, athena.region, workgroup, "AwsDataCatalog", database
+    )
+
+    execution = await athena.start_query(
+        select_starter_sql(ref), context, request_token=str(uuid4())
+    )
+
+    assert execution.execution_id
