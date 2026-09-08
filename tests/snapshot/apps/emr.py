@@ -181,11 +181,32 @@ class EmrPageOpenSourcePickerApp(EmrPageApp):
             ServiceSourceContext("demo-prod-west", "demo-prod-west", "us-west-2"),
         )
 
+    _OPEN_RETRY_LIMIT = 20
+
     def on_mount(self) -> None:
+        self._open_attempts = 0
         self.call_after_refresh(self._open_source_picker)
 
     def _open_source_picker(self) -> None:
-        self.query_one(ServiceSourceHeader).open()
+        """Open the source list, retrying until the header actually accepts it.
+
+        ``ServiceSourceHeader.open`` is a silent no-op while the header is not
+        yet selectable or its picker is still loading, and one
+        ``call_after_refresh`` is no guarantee that page setup has landed.
+        Every consumer of this fixture then asserts ``picker.is_open`` (or
+        snapshots the expanded list) immediately after a single
+        ``pilot.pause()``, so on a slow runner the fixture opened nothing and
+        the first precondition failed -- observed on windows-latest across
+        py3.11 and py3.12 while macOS and py3.13 passed the same commit.
+
+        Retrying until the open takes makes the precondition deterministic
+        rather than a function of how fast the runner settles.
+        """
+        header = self.query_one(ServiceSourceHeader)
+        header.open()
+        self._open_attempts += 1
+        if not header.picker.is_open and self._open_attempts < self._OPEN_RETRY_LIMIT:
+            self.call_after_refresh(self._open_source_picker)
 
 
 __all__ = [
