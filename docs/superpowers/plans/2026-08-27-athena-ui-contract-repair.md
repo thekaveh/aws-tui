@@ -1,4 +1,4 @@
-# 1. Athena UI Contract Repair Implementation Plan
+# Athena UI Contract Repair Implementation Plan
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
@@ -8,7 +8,7 @@
 
 **Tech Stack:** Python 3.11-3.13, Textual 8.2.8, VMx 3.23.0, sqlglot 30.x, Rich, pytest, pytest-asyncio, pytest-textual-snapshot, TCSS, MkDocs Material.
 
-## 1.1. Global Constraints
+## 1. Global Constraints
 
 - Work only on `fix/athena-ui-contracts`, created from synchronized `develop` commit `49ac96dc`.
 - Preserve Athena's source -> workgroup -> catalog -> database resolver order.
@@ -25,7 +25,7 @@
 
 ---
 
-## 1.2. File Map
+## 2. File Map
 
 - `src/aws_tui/ui/widgets/hint_legend.py`: center the already fitted one-line command sequence.
 - `tests/unit/ui/test_chrome_widgets.py`: command-row centering and constrained-width geometry.
@@ -47,9 +47,9 @@
 
 ---
 
-## 1.3. Task Plan
+## 3. Task Plan
 
-### 1.3.1. Center the Shared One-Line Command Legend
+### 3.1. Center the Shared One-Line Command Legend
 
 **Files:**
 - Modify: `tests/unit/ui/test_chrome_widgets.py`
@@ -122,7 +122,7 @@ git commit -m "fix(ui): center fitted command legends"
 
 ---
 
-### 1.3.2. Keep the Active Service Selected Outside Rail Focus
+### 3.2. Keep the Active Service Selected Outside Rail Focus
 
 **Files:**
 - Modify: `tests/unit/ui/test_nav_menu.py`
@@ -214,7 +214,7 @@ git commit -m "fix(ui): persist active service selection"
 
 ---
 
-### 1.3.3. Unframe and Restore Athena Context Selectors
+### 3.3. Unframe and Restore Athena Context Selectors
 
 **Files:**
 - Modify: `tests/unit/ui/athena/test_page.py`
@@ -356,7 +356,7 @@ git commit -m "fix(athena): restore context picker interactions"
 
 ---
 
-### 1.3.4. Align VMx Stop Availability with Interruptibility
+### 3.4. Align VMx Stop Availability with Interruptibility
 
 **Files:**
 - Modify: `tests/unit/vm/athena/test_query_vm.py`
@@ -455,7 +455,7 @@ git commit -m "fix(athena): align stop command with query lifecycle"
 
 ---
 
-### 1.3.5. Put Compact Query Controls Above the Editor
+### 3.5. Put Compact Query Controls Above the Editor
 
 **Files:**
 - Modify: `tests/unit/ui/athena/test_page.py`
@@ -605,7 +605,7 @@ git commit -m "fix(athena): place compact query controls above editor"
 
 ---
 
-### 1.3.6. Prefill Five-Row SQL in the Visible Athena Editor
+### 3.6. Prefill Five-Row SQL in the Visible Athena Editor
 
 **Files:**
 - Modify: `tests/unit/domain/test_sql_policy.py`
@@ -707,7 +707,7 @@ git commit -m "fix(athena): prefill visible five-row starter queries"
 
 ---
 
-### 1.3.7. Synchronize Documentation and Visual Contracts
+### 3.7. Synchronize Documentation and Visual Contracts
 
 **Files:**
 - Modify: `docs/services/athena.md`
@@ -792,7 +792,7 @@ git commit -m "docs: synchronize Athena interaction contracts"
 
 ---
 
-### 1.3.8. Full Verification, Review, and Gitflow Delivery
+### 3.8. Full Verification, Review, and Gitflow Delivery
 
 **Files:**
 - Verify: all changed source, tests, docs, generated outputs, and snapshots.
@@ -903,7 +903,7 @@ Expected: clean synchronized `develop` and no local or remote feature branch.
 
 ---
 
-## 1.4. Acceptance Checklist
+## 4. Acceptance Checklist
 
 - [ ] Commands are centered on every service screen and remain one line.
 - [ ] Athena has no outer `AWS context` border.

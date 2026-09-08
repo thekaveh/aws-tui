@@ -1,4 +1,4 @@
-# 1. Overlay Pickers, One-Line Commands, and Athena Handoffs Implementation Plan
+# Overlay Pickers, One-Line Commands, and Athena Handoffs Implementation Plan
 
 **Status:** Completed and merged into `develop` through PR #176 on 2026-08-25.
 This is a historical implementation record; its branch commands, checklists,
@@ -12,7 +12,7 @@ and lifecycle instructions are not current work.
 
 **Tech Stack:** Python 3.12, Textual 0.89.1, VMx 3.1, Rich, pytest, pytest-textual-snapshot, TCSS, MkDocs Material.
 
-## 1.1. Global Constraints
+## 1. Global Constraints
 
 - Historical execution constraint: work was performed on `codex/overlay-pickers-command-handoffs`, based on `develop`, and merged back through PR #176.
 - `ContextPicker` and EMR `ApplicationPicker` are the only inline-dropdown classes in scope; resource `OptionList` panes, modal pickers, and the command palette are excluded.
@@ -31,7 +31,7 @@ and lifecycle instructions are not current work.
 
 ---
 
-## 1.2. File Map
+## 2. File Map
 
 - `src/aws_tui/ui/widgets/overlay_option_list.py`: shared screen-overlaid `OptionList` with explicit dismiss semantics.
 - `src/aws_tui/ui/widgets/context_picker.py`: stable three-row picker geometry, overlay lifecycle, semantic border precedence.
@@ -59,7 +59,7 @@ and lifecycle instructions are not current work.
 
 ---
 
-## 1.3. Task 1: Give ContextPicker a Stable Screen Overlay
+## 3. Task 1: Give ContextPicker a Stable Screen Overlay
 
 **Files:**
 - Create: `src/aws_tui/ui/widgets/overlay_option_list.py`
@@ -229,7 +229,7 @@ git commit -m "fix(ui): overlay service context pickers"
 
 ---
 
-## 1.4. Task 2: Give EMR ApplicationPicker Overlay Parity
+## 4. Task 2: Give EMR ApplicationPicker Overlay Parity
 
 **Files:**
 - Modify: `src/aws_tui/ui/widgets/emr_serverless/application_picker.py`
@@ -332,7 +332,7 @@ git commit -m "fix(emr): overlay the application picker"
 
 ---
 
-## 1.5. Task 3: Enrich Command Metadata and Bind Glue Table Queries
+## 5. Task 3: Enrich Command Metadata and Bind Glue Table Queries
 
 **Files:**
 - Modify: `src/aws_tui/vm/chrome/hint_legend_vm.py`
@@ -549,7 +549,7 @@ git commit -m "feat(commands): expose Glue Athena handoffs"
 
 ---
 
-## 1.6. Task 4: Render Commands as One Deterministic Row
+## 6. Task 4: Render Commands as One Deterministic Row
 
 **Files:**
 - Modify: `src/aws_tui/ui/widgets/hint_legend.py`
@@ -670,7 +670,7 @@ git commit -m "fix(commands): keep hints on one compact row"
 
 ---
 
-## 1.7. Task 5: Converge Glue Button, Key, and Palette Actions
+## 7. Task 5: Converge Glue Button, Key, and Palette Actions
 
 **Files:**
 - Modify: `src/aws_tui/ui/actions.py`
@@ -791,7 +791,7 @@ git commit -m "fix(glue): unify Athena handoff actions"
 
 ---
 
-## 1.8. Task 6: Prove Full-App Handoffs and Visual Contracts
+## 8. Task 6: Prove Full-App Handoffs and Visual Contracts
 
 **Files:**
 - Modify: `tests/integration/test_glue_athena_navigation.py`
@@ -906,7 +906,7 @@ git commit -m "test(ui): cover overlay and Athena handoff journeys"
 
 ---
 
-## 1.9. Task 7: Synchronize Documentation and Run the Release Gate
+## 9. Task 7: Synchronize Documentation and Run the Release Gate
 
 **Files:**
 - Modify: `docs/keybindings.md`
@@ -1019,7 +1019,7 @@ confirm the remote feature branch and any task worktrees are gone.
 
 ---
 
-## 1.10. Final Acceptance Gate
+## 10. Final Acceptance Gate
 
 - [ ] Every scoped dropdown overlays with invariant surrounding regions.
 - [ ] Only one picker is open, and no stale refocus survives unmount or service switch.

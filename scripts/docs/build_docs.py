@@ -19,31 +19,62 @@ from scripts.docs.transforms import (
     wiki_slug,
 )
 
-_IMG_RE = re.compile(r"(!\[[^\]]*\]\()\s*((?:\.\./)*)diagrams/img/([\w-]+)\.png(\))")
-_HERO_RE = re.compile(
-    r"(<img\s+[^>]*src=[\"'])\.\./assets/screenshots/aws-tui-running\.png([\"'][^>]*>)"
+_IMG_RE = re.compile(r"(!\[[^\]]*\]\()\s*(?:\.\./)*diagrams/img/([\w-]+)\.png(\))")
+# Raw <img> embeds pointing anywhere under the repo-root assets/ tree. Matching the
+# whole tree rather than one hard-coded filename is deliberate: the previous
+# single-file regex passed every other asset through unrewritten and uncopied, so
+# the landing poster rendered as a broken image on both published surfaces.
+_ASSET_RE = re.compile(
+    r"(<img\s+[^>]*\bsrc=[\"'])(?:\.\./)*assets/"
+    r"([\w./-]+\.(?:png|jpg|jpeg|gif|webp|svg))([\"'][^>]*>)"
 )
 
 
+def _asset_target(surface: str, name: str) -> str:
+    """Both generated surfaces are flat, so surface-relative paths carry no prefix."""
+    return f"assets/img/{name}" if surface == "site" else f"img/{name}"
+
+
+def _referenced_assets(md: str) -> set[str]:
+    """Return the ``assets/``-relative files a canonical page embeds via <img>."""
+    return {match.group(2) for match in _ASSET_RE.finditer(md)}
+
+
 def _rewrite_images(md: str, surface: str) -> str:
-    def repl(m: re.Match[str]) -> str:
-        head, prefix, name, tail = m.groups()
-        if surface == "site":
-            return f"{head}{prefix}assets/img/{name}.svg{tail}"
-        return f"{head}{prefix}img/{name}.png{tail}"  # wiki
+    def diagram(m: re.Match[str]) -> str:
+        head, name, tail = m.groups()
+        suffix = "svg" if surface == "site" else "png"
+        return f"{head}{_asset_target(surface, f'{name}.{suffix}')}{tail}"
 
-    rewritten = _IMG_RE.sub(repl, md)
-    hero_target = (
-        "assets/img/aws-tui-running.png" if surface == "site" else "img/aws-tui-running.png"
-    )
-    return _HERO_RE.sub(rf"\1{hero_target}\2", rewritten)
+    def asset(m: re.Match[str]) -> str:
+        head, name, tail = m.groups()
+        return f"{head}{_asset_target(surface, Path(name).name)}{tail}"
+
+    return _ASSET_RE.sub(asset, _IMG_RE.sub(diagram, md))
 
 
-def _copy_hero(repo_root: Path, target: Path) -> None:
-    source = repo_root / "assets" / "screenshots" / "aws-tui-running.png"
-    if source.is_file():
-        target.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(source, target)
+def _copy_referenced_assets(repo_root: Path, names: set[str], img_dir: Path) -> None:
+    """Copy every embedded asset onto the surface, refusing silent omissions.
+
+    A page that embeds an asset the surface does not carry renders as a broken
+    image, and ``mkdocs build --strict`` cannot see it because the embed is raw
+    HTML rather than Markdown. Failing the build is the only place to catch it.
+    """
+    img_dir.mkdir(parents=True, exist_ok=True)
+    by_basename: dict[str, str] = {}
+    for rel in sorted(names):
+        basename = Path(rel).name
+        collision = by_basename.get(basename)
+        if collision is not None:
+            raise ManifestError(
+                f"assets/{rel} and assets/{collision} share the basename {basename}; "
+                "generated surfaces are flat and cannot carry both"
+            )
+        by_basename[basename] = rel
+        source = repo_root / "assets" / rel
+        if not source.is_file():
+            raise ManifestError(f"embedded asset assets/{rel} does not exist")
+        shutil.copy2(source, img_dir / basename)
 
 
 def render_site(manifest: Manifest, repo_root: str | Path, out_dir: str | Path) -> None:
@@ -53,9 +84,11 @@ def render_site(manifest: Manifest, repo_root: str | Path, out_dir: str | Path) 
         shutil.rmtree(out_dir)
     out_dir.mkdir(parents=True)
     source_map = build_source_map(manifest, "site")
+    assets: set[str] = set()
     for leaf in manifest.leaves():
         assert leaf.source is not None
         md = (repo_root / leaf.source).read_text(encoding="utf-8")
+        assets |= _referenced_assets(md)
         md = rewrite_for_surface(md, "site", source_map)
         md = _rewrite_images(md, "site")
         (out_dir / output_name(leaf, "site")).write_text(md, encoding="utf-8")
@@ -73,7 +106,7 @@ def render_site(manifest: Manifest, repo_root: str | Path, out_dir: str | Path) 
             font_path=repo_root / "assets" / "fonts" / "fira-code" / "FiraCode-Regular.ttf",
         )
         write_svg(img_dir / f"{d.id}.svg", svg)
-    _copy_hero(repo_root, img_dir / "aws-tui-running.png")
+    _copy_referenced_assets(repo_root, assets, img_dir)
 
 
 def render_wiki(manifest: Manifest, repo_root: str | Path, out_dir: str | Path) -> None:
@@ -83,9 +116,11 @@ def render_wiki(manifest: Manifest, repo_root: str | Path, out_dir: str | Path) 
         shutil.rmtree(out_dir)
     out_dir.mkdir(parents=True)
     source_map = build_source_map(manifest, "wiki")
+    assets: set[str] = set()
     for leaf in manifest.leaves():
         assert leaf.source is not None
         md = (repo_root / leaf.source).read_text(encoding="utf-8")
+        assets |= _referenced_assets(md)
         md = rewrite_for_surface(md, "wiki", source_map)
         md = _rewrite_images(md, "wiki")
         (out_dir / output_name(leaf, "wiki")).write_text(md, encoding="utf-8")
@@ -95,7 +130,7 @@ def render_wiki(manifest: Manifest, repo_root: str | Path, out_dir: str | Path) 
         encoding="utf-8",
     )
     copy_assets(repo_root, out_dir / "img")
-    _copy_hero(repo_root, out_dir / "img" / "aws-tui-running.png")
+    _copy_referenced_assets(repo_root, assets, out_dir / "img")
 
 
 def _wiki_link_name(section: Section) -> str:

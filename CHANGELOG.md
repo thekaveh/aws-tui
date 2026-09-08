@@ -1,11 +1,11 @@
-# 1. Changelog
+# Changelog
 
 All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## 1.1. [Unreleased]
+## [Unreleased]
 
 The Unreleased section is the promotion queue for the next package release.
 Entries may reside on ``develop`` before promotion to ``main``; inclusion here
@@ -21,7 +21,7 @@ headline or a v0.8.1 patch candidate. The package metadata remains ``0.8.0``
 until a v0.9.0 release-preparation PR bumps it and cuts a dated changelog
 section; the current tree must not be tagged as v0.8.0.
 
-### 1.1.1. Added
+### Added
 
 - **Glue and Athena interaction polish.** Bordered, keyboard-focusable AWS
   context selectors now expose source, Glue state filters, and Athena
@@ -113,7 +113,7 @@ section; the current tree must not be tagged as v0.8.0.
   hands focus off). New ``DualPane.focus_left_pane`` +
   ``SettingsView.focus_default``.
 
-### 1.1.2. Changed
+### Changed
 
 - **Live chrome cleanup.** Removed the unmounted legacy `StatusBar` widget,
   its subscribed viewmodel, obsolete theme selectors, and the unused
@@ -158,7 +158,7 @@ section; the current tree must not be tagged as v0.8.0.
 - ``assets/screenshots/aws-tui-running.png``: refreshed the README
   hero image to a current EMR + demo-mode capture (PR #106).
 
-### 1.1.3. Fixed
+### Fixed
 
 - **Athena query execution and controls.** Glue-generated starter SQL now uses
   the resolved Athena catalog context with a quoted database/table reference,
@@ -317,7 +317,7 @@ section; the current tree must not be tagged as v0.8.0.
   now lists Settings, theme cycling, delete, extend-selection, and pane
   source-cycling shortcuts that were already present in the app.
 
-### 1.1.4. Docs
+### Docs
 
 - Added current S3, EMR Serverless, Glue/Iceberg, and Athena service guides; a
   VMx 3.23 compatibility and line-count audit; refreshed consumed-contract and
@@ -348,7 +348,7 @@ section; the current tree must not be tagged as v0.8.0.
 - `docs/superpowers/plans/` now has a numbered index of plan documents,
   and recent VMx adoption plan/spec headings are hierarchically numbered.
 
-### 1.1.5. Build
+### Build
 
 - Recorded the removal of the resume and first-run modal flows.
   `ResumeModal`, `ResumeVM`, `FirstRunModal` and `FirstRunVM` had been
@@ -388,9 +388,9 @@ section; the current tree must not be tagged as v0.8.0.
 - Pre-commit now includes ShellCheck for repository shell scripts via
   `shellcheck-py`, matching the maintenance verification path.
 
-## 1.2. [0.8.0] - Pending
+## [0.8.0] - Pending
 
-### 1.2.1. Added
+### Added
 
 - **EMR job-run logs pane** (PR #84, service PR-B — logs surface).
   Lower half of the right column in the EMR page. Streams the selected
@@ -418,7 +418,7 @@ section; the current tree must not be tagged as v0.8.0.
   active. ``notifications.Subject`` literal gains ``"Job"`` for
   the success / error toasts.
 
-### 1.2.2. Changed
+### Changed
 
 - **Screen layers gain ``dropdown``** (PR #83, items #1 + #2).
   ``Screen { layers: base dropdown notifications }`` (was
@@ -469,7 +469,7 @@ section; the current tree must not be tagged as v0.8.0.
   single ordered list. ``test_main_screen`` snapshots
   regenerated across all 10 themes.
 
-### 1.2.3. Added (prior entries)
+### Added (prior entries)
 
 - **EMR Serverless read-only browser** (PR #76, service PR-A). New
   ``U+1F525 FIRE`` nav-rail entry next to S3, gated to AWS-only connections.
@@ -496,7 +496,7 @@ section; the current tree must not be tagged as v0.8.0.
   spark params in the detail pane. Page width split tightened from
   `1fr / 2fr` to `1fr / 1fr`.
 
-### 1.2.4. Changed
+### Changed
 
 - **"Commands" pane renamed from "Shortcuts"** (PR #81). The
   `HintLegend` border title and all user-visible references now read
@@ -1058,7 +1058,7 @@ section; the current tree must not be tagged as v0.8.0.
   are deliberately preserved — they're records of project state at
   that point in time, not active declarations.
 
-### 1.2.5. Added
+### Added
 
 - **Shift+S now skips connections observed unreachable.** If a pane
   mounted on an s3-compatible (or AWS) connection lands in the
@@ -1187,7 +1187,7 @@ section; the current tree must not be tagged as v0.8.0.
   ``S3ConnectionsVM`` unchanged) plus the ``ConfigStore`` extensions
   plus ``ConnectionListChangedMessage`` all carry over.
 
-### 1.2.6. Fixed
+### Fixed
 
 - **(fourth overnight-maintenance loop, pass 2)** EMR runs pane now
   renders the actionable placeholder for ``UNREACHABLE`` /
@@ -1702,7 +1702,7 @@ section; the current tree must not be tagged as v0.8.0.
   and the border title). Dropped the inline `.breadcrumb` Static — the
   border title is the single source.
 
-### 1.2.7. Removed
+### Removed
 
 - **`SettingsModal`, `ServicesMenuFooter`, `S3CompatFormModal`,
   `_PlaceholderPanel`, `ServicesMenuVM`** (PR #54 rework). The PR #52
@@ -1730,7 +1730,7 @@ section; the current tree must not be tagged as v0.8.0.
 - Duplicate `import sys` inside `app.main()` (was imported twice on
   separate exception branches); folded into the module-level import.
 
-### 1.2.8. Testing
+### Testing
 
 - 41 new regression tests across 8 files cover every pass-7–12
   feature and bug-fix (`S3FS` bucketless ops, `PaneVM` border / swap /
@@ -1814,7 +1814,7 @@ import in `app.py.on_mount` moved to a module-level import. (Items
 folded into the unified `### Removed` section above; retained here for
 provenance.)
 
-### 1.2.9. Deferred / v0.9 roadmap
+### Deferred / v0.9 roadmap
 
 These items are spec'd but explicitly not wired in v0.8.x. They are
 tracked so the next minor release can pick them up without rediscovery:
@@ -1865,9 +1865,9 @@ tracked so the next minor release can pick them up without rediscovery:
   binding, so the `_action_ring` is always empty when a dump is
   written.
 
-## 1.3. [0.7.0] - 2026-06-14
+## [0.7.0] - 2026-06-14
 
-### 1.3.1. Added
+### Added
 
 - **Crash modal + unhandled-exception capture (M6 T1).** Top-level
   Textual `App._handle_exception` override writes a dump to
@@ -1903,7 +1903,7 @@ tracked so the next minor release can pick them up without rediscovery:
   sso`), `add_s3_compat_connection` (writes a `static`-credentials
   entry to `ConfigStore`). Snapshot tests per theme.
 
-### 1.3.2. Documentation (M6 T4)
+### Documentation (M6 T4)
 
 - README polished with the full features list, install +
   development-workflow recipes, quickstart (including the first-run
@@ -1929,7 +1929,7 @@ tracked so the next minor release can pick them up without rediscovery:
   (a subagent cannot drive a real terminal), with copy-pasteable
   recipes and embed locations.
 
-### 1.3.3. Testing
+### Testing
 
 - **Unit tier (+49 tests).** `tests/unit/vm/chrome/test_crash.py`,
   `test_resume.py`, `test_first_run.py` (VMs);
@@ -1941,7 +1941,7 @@ tracked so the next minor release can pick them up without rediscovery:
 - **Snapshot tier (+12 goldens).** 3 new modals (crash, resume,
   first-run) × 4 themes, all pinned to (120, 40).
 
-### 1.3.4. Watch-outs captured
+### Watch-outs captured
 
 - Textual's `App._handle_exception` is sync + fatal, so we write
   the dump there and re-raise from `main()` rather than try to push
@@ -1954,9 +1954,9 @@ tracked so the next minor release can pick them up without rediscovery:
   scaffolding lands in a follow-up. Journals stay on disk so users
   don't lose state.
 
-## 1.4. [0.6.0] - 2026-06-14
+## [0.6.0] - 2026-06-14
 
-### 1.4.1. Added
+### Added
 
 - **UI layer (M5).** Full Textual widget tree binding to the M3 + M4
   VM hierarchy:
@@ -2004,7 +2004,7 @@ tracked so the next minor release can pick them up without rediscovery:
     host, and runs a graceful shutdown sequence (cancel transfers,
     close aioboto3 clients, flush log sink, dispose VMs).
 
-### 1.4.2. Testing
+### Testing
 
 - **Unit tier (+47 tests).** New `tests/unit/ui/` suite covers
   `ActionRegistry`, `BindingResolver`, themes parsing, and smoke
@@ -2018,14 +2018,14 @@ tracked so the next minor release can pick them up without rediscovery:
   silent SSO, copy across panes, connection switch orchestration,
   resume-from-journal scan, and delete cancel spy.
 
-### 1.4.3. Layer rules
+### Layer rules
 
 - Composition root (`composition.py`) and Textual app (`app.py`)
   live at the top of `src/aws_tui/` (not under any of the five
   layer dirs), so `scripts/check-layers.sh` does not need to be
   exempted — it only walks the five layer folders.
 
-### 1.4.4. Watch-outs captured
+### Watch-outs captured
 
 - `_context` attribute name on an `App` subclass collides with
   Textual's internal `App._context`; rename to e.g. `_app_ctx`.
@@ -2036,15 +2036,15 @@ tracked so the next minor release can pick them up without rediscovery:
   and `trailing-whitespace` pre-commit hooks since they're
   byte-exact match targets.
 
-### 1.4.5. CI
+### CI
 
 - New `snapshot` job (ubuntu-22.04 / py3.12) running
   `tests/snapshot`.
 - New `e2e` job (ubuntu-22.04 / py3.12) running `tests/e2e`.
 
-## 1.5. [0.5.0] - 2026-06-14
+## [0.5.0] - 2026-06-14
 
-### 1.5.1. Added
+### Added
 
 - **VM file-manager layer (M4).** First-class dual-pane Norton Commander
   viewmodels under `src/aws_tui/vm/file_manager/`, all wrapping VMx
@@ -2097,7 +2097,7 @@ tracked so the next minor release can pick them up without rediscovery:
   out. `bind_hub(hub)` late-wires the `RootVM` `MessageHub` since the
   service is registered before `RootVM` has a hub.
 
-### 1.5.2. Testing
+### Testing
 
 - **PaneVM capability contracts.** Hand-rolled selectable / filterable /
   pageable contract suite at
@@ -2111,9 +2111,9 @@ tracked so the next minor release can pick them up without rediscovery:
   `DualPaneVM` lands in `ContentHostVM.current` and is properly
   disposed on subsequent service / connection swaps.
 
-## 1.6. [0.4.0] - 2026-06-14
+## [0.4.0] - 2026-06-14
 
-### 1.6.1. Added
+### Added
 
 - **VM shell layer (M3).** Full application shell under `src/aws_tui/vm/`,
   all VMx-backed and free of Textual / boto3 imports:
@@ -2172,7 +2172,7 @@ tracked so the next minor release can pick them up without rediscovery:
   asserts dispose / build counts during switches, and verifies hub
   propagation end-to-end.
 
-### 1.6.2. Changed
+### Changed
 
 - `services/__init__.py` re-exports `Service` / `ServiceRegistry` /
   `ServiceDescriptor` / `ServiceNotFound` from
@@ -2183,9 +2183,9 @@ tracked so the next minor release can pick them up without rediscovery:
   (builder-pattern instantiation, no static `.builder()` on
   `AggregateVM3`, `.children(factory)` on composites, etc.).
 
-## 1.7. [0.3.0] - 2026-06-14
+## [0.3.0] - 2026-06-14
 
-### 1.7.1. Added
+### Added
 
 - **Domain layer (M2).** Norton-Commander unifier landed under
   `src/aws_tui/domain/`:
@@ -2235,14 +2235,14 @@ tracked so the next minor release can pick them up without rediscovery:
   executes the integration tier in parallel with the existing
   `unit` matrix.
 
-### 1.7.2. Changed
+### Changed
 
 - Dev deps now include `moto[server,s3]>=5`, `testcontainers[minio]>=4`,
   and `types-aiofiles>=23`. Strict mypy stays clean.
 
-## 1.8. [0.2.0] - 2026-06-14
+## [0.2.0] - 2026-06-14
 
-### 1.8.1. Added
+### Added
 
 - **Infrastructure layer (M1).** Six independent boundary-layer modules
   under `src/aws_tui/infra/`, each unit-tested against tmp dirs:
@@ -2276,14 +2276,14 @@ tracked so the next minor release can pick them up without rediscovery:
   to guard against circular imports and verify end-to-end probe success.
 - Per-module strict-mypy + ruff + layer-rule clean.
 
-### 1.8.2. Changed
+### Changed
 
 - Mypy config now ignores missing imports for `aioboto3` and `botocore`
   (no upstream stubs).
 
-## 1.9. [0.0.1] - 2026-06-14
+## [0.0.1] - 2026-06-14
 
-### 1.9.1. Added
+### Added
 
 - Initial project scaffold (M0): public GitHub repo, MIT license, VMx submodule, uv-managed dependencies, src-layout, hello-world Textual `AwsTuiApp` with `q`-to-quit, CI matrix on macos-14 / ubuntu-22.04 across Python 3.11–3.13.
 - Full design spec at `docs/superpowers/specs/2026-06-13-aws-tui-design.md`.

@@ -1,4 +1,4 @@
-# 1. EMR Job-Run Logs Pane — Implementation Plan
+# EMR Job-Run Logs Pane — Implementation Plan
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
@@ -8,7 +8,7 @@
 
 **Tech Stack:** Python 3.11+, Textual (Widget, OptionList, Static, set_interval, run_worker exclusive groups), aioboto3 (S3 get_object streaming body), `gzip.GzipFile` over an `io.BufferedReader` wrapper of the boto body, VMx MVVM, pytest tiers.
 
-## 1.1. Global Constraints
+## 1. Global Constraints
 
 - **Horizontal split**: LEFT column = `1fr`, RIGHT column = `2fr` (was `1fr` / `1fr`). User feedback: "the left job runs pane … to occupy 1/3 of the horizontal space … the job details pane to occupy the remaining 2/3". The `#main-area` and per-page margins stay unchanged — only the page's internal column widths change.
 - **RIGHT column vertical split**: 50/50 between detail (top) and logs (bottom). ``JobRunDetailPane`` gets ``height: 1fr`` (was driven by content rows); ``JobRunLogsPane`` gets ``height: 1fr`` below it. Both halves scroll independently if content overflows.
@@ -31,7 +31,7 @@
 
 ---
 
-## 1.2. File Structure
+## 2. File Structure
 
 **Create:**
 
@@ -62,7 +62,7 @@
 
 ---
 
-## 1.3. Task 1: Domain — S3 log path resolver + ``LogFile`` model
+## 3. Task 1: Domain — S3 log path resolver + ``LogFile`` model
 
 **Files:**
 - Create: ``src/aws_tui/domain/emr_logs.py``
@@ -261,7 +261,7 @@ git commit -m "feat(emr): domain log-file model + S3 path resolver + JobRunDetai
 
 ---
 
-## 1.4. Task 2: Domain — Streaming gunzip + line buffer + ``LogFilter``
+## 4. Task 2: Domain — Streaming gunzip + line buffer + ``LogFilter``
 
 **Files:**
 - Modify: ``src/aws_tui/domain/emr_logs.py`` (add the streamer + filter)
@@ -541,7 +541,7 @@ git commit -am "feat(emr): streaming gunzip log reader + default match filter"
 
 ---
 
-## 1.5. Task 3: Domain — Log-file enumeration via ListObjectsV2
+## 5. Task 3: Domain — Log-file enumeration via ListObjectsV2
 
 **Files:**
 - Modify: ``src/aws_tui/domain/emr_logs.py``
@@ -666,7 +666,7 @@ git commit -am "feat(emr): list_log_files enumerates S3 prefix + driver-first so
 
 ---
 
-## 1.6. Task 4: VM — ``JobRunLogsVM`` skeleton (state + set_target)
+## 6. Task 4: VM — ``JobRunLogsVM`` skeleton (state + set_target)
 
 **Files:**
 - Create: ``src/aws_tui/vm/emr_serverless/job_run_logs_vm.py``
@@ -971,7 +971,7 @@ git commit -am "feat(emr): JobRunLogsVM skeleton — state machine + set_target 
 
 ---
 
-## 1.7. Task 5: VM — ``JobRunLogsVM.load()`` — fetch + stream + buffer
+## 7. Task 5: VM — ``JobRunLogsVM.load()`` — fetch + stream + buffer
 
 **Files:**
 - Modify: ``src/aws_tui/vm/emr_serverless/job_run_logs_vm.py``
@@ -1104,7 +1104,7 @@ git commit -am "feat(emr): JobRunLogsVM.load() — stream + buffer + cache + tru
 
 ---
 
-## 1.8. Task 6: VM — Wire ``JobRunLogsVM`` into ``EmrServerlessPageVM``
+## 8. Task 6: VM — Wire ``JobRunLogsVM`` into ``EmrServerlessPageVM``
 
 **Files:**
 - Modify: ``src/aws_tui/vm/emr_serverless/page_vm.py``
@@ -1154,7 +1154,7 @@ git commit -am "feat(emr): page VM wires JobRunLogsVM, select_job_run cascades l
 
 ---
 
-## 1.9. Task 7: UI — ``JobRunLogsPane`` widget skeleton
+## 9. Task 7: UI — ``JobRunLogsPane`` widget skeleton
 
 **Files:**
 - Create: ``src/aws_tui/ui/widgets/emr_serverless/job_run_logs_pane.py``
@@ -1215,7 +1215,7 @@ git commit -am "feat(emr): JobRunLogsPane widget — state placeholders + chip s
 
 ---
 
-## 1.10. Task 8: UI — ``LogFilterModal``
+## 10. Task 8: UI — ``LogFilterModal``
 
 **Files:**
 - Create: ``src/aws_tui/ui/widgets/emr_serverless/log_filter_modal.py``
@@ -1240,7 +1240,7 @@ git commit -am "feat(emr): LogFilterModal — edit regex list + show-all toggle 
 
 ---
 
-## 1.11. Task 9: Page integration — 1:2 horizontal split + 50/50 right-column vertical split + 2-slot Tab cycle (unchanged)
+## 11. Task 9: Page integration — 1:2 horizontal split + 50/50 right-column vertical split + 2-slot Tab cycle (unchanged)
 
 **Files:**
 - Modify: ``src/aws_tui/ui/widgets/emr_serverless/page.py``
@@ -1341,7 +1341,7 @@ git commit -am "feat(emr): page layout — right column stacked + 3-slot Tab + p
 
 ---
 
-## 1.12. Task 10: Per-theme CSS for the logs pane
+## 12. Task 10: Per-theme CSS for the logs pane
 
 **Files:**
 - Modify: 10 × ``src/aws_tui/ui/themes/*.tcss``
@@ -1363,7 +1363,7 @@ git commit -am "feat(emr): per-theme tcss for JobRunLogsPane chrome (10 themes)"
 
 ---
 
-## 1.13. Task 11: Snapshot tests + content-presence guards
+## 13. Task 11: Snapshot tests + content-presence guards
 
 **Files:**
 - Create: ``tests/snapshot/apps/emr_logs.py``
@@ -1389,7 +1389,7 @@ git commit -am "test(emr): JobRunLogsPane snapshots — 6 state placeholders × 
 
 ---
 
-## 1.14. Task 12: HintLegend + keymap chip wiring
+## 14. Task 12: HintLegend + keymap chip wiring
 
 **Files:**
 - Modify: ``src/aws_tui/vm/chrome/hint_legend_vm.py``
@@ -1423,7 +1423,7 @@ git commit -am "feat(emr): HintLegend gains 'filter logs' chip + 'f' keybinding"
 
 ---
 
-## 1.15. Task 13: Documentation catchup
+## 15. Task 13: Documentation catchup
 
 **Files:**
 - Modify: ``CHANGELOG.md`` (``[Unreleased] ### Added``)
@@ -1441,7 +1441,7 @@ git commit -am "docs: EMR logs pane — CHANGELOG, keybindings, architecture, sp
 
 ---
 
-## 1.16. Task 14: End-to-end smoke test + final validation
+## 16. Task 14: End-to-end smoke test + final validation
 
 **Files:**
 - Modify: ``tests/integration/test_emr_page.py``
@@ -1470,7 +1470,7 @@ gh pr create --title "feat(emr): job-run logs pane — on-demand S3 stream + gre
 
 ---
 
-## 1.17. Out of scope (v1, deferred to follow-ups)
+## 17. Out of scope (v1, deferred to follow-ups)
 
 - Config-file persistence for custom filter patterns (v1 is session-only).
 - CloudWatch Logs as an alternative source (only S3 monitoring logs in v1).

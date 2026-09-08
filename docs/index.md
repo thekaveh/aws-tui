@@ -1,4 +1,4 @@
-# 1. aws-tui
+# aws-tui
 
 <p align="center">
   <img src="../assets/aws-tui-poster.png" alt="A wireframe cloud of teal light anchored by golden tethers to a glowing point on a dark sea, the AWS-TUI wordmark seated at its luminous core." width="100%">
@@ -17,7 +17,7 @@ The application combines a Norton-Commander-style S3 file manager, an EMR
 Serverless console, and AWS Glue, Amazon Athena, and Iceberg inspection
 workflows, which are unreleased.
 
-## 1.1. What it does
+## 1. What it does
 
 - **Dual-pane S3 ⇄ local file management** — copy, delete, and multi-select
   across an S3 (or S3-compatible) source and your local filesystem.
@@ -44,7 +44,7 @@ Glue, Athena, and Iceberg integration are Unreleased minor-version feature
 work targeting v0.9.0. They remain read-only: generated SQL is placed in the
 Athena editor for review and never executes automatically.
 
-## 1.2. Where to start
+## 2. Where to start
 
 - New here? Start with [Installation](install.md), then
   [Platforms](platforms.md) and [Connections](connections.md).

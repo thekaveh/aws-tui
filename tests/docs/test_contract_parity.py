@@ -116,11 +116,15 @@ def _s3mock_image_from(text: str) -> str:
     return pins.pop()
 
 
-def _numbered_section(text: str, heading: str) -> str:
-    marker = f"## {heading}"
-    _, separator, remainder = text.partition(marker)
-    assert separator, f"missing section: {heading}"
-    return remainder.partition("\n## ")[0]
+def _numbered_section(text: str, title: str) -> str:
+    """Return the body of the ``## N. <title>`` section, ignoring its number.
+
+    Matching on the title rather than the rendered number keeps these contract
+    assertions stable when sections are inserted, reordered, or renumbered.
+    """
+    match = re.search(rf"^## [\d.]+\. {re.escape(title)}\s*$", text, flags=re.MULTILINE)
+    assert match, f"missing section: {title}"
+    return text[match.end() :].partition("\n## ")[0]
 
 
 def _module(path: str) -> ast.Module:
@@ -188,9 +192,7 @@ def _text_ledger_block(text: str, heading: str) -> tuple[str, ...]:
 
 def _action_id_table_actions(text: str) -> tuple[str, ...]:
     """Extract action IDs from the first table under the Action IDs heading."""
-    heading = "## 1.3. Action IDs"
-    assert heading in text, f"missing Action IDs heading: {heading}"
-    section = text.split(heading, maxsplit=1)[1].split("\n## ", maxsplit=1)[0]
+    section = _numbered_section(text, "Action IDs")
     table_lines = [line for line in section.splitlines() if line.startswith("|")]
     assert len(table_lines) >= 3, "missing Action IDs table"
 
@@ -259,7 +261,7 @@ def test_dependency_ledger_matches_locked_runtime_and_build_versions() -> None:
     project = tomllib.loads(_text("pyproject.toml"))
     ledger = _numbered_section(
         _text("docs/contract-ledger.md"),
-        "1.5. 2026-08-25 maintenance pass",
+        "2026-08-25 maintenance pass",
     )
 
     for name in (
@@ -303,7 +305,7 @@ def test_pre_commit_revisions_are_recorded_in_the_current_ledger_pass() -> None:
     """
     ledger = _numbered_section(
         _text("docs/contract-ledger.md"),
-        "1.5. 2026-08-25 maintenance pass",
+        "2026-08-25 maintenance pass",
     )
     config = _text(".pre-commit-config.yaml")
     revisions = re.findall(r"^\s*rev:\s*([0-9a-f]{40})\b", config, flags=re.MULTILINE)
@@ -314,9 +316,9 @@ def test_pre_commit_revisions_are_recorded_in_the_current_ledger_pass() -> None:
 
 
 def test_numbered_section_excludes_historical_dependency_decoys() -> None:
-    ledger = "## 1.4. Old\n`package==1`\n\n## 1.5. Current\n`package==2`\n\n## 1.6. Next\n"
+    ledger = "## 4. Old\n`package==1`\n\n## 5. Current\n`package==2`\n\n## 6. Next\n"
 
-    current = _numbered_section(ledger, "1.5. Current")
+    current = _numbered_section(ledger, "Current")
 
     assert "`package==2`" in current
     assert "`package==1`" not in current

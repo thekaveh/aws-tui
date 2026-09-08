@@ -1,4 +1,4 @@
-# 1. Athena Eager Glue Prefill Implementation Plan
+# Athena Eager Glue Prefill Implementation Plan
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
@@ -8,7 +8,7 @@
 
 **Tech Stack:** Python 3.12, Textual, VMx `AsyncRelayCommand`, pytest, asyncio.
 
-## 1.1. Global Constraints
+## 1. Global Constraints
 
 - Keep generated SQL exact, quoted, read-only, and bounded by `LIMIT 5`.
 - Never execute a generated starter query automatically.
@@ -18,7 +18,7 @@
 
 ---
 
-### 1.1.1. Task 1: Query Resolution Gate
+### 1.1. Task 1: Query Resolution Gate
 
 **Files:**
 - Modify: `src/aws_tui/vm/athena/query_vm.py`
@@ -63,7 +63,7 @@ Run: `uv run pytest tests/unit/vm/athena/test_query_vm.py tests/unit/ui/athena/t
 
 Expected: all selected tests pass.
 
-### 1.1.2. Task 2: Prime Before Provider Setup
+### 1.2. Task 2: Prime Before Provider Setup
 
 **Files:**
 - Modify: `src/aws_tui/vm/athena/page_vm.py`
@@ -116,7 +116,7 @@ Run: `uv run pytest tests/integration/test_glue_athena_navigation.py -q`
 
 Expected: all handoff, rollback, stale-request, key, and click tests pass.
 
-### 1.1.3. Task 3: Documentation and Verification
+### 1.3. Task 3: Documentation and Verification
 
 **Files:**
 - Modify: `docs/architecture.md`

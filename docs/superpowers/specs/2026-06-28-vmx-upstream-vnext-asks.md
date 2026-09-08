@@ -1,4 +1,4 @@
-# 1. VMx vNext — upstream feedback from the aws-tui adoption review
+# VMx vNext — upstream feedback from the aws-tui adoption review
 
 | Field | Value |
 |---|---|
@@ -11,7 +11,7 @@
 
 ---
 
-## 1.1. Why this report exists
+## 1. Why this report exists
 
 > **Round-2 addendum (2026-06-29).** The body of this report below
 > was drafted during the round-1 brainstorm with the framing: "we
@@ -72,7 +72,7 @@ upstream effort.
 
 ---
 
-## 1.2. Item 1 — `PagedComposition` cannot model nextToken (forward-only, unknown total) pagination
+## 2. Item 1 — `PagedComposition` cannot model nextToken (forward-only, unknown total) pagination
 
 **Primitive evaluated:** `PagedComposition[TVM]` —
 `vmx/collections/paged_composition.py`.
@@ -162,7 +162,7 @@ docs. Reuses existing `CollectionChangedEvent` and `RelayCommand`.
 
 ---
 
-## 1.3. Item 2 — `PagedComposition` does not compose with `CompositeVM` as its source
+## 3. Item 2 — `PagedComposition` does not compose with `CompositeVM` as its source
 
 **Primitive evaluated:** `PagedComposition[TVM]` (source-subscription
 path) — `vmx/collections/paged_composition.py:232–240`.
@@ -218,7 +218,7 @@ Recommendation: ship (A) now, leave (B) for vNext+1.
 
 ---
 
-## 1.4. Item 3 — No "filtered / derived view over `CompositeVM`" primitive
+## 4. Item 3 — No "filtered / derived view over `CompositeVM`" primitive
 
 **Primitive evaluated:** `CompositeVM[VM]` —
 `vmx/composites/composite_vm.py`. Specifically the absence of a derived-
@@ -378,7 +378,7 @@ docs. The cursor-mapping is the subtle part.
 
 ---
 
-## 1.5. Item 4 — `FormVM` has no declarative validator API; cross-field rules need predicate scaffolding
+## 5. Item 4 — `FormVM` has no declarative validator API; cross-field rules need predicate scaffolding
 
 **Primitive evaluated:** `FormVM[TM]` — `vmx/forms/form_vm.py`.
 
@@ -514,7 +514,7 @@ Mostly state machinery; the API surface is short.
 
 ---
 
-## 1.6. Item 5 — `IDialogService` is a closed contract; no escape hatch for VM-backed modals
+## 6. Item 5 — `IDialogService` is a closed contract; no escape hatch for VM-backed modals
 
 **Primitive evaluated:** `DialogService` (abstract) —
 `vmx/dialogs/dialog_service.py`. Concrete: `NullDialogService` (tests),
@@ -628,7 +628,7 @@ LOC + test + docs. The sub-asks are each independently small.
 
 ---
 
-## 1.7. Item 6 — `ServicedObservableCollection`: name and docstring suggest ownership semantics it does not implement
+## 7. Item 6 — `ServicedObservableCollection`: name and docstring suggest ownership semantics it does not implement
 
 **Primitive evaluated:** `ServicedObservableCollection[T]` —
 `vmx/collections/serviced_observable_collection.py:1–137`.
@@ -695,7 +695,7 @@ pass; consider (B) for vNext+1 once a second use case shows up.
 
 ---
 
-## 1.8. Item 7 — `HierarchicalVM` has no documented cache-invalidation contract
+## 8. Item 7 — `HierarchicalVM` has no documented cache-invalidation contract
 
 **Primitive evaluated:** `HierarchicalVM[TModel, TVM]` —
 `vmx/hierarchical/hierarchical_vm.py` (per Appendix C of the aws-tui
@@ -766,7 +766,7 @@ is the only non-trivial part) + tests + docs.
 
 ---
 
-## 1.9. Item 8 — Per-VM Observable surface for shared-hub VMs (NEW from round-3 implementation)
+## 9. Item 8 — Per-VM Observable surface for shared-hub VMs (NEW from round-3 implementation)
 
 **Primitive evaluated:** `ComponentVM` / `CompositeVM` — specifically,
 their event-emission contract through a shared `MessageHub`.
@@ -868,7 +868,7 @@ path stays for cross-VM coordination use cases.
 
 ---
 
-## 1.10. Item 9 — `ScoredFilteredCompositeVM` for rank-by-score filtering (NEW from round-3 implementation)
+## 10. Item 9 — `ScoredFilteredCompositeVM` for rank-by-score filtering (NEW from round-3 implementation)
 
 **Primitive evaluated:** Hypothetical extension of Item 3's
 `FilteredCompositeVM`.
@@ -938,7 +938,7 @@ _subsequence_span, _recompute_filtered`.
 
 ---
 
-## 1.11. Item 10 — Slot-discriminator coordinator with modal precedence (NEW from round-3 implementation)
+## 11. Item 10 — Slot-discriminator coordinator with modal precedence (NEW from round-3 implementation)
 
 **Primitive evaluated:** Hypothetical. No existing VMx primitive
 captures "single source of truth for which UI slot has focus".
@@ -1080,7 +1080,7 @@ use it (e.g., theme picker, settings page tabs).
 
 ---
 
-## 1.12. Item 11 — `RelayCommand.dispose()` does not gate later `execute()` calls (NEW from round-6 verification)
+## 12. Item 11 — `RelayCommand.dispose()` does not gate later `execute()` calls (NEW from round-6 verification)
 
 **Primitive evaluated:** `RelayCommand` / `RelayCommandOf[T]` —
 `vmx/commands/relay_command.py` (Builder in
@@ -1144,7 +1144,7 @@ on commit `24f01da` of `refactor/vmx-toolkit-adoption`.
 
 ---
 
-## 1.13. Summary table
+## 13. Summary table
 
 | # | Primitive | Issue | aws-tui workaround | vNext ask effort |
 |---|---|---|---|---|
@@ -1162,7 +1162,7 @@ on commit `24f01da` of `refactor/vmx-toolkit-adoption`.
 
 ---
 
-## 1.14. Suggested prioritisation for VMx vNext
+## 14. Suggested prioritisation for VMx vNext
 
 If only a subset can ship — ordered by *consumer impact across
 likely future projects*, not by aws-tui's own urgency (aws-tui has
@@ -1199,7 +1199,7 @@ already composed each one):
 
 ---
 
-## 1.15. Acknowledgements / disclaimers
+## 15. Acknowledgements / disclaimers
 
 - This is a **single-consumer** report (aws-tui). Other VMx consumers
   may have different priorities. Don't change a contract on the

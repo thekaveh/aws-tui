@@ -1,11 +1,11 @@
-# 1. EMR Serverless
+# EMR Serverless
 
 The EMR Serverless service is an AWS-only operational view for applications,
 job runs, details, and S3-backed logs. It is read-mostly: browsing and log
 inspection are read-only, while cloning an existing run is the one focused
 submission workflow.
 
-## 1.1. Source and application context
+## 1. Source and application context
 
 The page uses one exact AWS connection and region at a time. The source and
 application selectors open as overlays, so expanding a selector does not
@@ -17,7 +17,7 @@ Source changes dispose the prior page and its pollers before the replacement
 VM publishes state. Selections and cached detail remain scoped to connection,
 region, and application identity.
 
-## 1.2. Runs, details, and logs
+## 2. Runs, details, and logs
 
 The runs pane provides state filters and drives the selected-run detail.
 Independent pollers refresh applications, runs, and active-run detail, with a
@@ -38,7 +38,7 @@ Retry attempts and worker identity remain visible in the file choices. The pane
 updates one reusable text widget for the streamed body and updates progress
 separately, keeping mounted widget count bounded as logs grow.
 
-## 1.3. Clone workflow
+## 3. Clone workflow
 
 Pressing `c` on a selected run opens a form prefilled with the run name, role,
 entry point, arguments, and Spark parameters. Save calls the public EMR
@@ -46,7 +46,7 @@ Serverless `StartJobRun` API through `EmrServerlessClient`; validation and
 provider errors keep the modal open with actionable feedback. The service does
 not currently expose a blank submit form or cancellation command.
 
-## 1.4. Architecture
+## 4. Architecture
 
 `EmrServerlessService` composes `EmrServerlessPageVM`, which owns
 `ApplicationsVM`, `JobRunsVM`, `JobRunDetailVM`, and `JobRunLogsVM`.
@@ -59,7 +59,7 @@ The exact AWS operations and pinned SDK model are recorded in the
 [Consumed Contract Ledger](../contract-ledger.md). The complete keyboard
 surface is in [Keybindings](../keybindings.md).
 
-## 1.5. Verification and demo
+## 5. Verification and demo
 
 Demo mode provides profile-isolated applications, terminal and active runs,
 clone transitions, and streamable success and failure logs without network

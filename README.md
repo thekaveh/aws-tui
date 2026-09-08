@@ -1,4 +1,4 @@
-# 1. aws-tui
+# aws-tui
 
 <p align="center">
   <img src="assets/aws-tui-poster.png" alt="A wireframe cloud of teal light anchored by golden tethers to a glowing point on a dark sea, the AWS-TUI wordmark seated at its luminous core." width="100%">
@@ -24,7 +24,7 @@ workflows, which are unreleased.
 > the current tree must not be tagged as v0.8.0. See
 > [`CHANGELOG.md`](CHANGELOG.md) for the full per-PR delta.
 
-## 1.1. Features
+## 1. Features
 
 - **Norton-Commander–style dual pane.** S3 (or any S3-compatible bucket)
   on one side, your local filesystem on the other. Copy and delete
@@ -33,8 +33,8 @@ workflows, which are unreleased.
   The left-rail nav menu is always visible — Tab cycles in/out of it
   as a regular pane. Move, rename, and the dedicated
   `v` multi-select-mode entry point are spec'd but deferred to v0.9 —
-  see [`docs/keybindings.md` file operations](docs/keybindings.md#113-file-operations)
-  and [action IDs](docs/keybindings.md#13-action-ids), plus the
+  see [`docs/keybindings.md` file operations](docs/keybindings.md#13-file-operations)
+  and [action IDs](docs/keybindings.md#3-action-ids), plus the
   `Deferred / v0.9 roadmap` block in the `[0.8.0]` section of
   `CHANGELOG.md`.
 - **AWS Glue read-only operations console.** Pick **Glue** in the nav
@@ -147,8 +147,8 @@ workflows, which are unreleased.
   the live Textual keymap on the next launch. Valid overlays apply on the
   next launch; invalid overlays fall back atomically. Handlerless deferred
   action IDs remain unbound. See
-  [`docs/keybindings.md` customizing](docs/keybindings.md#12-customizing)
-  and [action IDs](docs/keybindings.md#13-action-ids).
+  [`docs/keybindings.md` customizing](docs/keybindings.md#2-customizing)
+  and [action IDs](docs/keybindings.md#3-action-ids).
 - **Streaming Quick Look.** Press `Space` on a file to open the built-in
   preview modal and stream its first 64 KB. Directories, the `..` row,
   and empty panes are ignored. The full-file `$PAGER` shell-out remains
@@ -173,12 +173,12 @@ workflows, which are unreleased.
   ▸ Service ▸ Domain ▸ Infra, with `app.py` / `composition.py` as trusted
   composition roots and services allowed to compose concrete VMs; enforced
   by `scripts/check-layers.sh`. Mypy strict-clean.
-  See [`docs/architecture.md` testing pyramid](docs/architecture.md#15-testing-pyramid)
+  See [`docs/architecture.md` testing pyramid](docs/architecture.md#5-testing-pyramid)
   for the current test-tier table; the default tier runs unit / in-process integration /
   snapshot / e2e, with a 9-test S3-compatible S3Mock tier opt-in via
   `uv run pytest -m integration`.
 
-## 1.2. Install
+## 2. Install
 
 > **PyPI status:** no `aws-tui` package is published yet. The v0.9.0 work in
 > this repository is development work; install from Git until the first
@@ -202,7 +202,7 @@ read lockfile revision 3 (CI pins `uv==0.11.19`). Runs on
 macOS, Linux, and Windows — see [`docs/platforms.md`](docs/platforms.md)
 for the recommended terminal + font setup per OS.
 
-### 1.2.1. Try it without AWS credentials
+### 2.1. Try it without AWS credentials
 
 Pass `AWS_TUI_DEMO=1` (or `--demo`) to launch with deterministic mock data backing all services:
 
@@ -216,7 +216,7 @@ You'll see four synthetic connections (`demo-dev`, `demo-prod`, `demo-shared`, `
 
 To verify: `aws-tui --version` reports `(demo: enabled)` or `(demo: disabled)`.
 
-## 1.3. Quickstart
+## 3. Quickstart
 
 ```bash
 aws-tui                       # launches with the default connection
@@ -227,7 +227,7 @@ recently, aws-tui picks up the cached token silently (no network
 round-trip just to render the UI). Otherwise the picker shows the
 connection in `login needed` state — the `auth.authenticate` action is
 spec'd as `a` in
-[`docs/keybindings.md` connection/auth](docs/keybindings.md#116-connection-and-authentication) but its
+[`docs/keybindings.md` connection/auth](docs/keybindings.md#16-connection-and-authentication) but its
 handler is deferred to v0.9. `BindingResolver` already installs handled
 overrides on the live keymap. Handlerless action IDs, including
 `auth.authenticate`, remain unbound. Today, run
@@ -245,7 +245,7 @@ then the first connection in resolver order — which lists every explicit
 `[connections.*]` entry, s3-compatible ones included, ahead of any
 auto-discovered AWS profile.
 
-### 1.3.1. First-time launch
+### 3.1. First-time launch
 
 If you have **no** `[connections.*]` in `<config-dir>/config.toml`
 **and** `~/.aws/{config,credentials}` is empty, v0.8.x opens the main
@@ -253,7 +253,7 @@ screen with a local-only placeholder. Add an AWS profile with
 `aws configure sso` / `aws sso login`, or open Settings with `,` and
 add an S3-compatible connection. No first-run modal is currently shipped.
 
-## 1.4. Documentation
+## 4. Documentation
 
 Start with the [documentation overview](docs/index.md). Canonical source files
 are indexed below for contributors and repository review.
@@ -317,10 +317,10 @@ are indexed below for contributors and repository review.
    3. [Security policy](SECURITY.md) — vulnerability reporting + supported versions.
    4. [Changelog](CHANGELOG.md) — user-visible unreleased and release deltas.
 
-## 1.5. File locations
+## 5. File locations
 
 `<config-dir>` and `<cache-dir>` are platform-specific; see
-[`docs/platforms.md`](docs/platforms.md#11-quick-reference) for exact
+[`docs/platforms.md`](docs/platforms.md#1-quick-reference) for exact
 macOS, Linux, and Windows paths. Existing legacy XDG directories are
 preserved when present.
 
@@ -333,7 +333,7 @@ preserved when present.
 | `<cache-dir>/transfers/<id>.jsonl` | Per-transfer interrupted-operation diagnostics |
 | `<cache-dir>/crash/<ts>.txt` | Full traceback + log/action tail per crash |
 
-## 1.6. Environment variables
+## 6. Environment variables
 
 | Variable | Default | Effect |
 |---|---|---|
@@ -355,13 +355,13 @@ but not yet wired (see the
 `Deferred / v0.9 roadmap` block in the `[0.8.0]` section of
 `CHANGELOG.md`).
 
-## 1.7. Localization
+## 7. Localization
 
 aws-tui is English-only in v0.8.x. User-facing strings are intentionally
 hardcoded until a localization pass introduces translation bundles and
 locale-aware formatting.
 
-## 1.8. Contributing
+## 8. Contributing
 
 See [CONTRIBUTING.md](CONTRIBUTING.md). License:
 [Apache License 2.0](LICENSE) (with [NOTICE](NOTICE)). Security:

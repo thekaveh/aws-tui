@@ -1,4 +1,4 @@
-# 1. Adding a new service
+# Adding a new service
 
 > The current tree ships `s3`, `emr-serverless`, `glue`, and `athena`;
 > Glue and Athena are linked by immutable table-navigation messages, and EMR includes
@@ -18,7 +18,7 @@ factory, so non-`DualPane` services also need an explicit route in
 `AwsTuiApp._mount_initial_service_view` / `_mount_service_view` until
 the planned service-owned view-factory contract lands.
 
-## 1.1. The `Service` protocol
+## 1. The `Service` protocol
 Declared in `src/aws_tui/vm/services_protocol.py`, re-exported from
 `src/aws_tui/services/__init__.py`:
 
@@ -44,7 +44,7 @@ whatever VMx VM they actually host (`S3Service.build_vm` returns
 `DualPaneVM`, see the §2 template below). `ContentHostVM` only
 needs a `construct → destruct → dispose` surface.
 
-## 1.2. Steps
+## 2. Steps
 1. **Create the folder.**
 
     ```
@@ -159,7 +159,7 @@ handoff may prefill destination state, but it must document whether it executes
 or mutates anything; Glue's `Shift+Q` and `Shift+V` actions prefill bounded
 Athena SQL and do not execute it.
 
-## 1.3. Layer rules cheat-sheet for services
+## 3. Layer rules cheat-sheet for services
 A service module **may** import from:
 
 - `aws_tui.infra.*` (aws_session, config_store, log_sink, …)
@@ -181,15 +181,15 @@ A service module **may not** import from:
 
 These bans are enforced by `scripts/check-layers.sh`.
 
-## 1.4. Future: entry-point discovery
+## 4. Future: entry-point discovery
 v1.1 promotes the registry to
 `importlib.metadata.entry_points(group="aws_tui.services")` so third-
 party packages can ship services without forking. The same `Service`
 protocol applies.
 
-## 1.5. Reference: the shipped services
+## 5. Reference: the shipped services
 
-### 1.5.1. S3
+### 5.1. S3
 `src/aws_tui/services/s3/service.py` is the first concrete service. Read its
 `S3Service` implementation end to end:
 
@@ -203,7 +203,7 @@ protocol applies.
 - `bind_hub(hub)` late-wires the hub since the service is registered
   before `RootVM` has its hub.
 
-### 1.5.2. EMR Serverless
+### 5.2. EMR Serverless
 `src/aws_tui/services/emr_serverless/service.py` is the second
 shipped service and demonstrates the richer per-service pattern:
 
@@ -244,7 +244,7 @@ shipped service and demonstrates the richer per-service pattern:
   their own actions follow the same three-touch-point pattern:
   default binding + service-actions tuple + action label.
 
-### 1.5.3. AWS Glue
+### 5.3. AWS Glue
 `src/aws_tui/services/glue/service.py` is the third shipped service and
 the compact read-only page reference:
 
@@ -278,7 +278,7 @@ the compact read-only page reference:
   and typed request path, preserve exact source identity, and never execute the
   generated query.
 
-### 1.5.4. Amazon Athena
+### 5.4. Amazon Athena
 `AthenaService` in `src/aws_tui/services/athena/service.py` is the
 query-service reference:
 

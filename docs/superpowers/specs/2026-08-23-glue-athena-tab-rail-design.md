@@ -1,4 +1,4 @@
-# 1. Glue and Athena tab rail and context framing design
+# Glue and Athena tab rail and context framing design
 
 **Status:** Implemented on 2026-08-23. The underline-only tab presentation in
 this document was subsequently superseded by the segmented-frame design; its
@@ -10,7 +10,7 @@ strip presentation described in
 remains authoritative for selector behavior, focus ordering, commands,
 profile-aware context, Glue-to-Athena transfer, and service behavior.
 
-## 1.1. Problem statement
+## 1. Problem statement
 
 The current Glue page creates two competing focus signals around AWS source
 selection: the enclosing `AWS context` pane and the nested bordered
@@ -27,7 +27,7 @@ The refinement must improve those signals without changing source resolution,
 view selection behavior, focus ownership, commands, AWS calls, or view-model
 state.
 
-## 1.2. Decision summary
+## 2. Decision summary
 
 - Remove the enclosing `AWS context` pane presentation from Glue only.
 - Keep the bordered `AWS source` selector as Glue's sole source-control frame
@@ -48,9 +48,9 @@ state.
   and `FocusCoordinatorVM` responsibilities. No new VM or VMx abstraction is
   introduced.
 
-## 1.3. Scope
+## 3. Scope
 
-### 1.3.1. In scope
+### 3.1. In scope
 
 - Glue context-row structure and styling.
 - Shared `ServiceTabStrip` structure and styling used by Glue and Athena.
@@ -59,7 +59,7 @@ state.
   terminal sizes.
 - Canonical documentation updates needed to describe the resulting UI.
 
-### 1.3.2. Out of scope
+### 3.2. Out of scope
 
 - Source-switch transaction behavior or resolver order.
 - Glue or Athena VM state, AWS gateway calls, filtering, pagination, or data
@@ -70,9 +70,9 @@ state.
 - Preview-then-confirm tab selection.
 - New commands, key bindings, or VMx dependencies.
 
-## 1.4. Glue context controls
+## 4. Glue context controls
 
-### 1.4.1. Catalog view
+### 4.1. Catalog view
 
 The Glue Catalog view shows `ServiceSourceHeader` as a standalone, bordered
 control. The current `AWS context` border and title are removed. The selector's
@@ -83,7 +83,7 @@ The source selector remains the first Glue page focus target. `Tab`,
 `Shift+Tab`, source commands, `Enter`, `Space`, arrow navigation, commit, and
 cancel behavior do not change.
 
-### 1.4.2. Jobs and Crawlers views
+### 4.2. Jobs and Crawlers views
 
 Jobs and Crawlers use an unframed horizontal control row:
 
@@ -102,7 +102,7 @@ Opening an inline picker may expand the row vertically, but it must not overlap
 the tab rail or sibling controls. Closing the picker restores the compact row
 without shifting the service's horizontal content columns.
 
-### 1.4.3. Athena and other services
+### 4.3. Athena and other services
 
 Athena retains its grouped context header. Its source, workgroup, catalog,
 database, and conditional load-more controls are an interdependent set and
@@ -112,9 +112,9 @@ S3 and EMR retain their existing context presentation. This is an intentional
 Glue-specific exception, not a new application-wide rule against context-pane
 borders.
 
-## 1.5. Shared tab rail
+## 5. Shared tab rail
 
-### 1.5.1. Resting state
+### 5.1. Resting state
 
 `ServiceTabStrip` no longer renders an enclosing border or the `Views` border
 title. Its tabs occupy equal, stable horizontal tracks across the available
@@ -130,7 +130,7 @@ Inactive tabs use the normal subdued label treatment. Selection must remain
 unambiguous after focus moves into page content. The rail therefore does not
 depend on focus color to communicate the active view.
 
-### 1.5.2. Focused state
+### 5.2. Focused state
 
 The tab strip remains one `can_focus` widget. When it owns keyboard focus, the
 selected tab receives a soft muted fill in addition to its persistent underline
@@ -141,7 +141,7 @@ must be visibly distinct from inactive tabs but quieter than the current full
 accent block. Hover, if rendered, must not be stronger than selected or focused
 state.
 
-### 1.5.3. Interaction model
+### 5.3. Interaction model
 
 Existing behavior is preserved:
 
@@ -154,7 +154,7 @@ Existing behavior is preserved:
 There is no separate preview selection. The internally highlighted item and the
 active view remain synchronized after every navigation input.
 
-### 1.5.4. Geometry
+### 5.4. Geometry
 
 The rail has a fixed compact height that does not change across resting,
 selected, focused, or hover states. Underline thickness, label weight, and focus
@@ -164,7 +164,7 @@ Labels must fit at the repository's supported minimum terminal width. The
 shared widget must render Glue's three tabs and Athena's four tabs without
 overlap, clipping, or ambiguous truncation.
 
-## 1.6. State ownership and VMx
+## 6. State ownership and VMx
 
 The change is presentational. `FocusCoordinatorVM` remains the application-wide
 source of typed focus identity and continues to map the existing Glue and
@@ -180,7 +180,7 @@ No new state machine, discriminator, component VM, property VM, or view-owned
 parallel focus state is justified. The existing VMx-backed focus coordinator is
 already the most specialized applicable abstraction for this work.
 
-## 1.7. State precedence and accessibility
+## 7. State precedence and accessibility
 
 The following presentation precedence applies:
 
@@ -195,9 +195,9 @@ Color is not the only selected-tab cue: the underline and stronger label remain
 present together. Focus does not alter label text, tab numbering, or command
 semantics. The page's forward and reverse focus order remain exact inverses.
 
-## 1.8. Verification strategy
+## 8. Verification strategy
 
-### 1.8.1. Shared widget tests
+### 8.1. Shared widget tests
 
 Add or update focused tests for `ServiceTabStrip` that verify:
 
@@ -213,7 +213,7 @@ Prefer assertions against component classes, focus state, messages, and active
 IDs. Use snapshots for geometry and theme appearance rather than as the sole
 behavioral proof.
 
-### 1.8.2. Glue tests
+### 8.2. Glue tests
 
 Glue coverage must verify:
 
@@ -228,7 +228,7 @@ Glue coverage must verify:
 - inline expansion does not overlap the rail, sibling selector, or content;
 - source switching, filtering, refresh, and active-view behavior are unchanged.
 
-### 1.8.3. Athena tests
+### 8.3. Athena tests
 
 Athena coverage must verify:
 
@@ -239,7 +239,7 @@ Athena coverage must verify:
 - source, workgroup, catalog, database, and pagination interactions remain
   unchanged.
 
-### 1.8.4. Visual regression and manual QA
+### 8.4. Visual regression and manual QA
 
 Capture Glue Catalog, Jobs, and Crawlers plus Athena Query and one non-query
 view at representative narrow and wide terminal sizes. Exercise every supported
@@ -254,7 +254,7 @@ Visual review must confirm:
 - labels, underlines, borders, and content columns do not shift between states;
 - Athena's context grouping remains visually intact.
 
-## 1.9. Documentation
+## 9. Documentation
 
 Update canonical widget, workflow, and UI descriptions only where they describe
 the removed Glue context frame or the old bordered `Views` strip. Preserve
@@ -266,7 +266,7 @@ documentation surfaces according to the repository's existing documentation
 workflow. Screenshots or diagrams that visibly encode the old framing must be
 updated; unrelated illustrations are out of scope.
 
-## 1.10. Acceptance criteria
+## 10. Acceptance criteria
 
 The implementation is complete when:
 

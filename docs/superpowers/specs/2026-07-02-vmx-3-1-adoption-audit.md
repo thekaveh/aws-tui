@@ -1,4 +1,4 @@
-# 1. VMx 3.1.0 adoption audit for aws-tui
+# VMx 3.1.0 adoption audit for aws-tui
 
 > **Maintenance note (2026-08-02):** The unwired `ResumeVM` and `FirstRunVM`
 > prototype stacks were removed after this audit. `S3CompatForm` now lives in
@@ -21,7 +21,7 @@
 
 ---
 
-## 1.1. Executive summary
+## 1. Executive summary
 
 VMx 3.1.0 ships several components that directly answer the prior aws-tui
 vNext asks:
@@ -58,7 +58,7 @@ The highest-value remaining follow-up refactors are:
 
 ---
 
-## 1.2. VMx 3.1.0 public API additions relevant to aws-tui
+## 2. VMx 3.1.0 public API additions relevant to aws-tui
 
 Compared with VMx 2.6.1, the top-level VMx 3.1.0 export set adds:
 
@@ -85,7 +85,7 @@ old cheatsheet. Those have been mechanically updated.
 
 ---
 
-## 1.3. Compatibility changes already made on this branch
+## 3. Compatibility changes already made on this branch
 
 | Area | Change |
 |---|---|
@@ -100,9 +100,9 @@ larger VM/view refactors below.
 
 ---
 
-## 1.4. Replacement matrix
+## 4. Replacement matrix
 
-### 1.4.1. `JobRunsVM` pagination -> `TokenPagedComposition`
+### 4.1. `JobRunsVM` pagination -> `TokenPagedComposition`
 
 Prior code:
 
@@ -141,7 +141,7 @@ Notes:
   stale app/token guards and CompositeVM selection bridge around VMx's simpler
   pager costs 40 net VM LOC.
 
-### 1.4.2. Local `FilteredCompositeVM` -> VMx `FilteredCompositeVM`
+### 4.2. Local `FilteredCompositeVM` -> VMx `FilteredCompositeVM`
 
 Prior code:
 
@@ -176,7 +176,7 @@ Notes:
   `FilteredCompositeVM`.
 - Focused pane and pane-contract tests preserve filter/cursor behavior.
 
-### 1.4.3. `CommandPaletteVM` scoring -> `ScoredFilteredCompositeVM`
+### 4.3. `CommandPaletteVM` scoring -> `ScoredFilteredCompositeVM`
 
 Current code:
 
@@ -215,7 +215,7 @@ Notes:
 - Shape tests now assert `CommandPaletteVM` composes VMx
   `ScoredFilteredCompositeVM` internally.
 
-### 1.4.4. Local `ValidatingFormVM` -> VMx `FormVM` validators
+### 4.4. Local `ValidatingFormVM` -> VMx `FormVM` validators
 
 Prior code:
 
@@ -254,7 +254,7 @@ Notes:
   remains covered by S3 form tests, round-3 composition tests, UI inline-form
   tests, and the unit/integration coverage run recorded in §1.6.3.
 
-### 1.4.5. `FocusCoordinatorVM` -> `DiscriminatorVM`
+### 4.5. `FocusCoordinatorVM` -> `DiscriminatorVM`
 
 Prior code:
 
@@ -296,7 +296,7 @@ Notes:
   Modal restore state remains intentionally facade-owned until VMx exposes a
   public "replace modal with explicit active key" operation.
 
-### 1.4.6. Modal VMs -> `ModalVM` and `DialogService.present`
+### 4.6. Modal VMs -> `ModalVM` and `DialogService.present`
 
 Prior code:
 
@@ -331,7 +331,7 @@ Notes:
 - `DialogService.present` remains separate because it affects Textual screen
   hosting rather than VM result state.
 
-### 1.4.7. Shared-hub property filtering -> `when_property_changed`
+### 4.7. Shared-hub property filtering -> `when_property_changed`
 
 Prior code:
 
@@ -363,7 +363,7 @@ Notes:
 - Kept separate from data-structure refactors to avoid mixing event-source
   changes with behavior changes.
 
-### 1.4.8. Async operations -> `AsyncRelayCommand`
+### 4.8. Async operations -> `AsyncRelayCommand`
 
 Current code:
 
@@ -388,7 +388,7 @@ Recommended refactor:
   cancellation model is reviewed; those paths have important stale-target
   guards.
 
-### 1.4.9. Hierarchical and collection fixes
+### 4.9. Hierarchical and collection fixes
 
 Prior asks:
 
@@ -409,9 +409,9 @@ aws-tui impact:
 
 ---
 
-## 1.5. Prioritized implementation backlog
+## 5. Prioritized implementation backlog
 
-### 1.5.1. Phase A — compatibility and report, already in this branch
+### 5.1. Phase A — compatibility and report, already in this branch
 
 - Bump VMx to `>=3.1.0,<4.0.0`.
 - Fix removed alias usage.
@@ -422,14 +422,14 @@ aws-tui impact:
 - Replace `CommandPaletteVM`'s bespoke score/rank projection with VMx
   `ScoredFilteredCompositeVM` and record the replacement metric ledger.
 
-### 1.5.2. Phase B — contained VM-layer swaps, implemented
+### 5.2. Phase B — contained VM-layer swaps, implemented
 
 1. `PaneVM` backed by VMx `FilteredCompositeVM`.
 2. `FocusCoordinatorVM` backed by VMx `DiscriminatorVM`.
 
 These should each be separate commits with focused tests.
 
-### 1.5.3. Phase C — higher-coupling flow refactors, partially implemented
+### 5.3. Phase C — higher-coupling flow refactors, partially implemented
 
 Implemented:
 
@@ -446,14 +446,14 @@ These touch more view/event boundaries and should be planned carefully.
 
 ---
 
-## 1.6. Replacement savings and coverage tracking
+## 6. Replacement savings and coverage tracking
 
 Each follow-up refactor should leave an audit trail that shows what VMx 3.1.0
 replaced and what the project gained from the replacement. The goal is not only
 to say "we adopted a better primitive"; it is to quantify how much bespoke
 aws-tui code disappeared from the VM and view layers while preserving behavior.
 
-### 1.6.1. Per-replacement ledger
+### 6.1. Per-replacement ledger
 
 For each Phase B/C replacement, add a short ledger entry to the implementing
 commit or follow-up report:
@@ -471,7 +471,7 @@ commit or follow-up report:
 | Coverage command | Exact pytest/coverage command run for this replacement. |
 | LOC metric | VM LOC saved, view LOC saved, test LOC delta, and net implementation LOC saved. |
 
-### 1.6.2. LOC accounting method
+### 6.2. LOC accounting method
 
 Use line counts as a directional maintainability metric, not as the only
 measure of quality.
@@ -508,7 +508,7 @@ When a replacement spans multiple commits, calculate the metric over the merge
 base of the replacement branch and the final replacement commit. Record the
 commit range beside the ledger entry.
 
-### 1.6.3. Aggregate VMx 3.1.0 benefit metric
+### 6.3. Aggregate VMx 3.1.0 benefit metric
 
 At the end of the adoption series, produce one roll-up table:
 
@@ -637,7 +637,7 @@ The implemented replacement ledger:
 | LOC metric | `vm_deleted=0`, `vm_added=0`, `vm_loc_saved=0`; `view_deleted=10`, `view_added=22`, `view_loc_saved=-12`; `implementation_loc_saved=-12`; `test_deleted=0`, `test_added=0`, `test_loc_delta=0`. |
 | Coverage metric | Before `83.09%`; after `83.07%` over `1244 passed, 9 deselected`; `coverage_delta=-0.02` percentage points. |
 
-### 1.6.4. Test coverage accounting
+### 6.4. Test coverage accounting
 
 Every replacement must preserve or improve confidence in the delegated
 behavior. Because VMx now owns more of the primitive behavior, aws-tui tests
@@ -670,7 +670,7 @@ the remaining facade/view behavior is still covered by focused tests.
 
 ---
 
-## 1.7. Tests to preserve or add during follow-up refactors
+## 7. Tests to preserve or add during follow-up refactors
 
 For each replacement, keep these contracts green:
 
@@ -706,7 +706,7 @@ Run snapshot tests for view-affecting phases.
 
 ---
 
-## 1.8. Non-goals for this branch
+## 8. Non-goals for this branch
 
 - Do not replace all local VM facades wholesale.
 - Do not expose raw VMx primitives in public aws-tui VM surfaces where the
@@ -717,7 +717,7 @@ Run snapshot tests for view-affecting phases.
 
 ---
 
-## 1.9. Acceptance criteria for this branch
+## 9. Acceptance criteria for this branch
 
 - `pyproject.toml` and `uv.lock` resolve VMx 3.1.0.
 - Import-level VMx smoke tests pass.

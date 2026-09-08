@@ -1,4 +1,4 @@
-# 1. Bootstrapping the Homebrew formula
+# Bootstrapping the Homebrew formula
 
 Run this **once**, immediately after the first PyPI release lands.
 The v0.9.0 development work is present in the repository, but the tag and PyPI
@@ -8,13 +8,13 @@ are visible on PyPI. After that, the `bump-homebrew` job in
 automatically — bootstrapping just gets the first formula in
 place.
 
-## 1.1. Prerequisites
+## 1. Prerequisites
 
 - First `aws-tui` wheel + sdist visible on PyPI.
 - The `thekaveh/homebrew-aws-tui` repo exists and is empty.
 - `brew` installed locally for the smoke test.
 
-## 1.2. Steps
+## 2. Steps
 
 ```bash
 # 1. Clone the tap repo.
@@ -66,7 +66,7 @@ test do
 end
 ```
 
-## 1.3. Smoke test locally
+## 3. Smoke test locally
 
 ```bash
 brew install --build-from-source ./Formula/aws-tui.rb
@@ -75,7 +75,7 @@ brew test aws-tui
 brew uninstall aws-tui
 ```
 
-## 1.4. Commit + push
+## 4. Commit + push
 
 ```bash
 git add Formula/aws-tui.rb
@@ -83,7 +83,7 @@ git commit -m "aws-tui 0.9.0 (initial)"
 git push origin main
 ```
 
-## 1.5. Document the install
+## 5. Document the install
 
 In the tap repo's README:
 
@@ -102,7 +102,7 @@ Tracking [PyPI releases](https://pypi.org/project/aws-tui/);
 bumps are opened automatically by the upstream release workflow.
 ```
 
-## 1.6. After bootstrap
+## 6. After bootstrap
 
 Enable that job in `thekaveh/aws-tui` under **Settings** →
 **Secrets and variables** → **Actions** → **Variables** by setting

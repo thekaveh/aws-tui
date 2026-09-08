@@ -1,4 +1,4 @@
-# 1. Architecture
+# Architecture
 
 ![aws-tui five-layer architecture: Textual S3, EMR Serverless, Glue and Iceberg, and Athena views; Glue and Athena VM trees plus S3 and EMR view models; service plugins; domain operations with shared TableRef and QueryContext models; connection, configuration, keychain, platform-path, and logging infrastructure; the AWS Glue, Athena, S3, and Lake Formation boundary; and a separate demo-mode composition boundary.](diagrams/img/architecture.png)
 
@@ -20,7 +20,7 @@ imports, and checks the banned edges in the script. `app.py` and
 `services/` is a service-composition boundary: it can import concrete
 VMs to build service pages, but it cannot import Textual widgets.
 
-## 1.1. Layers
+## 1. Layers
 - **View** — Textual widgets and `.tcss` themes
   (`src/aws_tui/ui/`). Never touches `boto3`, `aioboto3`, or
   `botocore`. Talks to VMs via property reads + relay-command
@@ -141,7 +141,7 @@ VMs to build service pages, but it cannot import Textual widgets.
 layers. Demo mode selects in-memory service adapters at the composition root;
 production modules do not import the demo package.
 
-## 1.2. Composition root
+## 2. Composition root
 The two top-level files `src/aws_tui/composition.py` and
 `src/aws_tui/app.py` are the only modules permitted to import from
 every layer. `composition.py` builds the dependency graph; `app.py`
@@ -166,7 +166,7 @@ At startup, automatic connection attempts consume one shared 90-second budget;
 untried sources remain available for explicit selection after the local fallback
 mounts.
 
-## 1.3. Lifecycle
+## 3. Lifecycle
 VMx components implement `construct → destruct → dispose`. Hosted service VMs
 may additionally expose app-owned asynchronous `setup` and `shutdown` hooks;
 those hooks are not a VMx lifecycle phase.
@@ -183,7 +183,7 @@ aioboto3 client, dispose subscriptions and the VM tree, then flush and close
 logs last so teardown diagnostics remain available
 (spec §5.4).
 
-## 1.4. Messaging
+## 4. Messaging
 Cross-service and shell-wide event communication goes through the session's
 single `MessageHub`. Parent VMs orchestrate their owned children directly when
 the interaction stays inside one subtree. Custom envelopes (defined in
@@ -230,7 +230,7 @@ when a view must consume hub traffic. Local VM-to-view updates use each VM's
 subscriptions are disposed on unmount, and VM-owned subscriptions are disposed
 with the VM lifecycle.
 
-## 1.5. Testing pyramid
+## 5. Testing pyramid
 | Tier | Source | What it proves |
 |---|---|---|
 | Unit | `tests/unit` | VM, domain, infra behavior; isolated local I/O only, with no external services |
@@ -254,14 +254,14 @@ with `uv run pytest`. Opt into the S3-compatible tier with
 `uv run pytest -m integration` — it spins up a container, which the
 default `addopts` filter excludes (`-m 'not integration'`).
 
-## 1.6. Layer-rule check
+## 6. Layer-rule check
 `scripts/check-layers.sh` parses Python imports with `ast` across the
 five layer subtrees, resolves relative imports to absolute module names,
 and matches them against the banned-import rules inlined in the script.
 The composition root and `app.py` are deliberately excluded — they live
 at `src/aws_tui/` top-level so the check never inspects them.
 
-## 1.7. Where to start reading the code
+## 7. Where to start reading the code
 1. `src/aws_tui/composition.py` — see how everything wires.
 2. `src/aws_tui/vm/root_vm.py` — top of the VM tree.
 3. `src/aws_tui/vm/file_manager/dual_pane_vm.py` — the first concrete

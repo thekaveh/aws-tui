@@ -1,10 +1,10 @@
-# 1. Consumed Contract Ledger
+# Consumed Contract Ledger
 
 This ledger records external contracts that aws-tui consumes and the pinned
 versions checked during maintenance. It is not a replacement for tests; it is a
 durable map of the real upstream surfaces that mocks and adapters must track.
 
-## 1.1. 2026-07-01 maintenance pass
+## 1. 2026-07-01 maintenance pass
 
 | Integration point | Pinned version / ref | Consumed contract | Verification method |
 |---|---:|---|---|
@@ -21,7 +21,7 @@ durable map of the real upstream surfaces that mocks and adapters must track.
 | GitHub Actions CI/release/publish workflow | Workflow refs at the 2026-07-01 pass: `actions/checkout` v4, `astral-sh/setup-uv` v8.3.2, `actions/upload-artifact` v7, `actions/download-artifact` v7, `pypa/gh-action-pypi-publish` v1, `peter-evans/create-pull-request` v6, `actions/configure-pages` v5, `actions/upload-pages-artifact` v3, and `actions/deploy-pages` v5.0.0; `uv==0.11.19` | Checkout, pinned uv installation, CI/build artifact upload, release artifact download, Sigstore/OIDC PyPI publishing, TestPyPI rehearsal, GitHub Release asset upload, Homebrew tap PR creation, and Pages build/deploy. | Historical workflow source review; superseded current pins are recorded in §1.4. |
 | Pre-commit hooks | Immutable refs resolved on 2026-08-02: `pre-commit-hooks@3e8a8703264a2f4a69428a0aa4dcb512790b2c8c` (`v6.0.0`), `ruff-pre-commit@39d9ac5938dadb73df0564a45f163e25ff9fa6e2` (`v0.16.1`), `taplo-pre-commit@ade0f95ddcf661c697d4670d2cfcbe95d0048a0a` (`v0.9.3` peeled commit); local `mypy` via locked env | Formatting, linting, type checking, TOML validation, trailing whitespace, EOF, and large-file hygiene. | `git ls-remote` verification of each tag before pinning; local equivalent checks run through the locked `uv 0.11.19` environment, and CI uses setup-uv v9.0.0 with `uv sync --frozen`. |
 
-## 1.2. 2026-07-26 Athena service pass
+## 2. 2026-07-26 Athena service pass
 
 | Integration point | Pinned version / ref | Consumed contract | Verification method |
 |---|---:|---|---|
@@ -49,7 +49,7 @@ list_prepared_statements
 get_prepared_statement
 ```
 
-## 1.3. 2026-07-28 Glue, Athena, and Iceberg integration pass
+## 3. 2026-07-28 Glue, Athena, and Iceberg integration pass
 
 | Integration point | Pinned version / ref | Consumed contract | Verification method |
 |---|---:|---|---|
@@ -118,14 +118,14 @@ CopyTableReferenceRequest
 OpenGlueTableRequest
 ```
 
-## 1.4. 2026-08-02 maintenance pass
+## 4. 2026-08-02 maintenance pass
 
 | Integration point | Pinned version / ref | Consumed contract | Verification method |
 |---|---:|---|---|
 | Python runtime dependency ownership | `vmx==3.1.0`, `textual==8.2.8`, `reactivex==4.1.0`, and `rich==15.0.0` from `uv.lock` | Every production import is directly declared: VMx provides lifecycle/composition primitives, Textual owns the TUI runtime, Reactivex owns observable protocols/subjects, and Rich provides markup escaping. `boto3` is no longer declared directly because production creates clients through `aioboto3`; Botocore remains direct for configuration, models, and exceptions. VMx's documented deep module paths remain supported public imports; root-facade imports are preferred for newly touched code, without a mechanical 46-module churn. | Built wheel metadata inspection, import inventory over `src/aws_tui`, exact installed-source inspection, isolated wheel smoke, and full unit/integration/snapshot/E2E coverage. |
 | GitHub Actions CI/release/publish workflow | `actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1` (`v7.0.1`), `astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9` (`v9.0.0`), `actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a` (`v7.0.1`), `actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c` (`v8.0.1`), `pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33` (`v1.14.2` peeled commit), `peter-evans/create-pull-request@5f6978faf089d4d20b00c7766989d076bb2fc7f1` (`v8.1.1`), `actions/configure-pages@45bfe0192ca1faeb007ade9deae92b16b8254a0d` (`v6.0.0`), `actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9` (`v5.0.0`), and `actions/deploy-pages@cd2ce8fcbc39b97be8ca5fce6e763baed58fa128` (`v5.0.0`) | Current major-version contracts for checkout, uv installation/cache, artifact exchange, trusted PyPI publishing, Homebrew PR creation, and Pages deployment. CI's stable `ci gate` now includes an unconditional documentation-contract job. | GitHub release API plus peeled `git ls-remote` tag verification on 2026-08-02; workflow guard tests, YAML parsing, local docs build, package build, and installed-wheel smoke. |
 
-## 1.5. 2026-08-25 maintenance pass
+## 5. 2026-08-25 maintenance pass
 
 | Integration point | Pinned version / ref | Consumed contract | Verification method |
 |---|---:|---|---|
@@ -158,7 +158,7 @@ UploadPart
 UploadPartCopy
 ```
 
-## 1.6. Deferred contract checks
+## 6. Deferred contract checks
 
 - External upstream documentation was not exhaustively re-queried for every
   library API. The concrete code paths above were checked against the locked

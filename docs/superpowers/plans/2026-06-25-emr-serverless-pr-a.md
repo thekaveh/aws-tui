@@ -1,4 +1,4 @@
-# 1. EMR Serverless PR-A (Read-Only Browser) Implementation Plan
+# EMR Serverless PR-A (Read-Only Browser) Implementation Plan
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
@@ -8,7 +8,7 @@
 
 **Tech Stack:** Python 3.11+, Textual, VMx MVVM (`vmx>=2.6.0,<3.0.0`), aioboto3 for AWS API, pytest (unit/integration/snapshot tiers), ruff + mypy --strict.
 
-## 1.1. Global Constraints
+## 1. Global Constraints
 
 These apply to every task — repeated here so the reviewer can fail fast on any violation.
 
@@ -43,9 +43,9 @@ These apply to every task — repeated here so the reviewer can fail fast on any
 
 ---
 
-## 1.2. File Structure
+## 2. File Structure
 
-### 1.2.1. Created
+### 2.1. Created
 
 ```
 src/aws_tui/domain/
@@ -82,7 +82,7 @@ tests/snapshot/test_emr.py
 tests/snapshot/apps/emr.py
 ```
 
-### 1.2.2. Modified
+### 2.2. Modified
 
 ```
 src/aws_tui/composition.py                  ← register EmrServerlessService
@@ -92,7 +92,7 @@ src/aws_tui/ui/themes/{amber,carbon,dracula,github-light,gruvbox-dark,
 
 ---
 
-## 1.3. Task 1: EMR domain data records
+## 3. Task 1: EMR domain data records
 
 **Files:**
 - Create: `src/aws_tui/domain/emr_serverless.py` (records portion only — client added in Task 3)
@@ -314,7 +314,7 @@ git commit -m "feat(domain): EMR Serverless data records + state enums"
 
 ---
 
-## 1.4. Task 2: EMR error mapping (reuse domain ProviderError hierarchy)
+## 4. Task 2: EMR error mapping (reuse domain ProviderError hierarchy)
 
 **Files:**
 - Modify: `src/aws_tui/domain/emr_serverless.py` (append `_map_boto_error` helper)
@@ -486,7 +486,7 @@ git commit -m "feat(domain): _map_boto_error + AuthRequired/Throttled/Validation
 
 ---
 
-## 1.5. Task 3: `EmrServerlessClient` — async boto3 facade
+## 5. Task 3: `EmrServerlessClient` — async boto3 facade
 
 **Files:**
 - Modify: `src/aws_tui/domain/emr_serverless.py` (append client class)
@@ -796,7 +796,7 @@ git commit -m "feat(domain): EmrServerlessClient — list/get verbs over aioboto
 
 ---
 
-## 1.6. Task 4: In-memory fake EMR client for tests
+## 6. Task 4: In-memory fake EMR client for tests
 
 **Files:**
 - Create: `tests/unit/domain/_in_memory_emr.py`
@@ -1002,7 +1002,7 @@ git commit -m "test(domain): in-memory EMR fake for VM/widget tests"
 
 ---
 
-## 1.7. Task 5: `EmrServerlessService` (Service protocol impl)
+## 7. Task 5: `EmrServerlessService` (Service protocol impl)
 
 **Files:**
 - Create: `src/aws_tui/services/emr_serverless/__init__.py` (empty)
@@ -1209,7 +1209,7 @@ git commit -m "feat(services): EmrServerlessService — ⚡ icon, aws-only suppo
 
 ---
 
-## 1.8. Task 6: `ApplicationsVM`
+## 8. Task 6: `ApplicationsVM`
 
 **Files:**
 - Create: `src/aws_tui/vm/emr_serverless/__init__.py` (empty)
@@ -1459,7 +1459,7 @@ git commit -m "feat(vm): ApplicationsVM — app list + selection + refresh"
 
 ---
 
-## 1.9. Task 7: `JobRunsVM`
+## 9. Task 7: `JobRunsVM`
 
 **Files:**
 - Create: `src/aws_tui/vm/emr_serverless/job_runs_vm.py`
@@ -1766,7 +1766,7 @@ git commit -m "feat(vm): JobRunsVM — runs list + state filter + selection"
 
 ---
 
-## 1.10. Task 8: `JobRunDetailVM`
+## 10. Task 8: `JobRunDetailVM`
 
 **Files:**
 - Create: `src/aws_tui/vm/emr_serverless/job_run_detail_vm.py`
@@ -1999,7 +1999,7 @@ git commit -m "feat(vm): JobRunDetailVM — detail tracking + terminal-state fla
 
 ---
 
-## 1.11. Task 9: `EmrServerlessPageVM` (orchestration root)
+## 11. Task 9: `EmrServerlessPageVM` (orchestration root)
 
 **Files:**
 - Create: `src/aws_tui/vm/emr_serverless/page_vm.py`
@@ -2251,7 +2251,7 @@ git commit -m "feat(vm): EmrServerlessPageVM — three-child orchestration root"
 
 ---
 
-## 1.12. Task 10: Application picker widget (dropdown)
+## 12. Task 10: Application picker widget (dropdown)
 
 **Files:**
 - Create: `src/aws_tui/ui/widgets/emr_serverless/__init__.py` (empty)
@@ -2477,7 +2477,7 @@ git commit -m "feat(ui): ApplicationPicker — top-strip dropdown for EMR"
 
 ---
 
-## 1.13. Task 11: `JobRunsPane` widget
+## 13. Task 11: `JobRunsPane` widget
 
 **Files:**
 - Create: `src/aws_tui/ui/widgets/emr_serverless/job_runs_pane.py`
@@ -2747,7 +2747,7 @@ git commit -m "feat(ui): JobRunsPane — chip filter + selected-row + r-refresh"
 
 ---
 
-## 1.14. Task 12: `JobRunDetailPane` widget
+## 14. Task 12: `JobRunDetailPane` widget
 
 **Files:**
 - Create: `src/aws_tui/ui/widgets/emr_serverless/job_run_detail_pane.py`
@@ -2946,7 +2946,7 @@ git commit -m "feat(ui): JobRunDetailPane — KV table + state placeholders"
 
 ---
 
-## 1.15. Task 13: `EmrServerlessPage` widget (top strip + 2-pane container)
+## 15. Task 13: `EmrServerlessPage` widget (top strip + 2-pane container)
 
 **Files:**
 - Create: `src/aws_tui/ui/widgets/emr_serverless/page.py`
@@ -3148,7 +3148,7 @@ git commit -m "feat(ui): EmrServerlessPage — top strip + 2 panes + 3 pollers"
 
 ---
 
-## 1.16. Task 14: Theme CSS across 10 themes
+## 16. Task 14: Theme CSS across 10 themes
 
 **Files:**
 - Modify: each of `src/aws_tui/ui/themes/{amber,carbon,dracula,github-light,gruvbox-dark,lattice,nord,one-light,solarized-light,voidline}.tcss`
@@ -3277,7 +3277,7 @@ git commit -m "feat(ui,themes): EMR Serverless page styling across 10 themes"
 
 ---
 
-## 1.17. Task 15: Composition wiring
+## 17. Task 15: Composition wiring
 
 **Files:**
 - Modify: `src/aws_tui/composition.py`
@@ -3365,7 +3365,7 @@ git commit -m "feat(composition): register EmrServerlessService after S3"
 
 ---
 
-## 1.18. Task 16: Integration test — page mounts on AWS, hidden on s3-compatible
+## 18. Task 16: Integration test — page mounts on AWS, hidden on s3-compatible
 
 **Files:**
 - Create: `tests/integration/test_emr_page.py`
@@ -3525,7 +3525,7 @@ git commit -m "feat(app): mount EmrServerlessPage on service_id=emr-serverless"
 
 ---
 
-## 1.19. Task 17: Snapshot tests with content-presence guards
+## 19. Task 17: Snapshot tests with content-presence guards
 
 **Files:**
 - Create: `tests/snapshot/apps/emr.py` (fixture apps wrapping the widgets with pre-seeded VMs)
@@ -3773,7 +3773,7 @@ git commit -m "test(snapshot): EMR page across 10 themes + content guards"
 
 ---
 
-## 1.20. Wrap-up
+## 20. Wrap-up
 
 After Task 17 the PR-A branch is ready for review. Open the PR with a body that:
 
@@ -3786,7 +3786,7 @@ The final commit history for PR-A should be 17 commits, one per task — keeps `
 
 ---
 
-## 1.21. Self-Review
+## 21. Self-Review
 
 **Spec coverage:**
 
@@ -3813,7 +3813,7 @@ No drift found.
 
 ---
 
-## 1.22. Execution Handoff
+## 22. Execution Handoff
 
 Plan complete and saved to `docs/superpowers/plans/2026-06-25-emr-serverless-pr-a.md`. Two execution options:
 

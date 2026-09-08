@@ -1,19 +1,19 @@
-# 1. Cookbook
+# Cookbook
 
 > Common recipes for daily aws-tui use. Each recipe is end-to-end —
 > commands you can copy/paste plus the in-app key sequence.
 
-1. [Connect to and switch between data sources](#11-connect-to-and-switch-between-data-sources)
-2. [Switch the theme on the fly](#12-switch-the-theme-on-the-fly)
-3. [Customize a keybinding](#13-customize-a-keybinding)
-4. [Diagnose an interrupted transfer after a crash](#14-diagnose-an-interrupted-transfer-after-a-crash)
-5. [Browse AWS Glue safely](#15-browse-aws-glue-safely)
-6. [Run Athena queries safely](#16-run-athena-queries-safely)
-7. [Inspect and query Glue tables through Athena](#17-inspect-and-query-glue-tables-through-athena)
+1. [Connect to and switch between data sources](#1-connect-to-and-switch-between-data-sources)
+2. [Switch the theme on the fly](#2-switch-the-theme-on-the-fly)
+3. [Customize a keybinding](#3-customize-a-keybinding)
+4. [Diagnose an interrupted transfer after a crash](#4-diagnose-an-interrupted-transfer-after-a-crash)
+5. [Browse AWS Glue safely](#5-browse-aws-glue-safely)
+6. [Run Athena queries safely](#6-run-athena-queries-safely)
+7. [Inspect and query Glue tables through Athena](#7-inspect-and-query-glue-tables-through-athena)
 
 ---
 
-## 1.1. Connect to and switch between data sources
+## 1. Connect to and switch between data sources
 
 Walks through three setups people hit on day one:
 
@@ -28,7 +28,7 @@ credentials `test / test`. The shipped harness creates the canonical
 `dev-s3` connection; the manual examples below use `s3mock-local`
 to show that connection names are user-defined.
 
-### 1.1.1. Start S3Mock (skip if already running)
+### 1.1. Start S3Mock (skip if already running)
 
 **Quickest path — dev seeded S3Mock** (recommended for first-time
 exploration; ships ~5 buckets and ~90 objects so you have content to
@@ -53,7 +53,7 @@ docker run --rm -d --name s3mock \
     adobe/s3mock:5.2.0@sha256:7a37f0d796e81a28b970c892dcae532797014616b3312b467af8f0274ebf0c26
 ```
 
-### 1.1.2. Store the credentials in the macOS Keychain (recommended)
+### 1.2. Store the credentials in the macOS Keychain (recommended)
 
 The resolver expects two required keychain entries under ONE service name
 (matching the `credentials = "keychain:<service>"` value in
@@ -79,7 +79,7 @@ security add-generic-password \
 (The Python `keyring` library aws-tui uses delegates to the macOS
 Keychain by default.)
 
-### 1.1.3. Add via the in-TUI Settings form
+### 1.3. Add via the in-TUI Settings form
 Open Settings with `,`, add an S3-compatible connection, and fill the
 form:
 
@@ -107,7 +107,7 @@ force_path_style = true
 verify_tls = false              # http:// S3Mock -> no cert to verify
 ```
 
-### 1.1.4. Add by editing the file directly
+### 1.4. Add by editing the file directly
 If you already have other connections, just append:
 
 ```toml
@@ -130,7 +130,7 @@ the pane's bottom border (`s3-compatible · s3mock-local · localhost:9000`).
 meaningful region, so the pane title shows `name · endpoint`
 instead.
 
-### 1.1.5. Use it
+### 1.5. Use it
 ```bash
 aws-tui
 ```
@@ -151,7 +151,7 @@ should populate immediately.
 
 ---
 
-### 1.1.6. Jump between AWS profiles with one keystroke
+### 1.6. Jump between AWS profiles with one keystroke
 
 If you have several `[profile *]` blocks in `~/.aws/config` (typical
 for orgs with multiple AWS accounts or SSO permission sets), `Shift+S`
@@ -192,7 +192,7 @@ the cycle immediately, no relaunch.
 
 > Expired SSO tokens are detected offline at launch via the SSO
 > cache freshness probe (see
-> [connections.md §3](connections.md#13-auto-discovery-and-sso-cache-probe));
+> [connections.md §3](connections.md#3-auto-discovery-and-sso-cache-probe));
 > expired or missing SSO profiles are skipped by the boot chain,
 > marked unreachable for the session, and surfaced through a recovery
 > toast while the app mounts local panes instead of hanging. Run
@@ -201,7 +201,7 @@ the cycle immediately, no relaunch.
 
 ---
 
-### 1.1.7. Run several s3-compatible endpoints side-by-side
+### 1.7. Run several s3-compatible endpoints side-by-side
 
 There's no fixed limit on how many `s3-compatible` connections you
 can configure. Each one shows up in the swap-source cycle and in
@@ -248,13 +248,13 @@ Edit / Delete chips to manage entries already there. Saves are
 atomic (`tempfile` + `os.replace`) so the config can't end up
 half-written.
 
-See [`docs/connections.md` §4](connections.md#14-switching-between-connections-at-runtime)
+See [`docs/connections.md` §4](connections.md#4-switching-between-connections-at-runtime)
 for the full source-cycle semantics and the unreachable-skip behavior.
 
 ---
 
-## 1.2. Switch the theme on the fly
-### 1.2.1. One-off (session-only)
+## 2. Switch the theme on the fly
+### 2.1. One-off (session-only)
 Two paths, both fire `ThemeChangedMessage` and reload the active
 stylesheet instantly without a restart:
 
@@ -269,7 +269,7 @@ has the same effect as `Shift+T`. Per-theme dynamic entries such as
 `theme switch ▸ voidline` remain deferred and are not registered, so use
 **Theme picker** to select a specific built-in or custom theme.
 
-### 1.2.2. Persistent
+### 2.2. Persistent
 ```toml
 # <config-dir>/config.toml
 [defaults]
@@ -278,10 +278,10 @@ theme = "voidline"
 
 Theme names: `carbon` (default), `voidline`, `lattice`, `amber`,
 `solarized-light`, `github-light`, `one-light`, `nord`, `dracula`,
-`gruvbox-dark`. See [theming.md §1](theming.md#11-built-in-themes) for
+`gruvbox-dark`. See [theming.md §1](theming.md#1-built-in-themes) for
 the full per-theme palette breakdown.
 
-### 1.2.3. Add a custom theme
+### 2.3. Add a custom theme
 A full replacement bypasses the built-in composition, so a repository checkout
 must combine the raw built-in theme, then the shared operational layer, before
 installing a custom file:
@@ -295,9 +295,9 @@ cat src/aws_tui/ui/themes/carbon.tcss \
 Edit `midnight.tcss`, then select it with `t` or `:` then **Theme picker**.
 Including `operational-panes.tcss` retains the Glue and Athena borders and
 focus styling that built-in themes receive automatically. See
-[theming.md](theming.md#132-full-custom-themes) for the full token table.
+[theming.md](theming.md#32-full-custom-themes) for the full token table.
 
-### 1.2.4. Tweak just one or two colors
+### 2.4. Tweak just one or two colors
 Drop `<config-dir>/theme.tcss` and override what you need; the
 overlay layers on top of the active built-in:
 
@@ -309,7 +309,7 @@ Footer { background: #050505; }
 
 ---
 
-## 1.3. Customize a keybinding
+## 3. Customize a keybinding
 
 > **Runtime status:** The composition root installs handled overrides
 > on the live Textual keymap through `BindingResolver`. It validates
@@ -334,7 +334,7 @@ For a fallback list (try `Ctrl+K` first, fall back to `:`):
 "app.command_palette" = ["Ctrl+K", ":"]
 ```
 
-### 1.3.1. Disable a default binding
+### 3.1. Disable a default binding
 Set the action to an empty list:
 
 ```toml
@@ -345,14 +345,14 @@ Set the action to an empty list:
 On the next launch, an empty `[keybindings]` value removes the live
 keybinding until you edit the config back.
 
-### 1.3.2. See the active map
+### 3.2. See the active map
 The full list of action IDs lives in
-[`docs/keybindings.md`](keybindings.md#13-action-ids) and is the same set
+[`docs/keybindings.md`](keybindings.md#3-action-ids) and is the same set
 declared in `src/aws_tui/infra/keymap_store.py:DEFAULT_BINDINGS`. There
 is no `--print-bindings` CLI flag in v0.8; the launch path enters the
 TUI directly.
 
-### 1.3.3. Unknown action IDs fall back to defaults
+### 3.3. Unknown action IDs fall back to defaults
 If you overlay an action id that isn't in `KeymapStore.DEFAULT_BINDINGS`
 (e.g. typo `pane.cpy`), startup logs the `UnknownAction` and falls back
 to the default keymap. That's deliberate: a bad override should not make
@@ -361,13 +361,13 @@ action id to fix.
 
 ---
 
-## 1.4. Diagnose an interrupted transfer after a crash
+## 4. Diagnose an interrupted transfer after a crash
 Long-running transfers keep a local journal while work is active so a process
 crash leaves evidence of the interrupted operation. Automatic replay and
 persisted S3 multipart state remain deferred; this recipe documents the
 current journal and manual cleanup flow.
 
-### 1.4.1. What gets saved
+### 4.1. What gets saved
 The production transfer path writes a durable `begin` line to
 `<cache-dir>/transfers/<id>.jsonl`:
 
@@ -380,7 +380,7 @@ and immediately removes that journal. The schema can replay optional `part`
 lines and an `upload_id`, but the current explicit S3 multipart implementation
 does not persist those values across process restarts.
 
-### 1.4.2. What happens on next launch
+### 4.2. What happens on next launch
 Startup does not scan or display interrupted journals today. Files that remain
 lack a terminal record and can be inspected as JSONL to identify source,
 destination, size, and start time:
@@ -389,7 +389,7 @@ destination, size, and start time:
 {"kind":"begin","transfer_id":"abc123abc123abcd","source_uri":"local:///x.bin","destination_uri":"s3://bucket/x.bin","bytes_total":104857600,"upload_id":null,"ts":"2026-06-13T23:45:11Z"}
 ```
 
-### 1.4.3. Manual cleanup
+### 4.3. Manual cleanup
 To remove journals after inspecting them:
 
 ```bash
@@ -397,10 +397,10 @@ rm -f "<cache-dir>"/transfers/*.jsonl
 ```
 
 For S3 uploads that were interrupted outside aws-tui's normal cancel
-path, the [1-day MPU abort lifecycle rule](connections.md#16-recommended-1-day-mpu-abort-lifecycle-rule)
+path, the [1-day MPU abort lifecycle rule](connections.md#6-recommended-1-day-mpu-abort-lifecycle-rule)
 is the server-side backstop.
 
-### 1.4.4. What gets dumped on a crash
+### 4.4. What gets dumped on a crash
 If aws-tui hits an unhandled exception, it writes
 `<cache-dir>/crash/<ts>.txt`:
 
@@ -438,7 +438,7 @@ The planned `continue` button is enabled only when the last user action was
 (delete, copy, move, rename) disable it — you can't safely continue a
 write that may have partially executed.
 
-## 1.5. Browse AWS Glue safely
+## 5. Browse AWS Glue safely
 
 Glue is an AWS-only, read-only service in aws-tui. Select **Glue** in
 the nav rail, then use:
@@ -475,7 +475,7 @@ For the shared source, state, and table-reference workflow:
 
 This is the copy table reference workflow for the typed app clipboard.
 
-### 1.5.1. Least-privilege Glue permissions
+### 5.1. Least-privilege Glue permissions
 
 Grant only the read operations needed by the views you use. A complete
 policy for the shipped Glue page may include:
@@ -515,7 +515,7 @@ AWS IAM and Lake Formation policies remain authoritative. An
 does not mark the connection unreachable or remove that profile from
 other services.
 
-### 1.5.2. Open a table location in S3
+### 5.2. Open a table location in S3
 
 1. In Catalog, select the database and table.
 2. Open the command palette with `:` or `Ctrl+K`.
@@ -532,7 +532,7 @@ Browsing the destination normally needs `s3:ListAllMyBuckets` for the
 initial S3 root load and `s3:ListBucket` for the target bucket/prefix;
 reading an object also needs `s3:GetObject`.
 
-### 1.5.3. Exercise Glue in demo mode
+### 5.3. Exercise Glue in demo mode
 
 Launch `aws-tui --demo`. `demo-dev` and `demo-prod` expose disjoint
 catalog, job/run, and crawler names, so `Shift+S` visibly proves
@@ -540,7 +540,7 @@ profile isolation. `demo-shared` demonstrates a Glue access-denied
 state. The Catalog-to-S3 command uses the matching synthetic profile
 and never makes a real AWS call.
 
-## 1.6. Run Athena queries safely
+## 6. Run Athena queries safely
 
 Athena is an AWS-only, read-only query service. Select **Athena** in the
 nav rail and choose a workgroup, catalog, and database in the page header.
@@ -554,7 +554,7 @@ app-owned active query do not cross profiles or regions. Selections may be
 remembered only within the same connection name and region and are revalidated
 when the page returns.
 
-### 1.6.1. Minimum Athena and data permissions
+### 6.1. Minimum Athena and data permissions
 
 Start with the least privilege required for the views in use. The
 [AWS Service Authorization Reference](https://docs.aws.amazon.com/service-authorization/latest/reference/list_athena.html)
@@ -615,7 +615,7 @@ encrypted Glue Data Catalog additionally requires `kms:GenerateDataKey`,
 catalog requirements in
 [Encryption at rest](https://docs.aws.amazon.com/athena/latest/ug/encryption.html).
 
-### 1.6.2. Customer S3 output versus managed results
+### 6.2. Customer S3 output versus managed results
 
 The shipped Query view sends the selected workgroup and query execution
 context without a caller-side `ResultConfiguration`; its
@@ -660,7 +660,7 @@ context, and a rejected workgroup. These categories use fixed copy and do not
 echo raw SQL, S3 locations, profiles, workgroups, catalogs, databases, tables,
 or request tokens. Other validation failures retain the generic safe fallback.
 
-### 1.6.3. Exact read-only SQL grammar
+### 6.3. Exact read-only SQL grammar
 
 Press `Ctrl+Enter` only after setting workgroup, catalog, and database. The
 local `sqlglot` Athena-dialect parser fails closed and permits exactly one
@@ -794,7 +794,7 @@ and every form outside the grammar above are also rejected before any
 feedback and does not dispatch the SQL. IAM, Lake Formation, workgroup, S3,
 bucket, and KMS policies remain the authorization boundary.
 
-### 1.6.4. Execution, History, Results, and result artifacts
+### 6.4. Execution, History, Results, and result artifacts
 
 After submission, Query records an app-owned execution identity and polls its
 detail through queued, running, and terminal states. On `SUCCEEDED`, it loads
@@ -832,7 +832,7 @@ Treat bytes scanned as the cost signal before broad queries. aws-tui does not
 calculate a currency price, and a workgroup bytes-scanned cutoff can reject or
 limit work.
 
-### 1.6.5. Exercise Athena in demo mode and troubleshoot
+### 6.5. Exercise Athena in demo mode and troubleshoot
 
 Launch `aws-tui --demo`, select **Athena**, and begin on `demo-dev`. Its
 `dev-analytics` workgroup has succeeded, running, failed, empty, missing-output,
@@ -864,7 +864,7 @@ state. All of this is in-memory and resets on launch.
   output URI must be valid, match the active connection/region, and be readable
   through S3. Check `s3:ListBucket` / `s3:GetObject` on the result prefix.
 
-## 1.7. Inspect and query Glue tables through Athena
+## 7. Inspect and query Glue tables through Athena
 
 Glue → Athena navigation is an explicit, read-only handoff. It carries the
 selected table's catalog, database, table, connection name, and region in an
@@ -895,7 +895,7 @@ From an Athena Query view, **Open query table in Glue** is available through
 the command palette when the read-only SQL resolves to exactly one visible
 table. Queries with zero or multiple table references remain on Athena.
 
-### 1.7.1. Iceberg detection and metadata views
+### 7.1. Iceberg detection and metadata views
 
 Glue table detail classifies a table as Iceberg when normalized Glue
 parameters such as `table_type`, `tableType`, `classification`, `provider`, or
@@ -936,7 +936,7 @@ grants. A denied metadata table is reported generically; raw SQL, table
 metadata values, and provider exception text are not written to UI errors or
 diagnostic logs.
 
-### 1.7.2. Snapshot time travel
+### 7.2. Snapshot time travel
 
 In **Snapshots**, highlight a visible snapshot and press `Shift+V`, click the
 time-travel control, or choose **Query Iceberg snapshot in Athena**. The
@@ -958,7 +958,7 @@ authoritatively reloads the execution and reveals its exact CSV artifact under
 the same connection name and region. Athena managed results have no customer
 S3 artifact, so the command remains on Athena.
 
-### 1.7.3. Demo journey and limitations
+### 7.3. Demo journey and limitations
 
 Launch `aws-tui --demo` and follow this no-network path:
 

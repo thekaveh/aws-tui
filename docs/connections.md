@@ -1,4 +1,4 @@
-# 1. Connections for AWS Profiles and S3-Compatible Storage
+# Connections for AWS Profiles and S3-Compatible Storage
 
 > Mirror of spec §6.1–6.3 and §6.5. See also the
 > [cookbook](cookbook.md) for the "connect to local S3Mock" walkthrough.
@@ -11,7 +11,7 @@ A **Connection** is the unit aws-tui authenticates as. Two kinds:
 - `kind = "s3-compatible"` — for MinIO, Cloudflare R2, Backblaze B2,
   Wasabi, Ceph, SeaweedFS, anything with an S3-compatible API.
 
-## 1.1. Config Schema
+## 1. Config Schema
 ```toml
 [connections.kaveh-dev]
 kind = "aws"
@@ -49,7 +49,7 @@ fails with a configuration error before a client is created. Every
 S3-compatible entry requires one of the credential specifications below;
 `static` also requires nonblank `access_key_id` and `secret_access_key`.
 
-## 1.2. Credential sources for S3-compatible connections
+## 2. Credential sources for S3-compatible connections
 The `credentials` field is dispatched at runtime:
 
 | Spec | Source |
@@ -74,7 +74,7 @@ Hand-authored legacy `keychain:<service>` references and `static` entries remain
 readable; editing a static entry through Settings migrates it to keychain-backed
 storage. No first-run credential form is currently shipped.
 
-## 1.3. Auto-Discovery and SSO Cache Probe
+## 3. Auto-Discovery and SSO Cache Probe
 `ConnectionResolver.list()` unions on **every launch**:
 
 1. `[connections.*]` entries in `<config-dir>/config.toml`
@@ -103,7 +103,7 @@ contracts consumed by the pinned SDK.
 > spec'd but deferred to v0.9 — the palette doesn't register
 > connection-management entries in v0.8.x. To materialize today, add
 > the `[connections.<name>]` block to `<config-dir>/config.toml`
-> by hand (the schema is shown in [§1.1](#11-config-schema)).
+> by hand (the schema is shown in [§1.1](#1-config-schema)).
 
 For each SSO-backed AWS connection, `AwsSession.probe_token(conn)` performs a
 cheap freshness check **without calling AWS**:
@@ -122,7 +122,7 @@ SSO-backed profiles use local AWS config and SSO cache reads only; no AWS
 network call. Non-SSO profiles return `connected` from the offline probe and
 are validated by the live boto path.
 
-## 1.4. Switching between connections at runtime
+## 4. Switching between connections at runtime
 
 Every connection the resolver returns — AWS profiles, manually-configured
 `s3-compatible` entries, and auto-discovered AWS profiles alike — joins
@@ -168,7 +168,7 @@ Why this is useful day-to-day:
 
 The `,` key opens **Settings** where you can add, edit, or delete
 `s3-compatible` connections (see the
-[`docs/cookbook.md` S3Mock walkthrough](cookbook.md#11-connect-to-and-switch-between-data-sources).
+[`docs/cookbook.md` S3Mock walkthrough](cookbook.md#1-connect-to-and-switch-between-data-sources).
 AWS profiles are read-only from aws-tui's perspective — manage those
 through the standard `~/.aws/` tooling.
 
@@ -179,7 +179,7 @@ S3 from the nav after a local-only fallback retries the initial connection
 and clears that connection's unreachable mark; pressing `r` on an
 unreachable pane and recovering it also clears the mark.
 
-### 1.4.1. Source scopes and service identity
+### 4.1. Source scopes and service identity
 
 aws-tui has two source scopes. S3 keeps an independent source in each file
 pane, so the left and right panes can intentionally point at different
@@ -237,7 +237,7 @@ service-scoped: it remains visible in that service page and does not mark the
 connection unreachable or remove it from the source cycle. A connection is
 only marked unreachable by connection-level S3 pane failures.
 
-## 1.5. Provider Configuration Patterns
+## 5. Provider Configuration Patterns
 aws-tui enforces only the connection fields it passes to botocore: an HTTP(S)
 endpoint, region, addressing style, TLS verification choice, and credential
 source. Use the storage provider's current documentation to choose the exact
@@ -246,7 +246,7 @@ required. Set `verify_tls = false` only for a controlled development endpoint
 whose certificate cannot be verified; aws-tui shows a warning when that
 setting is active.
 
-## 1.6. Recommended 1-Day MPU Abort Lifecycle Rule
+## 6. Recommended 1-Day MPU Abort Lifecycle Rule
 Set a 1-day lifecycle rule to abort incomplete multipart uploads on
 every bucket you write to from aws-tui (or any other tool). aws-tui uses
 explicit multipart upload for non-empty S3 writes and aborts it on cancellation
@@ -271,18 +271,18 @@ aws s3api put-bucket-lifecycle-configuration \
     --bucket <name> --lifecycle-configuration file://lifecycle.json
 ```
 
-## 1.7. First-run flow
+## 7. First-run flow
 If `ConfigStore.load()` returns no `[connections.*]` and
 `~/.aws/{config,credentials}` is also empty, v0.8.x opens the main
 screen with a local-only placeholder. No first-run modal is currently
 shipped. Use `aws configure sso` / `aws sso login` for AWS profiles, or
 open Settings with `,` to add an S3-compatible endpoint.
 
-## 1.8. Interrupted-transfer diagnostic journal
+## 8. Interrupted-transfer diagnostic journal
 aws-tui writes a durable JSONL `begin` record under
 `<cache-dir>/transfers/<id>.jsonl` while each transfer is active. Terminal
 transfers are removed promptly, so files left after a process crash identify
 interrupted work. Startup scanning, automatic replay, and persisted multipart
 upload IDs remain deferred; see the
-[cookbook](cookbook.md#14-diagnose-an-interrupted-transfer-after-a-crash) for
+[cookbook](cookbook.md#4-diagnose-an-interrupted-transfer-after-a-crash) for
 inspection and cleanup.
