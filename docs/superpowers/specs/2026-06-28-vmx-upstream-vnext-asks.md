@@ -6,7 +6,7 @@
 | Date | 2026-06-28 (initial) / 2026-06-29 (round-2 re-framing) |
 | Source project | [aws-tui](https://github.com/thekaveh/aws-tui) — Textual-based TUI for AWS, currently consuming `vmx>=2.6.0,<3.0.0` |
 | Target audience | VMx maintainer(s) planning the vNext (post-2.6.x) release |
-| Related | [VMx toolkit adoption](2026-06-28-vmx-toolkit-adoption-design.md) §4 (per-VM adoption targets), §9 (open questions), §9.bis (brainstorm resolutions incl. round 3 directive at §9.bis.11), §1.3 (mistakes record) |
+| Related | [VMx toolkit adoption](2026-06-28-vmx-toolkit-adoption-design.md) §4 (per-VM adoption targets), §9 (open questions), §9.bis (brainstorm resolutions incl. round 3 directive at §9.bis.11), §3 (mistakes record) |
 | Tone (post round-2) | "We composed VMx primitive X inside a custom aws-tui VM that adds behaviour Y on top; vNext shipping X-natively-with-Y would let consumers skip the wrapper." |
 
 ---
@@ -661,7 +661,7 @@ The aws-tui adoption spec's Appendix C cheat sheet had recorded
 "Observable collection that auto-disposes items on removal via the
 service registry" — paraphrased from somewhere outside the source, and
 **wrong against the source**. This was recorded as **Mistake 9** in
-§1.3 of the spec, per the same shape as Mistakes 1, 4, 6 (paraphrase
+§3 of the spec, per the same shape as Mistakes 1, 4, 6 (paraphrase
 substituted for source review).
 
 **What aws-tui did instead:** Corrected the spec. Keep the existing
@@ -691,7 +691,7 @@ pass; consider (B) for vNext+1 once a second use case shows up.
 **Estimated upstream effort:** **Trivial for (A)** (1-line rename or
 30-line docstring), **small for (B)** (~50 LOC + tests).
 
-**Reference:** aws-tui spec §4.2.4, §9 q6, §1.3 mistake 9.
+**Reference:** aws-tui spec §4.2.4, §9 q6, §3 mistake 9.
 
 ---
 

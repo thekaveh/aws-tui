@@ -852,7 +852,7 @@ state. All of this is in-memory and resets on launch.
 - **Cannot access the workgroup result location.** The workgroup can still be
   configured for enforced S3 output while the active principal lacks the
   required bucket, object, or KMS permissions. Check the result-prefix grants
-  listed in §1.6.2; aws-tui does not replace the enforced destination.
+  listed in §6.2; aws-tui does not replace the enforced destination.
 - **Selected query context or workgroup was rejected.** Re-select the catalog,
   database, and enabled workgroup for the active profile and region. The
   generated SQL is database/table relative because the exact catalog and
@@ -928,7 +928,7 @@ successful sibling tabs.
 These are real Athena queries, not free Glue lookups. Account for
 metadata-query costs, workgroup limits, bytes scanned, result storage, and
 concurrency exactly as for other Athena statements. The selected profile needs
-the Glue read operations in §1.5.1, the Athena operations in §1.6.1, source
+the Glue read operations in §5.1, the Athena operations in §6.1, source
 data/catalog authorization where Athena requires it, and result-location
 permissions for its workgroup. Lake Formation-governed tables additionally
 need `lakeformation:GetDataAccess` plus the relevant `DESCRIBE`/`SELECT`

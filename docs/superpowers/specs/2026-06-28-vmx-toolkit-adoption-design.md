@@ -5,7 +5,7 @@
 | Status | Drafted, awaiting brainstorm → plan → execution |
 | Date | 2026-06-28 |
 | Owner | TBD at brainstorm |
-| Driver | Architectural review session 2026-06-28 — see §1.2 |
+| Driver | Architectural review session 2026-06-28 — see §2 |
 | Related | [docs/superpowers/specs/2026-06-13-aws-tui-design.md](2026-06-13-aws-tui-design.md) (M0 design baseline), [docs/architecture.md](../../architecture.md) (current five-layer model), [VMx 2.6.1 source](https://github.com/thekaveh/VMx) |
 | Estimated effort | 4–6 PRs over 2–3 calendar weeks at the project's typical cadence (Phases 1–6) + 1 PR for Phase 7 (focus coordinator) |
 | Target VMx version | `>=2.6.0,<3.0.0` (no version bump required) |
@@ -16,13 +16,13 @@
 
 > **Read this entire section before doing anything else.** The spec is the
 > output of three review rounds; trying to act on it without reading the
-> mistakes record (§1.3) and the discipline rules below has a high chance
+> mistakes record (§3) and the discipline rules below has a high chance
 > of repeating those mistakes.
 
 **Read sections in this order:**
 
-1. **§1.1** — what the work delivers and why (two architectural gaps).
-2. **§1.3 — every numbered mistake.** Eight mistakes the prior review went
+1. **§1** — what the work delivers and why (two architectural gaps).
+2. **§3 — every numbered mistake.** Eight mistakes the prior review went
    through. Each one is a trap the next worker can also fall into. Read
    them as "do not".
 3. **§3.2.bis** — the ten parallel sources of focus / selection state.
@@ -40,7 +40,7 @@
 
 **Discipline rules — non-negotiable.**
 
-These are not aspirational. The methodology mistakes recorded in §1.3
+These are not aspirational. The methodology mistakes recorded in §3
 (specifically 1, 4, 6, 8) are all the same shape: someone opined on a
 VMx primitive or an aws-tui VM without reading the source first. Every
 brainstorming decision, every per-VM PR, every spec amendment must
@@ -67,7 +67,7 @@ record:
   `uv run python -c "from vmx import <Symbol>; print(<Symbol>)"`
 
 If a claim is made without one of those commands behind it, the spec's
-§1.3 mistakes 1, 4, 6 are repeating. The reviewer of any PR or
+§3 mistakes 1, 4, 6 are repeating. The reviewer of any PR or
 amendment should reject on those grounds.
 
 **Brainstorming-session guardrails.**
@@ -78,7 +78,7 @@ questions. It does NOT:
 - Propose new VMx primitives (mistake 2: VMx already ships everything we
   need; see §2).
 - Re-litigate decisions captured in §4 or §5 (the spec is canonical;
-  amendments require an explicit reason recorded in §1.3 as "mistake N").
+  amendments require an explicit reason recorded in §3 as "mistake N").
 - Expand scope to include features not listed in §4.2 / §4.3
   (mistake 8 was scope creep in the opposite direction; do not over-
   correct).
@@ -90,7 +90,7 @@ questions. It does NOT:
   scope creep or re-litigation.
 
 If brainstorming finds the spec genuinely wrong on a point (a 9th
-mistake), record it as such with the same format §1.3 uses, then
+mistake), record it as such with the same format §3 uses, then
 proceed.
 
 **Workflow assumptions** — see Appendix A. **Per-VM cross-reference table**
@@ -118,7 +118,7 @@ the project shipped the same shape of fix repeatedly:
 Every fix landed entirely in the View layer (`src/aws_tui/ui/widgets/...` and
 the per-theme `.tcss` files). Surface-read, this looks like a polish phase
 ironing out View-side details. **The deeper read, surfaced in the 2026-06-28
-review session and recorded in §1.2, is that several of these bugs were
+review session and recorded in §2, is that several of these bugs were
 symptoms of TWO related architectural gaps**:
 
 1. The project hand-rolls the observable-list-with-cursor pattern in every
@@ -731,7 +731,7 @@ forgot-to-broadcast / forgot-to-dispose-child bug families**.
 ### 5.1. Principles
 
 1. **Re-evaluate each existing hand-rolled VM against the toolkit
-   before re-writing it.** The mistake §1.3 records is exactly this:
+   before re-writing it.** The mistake §3 records is exactly this:
    assume the framework lacks a primitive without checking. Every
    per-VM migration starts by `cat`-ing the candidate VMx primitive's
    source and asking, in writing on the PR, "does this VM's contract
@@ -763,7 +763,7 @@ forgot-to-broadcast / forgot-to-dispose-child bug families**.
 
 ### 5.2. Per-VM target shape
 
-> **Methodology reminder (from §1.3 mistake 5).** Every entry below carries
+> **Methodology reminder (from §3 mistake 5).** Every entry below carries
 > three explicit answers: **(1) primitives evaluated**, **(2) chosen primitive
 > and reason**, **(3) what was read to know**. The next worker should
 > reproduce this discipline for any VM the spec does not pre-evaluate.
@@ -890,7 +890,7 @@ load_more, on filter change.
 `HierarchicalVM[FileSystemNode, FileSystemNodeVM]`, `ObservableList[FileEntry]`
 (rejected — entries are per-row VMs, not raw values).
 
-This is the case where the choice is non-obvious and where mistake 5 (§1.3)
+This is the case where the choice is non-obvious and where mistake 5 (§3)
 was made — the first draft defaulted to `CompositeVM` without explicitly
 considering `HierarchicalVM`. The user's review pushback was on exactly this
 question. The honest answer is the choice depends on a design call that has
@@ -1239,7 +1239,7 @@ relative to Phase 7 — they don't intersect with focus.
        the toolkit adoption, or AFTER?
 
 (Recorded as §5.0 because the user's review explicitly asked. Mistake 7 in
-§1.3 was not having addressed it.)
+§3 was not having addressed it.)
 
 **The two candidates for "first":**
 
@@ -1583,7 +1583,7 @@ Domain stays as-is.
 
 (Was "out of scope — write a separate follow-up spec".) After review
 round 3 surfaced that the View-side focus / selection state is part of
-the SAME MVVM-principle refactor as the toolkit adoption (see §1.3
+the SAME MVVM-principle refactor as the toolkit adoption (see §3
 mistake 8 and §3.2.bis), the FocusCoordinatorVM is now §4.3 of this
 spec and lands as Phase 7 (§5.8).
 
@@ -1776,7 +1776,7 @@ the primitive, ~50–80 LOC hand-roll wrapper would have been required,
 and cursor-mapping between outer and inner adds duplicated state.
 Option B (filter at the View) was rejected: pushes filter logic into
 widget code, breaks the "VM layer reusable by a second View" property
-the spec's §1.2 q4 asked about.
+the spec's §2 q4 asked about.
 
 **Spec amendments:** §7.2 risk closed with "Option C adopted for both
 VMs". §4.2.2 (already updated by 12.1) reads consistently. §4.2.8
@@ -1894,7 +1894,7 @@ TransfersVM's `finally: vm.dispose()` block stays". LOC delta revised
 from `−100` to **`−60`** (the remaining savings come from a `Batch`
 block on pre-registration, not from auto-dispose). Appendix C cheat
 sheet entry for `ServicedObservableCollection` is corrected
-accordingly. **Mistake 9 (below) is added to §1.3** as the audit-
+accordingly. **Mistake 9 (below) is added to §3** as the audit-
 trail entry.
 
 **Upstream ask:** Item 6 in the vNext feedback report — rename to
@@ -1905,7 +1905,7 @@ auto-dispose-on-remove.
 
 ---
 
-### 11.8. 9.bis.8. Mistake 9 (recorded against §1.3)
+### 11.8. 9.bis.8. Mistake 9 (recorded against §3)
 
 **Mistake 9: spec Appendix C entry for `ServicedObservableCollection`
 was paraphrased from an unspecified source — likely an upstream doc —
@@ -2051,7 +2051,7 @@ now CONCRETE (named PR/file/line) rather than abstract.
 
 **Mistake 10 recorded.** §9's question set was VMx-fit-scoped; the
 MVVM-half open questions implicit in §3.2.bis / §4.3 / §5.8 were not
-called out. See §1.3 amendment for the canonical record.
+called out. See §3 amendment for the canonical record.
 
 **Spec amendments triggered by this subsection:**
 
@@ -2062,10 +2062,10 @@ called out. See §1.3 amendment for the canonical record.
   explicit "PR #X cannot recur" checks).
 - §4.3 risk note (slot priority table; projection timing) gains
   cross-references to Q-MVVM-A, Q-MVVM-B, Q-MVVM-C.
-- §1.3 gains a Mistake 10 amendment block (next subsection ties it
+- §3 gains a Mistake 10 amendment block (next subsection ties it
   together with the existing record).
 
-### 11.10. 9.bis.10. Mistake 10 (recorded against §1.3)
+### 11.10. 9.bis.10. Mistake 10 (recorded against §3)
 
 **Mistake 10: §9's open-questions set was scoped only to VMx-
 primitive-fit; the MVVM-half open questions implicit in §3.2.bis /
@@ -2110,7 +2110,7 @@ The maintainer's directive, delivered verbatim:
 
 This supersedes the implicit "VMx fits → adopt; doesn't fit → leave
 hand-rolled" dichotomy rounds 1 and 2 operated on (recorded as
-Mistake 11 in §9.bis.12 and as a §1.3 amendment block).
+Mistake 11 in §9.bis.12 and as a §3 amendment block).
 
 **The VMx-use ladder applied to each VM need:**
 
@@ -2254,7 +2254,7 @@ once the wrapper shapes are sketched.
   could ship these natively so consumers skip the wrapper"
   rather than "we couldn't use these primitives".
 
-### 11.12. 9.bis.12. Mistake 11 (recorded against §1.3)
+### 11.12. 9.bis.12. Mistake 11 (recorded against §3)
 
 **Mistake 11: brainstorm rounds 1 and 2 operated on an implicit
 "VMx fits → adopt; doesn't fit → hand-roll" dichotomy.**

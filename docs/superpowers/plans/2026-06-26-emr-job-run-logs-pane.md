@@ -56,7 +56,7 @@
 - ``tests/unit/domain/_in_memory_emr.py`` — Add fake S3 log files (key → bytes mapping) + ``head_object`` / ``get_object`` stubs aligned with the streaming reader contract.
 - 10 × ``src/aws_tui/ui/themes/*.tcss`` — Per-theme block for ``JobRunLogsPane`` chrome (filter strip, log-file selector, line container, status footer, placeholder, in-progress spinner row, match-highlight class).
 - ``CHANGELOG.md`` — ``[Unreleased] ### Added`` block for the logs pane.
-- ``docs/keybindings.md`` §1.8 — EMR section gains rows: ``Enter`` on LOGS (load), ``r`` on LOGS (reload), ``f`` (filter modal).
+- ``docs/keybindings.md`` §8 — EMR section gains rows: ``Enter`` on LOGS (load), ``r`` on LOGS (reload), ``f`` (filter modal).
 - ``docs/architecture.md`` — ``vm/emr_serverless/`` adds ``JobRunLogsVM``.
 - ``docs/superpowers/specs/2026-06-25-emr-serverless-service-design.md`` — Status amendment: logs shipped under PR-B-logs naming, scoped to ``stdout/stderr`` streaming.
 
@@ -1427,7 +1427,7 @@ git commit -am "feat(emr): HintLegend gains 'filter logs' chip + 'f' keybinding"
 
 **Files:**
 - Modify: ``CHANGELOG.md`` (``[Unreleased] ### Added``)
-- Modify: ``docs/keybindings.md`` §1.8 — Logs section + ``Enter`` / ``r`` / ``f`` rows + 3-slot Tab cycle update
+- Modify: ``docs/keybindings.md`` §8 — Logs section + ``Enter`` / ``r`` / ``f`` rows + 3-slot Tab cycle update
 - Modify: ``docs/architecture.md`` — ``vm/emr_serverless/`` list adds ``JobRunLogsVM``
 - Modify: ``docs/superpowers/specs/2026-06-25-emr-serverless-service-design.md`` — Status amendment block
 

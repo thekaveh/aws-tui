@@ -8,6 +8,7 @@ from scripts.docs.check_docs import (
     check_local_anchors,
     check_numbering,
     check_placeholders,
+    check_section_references,
     check_self_containment,
     check_titles,
 )
@@ -346,3 +347,31 @@ def test_titles_accept_matching_h1_and_exempt_the_landing_page(tmp_path):
     _write_docs(tmp_path)
 
     assert check_titles(MANIFEST, tmp_path) == []
+
+
+def test_section_references_flag_a_reference_with_no_such_section(tmp_path):
+    """Plain-prose refs are rewritten by nothing and seen by no link checker."""
+    _write_docs(tmp_path)
+    (tmp_path / "docs" / "index.md").write_text("# aws-tui\n\n## 1. Intro\n\nSee §4.2.\n")
+
+    findings = check_section_references(MANIFEST, tmp_path)
+
+    assert any("§4.2 has no such section" in finding.message for finding in findings)
+
+
+def test_section_references_accept_a_resolving_reference(tmp_path):
+    _write_docs(tmp_path)
+    (tmp_path / "docs" / "index.md").write_text(
+        "# aws-tui\n\n## 1. Intro\n\n### 1.1. Detail\n\nSee §1.1.\n"
+    )
+
+    assert check_section_references(MANIFEST, tmp_path) == []
+
+
+def test_section_references_leave_external_spec_citations_alone(tmp_path):
+    _write_docs(tmp_path)
+    (tmp_path / "docs" / "index.md").write_text(
+        "# aws-tui\n\n## 1. Intro\n\nMirror of spec §4.2.\n"
+    )
+
+    assert check_section_references(MANIFEST, tmp_path) == []

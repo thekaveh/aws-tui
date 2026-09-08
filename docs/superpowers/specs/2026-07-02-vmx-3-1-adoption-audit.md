@@ -252,7 +252,7 @@ Notes:
   prior exact ask.
 - The old implementation-specific primitive tests were deleted; facade behavior
   remains covered by S3 form tests, round-3 composition tests, UI inline-form
-  tests, and the unit/integration coverage run recorded in §1.6.3.
+  tests, and the unit/integration coverage run recorded in §6.3.
 
 ### 4.5. `FocusCoordinatorVM` -> `DiscriminatorVM`
 
@@ -646,7 +646,7 @@ integration boundaries, and view behavior.
 
 For each replacement:
 
-- Run the targeted tests listed in §1.7.
+- Run the targeted tests listed in §7.
 - Run `uv run pytest tests/unit/vm tests/unit/ui -q`.
 - For larger view/event refactors, run the relevant snapshot tests.
 - Run coverage for unit and in-process integration tests:

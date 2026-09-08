@@ -103,7 +103,7 @@ contracts consumed by the pinned SDK.
 > spec'd but deferred to v0.9 — the palette doesn't register
 > connection-management entries in v0.8.x. To materialize today, add
 > the `[connections.<name>]` block to `<config-dir>/config.toml`
-> by hand (the schema is shown in [§1.1](#1-config-schema)).
+> by hand (the schema is shown in [§1](#1-config-schema)).
 
 For each SSO-backed AWS connection, `AwsSession.probe_token(conn)` performs a
 cheap freshness check **without calling AWS**:

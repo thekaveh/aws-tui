@@ -1921,7 +1921,7 @@ window.MathJax = {
 Invoke the **architecture-diagram skill** to create `docs/diagrams/architecture.html` — a dark-themed standalone HTML file with an inline `<svg>`. Depict aws-tui's layered MVVM architecture to match `docs/architecture.md §1.1 Layers`:
 - Three stacked layers, top→bottom: **View** (Textual widgets/panes) → **ViewModel** (VMx VMs, bindings) → **Domain** (Service protocol, AWS/S3 clients).
 - A **Composition Root** box wiring the layers (per §1.2).
-- A left→right **Lifecycle** arrow (startup → mount → dispose) per §1.3.
+- A left→right **Lifecycle** arrow (startup → mount → dispose) per §3.
 - Dark background, cyan (`#22d3ee`) accents to match the site theme.
 
 Requirements the renderer depends on: the file MUST contain a single inline `<svg>…</svg>` block (no external `<img>`/CSS refs inside it); any HTML named entities inside the SVG (e.g. `&middot;`) are fine — `extract_svg` sanitizes them.

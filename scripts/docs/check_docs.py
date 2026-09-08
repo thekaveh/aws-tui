@@ -176,6 +176,42 @@ def check_titles(manifest: Manifest, repo_root: str | Path) -> list[Finding]:
     return findings
 
 
+_SECTION_REF_RE = re.compile(r"§ ?(\d+(?:\.\d+)+)")
+
+
+def check_section_references(manifest: Manifest, repo_root: str | Path) -> list[Finding]:
+    """Reject a ``§N.M`` cross-reference with no such section in its own document.
+
+    These are plain prose, so nothing rewrites them when sections are renumbered
+    and no link checker sees them. Seven were already stale before the numbering
+    was standardized. A reference whose line cites the design spec is external
+    and is left alone.
+    """
+    repo_root = Path(repo_root)
+    findings: list[Finding] = []
+    for leaf in manifest.leaves():
+        if leaf.source is None:
+            continue
+        path = repo_root / leaf.source
+        if not path.is_file():
+            continue
+        lines = path.read_text(encoding="utf-8").splitlines()
+        numbers = {match.group(2) for match in (_HEADING_RE.match(line) for line in lines) if match}
+        for line_number, line in enumerate(lines, start=1):
+            if "spec" in line.casefold():
+                continue
+            for match in _SECTION_REF_RE.finditer(line):
+                if match.group(1) not in numbers:
+                    findings.append(
+                        Finding(
+                            "error",
+                            f"{leaf.source}:{line_number}: section reference "
+                            f"§{match.group(1)} has no such section in this document",
+                        )
+                    )
+    return findings
+
+
 def check_numbering(manifest: Manifest, repo_root: str | Path) -> list[Finding]:
     """Enforce unnumbered page titles with hierarchically numbered sections.
 
@@ -409,6 +445,7 @@ def check(repo_root: str | Path, generated_root: str | Path) -> int:
     findings += check_assets(generated_root)
     findings += check_numbering(manifest, repo_root)
     findings += check_titles(manifest, repo_root)
+    findings += check_section_references(manifest, repo_root)
     findings += check_local_anchors(repo_root)
     for f in findings:
         print(f"[{f.severity}] {f.message}", file=sys.stderr)
