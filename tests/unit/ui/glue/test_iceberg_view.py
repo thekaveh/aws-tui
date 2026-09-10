@@ -52,7 +52,14 @@ def _build_vm(*, iceberg: bool = True) -> tuple[GluePageVM, RecordingInspector]:
 
 
 async def _wait_until(predicate: Callable[[], bool]) -> None:
-    async with asyncio.timeout(5):
+    """Wait for ``predicate``, sized for the slowest runner in the matrix.
+
+    Five seconds was enough locally but not on windows-latest under a loaded
+    three-Python matrix, where this raised ``TimeoutError`` while the same
+    commit passed everywhere else. ``tests/helpers.DEFAULT_DRAIN_TIMEOUT_SECONDS``
+    already uses 30s for the same reason; a real hang still fails, just later.
+    """
+    async with asyncio.timeout(30):
         while not predicate():
             await asyncio.sleep(0.01)
 

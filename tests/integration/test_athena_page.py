@@ -81,6 +81,54 @@ def test_athena_is_registered_after_glue_and_is_hidden_from_minio(tmp_path: Path
         ctx.log_sink.close()
 
 
+async def _settled(
+    pilot: object,
+    predicate: object,
+    *,
+    what: str,
+    rounds: int = 50,
+) -> None:
+    """Pause until ``predicate`` holds, then return.
+
+    Widget state here is painted by a refresh that the view schedules through
+    ``call_after_refresh`` when the view model notifies, so a single
+    ``pilot.pause()`` asserts a frame the refresh may not have produced yet.
+    On a fast runner the paint wins; on a slow one it does not, which is how
+    these assertions failed on windows-latest while passing on macOS.
+
+    Bounded, and raises with ``what`` so a genuine regression still fails
+    loudly instead of hanging.
+    """
+    for _ in range(rounds):
+        if predicate():  # type: ignore[operator]
+            return
+        await pilot.pause()  # type: ignore[attr-defined]
+    raise AssertionError(f"never settled: {what}")
+
+
+async def _seed_sql(pilot: object, query_vm: object, editor: TextArea, sql: str) -> None:
+    """Put ``sql`` in the editor without racing the MVVM binding.
+
+    Assigning ``editor.text`` reaches the view model through a queued Textual
+    ``Changed`` message, while ``AthenaQueryView._refresh`` -- scheduled by any
+    VM notification through ``call_after_refresh`` -- rewrites the editor from
+    ``vm.sql``. Whichever callback lands first wins. A widget-seeded editor can
+    therefore be blanked again before the assertion runs, and assertions on
+    VM-derived state (command admission, hint enablement) can read the previous
+    value. Reproduced deterministically by running ``_refresh`` before the
+    ``Changed`` message: the editor comes back empty, which is the
+    ``assert '' == 'SELECT 1'`` seen on windows-latest.
+
+    Seeding the view model -- the source of truth the editor is a projection of
+    -- makes both sides agree from the outset. Tests that deliberately simulate
+    a user typing still assign ``editor.text`` directly; this is only for
+    establishing a precondition.
+    """
+    query_vm.set_sql(sql)  # type: ignore[attr-defined]
+    await pilot.pause()  # type: ignore[attr-defined]
+    assert editor.text == sql
+
+
 @pytest.mark.asyncio
 async def test_real_app_mounts_editor_results_and_explicit_entry_focuses_editor(
     tmp_path: Path,
@@ -93,8 +141,7 @@ async def test_real_app_mounts_editor_results_and_explicit_entry_focuses_editor(
         assert ctx.root_vm.content_host.current_id == "athena"
         assert app.focused is page.query_one("#athena-editor", TextArea)
         editor = page.query_one("#athena-editor", TextArea)
-        editor.text = "SELECT 1"
-        await pilot.pause()
+        await _seed_sql(pilot, vm.query, editor, "SELECT 1")
         await pilot.press("tab")
         assert page.query_one("#athena-execute", Button).has_focus
         await pilot.press("shift+tab")
@@ -165,7 +212,7 @@ async def test_results_retry_keeps_button_error_visible_until_success(
         await vm.results.load_more()
         await pilot.pause()
         assert vm.results.error_text == "Athena results request failed"
-        assert button.has_class("-error")
+        await _settled(pilot, lambda: button.has_class("-error"), what="results button error class")
         assert button.tooltip == "Athena results request failed"
 
         block_request = True
@@ -176,7 +223,7 @@ async def test_results_retry_keeps_button_error_visible_until_success(
 
         assert vm.results.is_loading_more
         assert vm.results.error_text == "Athena results request failed"
-        assert button.has_class("-error")
+        await _settled(pilot, lambda: button.has_class("-error"), what="results button error class")
         assert button.tooltip == "Athena results request failed"
 
         release_request.set()
@@ -185,7 +232,7 @@ async def test_results_retry_keeps_button_error_visible_until_success(
 
         assert not vm.results.is_loading_more
         assert vm.results.error_text == "Athena results request failed"
-        assert button.has_class("-error")
+        await _settled(pilot, lambda: button.has_class("-error"), what="results button error class")
         assert button.tooltip == "Athena results request failed"
 
         should_fail = False
@@ -197,7 +244,7 @@ async def test_results_retry_keeps_button_error_visible_until_success(
 
         assert vm.results.is_loading_more
         assert vm.results.error_text == "Athena results request failed"
-        assert button.has_class("-error")
+        await _settled(pilot, lambda: button.has_class("-error"), what="results button error class")
         assert button.tooltip == "Athena results request failed"
 
         release_request.set()
@@ -205,7 +252,9 @@ async def test_results_retry_keeps_button_error_visible_until_success(
         await pilot.pause()
 
         assert vm.results.error_text is None
-        assert not button.has_class("-error")
+        await _settled(
+            pilot, lambda: not button.has_class("-error"), what="results button error cleared"
+        )
         assert button.tooltip == "Load more result rows"
 
 
@@ -250,7 +299,7 @@ async def test_real_app_allows_tab_strip_arrow_navigation(tmp_path: Path) -> Non
 async def test_real_app_routes_tabs_execute_cancel_and_lazy_views(tmp_path: Path) -> None:
     async with _mounted_athena_app(tmp_path) as (app, _ctx, vm, client, pilot):
         editor = app.query_one("#athena-editor", TextArea)
-        editor.text = "SELECT 1"
+        await _seed_sql(pilot, vm.query, editor, "SELECT 1")
         editor.focus()
         await pilot.pause()
 
@@ -304,12 +353,10 @@ async def test_athena_command_hints_follow_live_command_and_pager_state(
         assert not hint_enabled("athena.load_more")
 
         editor = app.query_one("#athena-editor", TextArea)
-        editor.text = "SELECT 1"
-        await pilot.pause()
+        await _seed_sql(pilot, vm.query, editor, "SELECT 1")
         assert hint_enabled("athena.execute")
 
-        editor.text = "DELETE FROM events"
-        await pilot.pause()
+        await _seed_sql(pilot, vm.query, editor, "DELETE FROM events")
         assert not hint_enabled("athena.execute")
 
         vm.query._execution_ref = QueryExecutionRef(  # type: ignore[attr-defined]

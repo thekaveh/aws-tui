@@ -158,7 +158,50 @@ UploadPart
 UploadPartCopy
 ```
 
-## 6. Deferred contract checks
+## 6. 2026-09-10 dependency maintenance pass
+
+Carries §5 forward at new pins. Only the four refs below moved; every other
+contract, boundary, and verification method is unchanged and restated here so
+this section is the single authoritative record of what is currently in force.
+`anyio` 4.14.2 → 4.15.1, `platformdirs` 4.11.5 → 4.11.8, `sqlglot` 30.17.0 →
+30.18.0, and `ruff-pre-commit` v0.16.5 → v0.16.6. The three locked packages are
+transitive-facing utilities consumed through public APIs; `ruff-pre-commit` is
+lint tooling whose ref was verified against the upstream tag rather than taken
+from the bump alone. Supersedes dependabot #194, #195, #196, and #197, which
+could not update this ledger themselves and so could never go green.
+
+| Integration point | Pinned version / ref | Consumed contract | Verification method |
+|---|---:|---|---|
+| Python runtime and AWS SDK graph | `aioboto3==15.5.0`, `aiobotocore==2.25.1`, `botocore==1.40.61`, `textual==8.2.8`, `vmx==3.23.0`, `reactivex==5.1.0`, `rich==15.0.0`, `keyring==25.7.0`, `tomli-w==1.2.0`, `platformdirs==4.11.8`, `sqlglot==30.18.0`, `anyio==4.15.1`, and `aiofiles==25.1.0` from `uv.lock` | VMx and the other runtime packages use public facades or documented module paths. The Textual compatibility adapter uses exact-version private hooks (`_bindings`, `_pre_process`, and `_handle_exception`) because Textual 8.2.8 has no equivalent public binding-replacement and lifecycle-recovery surface; the exact Textual pin prevents unreviewed drift. VMx owns command admission/cancellation, modal focus restoration, immutable form construction, observable state, component lifecycle, filtering, and paging. AWS operations and request members are validated against the locked Botocore models. | Full unit, integration, snapshot, and E2E tiers; minimum-direct-dependency tests; import/layer checks; VMx compatibility regressions for command cancellation, retired pager generations, form validation, and modal restoration; source-derived Botocore operation and input-member tests. |
+| VMx 3.23 compatibility and specialization | `vmx==3.23.0` from `uv.lock`; runtime requirement `vmx>=3.23.0,<4.0.0` | `FocusCoordinatorVM` delegates modal save/restore behavior to public `DiscriminatorVM.modal_open()` / `modal_close()`. `S3ConnectionFormVM` supplies complete field and model validation through `FormVMBuilder` at construction time. Athena drains public `AsyncRelayCommand.is_executing` admission state after cancellation and tracks the provider task behind nested command execution so shutdown waits for cancellation-resistant I/O. No VM reaches into VMx private fields. | Focus, Settings form, Athena query/results, VMx smoke, mypy, and lifecycle tests run against the locked package. The dated VMx 3.23 maintenance report records adopted and rejected candidates plus production-line metrics. |
+| Bounded AWS operational state | Botocore service contracts above plus internal provider-error taxonomy | EMR requests at most 50 applications or job runs per page; application discovery stops above 100 pages or 1,000 records, and bulk job-run discovery stops above 100 pages. User-driven Glue Catalog, Glue Jobs, Glue Crawlers, and EMR job-run collections stop at 1,000 items through a bounded VMx token-pager specialization. Athena history, saved-query, and context collections stop at 1,000 items, while result rows stop at 10,000, through an app-owned bounded snapshot pager that retains VMx commands. A visible, snapshot-stable safety-limit state replaces the ordinary load-more affordance when a ceiling ends pagination. Log discovery classifies only the run-relative suffix so user prefixes cannot impersonate worker markers. Recursive S3 deletion stops above 100 listing pages or 10,000 objects and reports how many objects were already removed. S3 `SlowDown` and `RequestLimitExceeded` responses map to `ThrottledError`; service availability and transport failures map to `ProviderUnreachableError`. | Exact request-shape and pager tests assert page size, page ceilings, collection ceilings, final-page clipping, refresh and snapshot preservation, visible truncation state, partial-delete diagnostics, repeated-token rejection, run-relative log classification, and throttling versus reachability behavior. |
+| Bounded local and cross-provider state | Internal `InMemoryFS` and `CrossFs` contracts | Demo objects are limited to 100 MiB each and 256 MiB in aggregate, and a directory listing fails closed above 10,000 entries. Recursive cross-provider copy and move traversals stop above 10,000 entries or 128 levels; owned staging data is cleaned after a limit failure. | In-memory filesystem boundary tests cover known-size and streamed writes, overwrite accounting, and listing ceilings. Cross-filesystem tests cover entry/depth rejection and stage cleanup. |
+| Packaging and developer tooling | `hatchling==1.32.0`, `testcontainers==4.15.0`, and `textual-dev==1.8.0` from `uv.lock`; `build-system.requires` constrained to `hatchling>=1.31.0,<2` | CI, release, Pages, and bootstrap sync/export with `--locked`, so a stale lock fails instead of silently installing it. Bootstrap installs all dependency groups. The Textual development CLI used by `scripts/dev.sh` is declared explicitly. Wheel and sdist members must exclude repository metadata, tests, local caches, and traversal paths; both artifacts must contain every source Python module, `py.typed`, and packaged theme stylesheet, while the sdist must also retain its build metadata and PyPI readme. | `uv lock --check`, script/workflow guard tests, real wheel/sdist builds, `scripts.check_dist`, Twine metadata checks, isolated wheel and sdist install smoke, and a Textual CLI invocation. |
+| GitHub Actions and pre-commit toolchain | `astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d` (`v10.0.1`), `ruff-pre-commit@321478e58f4938179c6b86e4ddfa923d1547a49b` (`v0.16.6`), `pre-commit-hooks@3e8a8703264a2f4a69428a0aa4dcb512790b2c8c` (`v6.0.0`), `taplo-pre-commit@ade0f95ddcf661c697d4670d2cfcbe95d0048a0a` (`v0.9.3`), and the other immutable action refs listed in §4 | Workflow jobs retain least-privilege permissions and bounded timeouts. CI and release export every locked dependency group before pip-audit. Pages and wiki publication run only from `main`, including manual dispatch, so a branch-controlled checkout cannot receive the wiki deploy key. The wiki deploy key is checked before it is written. The Homebrew checkout does not persist its cross-repository token. Artifact contents are checked before upload or publication. | Official tag/ref verification, YAML guard tests, pre-commit, shellcheck, and local workflow-equivalent package/docs commands. |
+| Local S3-compatible harness | Docker image `adobe/s3mock:5.2.0@sha256:7a37f0d796e81a28b970c892dcae532797014616b3312b467af8f0274ebf0c26`; `testcontainers==4.15.0` from `uv.lock` | Independent S3-compatible endpoint, readiness probe, seeded buckets/objects, path-style config, arbitrary test credentials, and host port exposure. | The former MinIO community image was removed because every usable community release is affected by [GHSA-hv4r-mvr4-25vw](https://github.com/advisories/GHSA-hv4r-mvr4-25vw), while the nominally fixed AIStor image requires a commercial license and rejects writes without one. Adobe S3Mock 5.2.0 is license-free, digest-pinned, exposed only on `127.0.0.1`, and passes the same nine strict S3FS/CrossFs protocol tests through the public `testcontainers.core.container.DockerContainer` API. Manual trace also covers `scripts/test-services/s3/docker-compose.yml`, `seed.py`, and `config-snippet.toml`. |
+
+Exact S3 boto operation ledger (16):
+
+```text
+AbortMultipartUpload
+CompleteMultipartUpload
+CopyObject
+CreateBucket
+CreateMultipartUpload
+DeleteObject
+DeleteObjects
+GetObject
+GetObjectTagging
+HeadBucket
+HeadObject
+ListBuckets
+ListObjectsV2
+PutObject
+UploadPart
+UploadPartCopy
+```
+
+## 7. Deferred contract checks
 
 - External upstream documentation was not exhaustively re-queried for every
   library API. The concrete code paths above were checked against the locked
