@@ -399,10 +399,18 @@ async def test_context_picker_semantic_and_disabled_states_override_active_theme
         await pilot.pause()
         picker.focus()
         picker.open()
-        await pilot.pause()
-        await pilot.pause()
 
-        assert picker.styles.border_top == ("heavy", Color.parse("#6fb8ff"))
+        # `open()` defers `_focus_options` through `call_after_refresh`, and that
+        # focus change flips the `:focus` pseudo-class deciding `border_top`.
+        # Counting pauses assumes how many frames that takes; wait for the
+        # painted value instead, which is what the assertion is really about.
+        focused_border = ("heavy", Color.parse("#6fb8ff"))
+        for _ in range(50):
+            if picker.styles.border_top == focused_border:
+                break
+            await pilot.pause()
+
+        assert picker.styles.border_top == focused_border
 
         picker.set_state(loading=True)
         await pilot.pause()

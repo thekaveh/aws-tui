@@ -360,6 +360,20 @@ async def test_open_connection_form_owns_tab_traversal(
                 app.query_one(f"#{widget_id}", Input).value = value
             await pilot.pause()
 
+            # This test asserts the Tab *order* through the form, which only
+            # means anything from a known starting point. `open_for_add()`
+            # lands focus on the first field through a deferred refresh, so a
+            # single pause can leave focus still on the rail's add button --
+            # the traversal then reads one slot off and the first assertion
+            # fails comparing _AddButton to an Input, as seen on
+            # windows-latest. Establish the starting slot before stepping.
+            first_field = app.query_one("#form-name", Input)
+            for _ in range(50):
+                if app.focused is first_field:
+                    break
+                await pilot.pause()
+            assert app.focused is first_field, "form did not take focus on open"
+
             expected_ids = (
                 "form-endpoint_url",
                 "form-region",
