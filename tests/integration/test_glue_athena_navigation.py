@@ -258,7 +258,14 @@ async def _seed_sql(pilot: object, query_vm: object, editor: TextArea, sql: str)
     establishing a precondition.
     """
     query_vm.set_sql(sql)  # type: ignore[attr-defined]
-    await pilot.pause()  # type: ignore[attr-defined]
+    # Seeding the view model removes the clobber race, but the projection back
+    # onto the editor is itself a deferred refresh -- one pause is not enough on
+    # a slow runner, which is how this helper's own assertion failed on
+    # windows-latest with `assert '' == 'SELECT 1'`. Wait for the projection.
+    for _ in range(50):
+        if editor.text == sql:
+            break
+        await pilot.pause()  # type: ignore[attr-defined]
     assert editor.text == sql
 
 

@@ -88,7 +88,17 @@ async def test_initial_mount_bounds_the_entire_fallback_chain(
     await app._initial_mount_worker(initial_conn=initial)
 
     assert [name for name, _ in attempts] == ["initial"]
-    assert attempts[0][1] <= 0.01
+    # The app computes the per-attempt timeout as ``deadline - loop.time()``
+    # where ``deadline = loop.time() + budget``. When the clock has not ticked
+    # between those two reads -- routine on Windows, whose timer resolution is
+    # ~15.6ms against this 10ms budget -- that is ``(t0 + 0.01) - t0``, which is
+    # not exactly 0.01 in binary floating point. The error scales with the
+    # magnitude of the monotonic clock, so it appears on machines with days of
+    # uptime and not on freshly booted ones: at t0 ~= 1.4e6 the result is
+    # 0.010000000009313226, over budget by 9.3e-12. Compare against the budget
+    # with representation tolerance; a real regression is orders of magnitude
+    # larger than this.
+    assert attempts[0][1] <= 0.01 + 1e-9
     assert mounted == ["chain-exhausted"]
     assert app._boot_in_flight is False
 
