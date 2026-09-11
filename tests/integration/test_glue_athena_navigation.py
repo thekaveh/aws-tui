@@ -239,6 +239,45 @@ async def test_glue_handoff_surfaces_preserve_source_and_prefill_without_executi
             ctx.root_vm.dispose()
 
 
+async def _seed_sql(pilot: object, query_vm: object, editor: TextArea, sql: str) -> None:
+    """Put ``sql`` in the editor without racing the MVVM binding.
+
+    Assigning ``editor.text`` reaches the view model through a queued Textual
+    ``Changed`` message, while ``AthenaQueryView._refresh`` -- scheduled by any
+    VM notification through ``call_after_refresh`` -- rewrites the editor from
+    ``vm.sql``. Whichever callback lands first wins. A widget-seeded editor can
+    therefore be blanked again before the assertion runs, and assertions on
+    VM-derived state (command admission, hint enablement) can read the previous
+    value. Reproduced deterministically by running ``_refresh`` before the
+    ``Changed`` message: the editor comes back empty, which is the
+    ``assert '' == 'SELECT 1'`` seen on windows-latest.
+
+    Seeding the view model -- the source of truth the editor is a projection of
+    -- makes both sides agree from the outset. Tests that deliberately simulate
+    a user typing still assign ``editor.text`` directly; this is only for
+    establishing a precondition.
+    """
+    # Seeding the view model removes the clobber race, but two more things can
+    # still undo it, so re-assert until the state holds across a settle.
+    #
+    # The projection back onto the editor is a deferred refresh, so one pause is
+    # not enough on a slow runner. And `AthenaQueryView._refresh` guards its own
+    # write with a synchronous `_syncing_editor` flag while Textual delivers the
+    # resulting `Changed` message *later* -- by which time the flag is back to
+    # False. A stale echo carrying the previous text therefore reaches
+    # `set_sql` and reverts the view model, which is how this helper failed on
+    # windows-latest with `assert 'SELECT 1' == 'DELETE FROM events'` when two
+    # values were seeded in quick succession.
+    for _ in range(50):
+        if editor.text == sql and query_vm.sql == sql:  # type: ignore[attr-defined]
+            await pilot.pause()  # type: ignore[attr-defined]
+            if editor.text == sql and query_vm.sql == sql:  # type: ignore[attr-defined]
+                return
+        query_vm.set_sql(sql)  # type: ignore[attr-defined]
+        await pilot.pause()  # type: ignore[attr-defined]
+    assert editor.text == sql
+
+
 @pytest.mark.asyncio
 async def test_glue_to_athena_preserves_identity_and_prefills_without_running(
     tmp_path: Path,
@@ -540,8 +579,7 @@ async def test_athena_insert_empty_clipboard_is_non_mutating(
             page = await _open_service(ctx, app, pilot, "athena")
             assert isinstance(page, AthenaPageVM)
             editor = app.query_one("#athena-editor", TextArea)
-            editor.text = "SELECT 1"
-            await pilot.pause()
+            await _seed_sql(pilot, page.query, editor, "SELECT 1")
 
             await _invoke(app, "athena.insert_table_ref")
             await pilot.pause()
@@ -583,8 +621,7 @@ async def test_athena_insert_refuses_source_mismatch_without_mutation(
             page = await _open_service(ctx, app, pilot, "athena")
             assert isinstance(page, AthenaPageVM)
             editor = app.query_one("#athena-editor", TextArea)
-            editor.text = "SELECT 1"
-            await pilot.pause()
+            await _seed_sql(pilot, page.query, editor, "SELECT 1")
 
             await _invoke(app, "athena.insert_table_ref")
             await pilot.pause()

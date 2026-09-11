@@ -322,12 +322,11 @@ Toast {
     border: round $rule-dim;
 }
 
-
 BrandBanner {
     border: round $rule-dim;
     background: $bg;
-    border-title-color: $text;
-    border-subtitle-color: $text;
+    border-title-color: $text-dim;
+    border-subtitle-color: $text-dim;
 }
 
 TransfersOverlay {
@@ -387,7 +386,6 @@ TransferRowWidget .transfer-cancel:hover {
 
 TransferRowWidget .transfer-bytes { color: $text-muted; }
 TransferRowWidget .transfer-rate  { color: $text-muted; }
-
 
 /* No-connection placeholder shown in the content host when no AWS or */
 /* S3-compatible connection is configured at startup.                  */
@@ -607,22 +605,6 @@ EmrServerlessPage {
     color: $text;
 }
 
-EmrServerlessPage ServiceSourceHeader {
-    background: $bg-elev;
-    color: $text-muted;
-    border-left: solid $rule-dim;
-}
-
-EmrServerlessPage > .emr-left-column > .emr-app-box {
-    background: $bg;
-    color: $text;
-    border: solid $rule-dim;
-    border-bottom: none;
-}
-EmrServerlessPage > .emr-left-column > .emr-app-box:focus-within {
-    border: solid $accent;
-    border-bottom: none;
-}
 JobRunsPane > .runs-column-header {
     background: $bg-elev;
     color: $text-muted;

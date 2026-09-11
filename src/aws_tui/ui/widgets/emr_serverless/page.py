@@ -57,46 +57,45 @@ class EmrServerlessPage(DeferredWorkerMixin, Widget):
         height: 1fr;
         layout: vertical;
     }
-    /* Source + application share one bordered context box. */
-    EmrServerlessPage > .emr-left-column > .emr-app-box {
-        height: auto;
-        min-height: 2;
-        layout: vertical;
-    }
-    EmrServerlessPage .emr-app-box > .emr-context-row {
+    /* Source and application sit directly above the runs pane as an
+       unbordered, equal-width context row -- the same shape GluePage
+       and AthenaPage use. The previous bordered ``.emr-app-box``
+       wrapper declared ``border-bottom: none`` so it rendered with no
+       lower edge, and it squeezed both children to a single row, which
+       left the source picker with no room to draw its label at all.
+       ServiceSourceHeader and ApplicationPicker both size themselves at
+       ``1fr`` by ``min-height: 3`` already, so the row only has to stay
+       out of their way. ``height: auto`` is load-bearing: the picker
+       expands inline when opened. */
+    EmrServerlessPage > .emr-left-column > .emr-context-row {
         width: 1fr;
         height: auto;
-        min-height: 1;
+        min-height: 3;
+        layout: horizontal;
+        border: none;
     }
-    EmrServerlessPage .emr-context-row > ServiceSourceHeader {
-        width: 2fr;
+    EmrServerlessPage > .emr-left-column > .emr-context-row > ServiceSourceHeader,
+    EmrServerlessPage > .emr-left-column > .emr-context-row > ApplicationPicker {
+        width: 1fr;
         height: auto;
-        min-height: 1;
+        min-height: 3;
     }
-    EmrServerlessPage .emr-context-row > ApplicationPicker {
-        width: 3fr;
-    }
-    EmrServerlessPage .emr-context-row > ServiceSourceHeader > ContextPicker {
+    /* The picker now carries its own border (shared theme layer), so its
+       trigger occupies the single content row inside that border rather
+       than all three rows of the widget. */
+    EmrServerlessPage .emr-context-row > ApplicationPicker > .app-trigger {
         height: 1;
-        min-height: 1;
-        border: none;
-    }
-    EmrServerlessPage .emr-app-box ContextPicker > .context-picker-trigger,
-    EmrServerlessPage .emr-app-box ApplicationPicker > .app-trigger {
-        height: 1;
-        border: none;
-        padding: 0 1;
-    }
-    EmrServerlessPage .emr-app-box ServiceSourceHeader
-        > ContextPicker > .context-picker-trigger {
-        padding: 0;
     }
     EmrServerlessPage .emr-context-row > ServiceSourceHeader
         ContextPicker > OverlayOptionList {
         width: 30;
     }
-    EmrServerlessPage .emr-app-box ApplicationPicker > .app-trigger > Static {
-        height: 1;
+    /* The expanded list is a screen overlay, so it is not bound by the
+       width of the trigger cell. Pin it wide enough to keep the application
+       name and its state label readable at an 80-column terminal, where the
+       equal-width context cell alone is far too narrow for both. */
+    EmrServerlessPage .emr-context-row > ApplicationPicker > OverlayOptionList {
+        width: 34;
     }
     EmrServerlessPage > .emr-left-column > JobRunsPane {
         height: 1fr;
@@ -173,10 +172,7 @@ class EmrServerlessPage(DeferredWorkerMixin, Widget):
         # containing detail (top, 1fr) + logs (bottom, 1fr) in a
         # 50/50 vertical split.
         with Vertical(classes="emr-left-column"):
-            with (
-                Vertical(classes="emr-app-box", id="emr-app-box"),
-                Horizontal(classes="emr-context-row"),
-            ):
+            with Horizontal(classes="emr-context-row", id="emr-context-row"):
                 yield self._source_header
                 yield self._picker
             yield self._left
@@ -185,15 +181,6 @@ class EmrServerlessPage(DeferredWorkerMixin, Widget):
             yield self._right_logs
 
     def on_mount(self) -> None:
-        # App-box border title — set here because Textual takes the
-        # title from a Python attribute, not from CSS. The matching
-        # ``:focus-within`` border-accent style is in the per-theme
-        # .tcss so the box highlights when the picker is open.
-        try:
-            box = self.query_one("#emr-app-box", Vertical)
-            box.border_title = "source / application"
-        except Exception:
-            pass
         # ``ContentHostVM.set_content`` already dispatches page setup when the
         # VM is adopted. Launching another setup worker here would race the
         # host and duplicate the boot-time ``list_applications`` request.

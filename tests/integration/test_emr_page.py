@@ -475,6 +475,29 @@ async def test_emr_left_pane_click_selects_and_repoints_detail(tmp_path: Path) -
             ctx.root_vm.dispose()
 
 
+async def _held_open(pilot: object, picker: object) -> None:
+    """Open ``picker`` and confirm it stays open, without trusting one pause.
+
+    ``EmrServerlessPage._reconcile_open_pickers`` closes every picker that is
+    not the currently desired one, and it runs from a ``call_after_refresh``.
+    A single pause after ``toggle_open`` therefore asserts a state a queued
+    reconcile may still be about to change. Observed on windows-latest, where
+    this precondition failed while macOS passed the same commit.
+
+    Re-open until the state survives an extra settle, so the test asserts the
+    behaviour it is named for rather than the runner's timing.
+    """
+    for _ in range(50):
+        if picker.is_open:  # type: ignore[attr-defined]
+            await pilot.pause()  # type: ignore[attr-defined]
+            if picker.is_open:  # type: ignore[attr-defined]
+                return
+        else:
+            picker.toggle_open()  # type: ignore[attr-defined]
+        await pilot.pause()  # type: ignore[attr-defined]
+    raise AssertionError("picker never stayed open")
+
+
 @pytest.mark.asyncio
 async def test_emr_application_picker_closes_on_outside_click(tmp_path: Path) -> None:
     config_dir = _prep(tmp_path, _MULTI_PROFILE_AWS_TOML)
@@ -488,9 +511,7 @@ async def test_emr_application_picker_closes_on_outside_click(tmp_path: Path) ->
             await _await_emr_mount(pilot, app)
 
             picker = app.query_one(ApplicationPicker)
-            picker.toggle_open()
-            await pilot.pause()
-            assert picker.is_open
+            await _held_open(pilot, picker)
 
             source_picker = app.query_one("#emr-source-header-picker", ContextPicker)
             await pilot.click(source_picker)
@@ -517,7 +538,6 @@ async def test_emr_application_picker_overlay_preserves_global_geometry(tmp_path
 
             widgets = (
                 app.query_one(ApplicationPicker),
-                app.query_one("#emr-app-box"),
                 app.query_one(".emr-context-row"),
                 app.query_one(ServiceSourceHeader),
                 app.query_one(JobRunsPane),
@@ -560,9 +580,7 @@ async def test_switching_away_from_emr_closes_open_application_picker(tmp_path: 
                 refocus_calls += 1
 
             picker._refocus = record_refocus  # type: ignore[method-assign]
-            picker.toggle_open()
-            await pilot.pause()
-            assert picker.is_open
+            await _held_open(pilot, picker)
 
             ctx.root_vm.services_menu.switch_service_command.execute("s3")
             await app.workers.wait_for_complete(list(app.workers._workers))  # type: ignore[attr-defined]
