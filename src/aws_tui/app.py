@@ -597,6 +597,8 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
         self._actions.register("app.cycle_theme", self.action_cycle_theme)
         self._actions.register("app.open_settings", self.action_open_settings)
         self._actions.register("pane.copy", self.action_copy)
+        self._actions.register("pane.copy_entry_path", self.action_copy_entry_path)
+        self._actions.register("pane.copy_path", self.action_copy_path)
         self._actions.register("pane.delete", self.action_delete)
         self._actions.register("app.swap_source", self.action_swap_source)
         self._actions.register("emr.next_application", self.action_next_emr_application)
@@ -2195,6 +2197,37 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
         pane = getattr(dual, "focused_pane", None)
         if pane is not None:
             await pane.refresh()
+
+    def _put_on_clipboard(self, value: str, label: str) -> None:
+        """Copy ``value`` and confirm it, so the keystroke is not silent."""
+        with contextlib.suppress(Exception):
+            self.copy_to_clipboard(value)
+        self.notify(f"Copied {label}", timeout=3)
+
+    def action_copy_entry_path(self) -> None:
+        """Copy the focused pane's cursor entry path.
+
+        The pane's view model owns the formatting, so this reads the prepared
+        payload rather than reassembling a path from chrome that the border may
+        have truncated for display.
+        """
+        self.record_action("pane.copy_entry_path")
+        pane = self._focused_file_pane()
+        if pane is None:
+            return
+        target = pane.viewmodel.copy_selected_path
+        if target is None:
+            self.notify("Nothing selected to copy", severity="warning", timeout=3)
+            return
+        self._put_on_clipboard(target, "file path")
+
+    def action_copy_path(self) -> None:
+        """Copy the focused pane's current location."""
+        self.record_action("pane.copy_path")
+        pane = self._focused_file_pane()
+        if pane is None:
+            return
+        self._put_on_clipboard(pane.viewmodel.copy_path, "path")
 
     async def action_help(self) -> None:
         """Show the help overlay with the active configurable keymap."""
