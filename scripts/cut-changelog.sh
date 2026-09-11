@@ -14,7 +14,7 @@ set -euo pipefail
 
 if [[ $# -ne 1 ]]; then
   echo "usage: $0 <version>" >&2
-  echo "example: $0 0.8.0" >&2
+  echo "example: $0 X.Y.Z" >&2
   exit 64
 fi
 

@@ -397,3 +397,48 @@ def test_workflow_metadata_avoids_stale_e2e_counts() -> None:
     workflow = _text(".github/workflows/ci.yml")
     assert re.search(r"name: e2e \(user journeys\)", workflow)
     assert not re.search(r"name: e2e \(\d+ user journeys\)", workflow)
+
+
+def test_workflow_action_pins_are_recorded_in_the_contract_ledger() -> None:
+    """Every SHA-pinned GitHub Action must appear verbatim in the ledger.
+
+    ``docs/contract-ledger.md`` records the action refs as a consumed contract,
+    but nothing compared that record to the workflows. A dependabot
+    ``github-actions`` bump touches only ``.github/workflows/*.yml``, so the
+    ``actions/deploy-pages`` ref drifted a patch release ahead of the ledger
+    while every tier stayed green -- the same failure mode
+    ``test_pre_commit_revisions_are_recorded_in_the_current_ledger_pass``
+    already guards for pre-commit.
+    """
+    ledger = _text("docs/contract-ledger.md")
+    workflows = sorted((ROOT / ".github" / "workflows").glob("*.yml"))
+    assert workflows, "expected at least one workflow to audit"
+
+    pins: dict[str, set[str]] = {}
+    for workflow in workflows:
+        for action, sha in re.findall(
+            r"uses:\s*([A-Za-z0-9._/-]+)@([0-9a-f]{40})\b",
+            workflow.read_text(encoding="utf-8"),
+        ):
+            pins.setdefault(f"{action}@{sha}", set()).add(workflow.name)
+
+    assert pins, "expected SHA-pinned actions in the workflows"
+    missing = {pin: sorted(files) for pin, files in pins.items() if pin not in ledger}
+    assert not missing, f"action pins absent from docs/contract-ledger.md: {missing}"
+
+
+def test_every_workflow_action_is_sha_pinned() -> None:
+    """No workflow may float an action on a tag or branch ref.
+
+    A floating ``@v4``/``@main`` ref is silently re-resolved on every run, which
+    both defeats the ledger above and makes the build non-reproducible.
+    """
+    floating: dict[str, list[str]] = {}
+    for workflow in sorted((ROOT / ".github" / "workflows").glob("*.yml")):
+        for line_number, line in enumerate(
+            workflow.read_text(encoding="utf-8").splitlines(), start=1
+        ):
+            match = re.search(r"uses:\s*([A-Za-z0-9._/-]+@\S+)", line)
+            if match and not re.fullmatch(r"[A-Za-z0-9._/-]+@[0-9a-f]{40}", match.group(1)):
+                floating.setdefault(workflow.name, []).append(f"{line_number}: {match.group(1)}")
+    assert not floating, f"actions not pinned to a 40-character commit SHA: {floating}"

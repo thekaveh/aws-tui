@@ -194,8 +194,38 @@ def test_release_version_and_changelog_are_guarded() -> None:
     workflow = _workflow(".github/workflows/release.yml")
     run = _step(workflow, "verify", "tag-version match")["run"]
 
-    assert "scripts.release_version stage-testpypi" in run
     assert "scripts.release_version check-changelog" in run
+    # The TestPyPI ``.devN`` rewrite must NOT happen in this step. It runs
+    # before every test tier, and ``__version__`` is rendered into the brand
+    # banner subtitle, so rewriting it here made the rehearsal lane fail its
+    # own snapshot and documentation-contract tiers -- the lane could never
+    # reach ``publish-pypi``. See ``stage TestPyPI version``.
+    assert "stage-testpypi" not in run
+
+
+def test_testpypi_version_is_staged_after_every_test_tier() -> None:
+    """The ``.devN`` rewrite must sit between the last tier and the build.
+
+    ``ui/widgets/brand_banner.py`` renders ``__version__`` into the banner, so
+    the demo-mode snapshot goldens embed it and
+    ``tests/docs/test_scaffolding.py`` asserts the exact assignment line.
+    """
+    workflow = _workflow(".github/workflows/release.yml")
+    names = [str(step.get("name", "")) for step in workflow["jobs"]["verify"]["steps"]]
+
+    stage = names.index("stage TestPyPI version")
+    for tier in (
+        "pytest (snapshot tier)",
+        "pytest (e2e tier)",
+        "documentation drift and strict build",
+        "pytest (documentation contracts)",
+    ):
+        assert names.index(tier) < stage, f"{tier} must run before the version rewrite"
+    assert stage < names.index("build wheel + sdist")
+
+    step = _step(workflow, "verify", "stage TestPyPI version")
+    assert step["if"] == "steps.target.outputs.target == 'testpypi'"
+    assert "scripts.release_version stage-testpypi" in step["run"]
 
 
 def test_release_pytest_tiers_stay_wired() -> None:
@@ -436,7 +466,11 @@ def test_pages_publication_is_main_only_including_manual_dispatch() -> None:
             if str(step.get("uses", "")).startswith("astral-sh/setup-uv@")
         )
         assert setup_uv["with"]["version"] == "${{ env.UV_VERSION }}"
-    assert "assets/screenshots/aws-tui-running.png" in workflow[True]["push"]["paths"]
+    # ``assets/**`` rather than the hero alone: ``docs/index.md`` embeds
+    # ``assets/aws-tui-poster.png`` on both published surfaces, and the Fira
+    # Code TTFs are base64-embedded into every rendered diagram SVG. Listing
+    # one file let a poster or font change ship without redeploying Pages.
+    assert "assets/**" in workflow[True]["push"]["paths"]
     assert workflow["permissions"] == {"contents": "read"}
     assert workflow["jobs"]["deploy"]["permissions"] == {
         "contents": "read",

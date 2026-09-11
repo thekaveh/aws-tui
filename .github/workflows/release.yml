@@ -83,29 +83,36 @@ jobs:
       # ``aws_tui.__version__`` exactly and point at a commit already
       # reachable from origin/main. The TestPyPI rehearsal path can
       # run from a branch ref and intentionally skips the tag check.
+      # This step only *computes* the publish version; the TestPyPI
+      # ``.devN`` rewrite happens in ``stage TestPyPI version`` below,
+      # after the test tiers.
       - name: tag-version match
         id: version
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          REF: ${{ github.ref_name }}
+          REF_TYPE: ${{ github.ref_type }}
+          TARGET: ${{ steps.target.outputs.target }}
         run: |
           PKG_VERSION="$(uv run --python 3.12 python -c 'import aws_tui; print(aws_tui.__version__)')"
           TAG_REF="v${PKG_VERSION}"
           PUBLISH_VERSION="$PKG_VERSION"
-          if [[ "${{ steps.target.outputs.target }}" == "testpypi" ]]; then
+          if [[ "$TARGET" == "testpypi" ]]; then
             PUBLISH_VERSION="${PKG_VERSION}.dev${GITHUB_RUN_NUMBER}"
-            uv run --python 3.12 python -m scripts.release_version stage-testpypi "$PKG_VERSION" "$PUBLISH_VERSION"
           fi
+          echo "base_version=$PKG_VERSION" >> "$GITHUB_OUTPUT"
           echo "version=$PUBLISH_VERSION" >> "$GITHUB_OUTPUT"
           echo "tag_sha=$(git rev-list -n 1 "$TAG_REF" 2>/dev/null || git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
-          if [[ "${{ github.event_name }}" == "push" ]]; then
-            REF="${{ github.ref_name }}"
+          if [[ "$EVENT_NAME" == "push" ]]; then
             TAG_VERSION="${REF#v}"
             if [[ "$TAG_VERSION" != "$PKG_VERSION" ]]; then
               echo "::error::tag '$REF' does not match aws_tui.__version__='$PKG_VERSION'" >&2
               exit 1
             fi
             echo "tag $REF matches __version__ $PKG_VERSION ✓"
-          elif [[ "${{ steps.target.outputs.target }}" == "pypi" ]]; then
-            if [[ "${{ github.ref_type }}" != "tag" || "${{ github.ref_name }}" != "$TAG_REF" ]]; then
-              echo "::error::manual PyPI publish must run from existing tag '$TAG_REF' (current ref: ${{ github.ref_type }}/${{ github.ref_name }})" >&2
+          elif [[ "$TARGET" == "pypi" ]]; then
+            if [[ "$REF_TYPE" != "tag" || "$REF" != "$TAG_REF" ]]; then
+              echo "::error::manual PyPI publish must run from existing tag '$TAG_REF' (current ref: $REF_TYPE/$REF)" >&2
               exit 1
             fi
             echo "workflow_dispatch pypi target is pinned to tag $TAG_REF"
@@ -113,7 +120,7 @@ jobs:
             echo "workflow_dispatch — publishing TestPyPI rehearsal version $PUBLISH_VERSION (base __version__ $PKG_VERSION; no tag check)"
           fi
           TAG_SHA="$(git rev-list -n 1 "$TAG_REF" 2>/dev/null || true)"
-          if [[ "${{ steps.target.outputs.target }}" == "pypi" ]]; then
+          if [[ "$TARGET" == "pypi" ]]; then
             uv run --python 3.12 python -m scripts.release_version check-changelog "$PKG_VERSION"
             if [[ -z "$TAG_SHA" ]]; then
               echo "::error::missing release tag '$TAG_REF'" >&2
@@ -169,6 +176,22 @@ jobs:
 
       - name: layer rules
         run: ./scripts/check-layers.sh
+
+      # Staged here, not in ``tag-version match``, and deliberately after every
+      # test tier. ``__version__`` is rendered into the brand banner
+      # (``ui/widgets/brand_banner.py``), so 15 snapshot goldens under
+      # ``tests/snapshot/__snapshots__/test_demo_mode/`` embed it verbatim, and
+      # ``tests/docs/test_scaffolding.py`` asserts the exact assignment line.
+      # Rewriting the version before those tiers made the whole TestPyPI
+      # rehearsal lane unable to pass its own ``verify`` job. The build below is
+      # the first consumer that actually needs the staged value.
+      - name: stage TestPyPI version
+        if: steps.target.outputs.target == 'testpypi'
+        env:
+          BASE_VERSION: ${{ steps.version.outputs.base_version }}
+          PUBLISH_VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          uv run --python 3.12 python -m scripts.release_version stage-testpypi "$BASE_VERSION" "$PUBLISH_VERSION"
 
       - name: build wheel + sdist
         run: uv build --no-build-isolation
@@ -388,14 +411,19 @@ jobs:
             echo "::error::no changelog section found for [$VERSION]" >&2
             exit 1
           fi
+          # Random delimiter, not a fixed ``EOF``: the body is arbitrary
+          # changelog prose, and a line that is literally ``EOF`` would close
+          # the block early and let the remainder be parsed as further output
+          # assignments.
+          DELIM="body_$(openssl rand -hex 16)"
           {
-            echo "body<<EOF"
+            echo "body<<$DELIM"
             echo "$BODY"
             echo ""
             echo "---"
             echo ""
             echo "Install: \`pip install aws-tui==$VERSION\` · [PyPI](https://pypi.org/project/aws-tui/$VERSION/) · [Changelog](https://github.com/thekaveh/aws-tui/blob/main/CHANGELOG.md)"
-            echo "EOF"
+            echo "$DELIM"
           } >> "$GITHUB_OUTPUT"
 
       - name: create GitHub Release

@@ -4,7 +4,12 @@ on:
   push:
     branches: [main]
     paths:
-      - "assets/screenshots/aws-tui-running.png"
+      # Whole tree, not just the hero screenshot: ``docs/index.md`` embeds
+      # ``assets/aws-tui-poster.png`` on the published site, and
+      # ``assets/fonts/fira-code/*.ttf`` is read when rasterizing every
+      # diagram SVG. Listing one file left those two able to change without
+      # redeploying Pages.
+      - "assets/**"
       - "docs/**"
       - "scripts/docs/**"
       - "Makefile"
