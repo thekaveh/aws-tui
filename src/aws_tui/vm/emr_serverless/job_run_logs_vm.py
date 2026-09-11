@@ -306,6 +306,12 @@ class JobRunLogsVM:
             self._lines = ()
             self._bytes_read = 0
             self._lines_scanned = 0
+            # ``_matched_count`` belongs in this reset too. Without it every
+            # cache-miss reload (``r``, a filter edit, Shift+F) accumulated on
+            # top of the previous run's total, so a file with one match
+            # rendered "showing last 1 of 3 matches" -- and the inflated value
+            # was then written into the LRU cache.
+            self._matched_count = 0
             self._available_files = tuple(files)
             self._notify("available_files")
             if not files:

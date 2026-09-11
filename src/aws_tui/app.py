@@ -43,7 +43,7 @@ from aws_tui.domain.data_catalog import TableRef
 from aws_tui.domain.filesystem import AuthRequiredError, EntryKind
 from aws_tui.domain.s3_uri import parse_s3_uri
 from aws_tui.infra.aws_session import TokenState
-from aws_tui.infra.connection_resolver import Connection
+from aws_tui.infra.connection_resolver import Connection, ConnectionNotFound
 from aws_tui.infra.crash_dump import CrashDump
 from aws_tui.infra.redaction import redact_text
 from aws_tui.infra.theme_store import ThemeNotFound, ThemeStore
@@ -3059,6 +3059,7 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
                 "service_source.rollback_failed",
                 service_id=service_id,
                 connection=connection.name,
+                error=str(exc),
                 error_type=type(exc).__name__,
             )
             return False
@@ -3417,8 +3418,27 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
             else:
                 try:
                     conn = self._app_ctx.connection_resolver.resolve(pane_name)
-                except Exception:
+                except ConnectionNotFound:
+                    # The connection was deleted in Settings; falling back to
+                    # the local filesystem is the intended recovery. A broader
+                    # catch also swallowed a locked keychain and a corrupt
+                    # config.toml, silently turning a live remote pane into a
+                    # local one -- so the next copy targeted ``~`` instead of
+                    # the bucket, with no toast and no log line.
                     await self._rebind_pane_to_local(pane)
+                except Exception as exc:
+                    self._app_ctx.log_sink.error(
+                        "pane.rebind.resolve_failed",
+                        connection=pane_name,
+                        error=str(exc),
+                        error_type=type(exc).__name__,
+                    )
+                    notifications.error(
+                        self._app_ctx.root_vm.chrome.toast_stack,
+                        subject="Connection",
+                        message=f"could not read connection '{pane_name}'",
+                        toast_id=f"pane-rebind-{pane_name}",
+                    )
                 else:
                     await self._rebind_pane_to_connection(pane, conn)
 
@@ -3781,6 +3801,7 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
                 self._app_ctx.log_sink.error(
                     "service_navigation.table_rollback_failed",
                     stage="restore",
+                    error=str(exc),
                     error_type=type(exc).__name__,
                 )
                 return False, cancelled
@@ -3835,6 +3856,7 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
                 connection=snapshot.connection.name,
                 service_id=snapshot.service_id,
                 stage="switch",
+                error=str(exc),
                 error_type=type(exc).__name__,
             )
             return False
@@ -4135,6 +4157,7 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
                 connection=connection.name,
                 service_id=service_id,
                 stage="switch",
+                error=str(exc),
                 error_type=type(exc).__name__,
             )
             return False
@@ -4495,6 +4518,12 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
                 error=str(exc),
                 error_type=type(exc).__name__,
             )
+            # Same recovery as the ``set_content`` failure branch above.
+            # ``_replace_content_widget`` mounts its own generic placeholder,
+            # but without this the nav rail still showed Settings selected and
+            # no toast fired -- so a one-off mount failure read as "Settings is
+            # broken forever" rather than "that failed, try again".
+            self._restore_navigation_after_failed_adoption("Settings")
 
     async def _mount_service_view(
         self,
@@ -4572,6 +4601,7 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
             ctx.log_sink.error(
                 "app.mount_service_view.switch_service_failed",
                 service_id=service_id,
+                error=str(exc),
                 error_type=type(exc).__name__,
             )
             self._restore_navigation_after_failed_adoption(service_id)

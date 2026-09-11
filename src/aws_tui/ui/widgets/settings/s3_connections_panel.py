@@ -348,7 +348,17 @@ class S3ConnectionsPanel(Widget):
                 )
                 return
         else:  # "edit"
-            assert event.original_name is not None
+            if event.original_name is None:
+                # A contract violation from the form widget, not user input.
+                # As an ``assert`` this vanished under ``python -O`` and the
+                # ``None`` reached ``update()``, which raised a confusing
+                # "connection cannot be renamed in place: old=None" instead.
+                self._surface_error_toast(
+                    "Could not save: the edit form did not report which connection it was editing.",
+                    toast_id="edit-error-missing-original-name",
+                )
+                form.clear_submitting()
+                return
             try:
                 self._vm.update(event.original_name, entry)
             except Exception as exc:

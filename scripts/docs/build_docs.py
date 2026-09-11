@@ -243,9 +243,21 @@ def _hash_tree(root: Path) -> dict[str, str]:
     return out
 
 
+class DocsCheckError(RuntimeError):
+    """A documentation gate failed. Raised instead of ``assert``.
+
+    These are CI gates, not internal invariants: ``python -O`` strips
+    ``assert`` entirely, which would let the determinism and staleness checks
+    below pass silently while publishing drifted output.
+    """
+
+
 def _assert_dirs_equal(a: str | Path, b: str | Path) -> None:
     ha, hb = _hash_tree(Path(a)), _hash_tree(Path(b))
-    assert ha == hb, f"regeneration not deterministic:\n  {a}: {sorted(ha)}\n  {b}: {sorted(hb)}"
+    if ha != hb:
+        raise DocsCheckError(
+            f"regeneration not deterministic:\n  {a}: {sorted(ha)}\n  {b}: {sorted(hb)}"
+        )
 
 
 def build(
@@ -275,12 +287,17 @@ def build(
     if build_wiki:
         render_wiki(manifest, repo_root, generated / "wiki")
     if build_package:
-        assert manifest.package is not None
+        if manifest.package is None:
+            raise DocsCheckError("package surface requested but no package is declared")
         expected = render_package_readme(manifest, repo_root)
         output = repo_root / manifest.package.output
         if check:
             actual = output.read_text(encoding="utf-8") if output.is_file() else ""
-            assert actual == expected, f"package README is stale: {manifest.package.output}"
+            if actual != expected:
+                raise DocsCheckError(
+                    f"package README is stale: {manifest.package.output}\n"
+                    "regenerate it with: make docs-package"
+                )
         else:
             output.write_text(expected, encoding="utf-8")
     if check:

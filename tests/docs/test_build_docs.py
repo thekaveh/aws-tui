@@ -4,6 +4,7 @@ from pathlib import Path
 import pytest
 import scripts.docs.render_diagrams as render_diagrams
 from scripts.docs.build_docs import (
+    DocsCheckError,
     _assert_dirs_equal,
     _copy_referenced_assets,
     _referenced_assets,
@@ -158,7 +159,10 @@ def test_assert_dirs_equal_detects_difference(tmp_path):
     b.mkdir()
     (a / "f.txt").write_text("one")
     (b / "f.txt").write_text("two")
-    with pytest.raises(AssertionError):
+    # ``DocsCheckError``, not ``AssertionError``: these are CI gates, and
+    # ``python -O`` strips ``assert`` -- which would let the determinism check
+    # pass silently while publishing drifted output.
+    with pytest.raises(DocsCheckError):
         _assert_dirs_equal(a, b)
 
 
@@ -190,7 +194,7 @@ def test_package_surface_is_generated_and_checked(tmp_path):
     )
     build(manifest_path, tmp_path, check=True)
     (tmp_path / "PYPI.md").write_text("stale\n", encoding="utf-8")
-    with pytest.raises(AssertionError, match="package README is stale"):
+    with pytest.raises(DocsCheckError, match="package README is stale"):
         build(manifest_path, tmp_path, check=True)
 
 

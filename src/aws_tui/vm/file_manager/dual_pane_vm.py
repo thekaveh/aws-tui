@@ -610,9 +610,14 @@ class DualPaneVM:
         # branch was dead code (asserted by the comment that used to
         # live there) and has been removed.
         cancel_event = self._cancel_events.get(transfer_id)
-        assert cancel_event is not None, (
-            f"cancel event missing for {transfer_id!r} — _pre_register_pending should install it"
-        )
+        if cancel_event is None:
+            # Raised, not asserted: ``python -O`` strips ``assert``, and the
+            # next line would then fail with ``AttributeError: 'NoneType' has
+            # no attribute 'is_set'`` in the middle of a live transfer.
+            raise RuntimeError(
+                f"cancel event missing for {transfer_id!r} — "
+                "_pre_register_pending should install it"
+            )
 
         # Pre-cancelled-while-PENDING fast path: the user clicked
         # cancel before this transfer got its turn. Skip the work

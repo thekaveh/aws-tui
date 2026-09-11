@@ -2,8 +2,9 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from collections.abc import Callable
 from contextvars import ContextVar
-from typing import Generic, TypeVar
+from typing import Generic, ParamSpec, TypeVar
 
 import anyio
 import reactivex as rx
@@ -12,6 +13,7 @@ from reactivex.subject import Subject
 from vmx import Message, MessageHub
 
 T = TypeVar("T")
+P = ParamSpec("P")
 
 _logger = logging.getLogger(__name__)
 _vmx_hub_logger = logging.getLogger("vmx.services.message_hub")
@@ -48,6 +50,40 @@ def _is_callback_cancellation(error: BaseException) -> bool:
     return isinstance(error, cancellation_type)
 
 
+def _isolated(callback: Callable[P, None], channel: str) -> Callable[P, None]:
+    """Wrap one observer callback so its failure cannot reach the publisher.
+
+    ``on_next``/``on_error``/``on_completed`` previously carried three verbatim
+    copies of this try/except pair. Cancellation still propagates -- only a
+    genuine subscriber fault is isolated.
+
+    The log record carries ``exc_info`` and the channel. Without them the line
+    said only "subscriber isolated": no exception type, no traceback, no
+    subscriber identity, repeated on every property tick, while the widget
+    silently stopped updating. This is a durable-log path, so the same useless
+    line also filled the crash dump's log tail. ``LogSink`` redacts ``exc_info``
+    tracebacks, so attaching one is safe.
+    """
+
+    def _report(error: BaseException) -> None:
+        _logger.error(
+            "observable.subscriber_failed",
+            extra={"channel": channel, "error_type": type(error).__name__},
+        )
+
+    def _run(*args: P.args, **kwargs: P.kwargs) -> None:
+        try:
+            callback(*args, **kwargs)
+        except Exception as error:
+            _report(error)
+        except BaseException as error:
+            if not _is_callback_cancellation(error):
+                raise
+            _report(error)
+
+    return _run
+
+
 class ObserverSafeSubject(rx.Observable[T], Generic[T]):
     """Subject facade that isolates exceptions from each subscriber."""
 
@@ -64,40 +100,10 @@ class ObserverSafeSubject(rx.Observable[T], Generic[T]):
         observer: abc.ObserverBase[T],
         scheduler: abc.SchedulerBase | None = None,
     ) -> abc.DisposableBase:
-        def on_next(value: T) -> None:
-            try:
-                observer.on_next(value)
-            except Exception:
-                _logger.error("Property observer raised; subscriber isolated")
-            except BaseException as error:
-                if not _is_callback_cancellation(error):
-                    raise
-                _logger.error("Property observer raised; subscriber isolated")
-
-        def on_error(error: Exception) -> None:
-            try:
-                observer.on_error(error)
-            except Exception:
-                _logger.error("Property observer raised; subscriber isolated")
-            except BaseException as callback_error:
-                if not _is_callback_cancellation(callback_error):
-                    raise
-                _logger.error("Property observer raised; subscriber isolated")
-
-        def on_completed() -> None:
-            try:
-                observer.on_completed()
-            except Exception:
-                _logger.error("Property observer raised; subscriber isolated")
-            except BaseException as error:
-                if not _is_callback_cancellation(error):
-                    raise
-                _logger.error("Property observer raised; subscriber isolated")
-
         return self._subject.subscribe(
-            on_next=on_next,
-            on_error=on_error,
-            on_completed=on_completed,
+            on_next=_isolated(observer.on_next, "on_next"),
+            on_error=_isolated(observer.on_error, "on_error"),
+            on_completed=_isolated(observer.on_completed, "on_completed"),
             scheduler=scheduler,
         )
 
