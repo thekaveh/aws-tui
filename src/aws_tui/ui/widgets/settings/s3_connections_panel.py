@@ -101,7 +101,35 @@ class S3ConnectionsPanel(Widget):
 
         Safe to call OUTSIDE compose() (no context-manager state required).
         """
-        conns = self._vm.connections
+        # ``self._vm.connections`` reaches the OS keyring through
+        # ``ConnectionResolver._dispatch_s3_credentials``, and the keyring is
+        # external state that can be absent or refuse to unlock -- a headless
+        # Linux box with no Secret Service, or a cancelled macOS unlock prompt.
+        # The resolver deliberately propagates that instead of reporting "no
+        # credentials" (see
+        # ``test_keychain_backend_failure_is_not_disguised_as_missing_credentials``),
+        # which is correct: a silent ``None`` would let the app fall back to
+        # different credentials. But this call happens inside ``compose()``, and
+        # a ``compose()`` failure is not delivered to the mount awaiter, so it
+        # bypassed the mount guard and reached ``_handle_exception`` -- opening
+        # Settings, the one screen that could repair the connection, tore the
+        # session down. Render the failure instead of raising through compose.
+        try:
+            conns = self._vm.connections
+        except Exception as exc:
+            self._id_to_name = {}
+            return [
+                Vertical(
+                    Static("S3-compatible connections are unavailable."),
+                    Static(""),
+                    Static(
+                        f"The OS keychain could not be read: {type(exc).__name__}.",
+                        markup=False,
+                    ),
+                    Static("Unlock the keychain and reopen Settings."),
+                    classes="empty-state",
+                )
+            ]
         if not conns:
             return [
                 Vertical(

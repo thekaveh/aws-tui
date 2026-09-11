@@ -249,3 +249,63 @@ async def test_duplicate_name_keeps_form_open_and_surfaces_error(tmp_path: Path)
             assert pilot.app.query_one("#form-name", Input).has_class("-invalid")
     finally:
         s3_vm.dispose()
+
+
+@pytest.mark.asyncio
+async def test_unusable_keychain_renders_a_notice_instead_of_killing_the_app(
+    tmp_path: Path,
+) -> None:
+    """An unusable OS keyring must not tear the session down from ``compose()``.
+
+    ``S3ConnectionsVM.connections`` reaches the keyring through
+    ``ConnectionResolver``, which deliberately propagates a backend failure
+    rather than reporting "no credentials" -- silently returning ``None`` would
+    let the app fall back to different credentials. But this read happens inside
+    ``compose()``, and a ``compose()`` failure is not delivered to the mount
+    awaiter, so it bypassed the mount guard and reached ``_handle_exception``:
+    opening Settings, the one screen that could repair the connection, killed
+    the app. Reproduces a headless Linux box with no Secret Service, or a
+    cancelled macOS unlock prompt.
+    """
+    from aws_tui.infra.keychain import InMemoryKeychain
+
+    class _LockedKeychain(InMemoryKeychain):
+        def get(self, service: str, key: str) -> str | None:
+            del service, key
+            raise RuntimeError("keychain locked")
+
+    hub = _hub()
+    store = ConfigStore(path=tmp_path / "config.toml")
+    store.add_connection(
+        ConnectionEntry(
+            name="minio-local",
+            kind="s3-compatible",
+            endpoint_url="http://localhost:9000",
+            credentials="keychain:aws-tui:minio-local",
+        )
+    )
+    resolver = ConnectionResolver(
+        config_store=store,
+        keychain=_LockedKeychain(),
+        aws_config_path=tmp_path / "missing",
+        aws_credentials_path=tmp_path / "missing",
+    )
+    s3_vm = S3ConnectionsVM(
+        resolver=resolver, config_store=store, hub=hub, dispatcher=NULL_DISPATCHER
+    )
+    s3_vm.construct()
+    try:
+        panel = S3ConnectionsPanel(vm=s3_vm, hub=hub)
+        app = _PanelHost(panel)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            from textual.widgets import Static as _Static
+
+            rendered = " ".join(str(node.render()) for node in app.query(_Static))
+        assert "S3-compatible connections are unavailable" in rendered, rendered
+        assert "RuntimeError" in rendered, rendered
+        # The resolver itself must still refuse to disguise the failure.
+        with pytest.raises(RuntimeError, match="keychain locked"):
+            resolver.resolve("minio-local")
+    finally:
+        s3_vm.dispose()
