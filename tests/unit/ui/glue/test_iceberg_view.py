@@ -64,6 +64,24 @@ async def _wait_until(predicate: Callable[[], bool]) -> None:
             await asyncio.sleep(0.01)
 
 
+async def _wait_for_paint(pilot: object, predicate: Callable[[], bool], *, what: str) -> None:
+    """Pause until ``predicate`` holds, then return.
+
+    DataTable cursor state is painted by a refresh the view schedules through
+    ``call_after_refresh``, so asserting after a fixed number of pauses assumes
+    how many frames that takes. On windows-latest it takes more, which is how
+    `assert table.cursor_row == 0` failed with 1 while macOS and the other
+    Pythons passed the same commit.
+
+    Bounded, and names what never settled so a real regression still fails.
+    """
+    for _ in range(50):
+        if predicate():
+            return
+        await pilot.pause()  # type: ignore[attr-defined]
+    raise AssertionError(f"never settled: {what}")
+
+
 class _GlueIcebergApp(App[None]):
     BINDINGS: ClassVar[list[Binding]] = [
         Binding("enter", "activate_enter", "", show=False, priority=True),
@@ -492,7 +510,7 @@ async def test_older_snapshot_selection_survives_refresh_and_drives_time_travel(
         await pilot.pause()
         await pilot.pause()
 
-        assert table.cursor_row == 1
+        await _wait_for_paint(pilot, lambda: table.cursor_row == 1, what="cursor settled on row 1")
         assert vm.catalog.iceberg.selected_snapshot_id == 42
         assert notifications.count("selected_snapshot_id") == selection_notifications
         await pilot.click("#glue-iceberg-time-travel")
@@ -523,7 +541,11 @@ async def test_snapshot_pagination_preserves_selection_and_removed_row_falls_bac
         await vm.catalog.iceberg.retry()
         await pilot.pause()
 
-        assert table.cursor_row == 0
+        await _wait_for_paint(
+            pilot,
+            lambda: table.cursor_row == 0,
+            what="cursor fell back to row 0 after the selected row vanished",
+        )
         assert vm.catalog.iceberg.selected_snapshot_id == 43
 
 

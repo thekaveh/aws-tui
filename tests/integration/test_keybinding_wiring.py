@@ -48,6 +48,8 @@ _EXPECTED: set[tuple[str, str, bool, bool]] = {
     ("T", "dispatch('app.cycle_theme')", True, False),
     ("comma", "dispatch('app.open_settings')", True, False),
     ("c", "dispatch('pane.copy')", True, False),
+    ("p", "dispatch('pane.copy_entry_path')", True, False),
+    ("P", "dispatch('pane.copy_path')", True, False),
     ("d", "dispatch('pane.delete')", True, False),
     ("S", "dispatch('app.swap_source')", True, False),
     ("A", "dispatch('emr.next_application')", True, False),

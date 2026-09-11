@@ -14,6 +14,8 @@ re-renders the body when ``entries`` or ``state`` change.
 
 from __future__ import annotations
 
+import contextlib
+
 from rich.markup import escape as _markup_escape
 from rich.text import Text
 from textual.app import ComposeResult
@@ -112,10 +114,27 @@ class EntryRow(HubSubscriberMixin, Widget):
         super().__init__(id=id, classes=merged)
         self._entry_vm = entry_vm
         self._hub = hub
+        self._tooltip_text: str | None = None
 
     @property
     def entry_vm(self) -> EntryVM:
         return self._entry_vm
+
+    def _sync_tooltip(self, full_name: str | None) -> None:
+        """Attach the untruncated name, with the key that copies its path.
+
+        A copy affordance *inside* the tooltip is not achievable: Textual's
+        ``Tooltip`` is a ``Static`` and cannot host an interactive child, and
+        ``Screen._maybe_clear_tooltip`` dismisses it as soon as the widget
+        under the pointer stops being this row -- so moving the mouse toward a
+        button drawn in it would destroy it first. Naming the keybinding is the
+        honest alternative to drawing a control that cannot be clicked.
+        """
+        text = None if full_name is None else f"{full_name}\n\npress p to copy its path"
+        if text == self._tooltip_text:
+            return
+        self._tooltip_text = text
+        self.tooltip = text
 
     def render(self) -> Text:
         vm = self._entry_vm
@@ -124,7 +143,11 @@ class EntryRow(HubSubscriberMixin, Widget):
         # No inline style on the cursor bar: the row's CSS class
         # (``-selected``) drives the color so theme swaps take effect
         # everywhere — including the bar — without re-rendering Python.
-        name_str = f"{_truncate(vm.display_name, name_width):<{name_width}}"
+        shown = _truncate(vm.display_name, name_width)
+        # Only offer a tooltip when the column actually hid something; a
+        # tooltip repeating a fully visible name is noise on every row.
+        self._sync_tooltip(vm.display_name if shown != vm.display_name else None)
+        name_str = f"{shown:<{name_width}}"
         size_str = f"{vm.size_display:>{_SIZE_COL_WIDTH}}"
         modified_str = f"{vm.modified_display:<{_MODIFIED_COL_WIDTH}}"
         text = Text()
@@ -263,6 +286,7 @@ class Pane(HubSubscriberMixin, Widget):
         # Recomputed on every Resize. EntryRow.render reads this directly
         # so wider terminals get wider NAME columns automatically.
         self._name_column_width: int = _DEFAULT_NAME_WIDTH
+        self._path_tooltip_text: str | None = None
 
     @property
     def vm(self) -> PaneVM:
@@ -352,8 +376,69 @@ class Pane(HubSubscriberMixin, Widget):
         else:
             self.remove_class("-focused")
 
-    async def on_click(self, _event: object) -> None:
-        """Clicking anywhere in a pane switches focus to it (when applicable)."""
+    def _copy_to_clipboard(self, value: str, label: str) -> None:
+        """Put ``value`` on the system clipboard and say so."""
+        with contextlib.suppress(Exception):
+            self.app.copy_to_clipboard(value)
+        with contextlib.suppress(Exception):
+            self.app.notify(f"Copied {label}", timeout=3)
+
+    def copy_current_path(self) -> None:
+        """Copy this pane's location. Bound to the border affordance and a key."""
+        self._copy_to_clipboard(self._vm.viewmodel.copy_path, "path")
+
+    def copy_selected_path(self) -> None:
+        """Copy the cursor entry's full location, if there is one."""
+        target = self._vm.viewmodel.copy_selected_path
+        if target is None:
+            with contextlib.suppress(Exception):
+                self.app.notify("Nothing selected to copy", severity="warning", timeout=3)
+            return
+        self._copy_to_clipboard(target, "file path")
+
+    def on_mouse_move(self, event: object) -> None:
+        """Offer the full path while the pointer is on the top border row.
+
+        The border is chrome rather than a child widget, so it cannot carry its
+        own tooltip. Textual does report pointer position relative to this
+        widget over the border, so the tooltip is attached and withdrawn as the
+        pointer enters and leaves row 0 -- otherwise it would appear anywhere
+        over the pane, which is worse than not having it.
+        """
+        offset = getattr(event, "offset", None)
+        on_border = offset is not None and offset.y == 0
+        vm = self._vm.viewmodel
+        text = f"{vm.copy_path}\n\nclick to copy, or press P" if on_border else None
+        if text != self._path_tooltip_text:
+            self._path_tooltip_text = text
+            self.tooltip = text
+
+    def on_leave(self, _event: object) -> None:
+        """Withdraw the path tooltip when the pointer leaves the pane.
+
+        ``on_mouse_move`` cannot do this alone: moving from the border straight
+        into the body puts the pointer over an ``EntryRow``, which consumes the
+        event, so the pane never sees the departure. Textual shows the hovered
+        widget's own tooltip rather than this one, so a stale value is not
+        visible -- but leaving it set is untidy and would surface if the pointer
+        later rested on the pane's own chrome.
+        """
+        if self._path_tooltip_text is not None:
+            self._path_tooltip_text = None
+            self.tooltip = None
+
+    async def on_click(self, event: object) -> None:
+        """Clicking anywhere in a pane switches focus to it (when applicable).
+
+        A click on the top border row is the path-copy affordance. EntryRow
+        delegates its own click here with a ROW-relative offset, where ``y`` is
+        also 0, so a genuine border hit is identified by the event's own widget
+        rather than by offset alone.
+        """
+        offset = getattr(event, "offset", None)
+        if getattr(event, "widget", None) is self and offset is not None and offset.y == 0:
+            self.copy_current_path()
+            return
         node: object | None = self
         while node is not None:
             if type(node).__name__ == "DualPane":
@@ -385,7 +470,12 @@ class Pane(HubSubscriberMixin, Widget):
         before assignment so brackets render as literal text.
         """
         vm = self._vm.viewmodel
-        self.border_title = _markup_escape(vm.border_title)
+        # U+1F4CB CLIPBOARD marks the path as clickable. It is an SMP
+        # single-codepoint emoji, so it renders as a 2-cell colour glyph on any
+        # font with emoji support -- the rule this project learned through
+        # PR #76 -> #77 -> #79, where BMP symbols with VS-16 came out as 1-cell
+        # text outlines and broke the surrounding width maths.
+        self.border_title = f"{_markup_escape(vm.border_title)} \U0001f4cb"
         if vm.border_subtitle is not None:
             self.border_subtitle = _markup_escape(vm.border_subtitle)
 

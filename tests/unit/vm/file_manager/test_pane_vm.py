@@ -671,3 +671,77 @@ async def test_marks_are_inert_while_the_pane_is_loading() -> None:
     # The marks themselves are untouched — they simply do not participate
     # while the listing is in flight.
     assert len(pane.marked_entries) == len(pane.entries)
+
+
+# ── Clipboard payloads ────────────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_copy_payloads_are_owned_by_the_view_model() -> None:
+    """The view copies prepared values, it does not reassemble paths.
+
+    The border label is decorated with a clipboard glyph for display and the
+    border truncates it on a narrow pane, so scraping the chrome back out would
+    copy something the user did not ask for.
+    """
+    pane = await _make_pane(await _seed_fs())
+    try:
+        vm = pane.viewmodel
+        assert vm.copy_path == "/"
+        # Cursor starts on the first entry of the listing.
+        assert vm.copy_selected_path is not None
+        assert vm.copy_selected_path.startswith("/")
+        assert not vm.copy_selected_path.endswith("/")
+        # No doubled separator at the root.
+        assert "//" not in vm.copy_selected_path
+    finally:
+        pane.dispose()
+
+
+@pytest.mark.asyncio
+async def test_copy_selected_path_joins_without_doubling_the_separator() -> None:
+    pane = await _make_pane(await _seed_fs())
+    try:
+        await pane.navigate_to(PathRef(("b",)))
+        assert pane.viewmodel.copy_path == "/b"
+        # A subdirectory listing opens with the cursor on the ``..`` link, so
+        # step onto a real entry before asking for its path.
+        entries = pane.filtered_entries
+        target = next(i for i, entry in enumerate(entries) if entry.name != "..")
+        pane.move_cursor_command.execute(target - pane.cursor_index)
+
+        selected = pane.viewmodel.copy_selected_path
+        assert selected is not None
+        assert "//" not in selected
+        assert selected.startswith("/b/")
+    finally:
+        pane.dispose()
+
+
+@pytest.mark.asyncio
+async def test_copy_selected_path_is_none_on_the_parent_link() -> None:
+    """``..`` is a navigation affordance, not a file the user could mean."""
+    pane = await _make_pane(await _seed_fs())
+    try:
+        await pane.navigate_to(PathRef(("b",)))
+        entries = pane.filtered_entries
+        parent_index = next((i for i, entry in enumerate(entries) if entry.name == ".."), None)
+        if parent_index is None:
+            pytest.skip("this listing exposes no parent link")
+        pane.move_cursor_command.execute(parent_index - pane.cursor_index)
+        assert pane.filtered_entries[pane.cursor_index].name == ".."
+
+        assert pane.viewmodel.copy_selected_path is None
+    finally:
+        pane.dispose()
+
+
+@pytest.mark.asyncio
+async def test_copy_selected_path_is_none_when_the_listing_is_empty() -> None:
+    pane = await _make_pane(InMemoryFS())
+    try:
+        assert pane.viewmodel.copy_selected_path is None
+        # The location itself is still copyable.
+        assert pane.viewmodel.copy_path == "/"
+    finally:
+        pane.dispose()

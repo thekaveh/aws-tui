@@ -389,3 +389,122 @@ async def test_dual_pane_mounts_with_two_panes(tmp_path: Path) -> None:
     finally:
         dual.dispose()
         hub.dispose()
+
+
+# ── Truncated-name tooltips and path copying ──────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_truncated_names_get_a_tooltip_and_short_ones_do_not() -> None:
+    """A tooltip is the only way to read a name the NAME column cut off.
+
+    It carries the copy *keystroke* rather than a clickable icon: Textual's
+    ``Tooltip`` is a ``Static`` and cannot host an interactive child, and
+    ``Screen._maybe_clear_tooltip`` dismisses it the moment the pointer stops
+    being over this row -- so a button drawn inside it could never be reached.
+    """
+    hub: MessageHub[Message] = MessageHub()
+    dispatcher = RxDispatcher.immediate()
+    fs = InMemoryFS()
+    long_name = "an-extremely-long-file-name-that-cannot-fit-the-column.txt"
+    await fs.write_stream(PathRef((long_name,)), _astream(b"x"))
+    await fs.write_stream(PathRef(("ok.txt",)), _astream(b"y"))
+    vm = PaneVM(provider=fs, hub=hub, dispatcher=dispatcher, id_prefix="pane.test")
+    vm.construct()
+    await vm.setup()
+    try:
+
+        class _App(App[None]):
+            def compose(self) -> ComposeResult:
+                yield Pane(vm, hub=hub, id="pane")
+
+        app = _App()
+        async with app.run_test(size=(60, 20)) as pilot:
+            await pilot.pause()
+            await pilot.pause()
+            tips = {r.entry_vm.name: r.tooltip for r in app.query(EntryRow)}
+
+            assert tips[long_name] is not None, "a cut-off name must be readable somehow"
+            assert long_name in str(tips[long_name])
+            assert "press p" in str(tips[long_name])
+            # A tooltip echoing a fully visible name is noise on every row.
+            assert tips["ok.txt"] is None
+    finally:
+        vm.dispose()
+        hub.dispose()
+
+
+@pytest.mark.asyncio
+async def test_border_row_hover_offers_the_path_and_click_copies_it() -> None:
+    """The path lives in the border, which is chrome and not a child widget.
+
+    Textual still reports pointer position relative to the pane over its
+    border, so hover and click on row 0 are the affordance. The tooltip is
+    attached only while the pointer is on that row -- otherwise it would appear
+    anywhere over the pane.
+    """
+    hub: MessageHub[Message] = MessageHub()
+    dispatcher = RxDispatcher.immediate()
+    vm = PaneVM(provider=await _seed(), hub=hub, dispatcher=dispatcher, id_prefix="pane.test")
+    vm.construct()
+    await vm.setup()
+    try:
+
+        class _App(App[None]):
+            def compose(self) -> ComposeResult:
+                yield Pane(vm, hub=hub, id="pane")
+
+        app = _App()
+        copied: list[str] = []
+        async with app.run_test(size=(80, 20)) as pilot:
+            app.copy_to_clipboard = copied.append  # type: ignore[assignment]
+            await pilot.pause()
+            await pilot.pause()
+            pane = app.query_one(Pane)
+
+            assert "\U0001f4cb" in str(pane.border_title), "the path must look copyable"
+
+            await pilot.hover(Pane, offset=(4, 0))
+            await pilot.pause()
+            assert pane.tooltip is not None
+            assert vm.viewmodel.copy_path in str(pane.tooltip)
+
+            await pilot.click(Pane, offset=(4, 0))
+            await pilot.pause()
+            assert copied == [vm.viewmodel.copy_path]
+    finally:
+        vm.dispose()
+        hub.dispose()
+
+
+@pytest.mark.asyncio
+async def test_clicking_a_row_selects_it_rather_than_copying() -> None:
+    """EntryRow delegates its click to the pane with a ROW-relative offset,
+    where ``y`` is also 0 -- so the border check must not fire for row clicks."""
+    hub: MessageHub[Message] = MessageHub()
+    dispatcher = RxDispatcher.immediate()
+    vm = PaneVM(provider=await _seed(), hub=hub, dispatcher=dispatcher, id_prefix="pane.test")
+    vm.construct()
+    await vm.setup()
+    try:
+
+        class _App(App[None]):
+            def compose(self) -> ComposeResult:
+                yield Pane(vm, hub=hub, id="pane")
+
+        app = _App()
+        copied: list[str] = []
+        async with app.run_test(size=(80, 20)) as pilot:
+            app.copy_to_clipboard = copied.append  # type: ignore[assignment]
+            await pilot.pause()
+            await pilot.pause()
+            rows = list(app.query(EntryRow))
+            assert rows
+
+            await pilot.click(rows[-1])
+            await pilot.pause()
+
+            assert copied == [], "a row click selects; it must not reach the clipboard"
+    finally:
+        vm.dispose()
+        hub.dispose()
