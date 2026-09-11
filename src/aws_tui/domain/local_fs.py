@@ -17,10 +17,12 @@ import ntpath
 import os
 import shutil
 import stat
+import threading
 from collections.abc import AsyncGenerator, AsyncIterator, Callable, Iterator, Sequence
 from contextlib import contextmanager, suppress
 from ctypes import wintypes
 from datetime import UTC, datetime
+from functools import partial
 from pathlib import Path, PureWindowsPath
 from string import ascii_uppercase
 from typing import Any, cast
@@ -652,29 +654,20 @@ class LocalFS:
         host = self._resolve_leaf(path)
 
         async def _iterate() -> AsyncIterator[bytes]:
+            # See ``_FdClaim``: a raw task cancellation unwinds this frame
+            # before the worker thread returns, so the descriptor has to be
+            # owned by an object both sides can reach, not by ``fd`` alone.
+            claim = _FdClaim()
             fd: int | None = None
             handed_off = False
             try:
                 if _WINDOWS:
-                    fd = await anyio.to_thread.run_sync(
-                        _windows_open,
-                        self._root,
-                        path,
-                        os.O_RDONLY,
-                    )
+                    opener = partial(_windows_open, self._root, path, os.O_RDONLY)
                 elif self._root is not None:
-                    fd = await anyio.to_thread.run_sync(
-                        _rooted_open,
-                        self._root,
-                        path,
-                        os.O_RDONLY,
-                    )
+                    opener = partial(_rooted_open, self._root, path, os.O_RDONLY)
                 else:
-                    fd = await anyio.to_thread.run_sync(
-                        _open_nofollow,
-                        host.as_posix(),
-                        os.O_RDONLY,
-                    )
+                    opener = partial(_open_nofollow, host.as_posix(), os.O_RDONLY)
+                fd = await anyio.to_thread.run_sync(claim.open_with, opener)
                 opened = os.fstat(fd)
                 if not stat.S_ISREG(opened.st_mode):
                     raise ConflictError(f"not a regular file: {host.as_posix()}")
@@ -688,9 +681,10 @@ class LocalFS:
                     raise ConflictError(f"refusing symlink: {host.as_posix()}") from exc
                 raise _map_os_error(exc, host.as_posix()) from exc
             finally:
-                if fd is not None and not handed_off:
-                    with suppress(OSError):
-                        os.close(fd)
+                if handed_off:
+                    claim.release()
+                else:
+                    claim.abandon()
 
             assert fd is not None
             stream = _read_chunks_fd(fd, host.as_posix(), chunk_size)
@@ -713,19 +707,24 @@ class LocalFS:
     ) -> None:
         host = self._resolve_leaf(path)
         flags = os.O_WRONLY | os.O_CREAT | (os.O_TRUNC if overwrite else os.O_EXCL)
+        # See ``_FdClaim``. ``read_stream`` at least paired its open with a
+        # ``finally``; this path had neither, so a cancellation anywhere between
+        # the thread hop and ``aiofiles.open`` taking ownership left the
+        # descriptor with no owner at all.
+        claim = _FdClaim()
+        handed_off = False
         try:
             if _WINDOWS:
-                fd = await anyio.to_thread.run_sync(
-                    _windows_open,
-                    self._root,
-                    path,
-                    flags,
-                )
+                opener = partial(_windows_open, self._root, path, flags)
             elif self._root is not None:
-                fd = await anyio.to_thread.run_sync(_rooted_open, self._root, path, flags)
+                opener = partial(_rooted_open, self._root, path, flags)
             else:
-                fd = await anyio.to_thread.run_sync(_open_nofollow, host.as_posix(), flags)
+                opener = partial(_open_nofollow, host.as_posix(), flags)
+            fd = await anyio.to_thread.run_sync(claim.open_with, opener)
             async with aiofiles.open(fd, "wb", closefd=True) as fh:
+                # ``closefd=True`` transfers ownership; from here the context
+                # manager closes the descriptor on every exit path.
+                handed_off = True
                 bytes_written = 0
                 async for chunk in source:
                     await fh.write(chunk)
@@ -749,6 +748,11 @@ class LocalFS:
             if exc.errno == errno.ELOOP:
                 raise ConflictError(f"refusing symlink: {host.as_posix()}") from exc
             raise _map_os_error(exc, host.as_posix()) from exc
+        finally:
+            if handed_off:
+                claim.release()
+            else:
+                claim.abandon()
 
 
 # ---------------------------------------------------------------------------
@@ -1754,6 +1758,66 @@ def _validate_publish_source(
 def _local_stable_identity(value: os.stat_result) -> tuple[int, int, int, int]:
     """Fields that remain stable when the same entry is renamed."""
     return (value.st_dev, value.st_ino, value.st_size, value.st_mtime_ns)
+
+
+class _FdClaim:
+    """Race-free ownership hand-off for a descriptor opened on a worker thread.
+
+    ``anyio.to_thread.run_sync`` defaults to ``abandon_on_cancel=False``, but
+    that shield is an *anyio* cancel scope and does not stop the raw
+    ``asyncio.Task.cancel()`` a Textual worker issues. Measured ordering on the
+    pinned runtime: the awaiting coroutine raises ``CancelledError`` and unwinds
+    **before** the worker thread returns, so neither ``fd = await run_sync(...)``
+    nor a plain list filled from the thread has the descriptor in hand by the
+    time the caller's ``finally`` runs.
+
+    This claim closes the gap from whichever side loses the race. If the caller
+    abandons first, the thread closes the descriptor the moment it is produced;
+    if the thread deposits first, ``abandon`` closes it. The lock makes the two
+    orderings mutually exclusive, so the descriptor is closed exactly once.
+
+    Both exclusive streaming groups -- ``quick-look-preview`` and the transfer
+    copy group -- cancel in-flight reads as a matter of course, so without this
+    a session leaks one descriptor per interrupted read until it hits
+    ``RLIMIT_NOFILE``.
+    """
+
+    __slots__ = ("_abandoned", "_fd", "_lock")
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._fd: int | None = None
+        self._abandoned = False
+
+    def open_with(self, opener: Callable[[], int]) -> int:
+        """Run ``opener`` on the worker thread and take ownership of the result."""
+        fd = opener()
+        with self._lock:
+            if self._abandoned:
+                with suppress(OSError):
+                    os.close(fd)
+                raise _AbandonedOpen
+            self._fd = fd
+        return fd
+
+    def release(self) -> None:
+        """Hand ownership to the caller; ``abandon`` becomes a no-op."""
+        with self._lock:
+            self._fd = None
+            self._abandoned = True
+
+    def abandon(self) -> None:
+        """Close the descriptor now, or mark it to be closed on arrival."""
+        with self._lock:
+            self._abandoned = True
+            fd, self._fd = self._fd, None
+        if fd is not None:
+            with suppress(OSError):
+                os.close(fd)
+
+
+class _AbandonedOpen(Exception):
+    """Raised on the worker thread when the caller cancelled before hand-off."""
 
 
 async def _read_chunks_fd(fd: int, filename: str, chunk_size: int) -> AsyncGenerator[bytes, None]:

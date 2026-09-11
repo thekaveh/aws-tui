@@ -436,7 +436,13 @@ class CrossFsCopy:
             container_revision=container_capture.value,
             manifest=(StageManifestEntry(PathRef(()), EntryKind.FILE, captured.value),),
         )
-        if failure is not None or captured.cancelled:
+        # ``container_capture.cancelled`` belongs here too. ``_durably_run``
+        # deliberately never re-raises cancellation -- it records it so the
+        # caller can route it into ``_finish_durable`` -- so omitting this
+        # disjunct meant a cancel delivered during the container capture was
+        # swallowed: the stage was published and the transfer reported success
+        # for a copy the user had already interrupted.
+        if failure is not None or captured.cancelled or container_capture.cancelled:
             cleanup = await self._cleanup_owned_stage(owned)
             _finish_durable(
                 failure,

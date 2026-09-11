@@ -2172,3 +2172,55 @@ async def test_nested_absent_directory_in_a_merge_is_preflighted_before_bytes_mo
         )
 
     assert dst.mutations == [], f"bytes moved before the preflight refused: {dst.mutations}"
+
+
+async def test_cancel_during_container_capture_does_not_publish_the_copy(
+    tmp_path: Path,
+) -> None:
+    """A cancel delivered during the stage *container* capture must abort.
+
+    ``_durably_run`` deliberately never re-raises cancellation -- it records it
+    so the caller can route it into ``_finish_durable``. The file-stage path
+    checked ``captured.cancelled`` but not ``container_capture.cancelled``, so a
+    cancel arriving in that window was swallowed: the stage was published and
+    the transfer reported success for a copy the user had already interrupted.
+
+    The destination must be a provider that actually stages
+    (``atomic_write_replaces = False``); ``InMemoryFS`` publishes directly and
+    never reaches this code.
+    """
+    # Capture order for a staged single-file copy: the stage container is
+    # claimed first, then the file inside it, then the container again for the
+    # ownership revision. It is that third call whose cancellation was dropped.
+    _CONTAINER_CAPTURE = 3
+    caller: list[asyncio.Task[None]] = []
+
+    class _CancelOnContainerCapture(LocalFS):
+        def __init__(self, root: Path) -> None:
+            super().__init__(root=root)
+            self.captures: list[str] = []
+
+        async def capture_stage_revision(self, path: PathRef) -> str:
+            self.captures.append(path.as_posix())
+            revision = await super().capture_stage_revision(path)
+            if len(self.captures) == _CONTAINER_CAPTURE:
+                caller[0].cancel()
+                await asyncio.sleep(0)
+            return revision
+
+    src = InMemoryFS()
+    dst = _CancelOnContainerCapture(tmp_path)
+    await _put_file(src, PathRef.from_posix("/source"), b"payload")
+
+    async def _run() -> None:
+        await CrossFsCopy(source=src, destination=dst).copy(
+            PathRef.from_posix("/source"), PathRef.from_posix("/target")
+        )
+
+    task: asyncio.Task[None] = asyncio.ensure_future(_run())
+    caller.append(task)
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    assert len(dst.captures) >= _CONTAINER_CAPTURE, f"container capture never ran: {dst.captures}"
+    assert not (tmp_path / "target").exists(), "cancelled copy was published anyway"
