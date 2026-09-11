@@ -257,14 +257,23 @@ async def _seed_sql(pilot: object, query_vm: object, editor: TextArea, sql: str)
     a user typing still assign ``editor.text`` directly; this is only for
     establishing a precondition.
     """
-    query_vm.set_sql(sql)  # type: ignore[attr-defined]
-    # Seeding the view model removes the clobber race, but the projection back
-    # onto the editor is itself a deferred refresh -- one pause is not enough on
-    # a slow runner, which is how this helper's own assertion failed on
-    # windows-latest with `assert '' == 'SELECT 1'`. Wait for the projection.
+    # Seeding the view model removes the clobber race, but two more things can
+    # still undo it, so re-assert until the state holds across a settle.
+    #
+    # The projection back onto the editor is a deferred refresh, so one pause is
+    # not enough on a slow runner. And `AthenaQueryView._refresh` guards its own
+    # write with a synchronous `_syncing_editor` flag while Textual delivers the
+    # resulting `Changed` message *later* -- by which time the flag is back to
+    # False. A stale echo carrying the previous text therefore reaches
+    # `set_sql` and reverts the view model, which is how this helper failed on
+    # windows-latest with `assert 'SELECT 1' == 'DELETE FROM events'` when two
+    # values were seeded in quick succession.
     for _ in range(50):
-        if editor.text == sql:
-            break
+        if editor.text == sql and query_vm.sql == sql:  # type: ignore[attr-defined]
+            await pilot.pause()  # type: ignore[attr-defined]
+            if editor.text == sql and query_vm.sql == sql:  # type: ignore[attr-defined]
+                return
+        query_vm.set_sql(sql)  # type: ignore[attr-defined]
         await pilot.pause()  # type: ignore[attr-defined]
     assert editor.text == sql
 
