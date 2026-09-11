@@ -115,6 +115,11 @@ class PaneViewModel:
     placeholder_severity: str  # "", "warning", "error"
     border_title: str  # live path, rendered subtly in the pane's top border
     border_subtitle: str | None  # connection identity, in the bottom border
+    # Clipboard payloads. The border label is decorated for display and the
+    # border truncates it when the pane is narrow, so the value to copy is
+    # carried separately rather than scraped back out of the chrome.
+    copy_path: str  # the pane's current location, verbatim
+    copy_selected_path: str | None  # cursor entry's full location, or None
 
 
 # State → (user-facing text, severity) — VM-owned per MVVM. Severity maps
@@ -504,7 +509,26 @@ class PaneVM:
             placeholder_severity=severity,
             border_title=self._format_border_title(),
             border_subtitle=self._identity_label,
+            copy_path=self._format_border_title(),
+            copy_selected_path=self._format_selected_path(),
         )
+
+    def _format_selected_path(self) -> str | None:
+        """Full location of the cursor entry, for the clipboard.
+
+        Returns ``None`` when there is nothing to copy: an empty listing, or a
+        cursor resting on the ``..`` parent link, which is a navigation
+        affordance rather than a file the user could mean.
+        """
+        entries = self.filtered_entries
+        if not entries:
+            return None
+        index = min(max(self._cursor_index, 0), len(entries) - 1)
+        entry = entries[index]
+        if entry.name == "..":
+            return None
+        base = self._format_border_title()
+        return f"{base}{entry.name}" if base.endswith("/") else f"{base}/{entry.name}"
 
     def _format_border_title(self) -> str:
         """Render the path label that lives in the pane's top border.

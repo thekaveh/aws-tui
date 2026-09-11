@@ -129,6 +129,11 @@ class KeymapStore:
         "pane.delete": ("d",),
         "pane.new": ("n",),
         "pane.refresh": ("r",),
+        # Distinct keys rather than aliasing glue's ``y``: a shared keystroke
+        # needs a context hijack inside one handler (see emr.clone/pane.copy),
+        # and there is no reason to take on that ambiguity here. ``p`` for path.
+        "pane.copy_entry_path": ("p",),
+        "pane.copy_path": ("P",),
         "app.themes": ("t",),
         "app.cycle_theme": ("T",),
         "app.swap_source": ("S",),

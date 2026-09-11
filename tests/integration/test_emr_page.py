@@ -697,9 +697,12 @@ async def test_emr_picker_commit_cascades_to_runs_pane(tmp_path: Path) -> None:
             assert page_vm.job_runs.application_id == initial_app_id
             other_app_id = "00emr" if initial_app_id == "00other" else "00other"
 
-            # Open the picker, highlight the OTHER app's row, commit.
-            picker.toggle_open()
-            await pilot.pause()
+            # Open the picker, highlight the OTHER app's row, commit. The open
+            # has to be held: the page's open-intent reconcile can close a
+            # freshly opened picker, and a closed list means the highlight below
+            # never lands, so the commit selects nothing and the cascade this
+            # test is about never happens.
+            await _held_open(pilot, picker)
             opts = picker.query_one("#app-options")
             for idx in range(opts.option_count):
                 opt = opts.get_option_at_index(idx)

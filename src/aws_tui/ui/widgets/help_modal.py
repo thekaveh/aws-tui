@@ -116,6 +116,8 @@ class HelpModal(ModalScreen[None]):
 
                 yield Static("File operations", classes="help-section")
                 yield self._action_row("pane.copy", "copy selected entry to the other pane")
+                yield self._action_row("pane.copy_entry_path", "copy the cursor entry's path")
+                yield self._action_row("pane.copy_path", "copy this pane's current path")
                 yield self._action_row("pane.delete", "delete selected entry")
                 yield self._action_row(("pane.mark_up", "pane.mark_down"), "extend selection")
 

@@ -287,6 +287,8 @@ unbound until a handler ships.
 | `pane.delete` | `d` | yes | Delete marked entries (confirms) |
 | `pane.new` | `n` | *(deferred)* | New folder / bucket |
 | `pane.refresh` | `r` | yes | Re-run `provider.list()` |
+| `pane.copy_entry_path` | `p` | yes | Copy the cursor entry's full path to the clipboard |
+| `pane.copy_path` | `P` (`shift+p`) | yes | Copy the pane's current path to the clipboard |
 | `auth.authenticate` | `a` (when auth toast active) | *(deferred)* | Reserved for a future auth helper; currently run `aws sso login --profile <name>` yourself |
 | `emr.next_application` | `A` (`shift+a`) | yes | Cycle to the next EMR application |
 | `emr.clone` | `c` (when EMR page mounted) | yes | Open the EMR clone-job-run modal pre-filled from the focused run. |
