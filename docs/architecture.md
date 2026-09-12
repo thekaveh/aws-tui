@@ -164,6 +164,12 @@ mounts.
 
 ![aws-tui content lifecycle showing widget-worker drain before VM disposal, transactional source rollback, and ordered application shutdown.](diagrams/img/lifecycle.png)
 
+![aws-tui operation states: the query, transfer, EMR job run, and log-pane lifecycle enums, each shown from its initial state through its terminal states, with the transitions the app owns distinguished from the ones AWS owns.](diagrams/img/operation-states.png)
+
+Those four enums are independent. A transfer cancelled mid-flight says
+nothing about the query that produced its source, and the app never drives
+an EMR job run's state — it only observes what the poller reports.
+
 Disposal order is the part that cannot be read off the code: a widget's
 workers must drain before its view model is disposed, or a late callback
 resumes against a disposed VM.

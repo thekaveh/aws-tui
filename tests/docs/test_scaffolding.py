@@ -445,6 +445,7 @@ def test_athena_canonical_surfaces_and_diagram_match_current_tree() -> None:
         {"id": "deployment", "master": "docs/diagrams/deployment.html"},
         {"id": "lifecycle", "master": "docs/diagrams/lifecycle.html"},
         {"id": "table-handoff", "master": "docs/diagrams/table-handoff.html"},
+        {"id": "operation-states", "master": "docs/diagrams/operation-states.html"},
     ]
     for service in ("S3", "EMR Serverless", "AWS Glue", "Amazon Athena"):
         assert service in index

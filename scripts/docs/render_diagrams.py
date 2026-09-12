@@ -204,9 +204,12 @@ def copy_assets(repo_root: str | Path, wiki_img_dir: str | Path) -> None:
     dst.mkdir(parents=True, exist_ok=True)
     if not src.is_dir():
         return
-    for pattern in ("*.png", "*.svg"):
-        for asset in src.glob(pattern):
-            _atomic_write_bytes(dst / asset.name, asset.read_bytes())
+    # PNGs only. The generated wiki markdown embeds `img/<name>.png` and never
+    # references an SVG, but copying both pushed ~5 MB of dead bytes into the
+    # wiki's own git repository on every sync -- and the wiki is a separate
+    # repository, so that weight is permanent history there.
+    for asset in src.glob("*.png"):
+        _atomic_write_bytes(dst / asset.name, asset.read_bytes())
 
 
 def main(argv: list[str] | None = None) -> int:

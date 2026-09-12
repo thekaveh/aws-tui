@@ -31,7 +31,7 @@ sections:
   - id: development
     title: Development
     children:
-      - { id: architecture, title: Architecture, source: docs/architecture.md, diagrams: [architecture, operations-flow, lifecycle, table-handoff] }
+      - { id: architecture, title: Architecture, source: docs/architecture.md, diagrams: [architecture, operations-flow, lifecycle, table-handoff, operation-states] }
       - { id: adding-service, title: Adding a New Service, source: docs/adding-a-service.md }
       - { id: contract-ledger, title: Consumed Contract Ledger, source: docs/contract-ledger.md }
   - { id: releasing, title: Releasing aws-tui, source: docs/RELEASING.md }
@@ -42,3 +42,4 @@ diagrams:
   - { id: deployment, master: docs/diagrams/deployment.html }
   - { id: lifecycle, master: docs/diagrams/lifecycle.html }
   - { id: table-handoff, master: docs/diagrams/table-handoff.html }
+  - { id: operation-states, master: docs/diagrams/operation-states.html }

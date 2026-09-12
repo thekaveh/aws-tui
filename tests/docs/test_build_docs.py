@@ -106,10 +106,21 @@ def test_three_surface_build_keeps_svg_assets_byte_identical(tmp_path, monkeypat
     render_site(m, root, site_dir)
     render_wiki(m, root, wiki_dir)
 
-    canonical = (canonical_dir / "architecture.svg").read_bytes()
-    site = (site_dir / "assets" / "img" / "architecture.svg").read_bytes()
-    wiki = (wiki_dir / "img" / "architecture.svg").read_bytes()
-    assert canonical == site == wiki
+    # One canonical asset, byte-identical on every surface that embeds it --
+    # but each surface embeds a different format. The site references the SVG;
+    # the generated wiki markdown references the PNG and never an SVG, so
+    # copying SVGs there too put ~5 MB of unreferenced bytes into the wiki's
+    # own git history on every sync. Assert the bytes each surface actually
+    # uses, and that the dead copy stays gone.
+    canonical_svg = (canonical_dir / "architecture.svg").read_bytes()
+    site_svg = (site_dir / "assets" / "img" / "architecture.svg").read_bytes()
+    assert canonical_svg == site_svg
+
+    canonical_png = (canonical_dir / "architecture.png").read_bytes()
+    wiki_png = (wiki_dir / "img" / "architecture.png").read_bytes()
+    assert canonical_png == wiki_png
+
+    assert not (wiki_dir / "img" / "architecture.svg").exists()
 
 
 def test_render_mkdocs_yml_has_nav_and_no_repo_url(tmp_path):

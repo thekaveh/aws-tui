@@ -178,7 +178,12 @@ def test_check_committed_assets_detects_stale_and_unexpected_assets(tmp_path):
     ]
 
 
-def test_copy_assets_copies_pngs(tmp_path):
+def test_copy_assets_copies_pngs_and_leaves_svgs_behind(tmp_path):
+    """The wiki embeds PNGs only; copying SVGs too was ~5 MB of dead weight.
+
+    The wiki is a separate git repository, so anything synced into it stays in
+    that repository's history permanently.
+    """
     src = tmp_path / "docs" / "diagrams" / "img"
     src.mkdir(parents=True)
     (src / "system.png").write_bytes(b"\x89PNG\r\n\x1a\nDATA")
@@ -186,7 +191,7 @@ def test_copy_assets_copies_pngs(tmp_path):
     wiki_img = tmp_path / "generated" / "wiki" / "img"
     copy_assets(tmp_path, wiki_img)
     assert (wiki_img / "system.png").read_bytes().startswith(b"\x89PNG")
-    assert (wiki_img / "system.svg").read_text(encoding="utf-8") == "<svg/>"
+    assert not (wiki_img / "system.svg").exists()
 
 
 def test_render_svg_embeds_regular_and_bold_fonts_without_external_dependency(tmp_path):
