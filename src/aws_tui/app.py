@@ -1513,10 +1513,6 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
                         _svc_id or "unknown",
                     ),
                     focus_coordinator=ctx.focus_coordinator,
-                    dual_pane_class=DualPane,
-                    emr_page_class=EmrServerlessPage,
-                    glue_page_class=GluePage,
-                    athena_page_class=AthenaPage,
                 )
                 await self._replace_content_widget(host, replacement)
                 if _svc_id in {"glue", "athena"}:
@@ -4186,7 +4182,7 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
             if athena is not None:
                 await current.restore_snapshot(athena)
             elif athena_result_execution_id is not None:
-                await current.results.load(athena_result_execution_id)
+                await current.results.load(athena_result_execution_id, from_history=True)
                 await current.select_view("results")
         elif service_id == "glue" and isinstance(current, GluePageVM) and glue is not None:
             await self._restore_glue_page_snapshot(current, glue)
@@ -4621,10 +4617,6 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
                 keymap=ctx.keymap_store,
                 source_candidates=_service_source_contexts(ctx, service_id),
                 focus_coordinator=ctx.focus_coordinator,
-                dual_pane_class=DualPane,
-                emr_page_class=EmrServerlessPage,
-                glue_page_class=GluePage,
-                athena_page_class=AthenaPage,
             )
             await self._replace_content_widget(host, replacement)
             if service_id in {"glue", "athena"}:

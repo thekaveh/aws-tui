@@ -2554,3 +2554,53 @@ async def test_shutdown_and_dispose_cascade_once_without_owning_store(
     assert set(dispose_calls.values()) == {1}
     assert store.dispose_calls == 0
     assert page._inner.status is ConstructionStatus.DISPOSED  # type: ignore[attr-defined]
+
+
+async def test_history_results_do_not_break_the_snapshot_export() -> None:
+    """Viewing History results must not poison the cross-service handoff.
+
+    ``AthenaPageVM.results`` *is* ``AthenaPageVM.query.results``, so
+    ``open_history_results`` loaded another execution's rows into the query
+    VM's results without touching ``execution_ref``/``state``. Every branch of
+    the structure check required those to agree, so from then on
+    ``export_snapshot`` raised ``ValueError`` -- and ``app.py`` turned that into
+    a permanent "finish the active Athena operation before switching services"
+    refusal of the Athena->Glue handoff, with the S3 handoff silently
+    degrading. The provenance flag says these rows are independent of this
+    query's execution.
+    """
+    client = PageClient()
+    page = make_page_vm(client)
+    try:
+        await page.setup()
+        await page.select_view("history")
+        await page.select_history_execution("history-primary")
+        await page.open_history_results()
+
+        assert page.results.execution_id == "history-primary"
+        assert page.query.execution_ref is None, "no query was ever run"
+        assert page.results.from_history is True
+
+        snapshot = page.export_snapshot()
+        assert snapshot.query.results.from_history is True
+
+        # The provenance has to survive a rollback round trip, or the restored
+        # page would fail its own next export.
+        await page.restore_snapshot(snapshot)
+        assert page.results.from_history is True
+        assert page.results.execution_id == "history-primary"
+        page.export_snapshot()
+    finally:
+        await page.shutdown()
+
+
+async def test_a_page_that_never_used_history_keeps_the_strict_coupling() -> None:
+    """The relaxation is scoped to history-sourced rows only."""
+    client = PageClient()
+    page = make_page_vm(client)
+    try:
+        await page.setup()
+        snapshot = page.export_snapshot()
+        assert snapshot.query.results.from_history is False
+    finally:
+        await page.shutdown()

@@ -361,6 +361,14 @@ class AthenaQueryVM:
         snapshot: AthenaQuerySnapshot,
         expected_context: QueryContext,
     ) -> bool:
+        # Results opened from the History view belong to a different execution
+        # than anything this query VM ran -- ``AthenaPageVM.results`` *is*
+        # ``AthenaPageVM.query.results`` -- so they must not be judged against
+        # ``execution_ref``. Without this, viewing history results once made
+        # every later ``export_snapshot`` raise, and ``app.py`` turned that into
+        # a permanent "finish the active Athena operation before switching
+        # services" refusal of the Athena->Glue handoff.
+        history_results = snapshot.results.from_history
         if (
             not valid_query_context(expected_context)
             or not valid_query_context(snapshot.context)
@@ -401,7 +409,7 @@ class AthenaQueryVM:
                 or snapshot.state_reason is not None
                 or snapshot.output_location is not None
                 or snapshot.engine_version is not None
-                or snapshot.results.execution_id is not None
+                or (snapshot.results.execution_id is not None and not history_results)
             ):
                 return False
             if snapshot.pane_state is PaneState.LOADING:
@@ -432,11 +440,11 @@ class AthenaQueryVM:
                 return False
             return snapshot.query_error is None and snapshot.results.execution_id is None
         if snapshot.state is QueryState.SUCCEEDED:
-            return (
-                snapshot.query_error is None
-                and snapshot.results.execution_id == snapshot.execution_ref.execution_id
+            return snapshot.query_error is None and (
+                history_results
+                or snapshot.results.execution_id == snapshot.execution_ref.execution_id
             )
-        if snapshot.results.execution_id is not None:
+        if snapshot.results.execution_id is not None and not history_results:
             return False
         return not (snapshot.state is QueryState.CANCELLED and snapshot.query_error is not None)
 

@@ -108,8 +108,6 @@ class TransferProgress:
 
     bytes_transferred: int
     bytes_total: int | None
-    part_index: int | None = None
-    part_count: int | None = None
 
 
 ProgressCallback = Callable[[TransferProgress], None]

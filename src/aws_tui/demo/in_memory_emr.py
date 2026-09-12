@@ -229,19 +229,6 @@ class InMemoryEmr:
         self._observe_timestamp(d.updated_at)
         return d
 
-    def set_run_state(self, application_id: str, job_run_id: str, state: JobRunState) -> None:
-        """Mutate the state of a previously-added run (used by tests
-        that pin auto-refresh observable side effects)."""
-        s = self._runs[application_id][job_run_id]
-        self._runs[application_id][job_run_id] = JobRunSummary(
-            application_id=s.application_id,
-            job_run_id=s.job_run_id,
-            name=s.name,
-            state=state,
-            created_at=s.created_at,
-            updated_at=s.updated_at,
-        )
-
     # ── Public client surface (matches EmrServerlessClient) ────────────────
 
     async def list_applications(self) -> list[ApplicationSummary]:

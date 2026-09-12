@@ -67,6 +67,11 @@ class AthenaResultsSnapshot:
     error_text: str | None = field(repr=False)
     is_loading_more: bool = field(repr=False)
     limit_reached: bool = field(default=False, repr=False)
+    #: True when these rows were loaded for an execution picked from History
+    #: rather than produced by the sibling query VM's own run. Such results
+    #: are independent of ``AthenaQuerySnapshot.execution_ref``, so the query
+    #: VM must not judge them against it.
+    from_history: bool = field(default=False, repr=False)
 
 
 @dataclass(frozen=True, slots=True)
@@ -118,6 +123,7 @@ class AthenaResultsVM:
         )
         self._generation = 0
         self._execution_id: str | None = None
+        self._from_history = False
         self._columns: tuple[ResultColumn, ...] = ()
         self._state = PaneState.EMPTY
         self._error_text: str | None = None
@@ -130,6 +136,11 @@ class AthenaResultsVM:
     @property
     def execution_id(self) -> str | None:
         return self._execution_id
+
+    @property
+    def from_history(self) -> bool:
+        """True when the loaded rows came from a History selection."""
+        return self._from_history
 
     @property
     def columns(self) -> tuple[ResultColumn, ...]:
@@ -187,12 +198,13 @@ class AthenaResultsVM:
     def construct(self) -> None:
         self._inner.construct()
 
-    async def load(self, execution_id: str) -> None:
+    async def load(self, execution_id: str, *, from_history: bool = False) -> None:
         if self._disposed or self._shutdown_started:
             return
         self._generation += 1
         generation = self._generation
         self._execution_id = execution_id
+        self._from_history = from_history
         self._columns = ()
         self._error_text = None
         worker = self._replace_worker(execution_id, generation)
@@ -260,6 +272,7 @@ class AthenaResultsVM:
             error_text=self._error_text,
             is_loading_more=self._is_loading_more,
             limit_reached=self._pager.limit_reached,
+            from_history=self._from_history,
         )
         if not self.snapshot_is_valid(snapshot):
             raise ValueError(_SNAPSHOT_ERROR)
@@ -279,6 +292,7 @@ class AthenaResultsVM:
         self._generation += 1
         generation = self._generation
         self._execution_id = snapshot.execution_id
+        self._from_history = snapshot.from_history
         self._columns = snapshot.columns
         worker = self._replace_worker(
             snapshot.execution_id,
@@ -408,6 +422,7 @@ class AthenaResultsVM:
             return
         self._generation += 1
         self._execution_id = None
+        self._from_history = False
         self._columns = ()
         self._error_text = None
         self._replace_worker(None, self._generation)
@@ -420,6 +435,7 @@ class AthenaResultsVM:
         self._shutdown_started = True
         self._generation += 1
         self._execution_id = None
+        self._from_history = False
         self._columns = ()
         self._error_text = None
         current = self._replace_worker(None, self._generation)
@@ -439,6 +455,7 @@ class AthenaResultsVM:
         self._generation += 1
         if not self._shutdown_started:
             self._execution_id = None
+            self._from_history = False
             self._columns = ()
             self._error_text = None
             current = self._replace_worker(None, self._generation)

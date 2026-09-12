@@ -24,20 +24,16 @@ def build_service_view(
     focus_coordinator: FocusCoordinatorVM,
     keymap: KeymapStore | None = None,
     source_candidates: tuple[ServiceSourceContext, ...] = (),
-    dual_pane_class: type[DualPane] = DualPane,
-    emr_page_class: type[EmrServerlessPage] = EmrServerlessPage,
-    glue_page_class: type[GluePage] = GluePage,
-    athena_page_class: type[AthenaPage] = AthenaPage,
 ) -> Widget:
     if service_id == "s3":
-        return dual_pane_class(
+        return DualPane(
             vm,
             hub=hub,
             focus_coordinator=focus_coordinator,
             id="content-dual-pane",
         )
     if service_id == "emr-serverless":
-        return emr_page_class(
+        return EmrServerlessPage(
             vm,
             hub=hub,
             keymap=keymap,
@@ -46,7 +42,7 @@ def build_service_view(
             id="content-emr-page",
         )
     if service_id == "glue":
-        return glue_page_class(
+        return GluePage(
             vm,
             hub=hub,
             keymap=keymap,
@@ -55,7 +51,7 @@ def build_service_view(
             id="content-glue-page",
         )
     if service_id == "athena":
-        return athena_page_class(
+        return AthenaPage(
             vm,
             hub=hub,
             keymap=keymap,

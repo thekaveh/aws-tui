@@ -223,20 +223,6 @@ class JobRunLogsVM:
         self._filter = filter_
         self._notify("filter")
 
-    def select_log_file(self, kind: LogFileKind) -> None:
-        """Pick a file from ``available_files`` by kind. No-op if
-        not loaded yet or no file with that kind exists."""
-        match = next((f for f in self._available_files if f.kind is kind), None)
-        if match is None or match == self._current_file:
-            return
-        self._current_file = match
-        self._lines = ()
-        self._bytes_read = 0
-        self._lines_scanned = 0
-        self._matched_count = 0
-        self._notify("current_file")
-        self._notify("lines")
-
     def select_log_file_key(self, key: str) -> None:
         """Pick one exact object, preserving executor and retry identity."""
         match = next((file for file in self._available_files if file.key == key), None)

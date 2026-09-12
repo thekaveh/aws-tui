@@ -427,7 +427,10 @@ class AthenaPage(DeferredWorkerMixin, HubSubscriberMixin, Widget):
             await self._vm.history.refresh()
         elif active == "results":
             if self._vm.results.execution_id is not None:
-                await self._vm.results.load(self._vm.results.execution_id)
+                await self._vm.results.load(
+                    self._vm.results.execution_id,
+                    from_history=self._vm.results.from_history,
+                )
         else:
             await self._vm.saved.setup()
 

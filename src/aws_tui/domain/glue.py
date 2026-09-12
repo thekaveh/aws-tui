@@ -491,6 +491,7 @@ class GlueClient:
         columns: Sequence[str],
     ) -> tuple[ColumnStatistics, ...]:
         rows: list[ColumnStatistics] = []
+        first_error: ProviderError | None = None
         async with await self._aws_session.client(self._connection, "glue") as client:
             for offset in range(0, len(columns), _COLUMN_STATISTICS_BATCH_SIZE):
                 batch = list(columns[offset : offset + _COLUMN_STATISTICS_BATCH_SIZE])
@@ -499,11 +500,17 @@ class GlueClient:
                     TableName=ref.table_name,
                     ColumnNames=batch,
                 )
-                _raise_column_statistics_errors(response)
+                if first_error is None:
+                    first_error = _column_statistics_error(response)
                 rows.extend(
                     self._map_column_statistics(item)
                     for item in _response_items(response, "ColumnStatisticsList")
                 )
+        # Keep whatever the service did compute. Raise only when the whole
+        # request produced nothing, so a denial is still surfaced rather than
+        # rendering as "no statistics".
+        if not rows and first_error is not None:
+            raise first_error
         return tuple(rows)
 
     async def _list_jobs_page_operation(
@@ -904,10 +911,21 @@ def _required_response_items(
     return _mapping_items(_required_sequence(mapping, field), field=field)
 
 
-def _raise_column_statistics_errors(response: object) -> None:
+def _column_statistics_error(response: object) -> ProviderError | None:
+    """Map the first per-column error in a response, or ``None`` if clean.
+
+    ``GetColumnStatisticsForTable`` is a partial-success API:
+    ``ColumnStatisticsList`` carries the columns that were computed and
+    ``Errors`` the ones that were not. This used to raise directly, before the
+    successful rows were collected and from inside the 100-column batch loop --
+    so one uncomputed or Lake-Formation-denied column discarded every other
+    column's statistics *and* every remaining batch. The caller now keeps what
+    succeeded and raises only when nothing did, matching the degrade-to-warning
+    shape ``_get_crawler_detail`` already uses for partial failures.
+    """
     errors = _response_items(response, "Errors")
     if not errors:
-        return
+        return None
     item = errors[0]
     detail = _optional_mapping(item, "Error")
     code = _optional_string(detail, "ErrorCode") or "ColumnStatisticsError"
@@ -918,7 +936,7 @@ def _raise_column_statistics_errors(response: object) -> None:
             _optional_string(detail, "ErrorMessage") or "",
         )
     ).lower()
-    raise _provider_error_for_code(
+    return _provider_error_for_code(
         code,
         f"{_glue_error_message(code)} [REDACTED]",
         lake_formation="lake formation" in normalized or "lakeformation" in normalized,
