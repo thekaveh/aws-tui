@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import sys
 from collections.abc import AsyncIterator
 from pathlib import Path
 
@@ -11,6 +12,7 @@ import aioboto3
 import pytest
 
 from aws_tui.demo.in_memory_fs import InMemoryFS
+from aws_tui.domain import local_fs
 from aws_tui.domain.cross_fs import ConflictResolution, CrossFsCopy, CrossFsMove
 from aws_tui.domain.filesystem import (
     ConflictError,
@@ -2227,6 +2229,11 @@ async def test_cancel_during_container_capture_does_not_publish_the_copy(
     assert not (tmp_path / "target").exists(), "cancelled copy was published anyway"
 
 
+@pytest.mark.skipif(
+    sys.platform == "win32",
+    reason="symlinks need admin on Windows; the reparse-point refusal is covered by "
+    "test_windows_reparse_refusal_is_an_unsupported_source_when_reading",
+)
 async def test_copying_a_symlink_reports_the_refusal_and_leaves_no_stage(
     tmp_path: Path,
 ) -> None:
@@ -2246,10 +2253,7 @@ async def test_copying_a_symlink_reports_the_refusal_and_leaves_no_stage(
     dst_root.mkdir()
     target = src_root / "real.txt"
     target.write_bytes(b"payload")
-    try:
-        (src_root / "link.txt").symlink_to(target)
-    except (OSError, NotImplementedError):  # pragma: no cover - Windows privilege
-        pytest.skip("symlink creation requires privilege on this platform")
+    (src_root / "link.txt").symlink_to(target)
 
     src = LocalFS(root=src_root)
     dst = LocalFS(root=dst_root)
@@ -2262,6 +2266,11 @@ async def test_copying_a_symlink_reports_the_refusal_and_leaves_no_stage(
     assert list(dst_root.iterdir()) == [], "the abandoned stage was left behind"
 
 
+@pytest.mark.skipif(
+    sys.platform == "win32",
+    reason="symlinks need admin on Windows; the reparse-point refusal is covered by "
+    "test_windows_reparse_refusal_is_an_unsupported_source_when_reading",
+)
 async def test_copying_a_symlink_under_rename_does_not_retry_the_source_refusal(
     tmp_path: Path,
 ) -> None:
@@ -2278,10 +2287,7 @@ async def test_copying_a_symlink_under_rename_does_not_retry_the_source_refusal(
     src_root.mkdir()
     target = src_root / "real.txt"
     target.write_bytes(b"payload")
-    try:
-        (src_root / "link.txt").symlink_to(target)
-    except (OSError, NotImplementedError):  # pragma: no cover - Windows privilege
-        pytest.skip("symlink creation requires privilege on this platform")
+    (src_root / "link.txt").symlink_to(target)
 
     # ``InMemoryFS`` sets ``atomic_write_replaces``, which is the shape that
     # sent the retry loop around the full attempt budget.
@@ -2300,3 +2306,30 @@ async def test_copying_a_symlink_under_rename_does_not_retry_the_source_refusal(
 async def test_unsupported_source_error_is_still_a_conflict_error() -> None:
     """Existing ``except ConflictError`` handlers must keep reporting it."""
     assert issubclass(UnsupportedSourceError, ConflictError)
+
+
+def test_windows_reparse_refusal_is_an_unsupported_source_when_reading() -> None:
+    """Windows refuses a symlink as a reparse point, not via ``ELOOP``.
+
+    That refusal was a plain ``ConflictError``, so the
+    ``ConflictResolution.RENAME`` retry loop treated reading a symlink as a
+    destination-name collision on Windows exactly as it did on POSIX -- burning
+    the full attempt budget on an error no new name can fix. The POSIX half of
+    this is covered by the two symlink tests above, which cannot run on Windows;
+    this exercises the branch directly so the contract holds on every platform.
+    """
+    attributes = local_fs._WINDOWS_FILE_ATTRIBUTE_REPARSE_POINT
+
+    with pytest.raises(UnsupportedSourceError, match="refusing reparse point"):
+        local_fs._windows_reject_reparse(
+            attributes, "C:\\x\\link.txt", error=UnsupportedSourceError
+        )
+
+    # The destination side keeps the plain error: renaming past a reparse point
+    # at the target name genuinely works, so that retry must stay available.
+    with pytest.raises(ConflictError) as destination_refusal:
+        local_fs._windows_reject_reparse(attributes, "C:\\x\\link.txt")
+    assert not isinstance(destination_refusal.value, UnsupportedSourceError)
+
+    # A file with no reparse attribute is not refused at all.
+    local_fs._windows_reject_reparse(0, "C:\\x\\plain.txt", error=UnsupportedSourceError)

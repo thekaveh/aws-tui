@@ -1133,9 +1133,25 @@ def _windows_base_and_segments(root: Path | None, path: PathRef) -> tuple[str, t
     return str(PureWindowsPath(native.anchor)), relative.segments
 
 
-def _windows_reject_reparse(attributes: int, path: str) -> None:
+def _windows_reject_reparse(
+    attributes: int,
+    path: str,
+    *,
+    error: type[ConflictError] = ConflictError,
+) -> None:
+    """Refuse a reparse point (symlink, junction, mount point).
+
+    ``error`` selects which refusal this is. Reading a reparse point is a
+    permanent *source* refusal -- the Windows analogue of the ``ELOOP`` branch
+    in ``read_stream`` -- so the leaf open passes
+    :class:`UnsupportedSourceError` there, which stops
+    ``CrossFsCopy._copy_file_atomically`` retrying it as though a different
+    destination name could help. Every other call site keeps the plain
+    :class:`ConflictError`: at the destination, a different name genuinely does
+    avoid the reparse point.
+    """
     if attributes & _WINDOWS_FILE_ATTRIBUTE_REPARSE_POINT:
-        raise ConflictError(f"refusing reparse point traversal: {path}")
+        raise error(f"refusing reparse point traversal: {path}")
 
 
 def _windows_require_directory(attributes: int, path: str) -> None:
@@ -1325,7 +1341,11 @@ def _windows_open(root: Path | None, path: PathRef, flags: int) -> int:
             handle = api.open(host, access=access, disposition=_WINDOWS_OPEN_EXISTING)
         try:
             attributes = api.attributes(handle, host)
-            _windows_reject_reparse(attributes, host)
+            _windows_reject_reparse(
+                attributes,
+                host,
+                error=ConflictError if writing else UnsupportedSourceError,
+            )
             if attributes & _WINDOWS_FILE_ATTRIBUTE_DIRECTORY:
                 raise IsADirectoryError(errno.EISDIR, os.strerror(errno.EISDIR), host)
             _windows_assert_contained(api, handle, host, anchor)
