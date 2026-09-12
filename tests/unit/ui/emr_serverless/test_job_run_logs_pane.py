@@ -21,6 +21,7 @@ from aws_tui.ui.widgets.emr_serverless.job_run_logs_pane import (
     _format_log_file_label,
 )
 from aws_tui.vm.emr_serverless.job_run_logs_vm import JobRunLogsVM, LogsState
+from tests.helpers import focus_and_settle
 
 
 def _make_vm() -> tuple[JobRunLogsVM, MessageHub[Message], _InMemoryEmr]:
@@ -224,7 +225,7 @@ async def test_left_and_right_select_exact_duplicate_kind_log_files() -> None:
 
     async with app.run_test() as pilot:
         pane = pilot.app.query_one(JobRunLogsPane)
-        pane.focus()
+        await focus_and_settle(pane)
         await pilot.press("right")
         await pilot.pause()
 

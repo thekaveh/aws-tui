@@ -26,6 +26,7 @@ from aws_tui.services.glue import GlueClientProtocol, GlueService
 from aws_tui.ui.widgets.context_picker import ContextPicker
 from aws_tui.ui.widgets.emr_serverless.page import EmrServerlessPage
 from aws_tui.ui.widgets.glue.page import GluePage
+from tests.helpers import focus_and_settle
 from tests.unit.vm.glue._fake_glue import seeded_glue
 
 
@@ -299,7 +300,7 @@ async def test_emr_source_picker_rebuilds_exact_selected_target(tmp_path: Path) 
                 return TokenProbeResult(TokenState.CONNECTED)
 
             ctx.aws_session.probe_token = probe  # type: ignore[method-assign]
-            picker.focus()
+            await focus_and_settle(picker)
             await pilot.press("enter")
             await pilot.pause()
             assert picker.is_open
@@ -513,7 +514,7 @@ async def test_glue_source_picker_event_rebuilds_exact_selected_target(
                 return TokenProbeResult(TokenState.CONNECTED)
 
             ctx.aws_session.probe_token = probe  # type: ignore[method-assign]
-            picker.focus()
+            await focus_and_settle(picker)
             await pilot.press("enter", "down", "enter")
             await _await_service_mount(pilot, app)
 
@@ -564,7 +565,7 @@ async def test_glue_source_picker_restores_active_source_when_target_disappears(
                 return result
 
             app._switch_single_context_source_to = recording_switch_to  # type: ignore[method-assign]
-            picker.focus()
+            await focus_and_settle(picker)
             await pilot.press("enter")
             await pilot.pause()
             await pilot.press("down", "enter")

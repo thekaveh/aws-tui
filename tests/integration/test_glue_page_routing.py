@@ -18,6 +18,7 @@ from aws_tui.ui.widgets.context_picker import ContextPicker
 from aws_tui.ui.widgets.glue.page import GluePage
 from aws_tui.ui.widgets.service_tab_strip import ServiceTabStrip
 from aws_tui.vm.glue.page_vm import GluePageVM
+from tests.helpers import focus_and_settle
 from tests.unit.vm.glue._fake_glue import InMemoryGlue, seeded_glue
 
 
@@ -115,12 +116,12 @@ async def test_production_router_navigates_glue_lists_and_filters(app_context_fa
         jobs = app.query_one("#glue-jobs-pane-options", OptionList)
         runs = app.query_one("#glue-runs-pane-options", OptionList)
         run_filter = app.query_one("#glue-run-state-filter", ContextPicker)
-        jobs.focus()
+        await focus_and_settle(jobs)
         await pilot.press("tab")
         await pilot.pause()
         assert runs.has_focus
 
-        run_filter.focus()
+        await focus_and_settle(run_filter)
         await pilot.press("down")
         await pilot.pause()
         assert run_filter.is_open

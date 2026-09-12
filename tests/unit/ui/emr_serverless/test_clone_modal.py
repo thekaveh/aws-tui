@@ -25,6 +25,7 @@ from aws_tui.domain.emr_serverless import JobRunDetail, JobRunState
 from aws_tui.domain.filesystem import AuthRequiredError
 from aws_tui.ui.widgets.emr_serverless.clone_modal import JobRunCloneModal
 from aws_tui.vm.emr_serverless.clone_vm import JobRunCloneVM
+from tests.helpers import focus_and_settle
 
 _FIXED_TS = datetime(2026, 6, 27, 12, 0, 0, tzinfo=UTC)
 
@@ -127,7 +128,7 @@ async def test_enter_in_clone_input_submits_form() -> None:
     async with _CloneModalHostApp(vm, hub).run_test() as pilot:
         modal = pilot.app.screen
         assert isinstance(modal, JobRunCloneModal)
-        modal.query_one("#clone-name", Input).focus()
+        await focus_and_settle(modal.query_one("#clone-name", Input))
         await pilot.press("enter")
         await pilot.pause()
 

@@ -400,6 +400,7 @@ async def test_enter_and_space_activate_focused_iceberg_tab(key: str) -> None:
     async with _GlueIcebergApp(vm).run_test(size=(100, 30)) as pilot:
         tab = pilot.app.query_one("#glue-iceberg-tab-history")
         pilot.app.set_focus(tab)
+        await _wait_for_paint(pilot, lambda: tab.has_focus, what="history tab focus")
         await pilot.press(key)
         await _wait_until(lambda: len(inspector.calls) == 1)
         await pilot.pause()
@@ -418,6 +419,7 @@ async def test_enter_and_space_press_all_enabled_iceberg_buttons(key: str) -> No
     async with _GlueIcebergApp(vm).run_test(size=(100, 30)) as pilot:
         snapshot_tab = pilot.app.query_one("#glue-iceberg-tab-snapshots")
         pilot.app.set_focus(snapshot_tab)
+        await _wait_for_paint(pilot, lambda: snapshot_tab.has_focus, what="snapshots tab focus")
         await pilot.press(key)
         await _wait_until(lambda: vm.catalog.iceberg.error_text is not None)
         await pilot.pause()
@@ -426,6 +428,7 @@ async def test_enter_and_space_press_all_enabled_iceberg_buttons(key: str) -> No
         retry = pilot.app.query_one("#glue-iceberg-retry", Button)
         assert not retry.disabled
         pilot.app.set_focus(retry)
+        await _wait_for_paint(pilot, lambda: retry.has_focus, what="retry focus")
         await pilot.press(key)
         await _wait_until(lambda: len(vm.catalog.iceberg.snapshots) == 1)
         await pilot.pause()
@@ -434,6 +437,7 @@ async def test_enter_and_space_press_all_enabled_iceberg_buttons(key: str) -> No
         more = pilot.app.query_one("#glue-iceberg-more", Button)
         assert not more.disabled
         pilot.app.set_focus(more)
+        await _wait_for_paint(pilot, lambda: more.has_focus, what="load-more focus")
         await pilot.press(key)
         await _wait_until(lambda: len(vm.catalog.iceberg.snapshots) == 2)
         await pilot.pause()
@@ -442,6 +446,7 @@ async def test_enter_and_space_press_all_enabled_iceberg_buttons(key: str) -> No
         time_travel = pilot.app.query_one("#glue-iceberg-time-travel", Button)
         assert not time_travel.disabled
         pilot.app.set_focus(time_travel)
+        await _wait_for_paint(pilot, lambda: time_travel.has_focus, what="time-travel focus")
         await pilot.press(key)
         await pilot.pause()
         assert pilot.app.action_ids == ["glue.time_travel_in_athena"]
@@ -457,6 +462,10 @@ async def test_glue_page_does_not_swallow_unhandled_iceberg_descendants() -> Non
         await pilot.pause()
         table = pilot.app.query_one("#glue-iceberg-table", DataTable)
         pilot.app.set_focus(table)
+        # Assert the precondition rather than assume it: without focus on the
+        # table, ``activate_focused`` returns False for the wrong reason and the
+        # test passes while proving nothing.
+        await _wait_for_paint(pilot, lambda: table.has_focus, what="iceberg table focus")
         page = pilot.app.query_one(GluePage)
 
         assert page.activate_focused(space=False) is False

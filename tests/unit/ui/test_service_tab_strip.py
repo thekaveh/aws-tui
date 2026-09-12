@@ -7,6 +7,7 @@ from textual.app import App, ComposeResult
 from textual.widgets import Button
 
 from aws_tui.ui.widgets.service_tab_strip import ServiceTabStrip
+from tests.helpers import focus_and_settle
 
 
 class TabHost(App[None]):
@@ -48,7 +49,7 @@ async def test_service_tab_strip_arrows_change_active_tab_and_emit() -> None:
     tabs = _tabs()
 
     async with TabHost(tabs).run_test() as pilot:
-        tabs.focus()
+        await focus_and_settle(tabs)
         await pilot.press("right")
 
         assert tabs.active == "jobs"
@@ -60,7 +61,7 @@ async def test_service_tab_strip_enter_selects_the_highlighted_tab() -> None:
     tabs = _tabs()
 
     async with TabHost(tabs).run_test() as pilot:
-        tabs.focus()
+        await focus_and_settle(tabs)
         await pilot.press("right", "enter")
 
         assert tabs.active == "jobs"
