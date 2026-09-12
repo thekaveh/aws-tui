@@ -442,3 +442,23 @@ def test_every_workflow_action_is_sha_pinned() -> None:
             if match and not re.fullmatch(r"[A-Za-z0-9._/-]+@[0-9a-f]{40}", match.group(1)):
                 floating.setdefault(workflow.name, []).append(f"{line_number}: {match.group(1)}")
     assert not floating, f"actions not pinned to a 40-character commit SHA: {floating}"
+
+
+def test_glue_get_job_runs_still_has_no_modeled_states_filter() -> None:
+    """Pin the fact that makes Glue's run-state filter page-local.
+
+    ``GlueClient.list_job_runs_page`` probes for a ``States`` request member and
+    falls back to filtering one page locally when it is absent. On every
+    botocore this project supports, the member is absent -- so the probe is
+    permanently False and the fallback is the only live path, which is why a
+    filtered page can render empty while matching runs sit on the next one.
+
+    If this test starts failing, AWS added the member: the server-side filter
+    just became live, and the fallback's page-local caveat can be dropped from
+    ``domain/glue.py`` and the contract ledger.
+    """
+    model = botocore.session.get_session().get_service_model("glue")
+    members = model.operation_model("GetJobRuns").input_shape.members
+
+    assert set(members) == {"JobName", "MaxResults", "NextToken"}
+    assert "States" not in members

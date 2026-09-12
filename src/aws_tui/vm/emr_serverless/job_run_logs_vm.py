@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import asyncio
 from collections import OrderedDict
+from contextlib import aclosing
 from enum import StrEnum
 
 import reactivex as rx
@@ -355,34 +356,42 @@ class JobRunLogsVM:
                 self._set_state(LogsState.TRUNCATED if cached_truncated else LogsState.READY)
                 return
             buffered: list[str] = []
-            async for chunk in self._client.stream(
-                log_file=self._current_file,
-                bucket=loc.bucket,
-                max_bytes=_MAX_RAW_BYTES,
-                filter_=self._filter,
-            ):
-                # Re-check target on EVERY chunk — set_target runs
-                # in a different worker group (emr-select-run /
-                # emr-select-app) and does NOT cancel emr-logs, so
-                # the stream can keep feeding chunks AFTER the user
-                # moved on. Without this guard, ``_notify("lines")``
-                # would paint the OLD run's lines under the NEW
-                # run's pane header. (Post-loop guard only catches
-                # the cache-write — the per-chunk paints already
-                # shipped to the view.)
-                if (self._application_id, self._job_run_id, self._log_uri) != target:
-                    return
-                buffered.extend(chunk.lines)
-                self._matched_count += chunk.matched_count
-                if len(buffered) > _MAX_MATCHED_LINES:
-                    buffered = buffered[-_MAX_MATCHED_LINES:]
-                self._lines = tuple(buffered)
-                self._bytes_read = chunk.bytes_read
-                self._lines_scanned = chunk.lines_scanned
-                self._notify("lines")
-                self._notify("matched_count")
-                self._notify("progress")
-                truncated = chunk.truncated
+            # ``aclosing``: the per-chunk guard below returns out of this loop
+            # by design, and ``set_target`` deliberately does not cancel this
+            # worker group. A bare ``async for`` therefore abandoned the
+            # generator on every job-run switch, stranding an open S3
+            # connection until the GC hook collected it.
+            async with aclosing(
+                self._client.stream(
+                    log_file=self._current_file,
+                    bucket=loc.bucket,
+                    max_bytes=_MAX_RAW_BYTES,
+                    filter_=self._filter,
+                )
+            ) as source:
+                async for chunk in source:
+                    # Re-check target on EVERY chunk — set_target runs
+                    # in a different worker group (emr-select-run /
+                    # emr-select-app) and does NOT cancel emr-logs, so
+                    # the stream can keep feeding chunks AFTER the user
+                    # moved on. Without this guard, ``_notify("lines")``
+                    # would paint the OLD run's lines under the NEW
+                    # run's pane header. (Post-loop guard only catches
+                    # the cache-write — the per-chunk paints already
+                    # shipped to the view.)
+                    if (self._application_id, self._job_run_id, self._log_uri) != target:
+                        return
+                    buffered.extend(chunk.lines)
+                    self._matched_count += chunk.matched_count
+                    if len(buffered) > _MAX_MATCHED_LINES:
+                        buffered = buffered[-_MAX_MATCHED_LINES:]
+                    self._lines = tuple(buffered)
+                    self._bytes_read = chunk.bytes_read
+                    self._lines_scanned = chunk.lines_scanned
+                    self._notify("lines")
+                    self._notify("matched_count")
+                    self._notify("progress")
+                    truncated = chunk.truncated
             if (self._application_id, self._job_run_id, self._log_uri) != target:
                 # Target changed during stream — drop the cache write
                 # (would key under the wrong target) and the state

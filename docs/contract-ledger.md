@@ -201,7 +201,14 @@ UploadPart
 UploadPartCopy
 ```
 
-## 7. Deferred contract checks
+## 7. Known model gaps
+
+| Consumed contract | Pinned version | What the model does not offer | Consequence |
+|---|---:|---|---|
+| `glue:GetJobRuns` state filter | `botocore==1.40.61` service model, Glue API `2017-03-31` | `GetJobRunsRequest` models exactly `JobName`, `MaxResults`, `NextToken`. There is no `States` member, so the server-side run-state filter `GlueClient.list_job_runs_page` probes for is permanently unavailable. | Run-state filtering falls back to filtering one 200-run page locally, so a state with no match on the current page renders an empty list while matching runs sit on the next one; the pager still offers "load more". `tests/docs/test_contract_parity.py::test_glue_get_job_runs_still_has_no_modeled_states_filter` fails the moment AWS adds the member, at which point the probe goes live and this row can be removed. |
+| `emr-serverless:StartJobRun` idempotency | `botocore==1.40.61` service model, EMR Serverless API `2021-07-13` | `clientToken` is a required, `idempotencyToken: true` member, so botocore auto-fills a fresh UUID per call rather than per user intent. | A double-submit of the clone modal creates two job runs. This is the only mutating AWS write in the app; the Athena path deliberately supplies its own `ClientRequestToken` instead. Recorded for a future app-owned token. |
+
+## 8. Deferred contract checks
 
 - External upstream documentation was not exhaustively re-queried for every
   library API. The concrete code paths above were checked against the locked

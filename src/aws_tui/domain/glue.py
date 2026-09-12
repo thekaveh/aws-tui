@@ -540,6 +540,15 @@ class GlueClient:
         if start_token is not None:
             kwargs["NextToken"] = start_token
         async with await self._aws_session.client(self._connection, "glue") as client:
+            # This probe returns False on every currently supported botocore:
+            # `GetJobRuns` models only JobName/MaxResults/NextToken, with no
+            # `States` member (pinned check in
+            # tests/docs/test_contract_parity.py). The guard is kept so the
+            # server-side filter switches on by itself if AWS adds the member,
+            # but today the fallback below is the only path -- and it filters
+            # one 200-run page at a time, so a state with no match on this page
+            # renders empty while matching runs sit on the next one. The pager
+            # still offers "load more", which is what makes that recoverable.
             remote_state_filter = bool(states) and _supports_request_parameter(
                 client,
                 operation_name="GetJobRuns",

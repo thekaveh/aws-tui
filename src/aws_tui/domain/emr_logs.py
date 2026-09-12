@@ -23,8 +23,8 @@ from __future__ import annotations
 import inspect
 import re
 import zlib
-from collections.abc import AsyncIterator
-from contextlib import suppress
+from collections.abc import AsyncGenerator
+from contextlib import aclosing, suppress
 from dataclasses import dataclass
 from enum import StrEnum
 from typing import TYPE_CHECKING, Any
@@ -278,7 +278,7 @@ async def stream_log(
     max_bytes: int,
     filter_: LogFilter,
     boto_config: BotoConfig | None = None,
-) -> AsyncIterator[LogChunk]:
+) -> AsyncGenerator[LogChunk, None]:
     """Stream the gzipped body of ``log_file.key`` and yield
     ``LogChunk``s of matched lines in batches of ``_LINE_BUFFER_BATCH``.
 
@@ -438,18 +438,28 @@ class EmrServerlessLogsClient:
         bucket: str,
         max_bytes: int,
         filter_: LogFilter,
-    ) -> AsyncIterator[LogChunk]:
-        """Stream the gzipped body of a log file line-by-line."""
-        async for chunk in stream_log(
-            session=self.session,
-            region_name=self.region_name,
-            log_file=log_file,
-            bucket=bucket,
-            max_bytes=max_bytes,
-            filter_=filter_,
-            boto_config=self.boto_config,
-        ):
-            yield chunk
+    ) -> AsyncGenerator[LogChunk, None]:
+        """Stream the gzipped body of a log file line-by-line.
+
+        ``aclosing`` so that closing this generator closes the inner one.
+        ``stream_log`` holds an ``async with session.client("s3", ...)`` open
+        across its yields; an abandoned ``async for`` leaves it suspended with a
+        live connection and an open ``StreamingBody``, released only whenever
+        the async-generator GC hook happens to run.
+        """
+        async with aclosing(
+            stream_log(
+                session=self.session,
+                region_name=self.region_name,
+                log_file=log_file,
+                bucket=bucket,
+                max_bytes=max_bytes,
+                filter_=filter_,
+                boto_config=self.boto_config,
+            )
+        ) as source:
+            async for chunk in source:
+                yield chunk
 
 
 __all__ = [
