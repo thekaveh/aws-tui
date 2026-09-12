@@ -48,6 +48,7 @@ from aws_tui.domain.filesystem import (
     ProviderUnreachableError,
 )
 from aws_tui.infra.redaction import redact_text
+from aws_tui.vm._observable import send_value_free
 from aws_tui.vm.file_manager.entry_vm import EntryState, EntryVM
 from aws_tui.vm.service_diagnostics import report_unexpected_service_error
 
@@ -1029,7 +1030,7 @@ class PaneVM:
         each) stay readable. Single seam for future coalescing /
         instrumentation.
         """
-        self._hub.send(PropertyChangedMessage.create(self, self._inner.name, prop))
+        send_value_free(self._hub, PropertyChangedMessage.create(self, self._inner.name, prop))
 
     # ── Cursor / selection / filter ─────────────────────────────────────────
 

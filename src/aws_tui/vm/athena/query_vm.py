@@ -6,7 +6,7 @@ import logging
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager, suppress
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Final
 from uuid import uuid4
 
 import anyio
@@ -22,7 +22,11 @@ from vmx.lifecycle.status import ConstructionStatus
 from vmx.services.dispatcher import Dispatcher
 
 from aws_tui.domain.athena_runner import AthenaQueryRunner
-from aws_tui.domain.filesystem import ProviderError
+from aws_tui.domain.filesystem import (
+    AuthRequiredError,
+    PermissionDeniedError,
+    ProviderError,
+)
 from aws_tui.domain.query import (
     AthenaQueryError,
     QueryContext,
@@ -49,6 +53,14 @@ _logger = logging.getLogger(__name__)
 
 _QUERY_ERROR = "Athena query request failed"
 _CONTEXT_ERROR = "Athena returned a query outside the active context"
+#: Cap on refs awaiting a ``StopQueryExecution``. The map is drained by
+#: iterating all of it, and that drain runs on every cancel, every context
+#: change and on shutdown -- under the lifecycle, page and content-host
+#: locks. Unbounded, an IAM role without ``athena:StopQueryExecution``
+#: turned the Nth cancel into N sequential failing round trips with all
+#: navigation frozen behind them.
+_MAX_PENDING_CLEANUP_REFS: Final[int] = 32
+
 _SNAPSHOT_ERROR = "Athena query snapshot is invalid"
 _TERMINAL_QUERY_STATES = frozenset(
     {
@@ -693,17 +705,36 @@ class AthenaQueryVM:
         *,
         report_error: bool = True,
     ) -> bool:
+        stopped, _retryable = await self._stop_outcome(ref, report_error=report_error)
+        return stopped
+
+    async def _stop_outcome(
+        self,
+        ref: QueryExecutionRef,
+        *,
+        report_error: bool = True,
+    ) -> tuple[bool, bool]:
+        """Attempt the stop; report ``(stopped, worth_retrying)``.
+
+        A permission or auth failure will not become a success later with the
+        same credentials, so the caller drops the ref instead of retaining it
+        for every subsequent drain.
+        """
         try:
             await self._runner.stop(ref)
+        except (AuthRequiredError, PermissionDeniedError) as exc:
+            if report_error:
+                self._apply_provider_error(exc)
+            return False, False
         except ProviderError as exc:
             if report_error:
                 self._apply_provider_error(exc)
-            return False
+            return False, True
         except Exception as exc:
             if report_error:
                 self._apply_unexpected_error("stop_query_execution", exc)
-            return False
-        return True
+            return False, True
+        return True, True
 
     async def _finalize_cancelled_submission(
         self,
@@ -725,6 +756,11 @@ class AthenaQueryVM:
 
     def _retain_cleanup(self, ref: QueryExecutionRef) -> None:
         self._pending_cleanup_refs[ref.execution_id] = ref
+        while len(self._pending_cleanup_refs) > _MAX_PENDING_CLEANUP_REFS:
+            # Oldest first: a ref this stale has already been retried on every
+            # intervening cancel. Dropping it abandons a server-side stop, which
+            # is strictly better than freezing navigation on a growing fan-out.
+            self._pending_cleanup_refs.pop(next(iter(self._pending_cleanup_refs)))
 
     async def _stop_retained_ref(
         self,
@@ -732,10 +768,12 @@ class AthenaQueryVM:
         *,
         report_error: bool,
     ) -> bool:
-        if not await self._try_stop(ref, report_error=report_error):
-            return False
-        self._pending_cleanup_refs.pop(ref.execution_id, None)
-        return True
+        stopped, retryable = await self._stop_outcome(ref, report_error=report_error)
+        if stopped or not retryable:
+            # A denial is permanent for this session's credentials: retrying it
+            # on every later cancel only multiplies the failures.
+            self._pending_cleanup_refs.pop(ref.execution_id, None)
+        return stopped
 
     async def _stop_pending_cleanup(self, *, report_error: bool) -> None:
         for ref in tuple(self._pending_cleanup_refs.values()):

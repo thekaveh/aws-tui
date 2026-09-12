@@ -1646,3 +1646,66 @@ async def test_snapshot_accepts_a_cancelled_submission_without_an_execution_ref(
     assert not valid(
         replace(base, state=QueryState.FAILED, pane_state=PaneState.EMPTY), base.context
     )
+
+
+async def test_a_denied_stop_does_not_accumulate_cleanup_refs() -> None:
+    """A denial is permanent for these credentials -- stop retaining the ref.
+
+    ``_stop_retained_ref`` only dropped a ref when ``StopQueryExecution``
+    SUCCEEDED, and ``_stop_pending_cleanup`` iterates the whole map on every
+    cancel, every context change and on shutdown. An IAM role without
+    ``athena:StopQueryExecution`` -- ordinary for a read-only analyst -- meant
+    the Nth cancel issued N sequential failing round trips, and the shutdown
+    fan-out ran under the lifecycle, page and content-host locks with all
+    navigation frozen behind it.
+    """
+    from aws_tui.domain.filesystem import PermissionDeniedError
+    from aws_tui.domain.query import QueryExecutionRef
+
+    fake = InMemoryAthena()
+    vm = make_query_vm(fake)
+    ref = QueryExecutionRef(
+        execution_id="q-1",
+        connection_name=vm.context.connection_name,
+        region=vm.context.region,
+        workgroup=vm.context.workgroup,
+    )
+    fake.stop_error = PermissionDeniedError("athena:StopQueryExecution denied")
+
+    vm._retain_cleanup(ref)
+    assert vm._pending_cleanup_refs
+
+    await vm._stop_pending_cleanup(report_error=False)
+
+    assert vm._pending_cleanup_refs == {}, "a denied stop was retained for retry"
+    assert fake.stop_calls.count("q-1") == 1
+
+    # A second drain must not re-issue the call.
+    await vm._stop_pending_cleanup(report_error=False)
+    assert fake.stop_calls.count("q-1") == 1
+
+    vm.dispose()
+
+
+async def test_retained_cleanup_refs_are_bounded() -> None:
+    """The retention map is drained by iterating all of it, so it must be capped."""
+    from aws_tui.domain.query import QueryExecutionRef
+    from aws_tui.vm.athena.query_vm import _MAX_PENDING_CLEANUP_REFS
+
+    vm = make_query_vm(InMemoryAthena())
+    for index in range(_MAX_PENDING_CLEANUP_REFS + 10):
+        vm._retain_cleanup(
+            QueryExecutionRef(
+                execution_id=f"q-{index}",
+                connection_name=vm.context.connection_name,
+                region=vm.context.region,
+                workgroup=vm.context.workgroup,
+            )
+        )
+
+    assert len(vm._pending_cleanup_refs) == _MAX_PENDING_CLEANUP_REFS
+    # Oldest evicted, newest kept.
+    assert "q-0" not in vm._pending_cleanup_refs
+    assert f"q-{_MAX_PENDING_CLEANUP_REFS + 9}" in vm._pending_cleanup_refs
+
+    vm.dispose()

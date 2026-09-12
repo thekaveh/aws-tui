@@ -32,7 +32,7 @@ from aws_tui.domain.emr_logs import (
 )
 from aws_tui.domain.filesystem import ProviderError
 from aws_tui.infra.redaction import redact_text
-from aws_tui.vm._observable import ObserverSafeSubject
+from aws_tui.vm._observable import ObserverSafeSubject, send_value_free
 from aws_tui.vm.emr_serverless._errors import map_provider_error
 from aws_tui.vm.operation_owner import OperationOwner, OperationSuperseded
 from aws_tui.vm.service_diagnostics import report_unexpected_service_error
@@ -475,7 +475,12 @@ class JobRunLogsVM:
         """Emit a PropertyChanged event on BOTH the shared hub AND
         the per-VM-instance Observable (round-3 / PR #103 retirement
         path)."""
-        self._hub.send(PropertyChangedMessage.create(self, "emr.job_run_logs", prop))
+        if self._disposed:
+            # The Athena and Glue VMs have always guarded this; these four
+            # did not, so a late callback could publish a property change
+            # for a disposed view model.
+            return
+        send_value_free(self._hub, PropertyChangedMessage.create(self, "emr.job_run_logs", prop))
         self._on_property_changed.on_next(prop)
 
     def _notify_all(self) -> None:
