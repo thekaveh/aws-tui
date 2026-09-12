@@ -4871,9 +4871,11 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
 
         Public so tests and recovery flows can drive the modal without
         also having to raise an exception. The in-app crash path
-        (``_handle_exception``) does not currently call this — see the
-        ``deferred-from-m6`` note on ``record_action``/crash-modal
-        push_screen wiring.
+        (``_handle_exception``) does not currently call this — see
+        ``CHANGELOG.md``'s ``Deferred / v0.9 roadmap`` block. (The label
+        this used to cite, ``deferred-from-m6``, no longer exists anywhere,
+        and the ``record_action`` half of the claim it pointed at was false:
+        ``record_action`` is invoked from every bound action.)
         """
         ctx = self._app_ctx
         crash_vm = CrashVM(report, hub=ctx.hub, dispatcher=ctx.dispatcher)

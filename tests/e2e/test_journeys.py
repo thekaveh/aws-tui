@@ -48,6 +48,7 @@ from tests.e2e.conftest import _AWS_CREDENTIAL_ENV_VARS
 # ── Helpers ─────────────────────────────────────────────────────────────────
 
 
+@pytest.mark.e2e
 def test_e2e_environment_disables_host_aws_credentials() -> None:
     assert set(_AWS_CREDENTIAL_ENV_VARS).isdisjoint(os.environ)
     assert os.environ["AWS_EC2_METADATA_DISABLED"] == "true"

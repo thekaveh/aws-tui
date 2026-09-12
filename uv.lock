@@ -292,7 +292,9 @@ dev = [
 docs = [
     { name = "cairosvg" },
     { name = "fonttools" },
+    { name = "markdown" },
     { name = "mkdocs-material" },
+    { name = "pillow" },
     { name = "pyyaml" },
 ]
 
@@ -334,7 +336,9 @@ dev = [
 docs = [
     { name = "cairosvg", specifier = ">=2.7,<3.0" },
     { name = "fonttools", specifier = ">=4.61,<5.0" },
+    { name = "markdown", specifier = ">=3.5,<4.0" },
     { name = "mkdocs-material", specifier = ">=9.7.7,<10.0" },
+    { name = "pillow", specifier = ">=10,<13" },
     { name = "pyyaml", specifier = ">=6.0,<7.0" },
 ]
 

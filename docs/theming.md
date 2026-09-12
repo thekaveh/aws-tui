@@ -1,6 +1,6 @@
 # Theming
 
-> Mirror of spec §4.5. Ten built-in themes ship (4 dark + 3 light +
+> Mirror of spec §5.5. Ten built-in themes ship (4 dark + 3 light +
 > 3 popular community palettes); the default is configurable; full
 > `.tcss` overrides are supported.
 
@@ -84,6 +84,7 @@ built-in composition, so use a repository checkout to compose the raw
 built-in theme, then the shared operational layer, in that file:
 
 ```bash
+# Linux shown; see docs/platforms.md for the macOS and Windows locations.
 THEME_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/aws-tui/themes"
 mkdir -p "$THEME_DIR"
 cat src/aws_tui/ui/themes/carbon.tcss \
@@ -97,7 +98,7 @@ such as `theme switch ▸ voidline` remain deferred and are not a way to select
 a custom theme.
 
 ## 4. Palette tokens
-The Carbon palette tokens (full spec table in §4.5):
+The Carbon palette tokens (full spec table in §5.5):
 
 | Token | Hex | Use |
 |---|---|---|
@@ -114,7 +115,9 @@ The Carbon palette tokens (full spec table in §4.5):
 | `warning` | `#f0c674` | Auth-pending state |
 | `danger` | `#ff6b7a` | Destructive op modal accents |
 
-See spec §4.5 for the matching Voidline / Lattice / Amber tables.
+Every shipped theme defines the same token set. Read any of them directly at
+`src/aws_tui/ui/themes/<name>.tcss` -- that file is the palette, so it cannot
+drift from what the app renders.
 
 ## 5. How the loader works
 `infra/theme_store.py` reads the active theme by:

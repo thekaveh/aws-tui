@@ -181,7 +181,7 @@ unmount (including fatal teardown) await the same sequence: stop navigation
 intake, drain transfers, setup, queries, and preview workers, close every
 aioboto3 client, dispose subscriptions and the VM tree, then flush and close
 logs last so teardown diagnostics remain available
-(spec §5.4).
+(spec §6.4).
 
 ## 4. Messaging
 Cross-service and shell-wide event communication goes through the session's

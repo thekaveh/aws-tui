@@ -45,6 +45,8 @@ profile or S3 endpoint.
   on one side, your local filesystem on the other. Copy and delete
   across panes with `c` and `d` (confirm modal first); multi-select via
   `Shift+↑/↓` cursor extension, modifier+click, or persistent marks.
+  `p` copies the cursor entry's path and `P` the pane's own path; the
+  pane's top border is a click target for the same copy.
   The left-rail nav menu is always visible — Tab cycles in/out of it
   as a regular pane. Move, rename, and the dedicated
   `v` multi-select-mode entry point are spec'd but deferred to v0.9 —
@@ -190,7 +192,7 @@ profile or S3 endpoint.
   by `scripts/check-layers.sh`. Mypy strict-clean.
   See [`docs/architecture.md` testing pyramid](docs/architecture.md#5-testing-pyramid)
   for the current test-tier table; the default tier runs unit / in-process integration /
-  snapshot / e2e, with a 9-test S3-compatible S3Mock tier opt-in via
+  snapshot / e2e, with an opt-in S3-compatible S3Mock tier via
   `uv run pytest -m integration`.
 
 ## 2. Install
@@ -279,7 +281,7 @@ are indexed below for contributors and repository review.
    3. [Keybindings](docs/keybindings.md) — wired key map, deferred action IDs, and shipped `[keybindings]` overlay behavior.
    4. [Theming](docs/theming.md) — built-in palettes, runtime theme switch, `.tcss` overlay and custom-theme drop-ins.
    5. [Cookbook (common recipes)](docs/cookbook.md) — step-by-step walkthroughs (connect to local S3Mock, switch theme on the fly, prepare keybinding overlays, inspect transfer evidence after a crash).
-   6. [Supported platforms](docs/platforms.md) — per-OS terminal + font recommendations and Windows launch notes.
+   6. [Supported Platforms](docs/platforms.md) — per-OS terminal + font recommendations and Windows launch notes.
    7. [Local AWS test-services harness (`scripts/test-services/`)](scripts/test-services/README.md) — Adobe S3Mock Docker Compose + seed for offline development.
    8. [S3 and local file manager](docs/services/s3.md) — sources, dual-pane operations, transfer safety, architecture, and verification.
    9. [EMR Serverless](docs/services/emr-serverless.md) — source/application context, runs, logs, clone workflow, architecture, and verification.
@@ -288,8 +290,10 @@ are indexed below for contributors and repository review.
 2. **Contributor-facing**
    1. [Architecture](docs/architecture.md) — five-layer model + composition root + lifecycle + messaging primer.
    2. [Adding a new service](docs/adding-a-service.md) — the `Service` protocol + per-layer wiring.
-   3. [VMx Python cheatsheet](docs/superpowers/notes/2026-06-14-vmx-python-cheatsheet.md) — facade pattern, message-protocol shape, lifecycle gotchas.
-   4. [Three-surface publish runbook](docs/superpowers/notes/2026-07-10-three-surface-docs-phase2-runbook.md) — gated Pages and wiki enablement, first publish, and verification steps.
+   3. [PyPI package blurb source](docs/package-readme.md) — the canonical
+      source for `PYPI.md`; regenerate with `make docs-package` after editing.
+   4. [VMx Python cheatsheet](docs/superpowers/notes/2026-06-14-vmx-python-cheatsheet.md) — facade pattern, message-protocol shape, lifecycle gotchas.
+   5. [Three-surface publish runbook](docs/superpowers/notes/2026-07-10-three-surface-docs-phase2-runbook.md) — gated Pages and wiki enablement, first publish, and verification steps.
 3. **Design specs and implementation plans**
 
    Design specs, implementation plans, and working notes live in-tree under
@@ -321,7 +325,7 @@ preserved when present.
 | `<config-dir>/config.toml` | Connections + defaults + keybindings |
 | `<config-dir>/theme.tcss` | Optional `.tcss` overlay over the active theme |
 | `<config-dir>/themes/<name>.tcss` | Optional full custom themes |
-| `<cache-dir>/log/aws-tui.log` | JSON-lines log (rotated 5 MB × 5) |
+| `<cache-dir>/log/aws-tui.log` | JSON-lines log (rotated 5 MiB × 5) |
 | `<cache-dir>/transfers/<id>.jsonl` | Per-transfer interrupted-operation diagnostics |
 | `<cache-dir>/crash/<ts>.txt` | Full traceback + log/action tail per crash |
 

@@ -87,7 +87,7 @@ _FALLBACK_SERVICE_ACTIONS: tuple[str, ...] = _SERVICE_ACTIONS["s3"]
 
 # Human-readable labels per action id. Anything not listed falls back to the
 # tail-segment of the action id (e.g. "pane.copy" -> "copy"). Keeping this
-# inline avoids a separate config file and lines up with the spec §4.1 chips.
+# inline avoids a separate config file and lines up with the spec §5.3 chips.
 _ACTION_LABELS: dict[str, str] = {
     "app.command_palette": "more",
     "pane.descend": "open",

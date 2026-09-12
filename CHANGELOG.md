@@ -23,6 +23,11 @@ section; the current tree must not be tagged as v0.8.0.
 
 ### Added
 
+- **Copyable pane paths and revealed truncated names (#208).** `p` copies the
+  path of the entry under the cursor and `P` copies the pane's own directory
+  path; the pane's top border is a click target for the same copy. A name or
+  path too long for its column is revealed in full rather than silently
+  clipped.
 - **Glue and Athena interaction polish.** Bordered, keyboard-focusable AWS
   context selectors now expose source, Glue state filters, and Athena
   workgroup/catalog/database choices with named commands and complete
@@ -160,6 +165,9 @@ section; the current tree must not be tagged as v0.8.0.
 
 ### Fixed
 
+- **Chrome legibility (#202).** The banner pedigree line is dimmed so it reads
+  as secondary to the wordmark, and the EMR source/application row is laid out
+  on one line instead of wrapping.
 - **Athena query execution and controls.** Glue-generated starter SQL now uses
   the resolved Athena catalog context with a quoted database/table reference,
   avoiding redundant catalog qualification in the query text. Known Athena
@@ -319,6 +327,11 @@ section; the current tree must not be tagged as v0.8.0.
 
 ### Docs
 
+- **Three-surface layout standardized, landing poster repaired (#198).** The
+  in-repo docs, the generated site, and the wiki now share one section
+  hierarchy, and the landing poster renders on every surface.
+- **Project opener.** `assets/aws-tui-poster.png` is embedded above the demo
+  screenshot in `README.md` and the documentation landing page.
 - Added current S3, EMR Serverless, Glue/Iceberg, and Athena service guides; a
   VMx 3.23 compatibility and line-count audit; refreshed consumed-contract and
   release checklists; and regenerated the four architecture diagrams from the
@@ -350,6 +363,8 @@ section; the current tree must not be tagged as v0.8.0.
 
 ### Build
 
+- Bumped `actions/deploy-pages` from 5.0.0 to 5.0.1 and recorded the new pin in
+  `docs/contract-ledger.md`.
 - Recorded the removal of the resume and first-run modal flows.
   `ResumeModal`, `ResumeVM`, `FirstRunModal` and `FirstRunVM` had been
   deleted without a Removed entry, while the deferred roadmap continued
@@ -1819,28 +1834,14 @@ provenance.)
 These items are spec'd but explicitly not wired in v0.8.x. They are
 tracked so the next minor release can pick them up without rediscovery:
 
-- **Quick Look (entire feature)** — `Space` on a file is spec'd to
-  stream the first 64 KB with a syntax tint, then offer a full-file
-  `$PAGER` shell-out. `QuickLookVM` is built, the `QuickLook` modal
-  is built and snapshot-tested, and `PaneVM` emits
-  `preview_requested` on file-cursor `Enter`/`Space`, but no
-  subscriber consumes the signal and no `Binding("space", …)` lives
-  in `AwsTuiApp.BINDINGS`, so end-to-end the feature is unreachable
-  at runtime. Wiring lands with the `BindingResolver` work below.
-- **`pane.enter_multiselect` action** — `v` is spec'd as the
-  mode-entry shortcut for multi-select; the handler is not wired in
-  v0.7.x. `Shift+↑/↓` and modifier+click cover the actual
-  multi-select paths today.
-- **Command palette (entire feature)** — `:` or `Ctrl+K` is spec'd
-  as a fuzzy-filterable list of every action (including dynamic
-  ones like `connection switch <name>`). `CommandPaletteVM` and the
-  modal exist; in v0.7.x `:` opens the help overlay as a
-  placeholder and `Ctrl+K` is unbound.
-- **`BindingResolver` is constructed but unwired** — `AwsTuiApp`
-  builds it from `KeymapStore` and the `ActionRegistry`, but
-  `BINDINGS` is still a hard-coded `ClassVar`. User `[keybindings]`
-  overlays in `config.toml` parse and validate but do not yet affect
-  the live keymap.
+- **Handler-less action ids** — eight ids are declared in
+  `KeymapStore.DEFAULT_BINDINGS` with no registered `action_*`
+  handler, so `BindingResolver` leaves them unbound:
+  `pane.enter_multiselect`, `pane.toggle_select`, `pane.select_all`,
+  `pane.filter`, `pane.fuzzy_find`, `pane.move`, `pane.new`, and
+  `auth.authenticate`. `docs/keybindings.md` §3 is the canonical
+  list — every row there carries a `Wired?` column. For multi-select,
+  `Shift+↑/↓` and modifier+click cover the actual paths today.
 - **`*_requested` orphan signals** — `PaneVM`/`DualPaneVM` emit
   `PropertyChangedMessage` envelopes named `open_requested`,
   `ascend_requested`, `refresh_requested`, `preview_requested`,
@@ -1853,17 +1854,12 @@ tracked so the next minor release can pick them up without rediscovery:
   the tree** — `ResumeModal`, `ResumeVM`, `FirstRunModal` and
   `FirstRunVM` were removed and would have to be rebuilt rather than
   wired. The placeholder `_mount_no_connection_placeholder` text panel
-  still covers the no-connection case. Quick Look and the command
-  palette, listed here previously as unwired, **are** wired: Quick Look
-  through `pane.quick_look` and the palette through
-  `app.command_palette`.
+  still covers the no-connection case.
 - **`AwsTuiApp._handle_exception` does not push the crash modal** —
   the dump file is written and stderr re-raises through `main()`, but
   the in-app `CrashChoice` modal flow (continue / view trace / quit)
   is only reachable via the public `show_crash_modal(report)` method
-  on a healthy app; `record_action()` is also not invoked from any
-  binding, so the `_action_ring` is always empty when a dump is
-  written.
+  on a healthy app, which no production caller invokes.
 
 ## [0.7.0] - 2026-06-14
 

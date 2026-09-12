@@ -8,7 +8,7 @@ import sys
 from dataclasses import dataclass
 from html.parser import HTMLParser
 from pathlib import Path
-from urllib.parse import unquote, urlsplit
+from urllib.parse import SplitResult, unquote, urlsplit
 
 from markdown import Markdown
 from mkdocs.config import load_config
@@ -18,6 +18,7 @@ from scripts.docs.manifest import Manifest, load_manifest
 
 # Docs deliberately kept in-repo only (never published/flagged).
 INTERNAL_DOCS: frozenset[str] = frozenset({"docs/recording-todo.md"})
+DESIGN_SPEC: str = "docs/superpowers/specs/2026-06-13-aws-tui-design.md"
 INTERNAL_DOC_PREFIXES: tuple[str, ...] = ("docs/superpowers/",)
 
 # Release history and the vendored Code of Conduct are never section-numbered:
@@ -179,15 +180,36 @@ def check_titles(manifest: Manifest, repo_root: str | Path) -> list[Finding]:
 _SECTION_REF_RE = re.compile(r"§ ?(\d+(?:\.\d+)+)")
 
 
+def _design_spec_sections(repo_root: Path) -> set[str]:
+    """Heading numbers declared by the canonical design spec, if it is present."""
+    spec = repo_root / DESIGN_SPEC
+    if not spec.is_file():
+        return set()
+    return {
+        match.group(2)
+        for match in (
+            _HEADING_RE.match(line) for line in spec.read_text(encoding="utf-8").splitlines()
+        )
+        if match
+    }
+
+
 def check_section_references(manifest: Manifest, repo_root: str | Path) -> list[Finding]:
-    """Reject a ``§N.M`` cross-reference with no such section in its own document.
+    """Reject a ``§N.M`` cross-reference that resolves to no such section.
 
     These are plain prose, so nothing rewrites them when sections are renumbered
-    and no link checker sees them. Seven were already stale before the numbering
-    was standardized. A reference whose line cites the design spec is external
-    and is left alone.
+    and no link checker sees them.
+
+    A line mentioning "spec" used to be skipped outright, on the theory that such
+    references were external and unverifiable. That exemption covered exactly the
+    ``spec §N.M`` citations -- and every one of them had since rotted, each off by
+    one top-level section, because a section was inserted after those pages were
+    written. The design spec lives in this repository, so its headings are
+    checkable: resolve against it instead of skipping. A spec-citing line is only
+    exempt when the spec itself is absent (it is excluded from the sdist).
     """
     repo_root = Path(repo_root)
+    spec_numbers = _design_spec_sections(repo_root)
     findings: list[Finding] = []
     for leaf in manifest.leaves():
         if leaf.source is None:
@@ -198,15 +220,18 @@ def check_section_references(manifest: Manifest, repo_root: str | Path) -> list[
         lines = path.read_text(encoding="utf-8").splitlines()
         numbers = {match.group(2) for match in (_HEADING_RE.match(line) for line in lines) if match}
         for line_number, line in enumerate(lines, start=1):
-            if "spec" in line.casefold():
+            cites_spec = "spec" in line.casefold()
+            if cites_spec and not spec_numbers:
                 continue
+            expected = spec_numbers if cites_spec else numbers
+            where = "the design spec" if cites_spec else "this document"
             for match in _SECTION_REF_RE.finditer(line):
-                if match.group(1) not in numbers:
+                if match.group(1) not in expected:
                     findings.append(
                         Finding(
                             "error",
                             f"{leaf.source}:{line_number}: section reference "
-                            f"§{match.group(1)} has no such section in this document",
+                            f"§{match.group(1)} has no such section in {where}",
                         )
                     )
     return findings
@@ -364,6 +389,32 @@ def _local_markdown_paths(repo_root: Path) -> list[Path]:
     return sorted(repo_root.glob("*.md")) + sorted((repo_root / "docs").rglob("*.md"))
 
 
+def _repo_relative_github_target(target: SplitResult, repo_root: Path) -> tuple[Path, str] | None:
+    """Resolve an absolute GitHub URL that points back into this repository.
+
+    Returns ``(path, fragment)`` for a link that names a file in this repo with
+    a fragment, else ``None``. Only the repository's own ``blob``/``tree`` URLs
+    and its root README are recognised; anything else is genuinely external.
+    """
+    if target.scheme not in {"http", "https"} or target.netloc != "github.com":
+        return None
+    if not target.fragment:
+        return None
+    parts = [part for part in unquote(target.path).split("/") if part]
+    if parts[:2] != ["thekaveh", "aws-tui"]:
+        return None
+    rest = parts[2:]
+    if not rest:
+        candidate = repo_root / "README.md"
+    elif rest[0] in {"blob", "tree"} and len(rest) > 2:
+        candidate = repo_root / Path(*rest[2:])
+    else:
+        return None
+    if not candidate.is_file():
+        return None
+    return candidate, unquote(target.fragment)
+
+
 def check_local_anchors(repo_root: str | Path) -> list[Finding]:
     """Reject local Markdown fragments that GitHub or configured MkDocs cannot resolve."""
     repo_root = Path(repo_root).resolve()
@@ -380,6 +431,30 @@ def check_local_anchors(repo_root: str | Path) -> list[Finding]:
         for link in find_links(markdown):
             target = urlsplit(link.target)
             if target.scheme or target.netloc:
+                # An absolute URL back into this same repository still points at
+                # a heading this checker can resolve. Skipping every scheme'd
+                # link left the PyPI blurb's "Installation and quickstart"
+                # anchor pointing at a heading number that had since changed --
+                # on the page published to PyPI, where it is the primary
+                # navigation affordance.
+                resolved = _repo_relative_github_target(target, repo_root)
+                if resolved is not None:
+                    target_path, fragment = resolved
+                    if target_path not in anchors_by_path:
+                        target_markdown = target_path.read_text(encoding="utf-8")
+                        anchors_by_path[target_path] = (
+                            _github_anchors(target_markdown),
+                            _mkdocs_anchors(target_markdown, extensions, extension_configs),
+                        )
+                    if fragment not in anchors_by_path[target_path][0]:
+                        findings.append(
+                            Finding(
+                                "error",
+                                f"{source_rel}: absolute repository link {link.target} "
+                                f"has no matching heading in "
+                                f"{target_path.relative_to(repo_root)}",
+                            )
+                        )
                 continue
             target_path = source_path
             if target.path:

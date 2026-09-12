@@ -98,7 +98,13 @@ def test_package_metadata_tracks_quickstart_and_emr_clone_surface() -> None:
     domain_source = _read("src/aws_tui/domain/emr_serverless.py")
     keymap_source = _read("src/aws_tui/infra/keymap_store.py")
 
-    assert "#13-quickstart" in pypi
+    # ``#3-quickstart``: README's heading is ``## 3. Quickstart``. This
+    # assertion pinned ``#13-quickstart``, an anchor left over from an
+    # older numbering, so the link on the published PyPI page pointed at a
+    # heading that no longer existed and the test kept it that way.
+    # ``check_docs.check_local_anchors`` now resolves same-repo absolute
+    # GitHub anchors, so the real target is verified there too.
+    assert "#3-quickstart" in pypi
     assert "#14-quickstart" not in pypi
     assert "read-mostly" in pypi
     assert "clone submission" in pypi
