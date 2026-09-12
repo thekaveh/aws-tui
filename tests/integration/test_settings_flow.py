@@ -73,7 +73,14 @@ async def _await_boot(pilot: object, app: object) -> None:
     await pilot.pause()  # type: ignore[attr-defined]
 
 
-async def _wait_until(predicate: Callable[[], bool], *, timeout: float = 5.0) -> None:
+async def _wait_until(predicate: Callable[[], bool], *, timeout: float = 30.0) -> None:
+    """Wait for ``predicate``, sized for the slowest runner in the matrix.
+
+    Five seconds was enough locally but not on windows-latest under a loaded
+    three-Python matrix. ``tests/helpers.DEFAULT_DRAIN_TIMEOUT_SECONDS`` and
+    ``tests/unit/ui/glue/test_iceberg_view._wait_until`` already use 30s for the
+    same reason; a real hang still fails, just later.
+    """
     async with asyncio.timeout(timeout):
         while not predicate():
             await asyncio.sleep(0.01)
@@ -512,7 +519,18 @@ async def test_delete_via_confirm_removes_from_toml(tmp_path: Path) -> None:
             # Right then Enter to confirm.
             await pilot.press("right")
             await pilot.press("enter")
-            await pilot.pause()
+            # ``S3ConnectionsPanel._do_delete`` awaits ``remove_async``, whose
+            # persistence step runs in a worker thread -- the keyring reach and
+            # the ``config.toml`` OS file lock must not block the event loop. A
+            # fixed pause can return before that lands, which is how this
+            # asserted the connection was still present on windows py3.11 while
+            # the same commit passed every other job.
+            await _wait_until(
+                lambda: (
+                    "minio-local"
+                    not in ConfigStore(path=config_dir / "config.toml").load().connections
+                )
+            )
     finally:
         _dispose(ctx)
 
