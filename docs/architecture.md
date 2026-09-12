@@ -2,12 +2,6 @@
 
 ![aws-tui five-layer architecture: Textual S3, EMR Serverless, Glue and Iceberg, and Athena views; Glue and Athena VM trees plus S3 and EMR view models; service plugins; domain operations with shared TableRef and QueryContext models; connection, configuration, keychain, platform-path, and logging infrastructure; the AWS Glue, Athena, S3, and Lake Formation boundary; and a separate demo-mode composition boundary.](diagrams/img/architecture.png)
 
-![aws-tui operational flows for local and S3 transfer, Glue-to-Athena query handoff, S3 result artifacts, and bounded EMR Serverless log loading.](diagrams/img/operations-flow.png)
-
-![aws-tui deployment boundaries showing the local process, platform config and keychain, multiple profile-scoped AWS accounts and regions, and optional S3-compatible endpoints.](diagrams/img/deployment.png)
-
-![aws-tui content lifecycle showing widget-worker drain before VM disposal, transactional source rollback, and ordered application shutdown.](diagrams/img/lifecycle.png)
-
 aws-tui follows a five-layer architecture with enforced forbidden edges:
 
 ```
@@ -167,6 +161,13 @@ untried sources remain available for explicit selection after the local fallback
 mounts.
 
 ## 3. Lifecycle
+
+![aws-tui content lifecycle showing widget-worker drain before VM disposal, transactional source rollback, and ordered application shutdown.](diagrams/img/lifecycle.png)
+
+Disposal order is the part that cannot be read off the code: a widget's
+workers must drain before its view model is disposed, or a late callback
+resumes against a disposed VM.
+
 VMx components implement `construct → destruct → dispose`. Hosted service VMs
 may additionally expose app-owned asynchronous `setup` and `shutdown` hooks;
 those hooks are not a VMx lifecycle phase.
@@ -184,6 +185,16 @@ logs last so teardown diagnostics remain available
 (spec §6.4).
 
 ## 4. Messaging
+
+![aws-tui operational flows for local and S3 transfer, Glue-to-Athena query handoff, S3 result artifacts, and bounded EMR Serverless log loading.](diagrams/img/operations-flow.png)
+
+![aws-tui table handoff sequence from a Glue catalog selection through identity validation, Athena page adoption, prefill without execution, an explicit user run, and the result handoff to the S3 pane, with a rollback path back to the composition root.](diagrams/img/table-handoff.png)
+
+The sequence above carries what the flow boxes cannot: the ordering, the
+await points, and the fact that a generated statement waits for an explicit
+run. A failure at any step restores the snapshot rather than leaving a
+half-switched service.
+
 Cross-service and shell-wide event communication goes through the session's
 single `MessageHub`. Parent VMs orchestrate their owned children directly when
 the interaction stays inside one subtree. Custom envelopes (defined in

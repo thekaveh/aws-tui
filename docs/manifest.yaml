@@ -14,7 +14,7 @@ sections:
     children:
       - { id: install, title: Installation, source: docs/install.md }
       - { id: platforms, title: Supported Platforms, source: docs/platforms.md }
-      - { id: connections, title: Connections, source: docs/connections.md }
+      - { id: connections, title: Connections, source: docs/connections.md, diagrams: [deployment] }
   - id: using
     title: Using aws-tui
     children:
@@ -31,7 +31,7 @@ sections:
   - id: development
     title: Development
     children:
-      - { id: architecture, title: Architecture, source: docs/architecture.md, diagrams: [architecture, operations-flow, deployment, lifecycle] }
+      - { id: architecture, title: Architecture, source: docs/architecture.md, diagrams: [architecture, operations-flow, lifecycle, table-handoff] }
       - { id: adding-service, title: Adding a New Service, source: docs/adding-a-service.md }
       - { id: contract-ledger, title: Consumed Contract Ledger, source: docs/contract-ledger.md }
   - { id: releasing, title: Releasing aws-tui, source: docs/RELEASING.md }
@@ -41,3 +41,4 @@ diagrams:
   - { id: operations-flow, master: docs/diagrams/operations-flow.html }
   - { id: deployment, master: docs/diagrams/deployment.html }
   - { id: lifecycle, master: docs/diagrams/lifecycle.html }
+  - { id: table-handoff, master: docs/diagrams/table-handoff.html }

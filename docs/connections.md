@@ -11,6 +11,11 @@ A **Connection** is the unit aws-tui authenticates as. Two kinds:
 - `kind = "s3-compatible"` — for MinIO, Cloudflare R2, Backblaze B2,
   Wasabi, Ceph, SeaweedFS, anything with an S3-compatible API.
 
+![aws-tui deployment boundaries showing the local process, platform config and keychain, multiple profile-scoped AWS accounts and regions, and optional S3-compatible endpoints.](diagrams/img/deployment.png)
+
+Each connection is a separate credential and endpoint boundary; nothing is
+shared between them at runtime.
+
 ## 1. Config Schema
 ```toml
 [connections.kaveh-dev]
