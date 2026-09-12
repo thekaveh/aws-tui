@@ -8,11 +8,13 @@ overlay.
 
 from __future__ import annotations
 
+from contextlib import suppress
 from typing import ClassVar
 
 from textual.app import ComposeResult
 from textual.binding import Binding, BindingType
 from textual.containers import Vertical, VerticalScroll
+from textual.css.query import NoMatches
 from textual.screen import ModalScreen
 from textual.widgets import Static
 
@@ -142,6 +144,30 @@ class HelpModal(ModalScreen[None]):
                 )
             help_keys = self._action_keys("app.help")
             yield Static(f"press {help_keys} / Esc to close", id="help-footer")
+
+    def action_move_up(self) -> None:
+        self._scroll_body(-1)
+
+    def action_move_down(self) -> None:
+        self._scroll_body(1)
+
+    def _scroll_body(self, delta: int) -> None:
+        """Scroll the help body by one line.
+
+        The App binds ↑/↓ with ``priority=True``, so the keys never reach
+        this screen's own scroll handling; the App forwards them here
+        instead. Without these handlers the body could only be scrolled
+        with PageDown/End or the mouse wheel, and everything past the
+        fold — the whole App section and the docs links — was
+        unreachable from the keyboard on any terminal short enough to
+        clip it, which is every supported size.
+        """
+        with suppress(NoMatches):
+            body = self.query_one(VerticalScroll)
+            if delta < 0:
+                body.scroll_up(animate=False)
+            else:
+                body.scroll_down(animate=False)
 
     def _action_row(self, action: str | tuple[str, ...], label: str) -> Static:
         actions = (action,) if isinstance(action, str) else action

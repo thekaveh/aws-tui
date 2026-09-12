@@ -263,6 +263,19 @@ class ConflictError(ProviderError):
     """The destination already exists (or another invariant clash)."""
 
 
+class UnsupportedSourceError(ConflictError):
+    """The *source* entry is not a regular file this app will copy.
+
+    A subclass of :class:`ConflictError` so every existing handler keeps
+    reporting it unchanged, but distinguishable so that destination-collision
+    retry loops do not mistake a permanent source refusal for a name clash.
+    ``CrossFilesystemCopier._copy_file_atomically`` did exactly that: copying a
+    symlink with ``ConflictResolution.RENAME`` burned all 1000 rename attempts
+    on an error no new destination name could fix, then reported "no available
+    destination name" instead of "refusing symlink".
+    """
+
+
 class ProviderUnreachableError(ProviderError):
     """The underlying service is unreachable (network, endpoint, DNS)."""
 

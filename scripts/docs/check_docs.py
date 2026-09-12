@@ -203,12 +203,18 @@ def check_titles(manifest: Manifest, repo_root: str | Path) -> list[Finding]:
 
 
 _SECTION_REF_RE = re.compile(r"§ ?(\d+(?:\.\d+)+)")
-# A citation of the design spec, not merely a line containing the letters
-# "spec". Routing on the bare substring diverted any line with "respect",
-# "specific" or "inspect" to the spec's numbering, and conversely let a
-# genuine same-document reference pass whenever the spec happened to have a
-# heading with the same number.
-_SPEC_CITATION_RE = re.compile(r"\bspec(?:ification)?\b[^.\n]{0,40}?§", re.IGNORECASE)
+# Whether a line *looks like* it cites the design spec rather than its own
+# headings. Used only to word the error message: validity is decided by
+# resolving against both corpora (see ``check_section_references``), because no
+# regex classifies English prose reliably. Routing on the bare substring "spec"
+# diverted any line containing "respect", "specific" or "inspect"; this form is
+# tighter but still guesses -- it misses "§7.4.4 of the design spec" (postfix),
+# "the specs §5.2" (plural), and "Design Spec. §7.10" (the period), and still
+# matches "the specification given in §2.1 of this page".
+_SPEC_CITATION_RE = re.compile(
+    r"\bspec(?:ification)?s?\b[^\n]{0,40}?§|§ ?\d[\d.]*[^\n]{0,40}?\bspec(?:ification)?s?\b",
+    re.IGNORECASE,
+)
 
 
 def _design_spec_sections(repo_root: Path) -> set[str]:
@@ -236,8 +242,21 @@ def check_section_references(manifest: Manifest, repo_root: str | Path) -> list[
     ``spec §N.M`` citations -- and every one of them had since rotted, each off by
     one top-level section, because a section was inserted after those pages were
     written. The design spec lives in this repository, so its headings are
-    checkable: resolve against it instead of skipping. A spec-citing line is only
-    exempt when the spec itself is absent (it is excluded from the sdist).
+    checkable: resolve against it instead of skipping.
+
+    A reference is accepted when it resolves against **either** the document's
+    own headings or the design spec's, and reported only when it resolves
+    against neither. Deciding validity by classifying the surrounding prose --
+    "does this sentence cite the spec?" -- cannot be done reliably by regex in
+    either direction, and getting it wrong fails the build on a correct
+    citation. Guessing is therefore confined to the error *message*, where being
+    wrong costs a reader one extra look. The cost of the union is that a wrong
+    number that coincidentally exists in the other corpus is missed; local pages
+    carry few numbered sections, so that overlap is small, and it is the better
+    trade against a checker that rejects correct prose.
+
+    Spec resolution is skipped when the spec itself is absent (it is excluded
+    from the sdist), leaving the document's own headings as the only corpus.
     """
     repo_root = Path(repo_root)
     spec_numbers = _design_spec_sections(repo_root)
@@ -254,10 +273,16 @@ def check_section_references(manifest: Manifest, repo_root: str | Path) -> list[
             cites_spec = _SPEC_CITATION_RE.search(line) is not None
             if cites_spec and not spec_numbers:
                 continue
-            expected = spec_numbers if cites_spec else numbers
-            where = "the design spec" if cites_spec else "this document"
+            accepted = numbers | spec_numbers
+            # Name the corpus the prose appears to mean first; the reference is
+            # dead in both either way.
+            where = (
+                "the design spec or this document"
+                if cites_spec
+                else "this document or the design spec"
+            )
             for match in _SECTION_REF_RE.finditer(line):
-                if match.group(1) not in expected:
+                if match.group(1) not in accepted:
                     findings.append(
                         Finding(
                             "error",
@@ -469,17 +494,29 @@ def check_local_anchors(repo_root: str | Path) -> list[Finding]:
                 resolved = _repo_relative_github_target(target, repo_root)
                 if resolved is not None:
                     target_path, fragment = resolved
-                    if not target_path.is_file():
+                    if not target_path.exists():
                         # The path resolves into this repository but nothing is
                         # there. Skipping it threw away a finding the function
                         # had already done the work to produce.
+                        #
+                        # ``exists()`` rather than ``is_file()``:
+                        # ``_repo_relative_github_target`` deliberately accepts
+                        # ``tree`` URLs, so a link to a real directory with a
+                        # fragment -- ``tree/main/docs#docs`` -- was reported as
+                        # a missing FILE.
                         findings.append(
                             Finding(
                                 "error",
                                 f"{source_rel}: absolute repository link {link.target} "
-                                f"points at a missing file",
+                                f"points at a missing path",
                             )
                         )
+                        continue
+                    if target_path.suffix.lower() != ".md":
+                        # A directory (``tree/<ref>/docs#...``) or a non-Markdown
+                        # blob has no headings to resolve the fragment against,
+                        # and ``read_text`` on a directory raises. The link
+                        # itself is valid -- only the anchor is uncheckable.
                         continue
                     if target_path not in anchors_by_path:
                         target_markdown = target_path.read_text(encoding="utf-8")

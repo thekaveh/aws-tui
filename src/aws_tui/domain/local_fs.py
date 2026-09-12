@@ -43,6 +43,7 @@ from aws_tui.domain.filesystem import (
     ProviderError,
     StageManifestEntry,
     TransferProgress,
+    UnsupportedSourceError,
 )
 
 # Default streaming chunk size. 8 MiB matches S3 multipart minimum-friendly
@@ -670,7 +671,7 @@ class LocalFS:
                 fd = await anyio.to_thread.run_sync(claim.open_with, opener)
                 opened = os.fstat(fd)
                 if not stat.S_ISREG(opened.st_mode):
-                    raise ConflictError(f"not a regular file: {host.as_posix()}")
+                    raise UnsupportedSourceError(f"not a regular file: {host.as_posix()}")
                 handed_off = True
             except FileNotFoundError as exc:
                 raise NotFoundError(host.as_posix()) from exc
@@ -678,7 +679,7 @@ class LocalFS:
                 raise PermissionDeniedError(host.as_posix()) from exc
             except OSError as exc:
                 if exc.errno == errno.ELOOP:
-                    raise ConflictError(f"refusing symlink: {host.as_posix()}") from exc
+                    raise UnsupportedSourceError(f"refusing symlink: {host.as_posix()}") from exc
                 raise _map_os_error(exc, host.as_posix()) from exc
             finally:
                 if handed_off:

@@ -27,6 +27,7 @@ from aws_tui.domain.iceberg import (
     IcebergPartitionSpec,
     IcebergReference,
     IcebergSnapshot,
+    _partition_field_names,
     quote_athena_identifier,
 )
 from aws_tui.domain.query import (
@@ -965,3 +966,19 @@ async def test_partition_queries_submit_for_a_table_in_the_active_context(method
 
     assert runner.calls, "the guard rejected a table that matches the active context"
     assert "$partitions" in runner.sql
+
+
+def test_a_deeply_nested_partition_struct_is_rejected_not_a_crash() -> None:
+    """``RecursionError`` is not a ``SqlglotError`` and escaped the handler.
+
+    ``sqlglot`` recurses over nested ``struct<...>``, so a sufficiently nested
+    type blew the stack past ``except (SqlglotError, TypeError, ValueError)``
+    and out of the domain layer as an unhandled crash -- a crash dump where the
+    surrounding code is written to surface a message. Same guard as
+    ``sql_policy._parse``/``_tokenize``. Reaching it needs implausible Athena
+    ``$partitions`` metadata, so this pins the hardening, not a live defect.
+    """
+    deeply_nested = "struct<a:" * 200 + "int" + ">" * 200
+
+    with pytest.raises(IcebergMetadataShapeError, match="nested too deeply"):
+        _partition_field_names(deeply_nested)

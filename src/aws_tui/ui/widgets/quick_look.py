@@ -8,9 +8,11 @@ on mount and append text to the body.
 from __future__ import annotations
 
 import asyncio
+from contextlib import suppress
 
 from textual.app import ComposeResult
 from textual.containers import Container, VerticalScroll
+from textual.css.query import NoMatches
 from textual.screen import ModalScreen
 from textual.widgets import Static
 from vmx import Message, MessageHub
@@ -59,6 +61,27 @@ class QuickLook(DeferredWorkerMixin, ModalScreen[None]):
                 yield Static(
                     "loading...", id="quicklook-body", classes="quicklook-body", markup=False
                 )
+
+    def action_move_up(self) -> None:
+        self._scroll_body(-1)
+
+    def action_move_down(self) -> None:
+        self._scroll_body(1)
+
+    def _scroll_body(self, delta: int) -> None:
+        """Scroll the preview by one line.
+
+        The App binds ↑/↓ with ``priority=True`` and forwards them here,
+        so without these the preview could only be scrolled with
+        PageDown/End or the wheel — leaving all but the first screenful
+        of a ~64 KB preview unreachable from the keyboard.
+        """
+        with suppress(NoMatches):
+            body = self.query_one("#quicklook-body-scroll", VerticalScroll)
+            if delta < 0:
+                body.scroll_up(animate=False)
+            else:
+                body.scroll_down(animate=False)
 
     def on_mount(self) -> None:
         self._run_lifecycle_worker(

@@ -215,6 +215,25 @@ section; the current tree must not be tagged as v0.8.0.
   Backspace, Tab, and Shift+Tab input before app-level navigation, and closing
   a modal restores the VMx focus slot without a delayed widget projection
   overwriting it or a newly opened modal.
+- **Keys no longer act on the screen behind an overlay.** An open modal now
+  swallows Enter, the arrow keys, Backspace, and Left/Right even when it
+  implements no handler for them. Previously they fell through to whatever was
+  underneath: with the help overlay open, Enter descended into the highlighted
+  directory and the arrows moved a pane cursor the user could not see, and on a
+  service page Enter could commit a row activation or a service handoff that was
+  never visible. The help overlay and Quick Look also scroll with the arrow keys
+  now, so the help text below the fold — the whole App section and the docs
+  links — and all but the first screenful of a preview are reachable without a
+  mouse.
+- **A refused Athena cancel stays on screen.** Stopping a query without
+  `athena:StopQueryExecution` reported the refusal and then erased it on the
+  next poll tick, leaving no sign the query was still running and billing. The
+  message now persists until the execution actually settles.
+- **Copying a symlink reports the real reason.** Under rename-on-conflict, a
+  source the app refuses to copy was retried as though it were a destination
+  name collision — a long stall ending in "no available destination name"
+  instead of "refusing symlink". Source refusals now fail immediately and say
+  what happened.
 - **Athena pagination freshness.** Refresh invalidates in-flight continuation
   loads so stale pages cannot append results after newer query state arrives.
 - **Resilient shutdown.** Teardown continues after individual cleanup errors,

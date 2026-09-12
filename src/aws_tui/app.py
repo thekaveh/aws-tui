@@ -1916,20 +1916,33 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
         with contextlib.suppress(Exception):
             nav.focus()
 
-    def _forward_to_modal(self, *action_names: str) -> bool:
-        """When a modal is active, try each ``action_name`` on the active
-        screen and run the first that exists. Used to work around
-        Textual dispatching App-level priority bindings BEFORE modal
-        ones — without forwarding, things like ↑/↓/Enter in our modals
-        would never reach the modal's own handlers."""
+    def _consumed_by_modal(self, *action_names: str) -> bool:
+        """Route a key to the active modal and report whether the modal
+        layer consumed it.
+
+        When a modal is active, try each ``action_name`` on the active
+        screen and run the first that exists. This works around Textual
+        dispatching App-level priority bindings BEFORE modal ones —
+        without forwarding, things like ↑/↓/Enter in our modals would
+        never reach the modal's own handlers.
+
+        A modal consumes the keystroke **whether or not it implements a
+        handler for it**. Returning ``False`` for "no handler found" let
+        callers fall through to the pane/page behind the overlay, so
+        Enter and the arrow keys drove hidden content: with the Help
+        overlay open, Enter navigated the file pane underneath it and
+        ↑/↓ moved a cursor the user could not see. Every screen this app
+        pushes is a :class:`ModalScreen`, so an active screen stack is
+        always an overlay that must swallow the key.
+        """
         if len(self.screen_stack) <= 1:
             return False
         for name in action_names:
             forward = getattr(self.screen, name, None)
             if forward is not None:
                 forward()
-                return True
-        return False
+                break
+        return True
 
     def action_move_up(self) -> None:
         self.record_action("pane.move_up")
@@ -1938,7 +1951,7 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
             if callable(move):
                 move()
             return
-        if self._forward_to_modal("action_move_up"):
+        if self._consumed_by_modal("action_move_up"):
             return
         self._move_cursor(-1)
 
@@ -1949,7 +1962,7 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
             if callable(move):
                 move()
             return
-        if self._forward_to_modal("action_move_down"):
+        if self._consumed_by_modal("action_move_down"):
             return
         self._move_cursor(1)
 
@@ -2055,7 +2068,14 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
                 result = action()
                 if isinstance(result, Awaitable):
                     await result
-                return
+                break
+            # A modal swallows Enter even when it implements none of the
+            # handlers above. Falling through instead ran the ladder
+            # below against the content *behind* the overlay: with the
+            # Help modal open, Enter descended into the highlighted
+            # directory, and on a service page it committed a row
+            # activation the user never saw.
+            return
         # If Textual focus is in the NavMenu, forward Enter to its
         # own commit action (re-fires the switch on the
         # currently-highlighted row). Post-PR-#94 NavMenu is the
@@ -2106,7 +2126,7 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
             return
         # Forward Backspace to the active modal as a cancel-by-key
         # gesture (esc still works too).
-        if self._forward_to_modal("action_cancel", "action_close", "action_dismiss"):
+        if self._consumed_by_modal("action_cancel", "action_close", "action_dismiss"):
             return
         # EMR page: Backspace is currently a deliberate no-op (the
         # page is a 2-slot master-detail with no hierarchical
@@ -2139,7 +2159,7 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
         # button (or whatever the modal exposes as ``action_focus_prev``).
         # Outside any modal: behaves like ``ascend`` so file-pane
         # navigation is unchanged.
-        if self._forward_to_modal("action_focus_prev"):
+        if self._consumed_by_modal("action_focus_prev"):
             return
         emr_page = self._emr_page()
         if emr_page is not None and emr_page.select_adjacent_log_file(-1):
@@ -2154,7 +2174,7 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
         # In a modal: Right moves arrow-key focus to the next footer
         # button. Outside any modal: no-op (panes don't currently bind
         # Right to anything).
-        if self._forward_to_modal("action_focus_next"):
+        if self._consumed_by_modal("action_focus_next"):
             return
         emr_page = self._emr_page()
         if emr_page is not None:

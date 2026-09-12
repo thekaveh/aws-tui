@@ -1769,3 +1769,32 @@ async def test_a_failed_stop_does_not_poison_the_page_after_the_query_settles() 
     assert vm.error_text is None, "a settled execution kept a stale stop error"
 
     vm.dispose()
+
+
+@pytest.mark.asyncio
+async def test_a_mid_flight_poll_tick_does_not_erase_a_failed_stop_error() -> None:
+    """Only a *settled* detail may clear the error.
+
+    ``_poll`` calls ``_apply_detail`` on every tick, so clearing the error
+    unconditionally erased a failed-cancel message within one poll interval.
+    ``_cancel_active`` returns early when ``_try_stop`` fails and does NOT bump
+    ``_generation``, so the poll survives the refusal: a role lacking
+    ``athena:StopQueryExecution`` saw "Athena access is forbidden" flash and
+    vanish while the query kept scanning and billing, with nothing left on the
+    page to say the cancel never happened.
+    """
+    vm = make_query_vm(InMemoryAthena())
+    vm._error_text = "Athena access is forbidden"
+    vm._pane_state = PaneState.FORBIDDEN
+
+    for non_terminal in (QueryState.QUEUED, QueryState.RUNNING):
+        vm._apply_detail(_detail("q-inflight", non_terminal))
+        assert vm.error_text == "Athena access is forbidden", (
+            f"a {non_terminal.name} poll tick erased the failed-stop error"
+        )
+
+    # The settle still clears it -- the behaviour the guard must not regress.
+    vm._apply_detail(_detail("q-inflight", QueryState.SUCCEEDED))
+    assert vm.error_text is None
+
+    vm.dispose()

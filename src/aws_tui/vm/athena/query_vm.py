@@ -815,15 +815,24 @@ class AthenaQueryVM:
         self._output_location = detail.output_location
         self._engine_version = detail.engine_version
         self._pane_state = PaneState.IDLE
-        # Clear the error with the pane state, not just the pane state. A failed
-        # ``StopQueryExecution`` sets ``_error_text`` while the poll keeps
-        # running; when the execution then settles, resetting only
-        # ``_pane_state`` left IDLE + a stale error, which
+        # Clear the error with the pane state, but only once the execution has
+        # actually settled. A failed ``StopQueryExecution`` sets ``_error_text``
+        # while the poll keeps running; when the execution then settled,
+        # resetting only ``_pane_state`` left IDLE + a stale error, which
         # ``_snapshot_structure_is_valid`` rejects for every terminal state
-        # except the CANCELLED carve-out. The result was a page that refused
-        # every service handoff with "finish the active Athena operation" for
-        # the rest of the session. A settled detail is authoritative.
-        self._error_text = None
+        # except the CANCELLED carve-out — a page that refused every service
+        # handoff with "finish the active Athena operation" for the rest of the
+        # session.
+        #
+        # The terminal guard is load-bearing. ``_poll`` calls this on EVERY
+        # tick, so clearing unconditionally wiped the refusal within one poll
+        # interval: a role without ``athena:StopQueryExecution`` pressed Esc,
+        # ``_cancel_active`` returned early WITHOUT bumping ``_generation`` (so
+        # the poll survives), and the next RUNNING detail erased the message
+        # while the query kept scanning and billing. Only a settled detail is
+        # authoritative; a mid-flight one says nothing about a failed stop.
+        if detail.summary.state in _TERMINAL_QUERY_STATES:
+            self._error_text = None
         for property_name in (
             "state",
             "statistics",

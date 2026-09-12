@@ -2,6 +2,7 @@ import textwrap
 from pathlib import Path
 
 from scripts.docs.check_docs import (
+    DESIGN_SPEC,
     INTERNAL_DOCS,
     check_assets,
     check_completeness,
@@ -375,3 +376,69 @@ def test_section_references_leave_external_spec_citations_alone(tmp_path):
     )
 
     assert check_section_references(MANIFEST, tmp_path) == []
+
+
+def _write_design_spec(root: Path, *sections: str) -> None:
+    spec = root / DESIGN_SPEC
+    spec.parent.mkdir(parents=True, exist_ok=True)
+    body = "# Design\n\n" + "".join(f"## {number}. Section\n\n" for number in sections)
+    spec.write_text(body)
+
+
+def test_section_references_resolve_against_the_spec_when_the_prose_reads_local(tmp_path):
+    """Validity must not hinge on classifying prose.
+
+    ``_SPEC_CITATION_RE`` guesses whether a sentence cites the design spec, and
+    no regex does that reliably: "§7.4.4 of the design spec" reads as local
+    (the word follows the reference) while "the specification given in §2.1 of
+    this page" reads as a spec citation. Routing decided validity, so either
+    misread failed the build on correct prose. The reference resolves, so it is
+    accepted regardless of which way the guess went.
+    """
+    _write_docs(tmp_path)
+    _write_design_spec(tmp_path, "7.4")
+    (tmp_path / "docs" / "index.md").write_text(
+        "# aws-tui\n\n## 1. Intro\n\nSee §7.4 of the design spec.\n"
+    )
+
+    assert check_section_references(MANIFEST, tmp_path) == []
+
+
+def test_section_references_flag_a_reference_dead_in_both_corpora(tmp_path):
+    """Accepting the union must not make the check vacuous."""
+    _write_docs(tmp_path)
+    _write_design_spec(tmp_path, "7.4")
+    (tmp_path / "docs" / "index.md").write_text(
+        "# aws-tui\n\n## 1. Intro\n\nMirror of spec §9.9.\n"
+    )
+
+    findings = check_section_references(MANIFEST, tmp_path)
+
+    assert any("§9.9 has no such section" in finding.message for finding in findings)
+
+
+def test_local_anchors_accept_an_absolute_repository_link_to_a_directory(tmp_path):
+    """``_repo_relative_github_target`` accepts ``tree`` URLs by design, so the
+    missing-path guard must test existence, not file-ness. Testing ``is_file``
+    reported every real directory as a missing file, and reading one for its
+    headings would have raised ``IsADirectoryError``.
+    """
+    _write_docs(tmp_path)
+    _write_mkdocs_config(tmp_path)
+    (tmp_path / "README.md").write_text(
+        "[docs](https://github.com/thekaveh/aws-tui/tree/main/docs#docs)\n"
+    )
+
+    assert check_local_anchors(tmp_path) == []
+
+
+def test_local_anchors_still_flag_an_absolute_repository_link_to_a_missing_path(tmp_path):
+    _write_docs(tmp_path)
+    _write_mkdocs_config(tmp_path)
+    (tmp_path / "README.md").write_text(
+        "[gone](https://github.com/thekaveh/aws-tui/blob/main/docs/gone.md#x)\n"
+    )
+
+    findings = check_local_anchors(tmp_path)
+
+    assert any("points at a missing path" in finding.message for finding in findings)

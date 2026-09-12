@@ -21,6 +21,7 @@ from aws_tui.domain.filesystem import (
     PathRef,
     ProviderError,
     TransferProgress,
+    UnsupportedSourceError,
 )
 from aws_tui.domain.local_fs import LocalFS
 from aws_tui.domain.s3_fs import S3FS
@@ -2259,3 +2260,43 @@ async def test_copying_a_symlink_reports_the_refusal_and_leaves_no_stage(
         )
 
     assert list(dst_root.iterdir()) == [], "the abandoned stage was left behind"
+
+
+async def test_copying_a_symlink_under_rename_does_not_retry_the_source_refusal(
+    tmp_path: Path,
+) -> None:
+    """A refused *source* is permanent; no destination name can fix it.
+
+    ``_copy_file_atomically`` caught bare ``ConflictError`` and treated it as a
+    destination-name collision, so ``ConflictResolution.RENAME`` spent all
+    ``_MAX_RENAME_ATTEMPTS`` on an error that could never clear -- roughly one
+    and a half minutes against an atomic-write destination -- and then reported
+    "no available destination name", hiding "refusing symlink" behind a
+    destination-side error the destination never raised.
+    """
+    src_root = tmp_path / "src"
+    src_root.mkdir()
+    target = src_root / "real.txt"
+    target.write_bytes(b"payload")
+    try:
+        (src_root / "link.txt").symlink_to(target)
+    except (OSError, NotImplementedError):  # pragma: no cover - Windows privilege
+        pytest.skip("symlink creation requires privilege on this platform")
+
+    # ``InMemoryFS`` sets ``atomic_write_replaces``, which is the shape that
+    # sent the retry loop around the full attempt budget.
+    destination = InMemoryFS()
+
+    with pytest.raises(UnsupportedSourceError, match="refusing symlink"):
+        await CrossFsCopy(source=LocalFS(root=src_root), destination=destination).copy(
+            PathRef.from_posix("/link.txt"),
+            PathRef.from_posix("/link.txt"),
+            on_conflict=ConflictResolution.RENAME,
+        )
+
+    assert await destination.list(PathRef.from_posix("/")) == []
+
+
+async def test_unsupported_source_error_is_still_a_conflict_error() -> None:
+    """Existing ``except ConflictError`` handlers must keep reporting it."""
+    assert issubclass(UnsupportedSourceError, ConflictError)

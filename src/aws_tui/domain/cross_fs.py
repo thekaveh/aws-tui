@@ -51,6 +51,7 @@ from aws_tui.domain.filesystem import (
     ProgressCallback,
     ProviderError,
     StageManifestEntry,
+    UnsupportedSourceError,
 )
 
 #: Maximum ``" (N)"`` suffixes the ``RENAME`` conflict resolver will try
@@ -304,6 +305,13 @@ class CrossFsCopy:
                     progress=progress,
                     overwrite=on_conflict == ConflictResolution.OVERWRITE,
                 )
+            except UnsupportedSourceError:
+                # A source the app refuses to copy (symlink, device node) is
+                # permanent: no destination name makes it copyable. Letting it
+                # fall into the RENAME arm below burned every rename attempt on
+                # it and then reported "no available destination name", hiding
+                # the real reason behind a destination-side error.
+                raise
             except ConflictError:
                 if on_conflict == ConflictResolution.RENAME:
                     continue
