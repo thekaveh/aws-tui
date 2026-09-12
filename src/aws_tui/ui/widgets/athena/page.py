@@ -346,10 +346,12 @@ class AthenaPage(DeferredWorkerMixin, HubSubscriberMixin, Widget):
         self.call_after_refresh(self._maybe_focus_active)
 
     async def action_execute(self) -> None:
-        await self.query_one(AthenaQueryView).execute()
+        # Dispatch rather than await: this runs inside the App's message
+        # handler, so awaiting the AWS round trip here froze the whole UI.
+        self.query_one(AthenaQueryView).dispatch_execute()
 
     async def action_cancel(self) -> None:
-        await self.query_one(AthenaQueryView).cancel()
+        self.query_one(AthenaQueryView).dispatch_cancel()
 
     async def insert_table_reference(self, identifier: str) -> bool:
         if not identifier:

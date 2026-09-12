@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 from dataclasses import replace
+from functools import partial
 
+import anyio
 from vmx import ComponentVM, Message, MessageHub
 from vmx.lifecycle.status import ConstructionStatus
 from vmx.services.dispatcher import Dispatcher
@@ -116,6 +118,24 @@ class S3ConnectionsVM:
 
     def add(self, entry: ConnectionEntry) -> None:
         """Validate uniqueness, persist via ConfigStore, publish 'added'."""
+        self._add_blocking(entry)
+        self._hub.send(ConnectionListChangedMessage(names=(entry.name,), change="added"))
+
+    async def add_async(self, entry: ConnectionEntry) -> None:
+        """:meth:`add` with the blocking half moved off the event loop.
+
+        The persistence step reaches the OS keyring and takes an OS file lock on
+        ``config.toml``, polling with ``time.sleep`` while it waits. Both are
+        unbounded: a locked macOS Keychain shows a system prompt, and a stalled
+        Linux D-Bus never answers. Running that on the event loop froze the whole
+        TUI -- no repaint, no key handling, and no progress on in-flight
+        transfers, which share the loop. The publish stays on the loop, because
+        hub subscribers are view models bound to it.
+        """
+        await anyio.to_thread.run_sync(partial(self._add_blocking, entry))
+        self._hub.send(ConnectionListChangedMessage(names=(entry.name,), change="added"))
+
+    def _add_blocking(self, entry: ConnectionEntry) -> None:
         self._ensure_writable()
         with self._config_store.transaction():
             current = self._config_store.load()
@@ -133,10 +153,18 @@ class S3ConnectionsVM:
                 if rollback_errors:
                     raise _rollback_failure("add connection", exc, rollback_errors) from exc
                 raise
-        self._hub.send(ConnectionListChangedMessage(names=(entry.name,), change="added"))
 
     def update(self, name: str, entry: ConnectionEntry) -> None:
         """Validate rename-disallowed, persist, publish 'updated'."""
+        self._update_blocking(name, entry)
+        self._hub.send(ConnectionListChangedMessage(names=(name,), change="updated"))
+
+    async def update_async(self, name: str, entry: ConnectionEntry) -> None:
+        """:meth:`update` with the blocking half moved off the event loop."""
+        await anyio.to_thread.run_sync(partial(self._update_blocking, name, entry))
+        self._hub.send(ConnectionListChangedMessage(names=(name,), change="updated"))
+
+    def _update_blocking(self, name: str, entry: ConnectionEntry) -> None:
         self._ensure_writable()
         if entry.name != name:
             raise ValueError(
@@ -174,10 +202,18 @@ class S3ConnectionsVM:
                 if rollback_errors:
                     raise _rollback_failure("update connection", exc, rollback_errors) from exc
                 raise
-        self._hub.send(ConnectionListChangedMessage(names=(name,), change="updated"))
 
     def remove(self, name: str) -> None:
         """Persist removal, publish 'deleted'."""
+        self._remove_blocking(name)
+        self._hub.send(ConnectionListChangedMessage(names=(name,), change="deleted"))
+
+    async def remove_async(self, name: str) -> None:
+        """:meth:`remove` with the blocking half moved off the event loop."""
+        await anyio.to_thread.run_sync(partial(self._remove_blocking, name))
+        self._hub.send(ConnectionListChangedMessage(names=(name,), change="deleted"))
+
+    def _remove_blocking(self, name: str) -> None:
         self._ensure_writable()
         with self._config_store.transaction():
             old_entry = self._config_store.load().connections.get(name)
@@ -198,7 +234,6 @@ class S3ConnectionsVM:
                 if rollback_errors:
                     raise _rollback_failure("remove connection", exc, rollback_errors) from exc
                 raise
-        self._hub.send(ConnectionListChangedMessage(names=(name,), change="deleted"))
 
     # ── Form helpers ───────────────────────────────────────────────────────
 

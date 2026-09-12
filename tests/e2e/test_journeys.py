@@ -44,6 +44,7 @@ from aws_tui.vm.file_manager.dual_pane_vm import DualPaneVM
 from aws_tui.vm.file_manager.pane_vm import PaneVM
 from aws_tui.vm.glue.page_vm import GluePageVM
 from tests.e2e.conftest import _AWS_CREDENTIAL_ENV_VARS
+from tests.helpers import drain_workers
 
 # ── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -515,7 +516,11 @@ async def test_journey_9_iceberg_snapshot_runs_only_on_explicit_execute(
             assert athena.results.rows == ()
             assert not any(call.method == "start_query" for call in client.calls)
 
+            # ``athena.execute`` dispatches to a Textual worker rather than
+            # awaiting the AWS round trip on the message pump, so returning from
+            # the action only means the query was started.
             await app.action_execute_athena()
+            await drain_workers(app)
             assert athena.query.execution_ref is not None
             assert athena.query.execution_ref.connection_name == "demo-dev"
             execution_id = athena.query.execution_ref.execution_id

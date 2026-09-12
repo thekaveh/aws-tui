@@ -278,7 +278,7 @@ class S3ConnectionsPanel(Widget):
         if not confirmed:
             return
         try:
-            self._vm.remove(name)
+            await self._vm.remove_async(name)
         except Exception as exc:
             # The connection vanished between the dialog opening and our
             # remove() call (concurrent edit, file corruption, etc.).
@@ -325,7 +325,7 @@ class S3ConnectionsPanel(Widget):
         entry = self._vm.entry_from_form(event.form)
         if event.mode == "add":
             try:
-                self._vm.add(entry)
+                await self._vm.add_async(entry)
             except ValueError:
                 # Duplicate name — keep form open, mark the field invalid.
                 form.mark_name_invalid()
@@ -360,7 +360,7 @@ class S3ConnectionsPanel(Widget):
                 form.clear_submitting()
                 return
             try:
-                self._vm.update(event.original_name, entry)
+                await self._vm.update_async(event.original_name, entry)
             except Exception as exc:
                 form.clear_submitting()
                 self._surface_error_toast(

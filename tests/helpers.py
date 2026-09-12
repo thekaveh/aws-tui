@@ -7,7 +7,7 @@ plain helpers that more than one tier imports directly.
 from __future__ import annotations
 
 import asyncio
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from textual.app import App
@@ -24,7 +24,10 @@ _MAX_DRAIN_ROUNDS = 20
 
 
 async def drain_workers(
-    app: App[object],
+    # ``App`` is invariant in its return type, so ``App[object]`` rejects the
+    # concrete ``AwsTuiApp`` (an ``App[None]``). Only ``app.workers`` is touched
+    # here, so the parameter is deliberately unconstrained.
+    app: App[Any],
     *,
     timeout: float = DEFAULT_DRAIN_TIMEOUT_SECONDS,
 ) -> None:
