@@ -18,6 +18,7 @@ from vmx import ComponentVMOf, Message, MessageHub, PropertyChangedMessage, Rela
 from vmx.lifecycle.status import ConstructionStatus
 from vmx.services.dispatcher import Dispatcher
 
+from aws_tui.vm._observable import send_value_free
 from aws_tui.vm.messages import (
     TransferCancelRequestedMessage,
     TransferState,  # canonical: re-exported for callers
@@ -221,7 +222,7 @@ class TransferVM:
         if new == self._inner.model:
             return
         self._inner.model = new
-        self._hub.send(PropertyChangedMessage.create(self, self._inner.name, "state"))
+        send_value_free(self._hub, PropertyChangedMessage.create(self, self._inner.name, "state"))
 
     # ── Command predicates / handlers ──────────────────────────────────────
 

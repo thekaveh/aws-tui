@@ -20,7 +20,7 @@ from aws_tui.ui.widgets.athena.page import AthenaPage
 from aws_tui.ui.widgets.context_picker import ContextPicker
 from aws_tui.ui.widgets.service_tab_strip import ServiceTabStrip
 from aws_tui.vm.athena.page_vm import AthenaPageVM
-from tests.helpers import focus_and_settle, seed_athena_sql
+from tests.helpers import drain_workers, focus_and_settle, seed_athena_sql
 from tests.integration.test_glue_page import open_service
 from tests.unit.vm.athena.test_page_vm import PageClient
 
@@ -282,7 +282,7 @@ async def test_real_app_routes_tabs_execute_cancel_and_lazy_views(tmp_path: Path
         await pilot.pause()
 
         await pilot.press("ctrl+enter")
-        await pilot.pause()
+        await drain_workers(app)
         assert client.start_calls
 
         await focus_and_settle(app.query_one("#athena-view-tabs", ServiceTabStrip))
@@ -308,7 +308,7 @@ async def test_real_app_routes_tabs_execute_cancel_and_lazy_views(tmp_path: Path
         vm.query._owns_active_query = True  # type: ignore[attr-defined]
         await focus_and_settle(app.query_one("#athena-view-tabs", ServiceTabStrip))
         await pilot.press("escape")
-        await pilot.pause()
+        await drain_workers(app)
         assert vm.query.owns_active_query is False
         assert client.stop_calls == ["owned-running"]
 

@@ -57,12 +57,17 @@ def _isolated(callback: Callable[P, None], channel: str) -> Callable[P, None]:
     copies of this try/except pair. Cancellation still propagates -- only a
     genuine subscriber fault is isolated.
 
-    The log record carries ``exc_info`` and the channel. Without them the line
-    said only "subscriber isolated": no exception type, no traceback, no
-    subscriber identity, repeated on every property tick, while the widget
-    silently stopped updating. This is a durable-log path, so the same useless
-    line also filled the crash dump's log tail. ``LogSink`` redacts ``exc_info``
-    tracebacks, so attaching one is safe.
+    The record carries the exception *type* and the channel, never the exception
+    message and never ``exc_info``. That is deliberate: a subscriber raising over
+    a property payload can put user data in its message, and this is a
+    durable-log path that also feeds the crash dump's log tail, so
+    ``test_observer_safe_subject_isolates_on_next_and_notifies_remaining_subscribers``
+    asserts the subscriber's text never appears and
+    ``test_isolated_subscriber_failure_records_the_type_but_never_the_message``
+    asserts ``exc_info`` stays ``None``. The previous line said only "subscriber
+    isolated" -- not even a type -- which left the log useless for triage while
+    the widget silently stopped updating. A class name is not user data, so it is
+    the most that can be recorded here.
     """
 
     def _report(error: BaseException) -> None:

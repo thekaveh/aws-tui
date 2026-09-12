@@ -16,6 +16,8 @@ from vmx import ComponentVMOf, Message, MessageHub, PropertyChangedMessage, Rela
 from vmx.lifecycle.status import ConstructionStatus
 from vmx.services.dispatcher import Dispatcher
 
+from aws_tui.vm._observable import send_value_free
+
 
 class ToastLevel(StrEnum):
     """Severity tier used by the view layer to pick the toast tint."""
@@ -148,7 +150,7 @@ class ToastVM:
         if self._is_dismissed:
             return
         self._is_dismissed = True
-        self._hub.send(PropertyChangedMessage.create(self, self.name, "is_dismissed"))
+        send_value_free(self._hub, PropertyChangedMessage.create(self, self.name, "is_dismissed"))
         if self._on_dismiss is not None:
             self._on_dismiss(self)
 

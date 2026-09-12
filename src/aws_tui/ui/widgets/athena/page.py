@@ -422,6 +422,11 @@ class AthenaPage(DeferredWorkerMixin, HubSubscriberMixin, Widget):
         )
 
     async def action_refresh_active(self) -> None:
+        # Dispatch, matching `GluePage.action_refresh_active`. Every branch below
+        # issues AWS calls, and this runs inside the App's message handler.
+        self._run_lifecycle_worker(self._refresh_active, group="athena-refresh-active")
+
+    async def _refresh_active(self) -> None:
         active = self._vm.active_view
         if active == "query":
             await self._vm.refresh_query_context()

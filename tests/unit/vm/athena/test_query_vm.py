@@ -1687,6 +1687,42 @@ async def test_a_denied_stop_does_not_accumulate_cleanup_refs() -> None:
     vm.dispose()
 
 
+async def test_an_expired_token_keeps_the_cleanup_ref_for_retry() -> None:
+    """An auth failure is recoverable within one session -- keep the ref.
+
+    ``AwsSession.client`` builds a fresh session per call, so an expired SSO
+    token is re-read once the user runs ``aws sso login`` in another terminal.
+    Design spec 7.4.4 "Flow 4 -- SSO token expires mid-session" describes that
+    recovery without a remount. Dropping the ref on ``AuthRequiredError``
+    abandoned the stop permanently and left the query scanning, and billing,
+    with nothing left to cancel it. Only a permission denial is permanent.
+    """
+    from aws_tui.domain.filesystem import AuthRequiredError
+    from aws_tui.domain.query import QueryExecutionRef
+
+    fake = InMemoryAthena()
+    vm = make_query_vm(fake)
+    ref = QueryExecutionRef(
+        execution_id="q-auth",
+        connection_name=vm.context.connection_name,
+        region=vm.context.region,
+        workgroup=vm.context.workgroup,
+    )
+    fake.stop_error = AuthRequiredError("aws sso login --profile dev")
+
+    vm._retain_cleanup(ref)
+    await vm._stop_pending_cleanup(report_error=False)
+    assert "q-auth" in vm._pending_cleanup_refs, "an expired token dropped the pending stop"
+
+    # After re-authentication the retained ref is what makes the stop land.
+    fake.stop_error = None
+    await vm._stop_pending_cleanup(report_error=False)
+    assert vm._pending_cleanup_refs == {}
+    assert fake.stop_calls.count("q-auth") == 2
+
+    vm.dispose()
+
+
 async def test_retained_cleanup_refs_are_bounded() -> None:
     """The retention map is drained by iterating all of it, so it must be capped."""
     from aws_tui.domain.query import QueryExecutionRef

@@ -22,6 +22,8 @@ from vmx import ComponentVM, Message, MessageHub, ModalVM, PropertyChangedMessag
 from vmx.lifecycle.status import ConstructionStatus
 from vmx.services.dispatcher import Dispatcher
 
+from aws_tui.vm._observable import send_value_free
+
 
 class CrashChoice(StrEnum):
     """The user's decision when faced with the crash modal."""
@@ -241,7 +243,7 @@ class CrashVM:
         if self._is_open == value:
             return
         self._is_open = value
-        self._hub.send(PropertyChangedMessage.create(self, self.name, "is_open"))
+        send_value_free(self._hub, PropertyChangedMessage.create(self, self.name, "is_open"))
 
 
 __all__ = ["SAFE_CONTINUE_ACTIONS", "CrashChoice", "CrashReport", "CrashVM"]

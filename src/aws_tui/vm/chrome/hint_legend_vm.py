@@ -14,6 +14,7 @@ from vmx.lifecycle.status import ConstructionStatus
 from vmx.services.dispatcher import Dispatcher
 
 from aws_tui.infra.keymap_store import KeymapStore, UnknownAction
+from aws_tui.vm._observable import send_value_free
 
 # Always-visible global chips follow the service-specific commands.
 _GLOBAL_ACTIONS: tuple[str, ...] = (
@@ -387,7 +388,7 @@ class HintLegendVM:
             self._global_actions = new_globals
             changed = True
         if changed:
-            self._hub.send(PropertyChangedMessage.create(self, self.name, "actions"))
+            send_value_free(self._hub, PropertyChangedMessage.create(self, self.name, "actions"))
 
     def _resolve(self, action_id: str) -> HintAction | None:
         try:

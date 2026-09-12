@@ -24,6 +24,8 @@ from vmx import (
 from vmx.lifecycle.status import ConstructionStatus
 from vmx.services.dispatcher import Dispatcher
 
+from aws_tui.vm._observable import send_value_free
+
 
 @dataclass(frozen=True, slots=True)
 class ThemeOptionState:
@@ -96,7 +98,9 @@ class ThemeOptionVM:
         if self._inner.model.is_active == value:
             return
         self._inner.model = replace(self._inner.model, is_active=value)
-        self._hub.send(PropertyChangedMessage.create(self, self._inner.name, "is_active"))
+        send_value_free(
+            self._hub, PropertyChangedMessage.create(self, self._inner.name, "is_active")
+        )
 
 
 class ThemePickerVM:
@@ -199,7 +203,9 @@ class ThemePickerVM:
         self._active_theme = name
         for opt in self._options:
             opt.set_active(opt.name == name)
-        self._hub.send(PropertyChangedMessage.create(self, self._inner.name, "active_theme"))
+        send_value_free(
+            self._hub, PropertyChangedMessage.create(self, self._inner.name, "active_theme")
+        )
 
     def next_theme(self) -> str:
         """Return the next theme in the cycle order. Wraps at the end.

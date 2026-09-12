@@ -325,6 +325,10 @@ class AthenaResultsVM:
             or type(snapshot.is_loading_more) is not bool
             or snapshot.is_loading_more
             or type(snapshot.limit_reached) is not bool
+            # ``from_history`` relaxes three branches of the query VM's
+            # structure check, so a non-bool truthy value would silently
+            # loosen validation. Every other bool here is type-checked.
+            or type(snapshot.from_history) is not bool
             or (snapshot.limit_reached and snapshot.next_token is not None)
             or type(snapshot.state) is not PaneState
             or snapshot.state is PaneState.LOADING

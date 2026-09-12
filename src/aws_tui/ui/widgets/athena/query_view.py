@@ -148,15 +148,6 @@ class AthenaQueryView(DeferredWorkerMixin, Widget):
         """Cancel on a worker, for the same reason as :meth:`dispatch_execute`."""
         self._run_lifecycle_worker(self._vm.cancel, group="athena-query-cancel")
 
-    async def execute(self) -> None:
-        """Await the execution directly. Used by tests driving the view."""
-        self._sync_sql_from_editor()
-        await self._vm.execute()
-
-    async def cancel(self) -> None:
-        """Await the cancellation directly. Used by tests driving the view."""
-        await self._vm.cancel()
-
     def action_focus_next(self) -> None:
         self._move_focus(forward=True)
 

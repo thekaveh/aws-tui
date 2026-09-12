@@ -28,7 +28,7 @@ from aws_tui.infra.redaction import safe_endpoint_display
 _logger = logging.getLogger(__name__)
 
 
-def _read_ini(parser: configparser.ConfigParser, path: Path) -> bool:
+def _read_ini(parser: configparser.RawConfigParser, path: Path) -> bool:
     """Read an AWS ini file, tolerating a malformed one.
 
     ``~/.aws/config`` is written by other tools and by hand, so a duplicate
@@ -265,7 +265,7 @@ class ConnectionResolver:
         """
         profiles: dict[str, str | None] = {}
 
-        cfg_parser = configparser.ConfigParser()
+        cfg_parser = configparser.RawConfigParser()
         if self._aws_config_path.is_file():
             _read_ini(cfg_parser, self._aws_config_path)
             for section in cfg_parser.sections():
@@ -279,7 +279,7 @@ class ConnectionResolver:
                 region = cfg_parser.get(section, "region", fallback=None)
                 profiles[name] = region
 
-        creds_parser = configparser.ConfigParser()
+        creds_parser = configparser.RawConfigParser()
         if self._aws_credentials_path.is_file():
             _read_ini(creds_parser, self._aws_credentials_path)
             for section in creds_parser.sections():
@@ -330,7 +330,12 @@ class ConnectionResolver:
     ) -> tuple[str | None, str | None, str | None]:
         if not self._aws_credentials_path.is_file():
             return None, None, None
-        parser = configparser.ConfigParser()
+        # ``RawConfigParser``, matching botocore. ``ConfigParser`` interpolates
+        # at ``.get()`` -- outside ``_read_ini``'s guard -- so a ``%`` in a
+        # secret key raised ``InterpolationSyntaxError``, and ``%%`` was
+        # silently halved: aws-tui signed with ``ab%cd`` where the AWS CLI
+        # used ``ab%%cd``, producing SignatureDoesNotMatch in this app only.
+        parser = configparser.RawConfigParser()
         if not _read_ini(parser, self._aws_credentials_path):
             return None, None, None
         if not parser.has_section(profile):

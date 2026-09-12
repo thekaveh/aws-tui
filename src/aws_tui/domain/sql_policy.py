@@ -286,6 +286,14 @@ class ReadOnlySqlPolicy:
             return sqlglot.parse(sql, read="athena", error_message_context=0)
         except SqlglotError:
             raise QueryRejectedError("query could not be parsed as Athena SQL") from None
+        except RecursionError:
+            # sqlglot recurses per nesting level, so a deeply nested expression
+            # blows the interpreter stack instead of raising ``SqlglotError``.
+            # Roughly 50 nested ``coalesce(`` calls is enough, which a
+            # generated dbt or BI query reaches easily. This policy is the
+            # fail-closed gate in front of every execution, so an escape here
+            # reached Textual's ``_handle_exception`` and tore the app down.
+            raise QueryRejectedError("query is nested too deeply to validate") from None
 
     def _validate_expression(self, expression: exp.Expr) -> None:
         if isinstance(expression, (exp.Select, exp.SetOperation)):
@@ -508,6 +516,8 @@ class ReadOnlySqlPolicy:
             ]
         except SqlglotError:
             raise QueryRejectedError("query could not be parsed as Athena SQL") from None
+        except RecursionError:
+            raise QueryRejectedError("query is nested too deeply to validate") from None
 
     def _reject_write_nodes(self, expression: exp.Expr) -> None:
         forbidden = (

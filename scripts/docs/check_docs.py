@@ -203,6 +203,12 @@ def check_titles(manifest: Manifest, repo_root: str | Path) -> list[Finding]:
 
 
 _SECTION_REF_RE = re.compile(r"§ ?(\d+(?:\.\d+)+)")
+# A citation of the design spec, not merely a line containing the letters
+# "spec". Routing on the bare substring diverted any line with "respect",
+# "specific" or "inspect" to the spec's numbering, and conversely let a
+# genuine same-document reference pass whenever the spec happened to have a
+# heading with the same number.
+_SPEC_CITATION_RE = re.compile(r"\bspec(?:ification)?\b[^.\n]{0,40}?§", re.IGNORECASE)
 
 
 def _design_spec_sections(repo_root: Path) -> set[str]:
@@ -245,7 +251,7 @@ def check_section_references(manifest: Manifest, repo_root: str | Path) -> list[
         lines = path.read_text(encoding="utf-8").splitlines()
         numbers = {match.group(2) for match in (_HEADING_RE.match(line) for line in lines) if match}
         for line_number, line in enumerate(lines, start=1):
-            cites_spec = "spec" in line.casefold()
+            cites_spec = _SPEC_CITATION_RE.search(line) is not None
             if cites_spec and not spec_numbers:
                 continue
             expected = spec_numbers if cites_spec else numbers
@@ -426,7 +432,7 @@ def _repo_relative_github_target(target: SplitResult, repo_root: Path) -> tuple[
     if not target.fragment:
         return None
     parts = [part for part in unquote(target.path).split("/") if part]
-    if parts[:2] != ["thekaveh", "aws-tui"]:
+    if [part.casefold() for part in parts[:2]] != ["thekaveh", "aws-tui"]:
         return None
     rest = parts[2:]
     if not rest:
@@ -434,8 +440,6 @@ def _repo_relative_github_target(target: SplitResult, repo_root: Path) -> tuple[
     elif rest[0] in {"blob", "tree"} and len(rest) > 2:
         candidate = repo_root / Path(*rest[2:])
     else:
-        return None
-    if not candidate.is_file():
         return None
     return candidate, unquote(target.fragment)
 
@@ -465,6 +469,18 @@ def check_local_anchors(repo_root: str | Path) -> list[Finding]:
                 resolved = _repo_relative_github_target(target, repo_root)
                 if resolved is not None:
                     target_path, fragment = resolved
+                    if not target_path.is_file():
+                        # The path resolves into this repository but nothing is
+                        # there. Skipping it threw away a finding the function
+                        # had already done the work to produce.
+                        findings.append(
+                            Finding(
+                                "error",
+                                f"{source_rel}: absolute repository link {link.target} "
+                                f"points at a missing file",
+                            )
+                        )
+                        continue
                     if target_path not in anchors_by_path:
                         target_markdown = target_path.read_text(encoding="utf-8")
                         anchors_by_path[target_path] = (

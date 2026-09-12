@@ -23,6 +23,8 @@ from vmx import (
 from vmx.lifecycle.status import ConstructionStatus
 from vmx.services.dispatcher import Dispatcher
 
+from aws_tui.vm._observable import send_value_free
+
 
 @dataclass(frozen=True, slots=True)
 class ConfirmPath:
@@ -168,13 +170,13 @@ class ConfirmationVM:
         if self._is_open == value:
             return
         self._is_open = value
-        self._hub.send(PropertyChangedMessage.create(self, self.name, "is_open"))
+        send_value_free(self._hub, PropertyChangedMessage.create(self, self.name, "is_open"))
 
     def _set_request(self, value: ConfirmRequest | None) -> None:
         if self._request is value:
             return
         self._request = value
-        self._hub.send(PropertyChangedMessage.create(self, self.name, "request"))
+        send_value_free(self._hub, PropertyChangedMessage.create(self, self.name, "request"))
 
 
 __all__ = ["ConfirmPath", "ConfirmRequest", "ConfirmationVM"]

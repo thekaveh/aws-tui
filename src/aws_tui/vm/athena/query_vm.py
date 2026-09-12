@@ -23,7 +23,6 @@ from vmx.services.dispatcher import Dispatcher
 
 from aws_tui.domain.athena_runner import AthenaQueryRunner
 from aws_tui.domain.filesystem import (
-    AuthRequiredError,
     PermissionDeniedError,
     ProviderError,
 )
@@ -716,13 +715,21 @@ class AthenaQueryVM:
     ) -> tuple[bool, bool]:
         """Attempt the stop; report ``(stopped, worth_retrying)``.
 
-        A permission or auth failure will not become a success later with the
-        same credentials, so the caller drops the ref instead of retaining it
-        for every subsequent drain.
+        Only a *permission* denial is permanent. The role either has
+        ``athena:StopQueryExecution`` or it does not, and retrying it on every
+        later drain multiplies the failures.
+
+        An auth failure is NOT permanent, and treating it as one was a bug:
+        ``AwsSession.client`` builds a fresh session per call, so an expired SSO
+        token is re-read after the user runs ``aws sso login`` in another
+        terminal -- design spec §7.4.4 "Flow 4 -- SSO token expires mid-session"
+        describes exactly that recovery within one session. Dropping the ref
+        there abandoned the stop permanently, leaving the query scanning, and
+        billing, with nothing left to cancel it.
         """
         try:
             await self._runner.stop(ref)
-        except (AuthRequiredError, PermissionDeniedError) as exc:
+        except PermissionDeniedError as exc:
             if report_error:
                 self._apply_provider_error(exc)
             return False, False
