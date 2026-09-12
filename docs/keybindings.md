@@ -1,6 +1,6 @@
 # Keybindings
 
-> Mirror of spec §4.2. `[keybindings]` entries in
+> Mirror of spec §5.2. `[keybindings]` entries in
 > `<config-dir>/config.toml` are validated by `KeymapStore` and
 > installed at runtime through `BindingResolver`. Only action IDs with
 > registered handlers receive live Textual bindings.
@@ -47,6 +47,8 @@ as the universal escape hatch.
 | New folder | `pane.new` action — *(deferred)* | No handler wired in v0.8.x |
 | Rename in place | `pane.move` action — *(deferred)* | Bundled into the move handler; not wired |
 | Refresh pane | `r` | |
+| Copy cursor entry path | `p` | Copies the full path of the entry under the cursor |
+| Copy pane path | `P` (`shift+p`) | Copies the pane's current directory path; the pane's top border is also a click target |
 
 ### 1.4. Overlays
 
@@ -250,7 +252,7 @@ The bindings that are wired today include `q`,
 `Backspace`, `left`, `→`, `r`, `?`, `:`, `t`, `T`, `,` (comma → Settings),
 `c`, `d`, `S` (Shift+S), `A` (Shift+A), Glue `1` / `2` / `3`, Athena
 `1` / `2` / `3` / `4`, `F`, `G`, `y`, `Q`, `W`, `C`, `D`, `i`, `V`,
-`Ctrl+Enter`, `Esc`, `l`,
+`Ctrl+Enter`, `Esc`, `l`, `p`, `P` (Shift+P), `Space`, `f`,
 `Shift+↑`, and `Shift+↓`.
 
 ## 3. Action IDs

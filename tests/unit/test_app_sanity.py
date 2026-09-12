@@ -953,7 +953,13 @@ async def test_initial_service_mount_awaits_content_host_operations(
 
     monkeypatch.setattr(app, "query_one", lambda *_args, **_kwargs: FakeHost())
     monkeypatch.setattr(app, "_replace_content_widget", replace)
-    monkeypatch.setattr(app_module, "DualPane", lambda *_args, **_kwargs: "dual-pane")
+    # Patch where the widget is actually constructed. ``app.py`` used to
+    # forward a ``dual_pane_class=`` override that no caller ever varied, so
+    # patching the app module's global happened to work; the factory owns
+    # construction, so that is the honest seam.
+    from aws_tui.ui.widgets import service_view_factory
+
+    monkeypatch.setattr(service_view_factory, "DualPane", lambda *_args, **_kwargs: "dual-pane")
 
     await app._mount_initial_service_view()
 

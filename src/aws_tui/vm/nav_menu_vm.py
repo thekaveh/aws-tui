@@ -26,6 +26,7 @@ from vmx.lifecycle.status import ConstructionStatus
 from vmx.services.dispatcher import Dispatcher
 
 from aws_tui.infra.connection_resolver import Connection
+from aws_tui.vm._observable import send_value_free
 from aws_tui.vm.messages import ConnectionChangedMessage, ConnectionListChangedMessage
 from aws_tui.vm.services_protocol import ServiceDescriptor, ServiceRegistry
 
@@ -107,7 +108,7 @@ class NavItemVM:
         if self._is_selected == value:
             return
         self._is_selected = value
-        self._hub.send(PropertyChangedMessage.create(self, self.name, "is_selected"))
+        send_value_free(self._hub, PropertyChangedMessage.create(self, self.name, "is_selected"))
 
 
 class NavMenuVM:
@@ -226,7 +227,7 @@ class NavMenuVM:
         self._inner.current = None
         for item in self._items:
             item.set_selected(False)
-        self._hub.send(PropertyChangedMessage.create(self, self.name, "selected_id"))
+        send_value_free(self._hub, PropertyChangedMessage.create(self, self.name, "selected_id"))
 
     # ── Internal ────────────────────────────────────────────────────────────
 
@@ -267,7 +268,7 @@ class NavMenuVM:
         self._inner.current = match.inner
         for item in self._items:
             item.set_selected(item is match)
-        self._hub.send(PropertyChangedMessage.create(self, self.name, "selected_id"))
+        send_value_free(self._hub, PropertyChangedMessage.create(self, self.name, "selected_id"))
 
     def _rebuild_items(self, *, notify: bool = True) -> None:
         prior_selected_id = self.selected_id
@@ -311,7 +312,7 @@ class NavMenuVM:
             # layer can re-mount the rows. Without this, the NavMenu widget
             # binds to the initial (empty) item set at mount and never re-renders
             # when the connection resolution adds entries.
-            self._hub.send(PropertyChangedMessage.create(self, self.name, "items"))
+            send_value_free(self._hub, PropertyChangedMessage.create(self, self.name, "items"))
 
         # The CompositeVM enforces "current must be in children" — its
         # `_remove_at` (composite_vm.py:264-272) drops `_current` to None
@@ -321,7 +322,9 @@ class NavMenuVM:
         # Only emit the user-visible `selected_id` notification if the
         # rebuild actually changed which service is current.
         if notify and self._inner.current is None and prior_selected_id is not None:
-            self._hub.send(PropertyChangedMessage.create(self, self.name, "selected_id"))
+            send_value_free(
+                self._hub, PropertyChangedMessage.create(self, self.name, "selected_id")
+            )
 
     def _desired_service_ids(self) -> list[str]:
         """Service ids the current connection supports, in registry order."""

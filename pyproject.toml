@@ -118,6 +118,13 @@ docs = [
   "pyyaml>=6.0,<7.0",
   "cairosvg>=2.7,<3.0",
   "fonttools>=4.61,<5.0",
+  # Imported directly by scripts/docs, not merely pulled in transitively:
+  # links.py imports `markdown`, render_diagrams.py imports `PIL`. They
+  # arrived via mkdocs-material and cairosvg respectively, so a future
+  # release of either dropping the dependency would break the docs tooling
+  # with no signal here.
+  "markdown>=3.5,<4.0",
+  "pillow>=10,<13",
 ]
 
 [tool.pytest.ini_options]
@@ -128,9 +135,12 @@ pythonpath = ["src", "."]
 addopts = "-ra --strict-markers --strict-config -m 'not integration'"
 timeout = 60
 markers = [
-  # Tagged via ``pytestmark = pytest.mark.unit`` in 6 files under
-  # tests/unit/domain/ — descriptive only; the default run already
-  # includes everything except ``-m 'not integration'``.
+  # Descriptive only; the default run already includes everything except
+  # ``-m 'not integration'``. Applied via ``pytestmark = pytest.mark.unit``
+  # in 15 files — mostly under tests/unit/domain/, plus
+  # tests/unit/vm/athena/test_errors.py. Coverage is deliberately partial,
+  # so ``pytest -m unit`` selects a subset of the unit tier rather than all
+  # of it; prefer ``pytest tests/unit`` to run the tier.
   "unit: pure-Python tests, no external service (run by default)",
   # Opt-in marker for tests that spin up a real S3Mock testcontainer.
   # Excluded from the default ``uv run pytest`` via the ``addopts``
@@ -141,9 +151,11 @@ markers = [
   # forwarding, etc.) intentionally don't carry this marker — they run
   # by default.
   "integration: tests that spin up a testcontainer or external service",
-  # Tagged on every test function in tests/e2e/test_journeys.py.
-  # Descriptive only; runs by default.
-  "e2e: end-to-end app-level pilot journeys (run by default)",
+  # Tagged on every test in tests/e2e/test_journeys.py. Descriptive only;
+  # runs by default. Not every one drives a pilot — journeys 2-4 exercise the
+  # same end-to-end contracts below the app boundary, and the first test
+  # guards the tier's own credential isolation.
+  "e2e: end-to-end journeys (run by default)",
 ]
 
 [tool.coverage.run]
@@ -187,10 +199,11 @@ ignore = ["E501"] # line length handled by formatter
 [tool.ruff.lint.per-file-ignores]
 "tests/**/*.py" = ["B011", "S101"]
 
-# Layer enforcement (View → VM → Service → Domain → Infra) via
-# flake8-tidy-imports is wired in M1, once real cross-layer imports
-# appear. No placeholder block here — ruff's TOML schema rejects an
-# empty [tool.ruff.lint.flake8-tidy-imports.*] table.
+# Layer enforcement (View → VM → Service → Domain → Infra) is owned by
+# ``scripts/check-layers.sh``, which CI, the release workflow and pre-commit
+# all run. ``TID`` above therefore contributes only TID252 (relative imports);
+# there is no [tool.ruff.lint.flake8-tidy-imports] table, and ruff's schema
+# rejects an empty one. Add the layer rules to the script, not here.
 
 [tool.ruff.format]
 quote-style = "double"

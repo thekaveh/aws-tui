@@ -17,6 +17,7 @@ from vmx.lifecycle.status import ConstructionStatus
 from vmx.services.dispatcher import Dispatcher
 
 from aws_tui.domain.emr_serverless import EmrServerlessClientProtocol, JobRunDetail
+from aws_tui.vm._observable import send_value_free
 
 # The five editable fields on the modal — kept as a tuple so
 # ``apply_field`` rejects typos up front and the view can iterate
@@ -136,7 +137,7 @@ class JobRunCloneVM:
                 self._entry_point = value
             else:  # spark_submit_parameters
                 self._spark_submit_parameters = value or None
-        self._hub.send(PropertyChangedMessage.create(self, self.vm_name, field_name))
+        send_value_free(self._hub, PropertyChangedMessage.create(self, self.vm_name, field_name))
 
     def is_valid(self) -> tuple[bool, str | None]:
         """Cheap inline validation used by the modal before

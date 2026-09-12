@@ -101,7 +101,35 @@ class S3ConnectionsPanel(Widget):
 
         Safe to call OUTSIDE compose() (no context-manager state required).
         """
-        conns = self._vm.connections
+        # ``self._vm.connections`` reaches the OS keyring through
+        # ``ConnectionResolver._dispatch_s3_credentials``, and the keyring is
+        # external state that can be absent or refuse to unlock -- a headless
+        # Linux box with no Secret Service, or a cancelled macOS unlock prompt.
+        # The resolver deliberately propagates that instead of reporting "no
+        # credentials" (see
+        # ``test_keychain_backend_failure_is_not_disguised_as_missing_credentials``),
+        # which is correct: a silent ``None`` would let the app fall back to
+        # different credentials. But this call happens inside ``compose()``, and
+        # a ``compose()`` failure is not delivered to the mount awaiter, so it
+        # bypassed the mount guard and reached ``_handle_exception`` -- opening
+        # Settings, the one screen that could repair the connection, tore the
+        # session down. Render the failure instead of raising through compose.
+        try:
+            conns = self._vm.connections
+        except Exception as exc:
+            self._id_to_name = {}
+            return [
+                Vertical(
+                    Static("S3-compatible connections are unavailable."),
+                    Static(""),
+                    Static(
+                        f"The OS keychain could not be read: {type(exc).__name__}.",
+                        markup=False,
+                    ),
+                    Static("Unlock the keychain and reopen Settings."),
+                    classes="empty-state",
+                )
+            ]
         if not conns:
             return [
                 Vertical(
@@ -250,7 +278,7 @@ class S3ConnectionsPanel(Widget):
         if not confirmed:
             return
         try:
-            self._vm.remove(name)
+            await self._vm.remove_async(name)
         except Exception as exc:
             # The connection vanished between the dialog opening and our
             # remove() call (concurrent edit, file corruption, etc.).
@@ -297,7 +325,7 @@ class S3ConnectionsPanel(Widget):
         entry = self._vm.entry_from_form(event.form)
         if event.mode == "add":
             try:
-                self._vm.add(entry)
+                await self._vm.add_async(entry)
             except ValueError:
                 # Duplicate name — keep form open, mark the field invalid.
                 form.mark_name_invalid()
@@ -320,9 +348,19 @@ class S3ConnectionsPanel(Widget):
                 )
                 return
         else:  # "edit"
-            assert event.original_name is not None
+            if event.original_name is None:
+                # A contract violation from the form widget, not user input.
+                # As an ``assert`` this vanished under ``python -O`` and the
+                # ``None`` reached ``update()``, which raised a confusing
+                # "connection cannot be renamed in place: old=None" instead.
+                self._surface_error_toast(
+                    "Could not save: the edit form did not report which connection it was editing.",
+                    toast_id="edit-error-missing-original-name",
+                )
+                form.clear_submitting()
+                return
             try:
-                self._vm.update(event.original_name, entry)
+                await self._vm.update_async(event.original_name, entry)
             except Exception as exc:
                 form.clear_submitting()
                 self._surface_error_toast(

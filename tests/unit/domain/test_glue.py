@@ -822,6 +822,63 @@ async def test_get_column_statistics_surfaces_redacted_per_column_errors() -> No
     assert "[REDACTED]" in str(exc_info.value)
 
 
+async def test_get_column_statistics_keeps_the_columns_that_succeeded() -> None:
+    """``GetColumnStatisticsForTable`` is a partial-success API.
+
+    ``ColumnStatisticsList`` carries the columns that were computed and
+    ``Errors`` the ones that were not. The error used to be raised before the
+    successful rows were collected, and from inside the 100-column batch loop --
+    so one uncomputed or Lake-Formation-denied column discarded every other
+    column's statistics and every remaining batch, and the pane rendered empty.
+    """
+    client, glue, _, _ = _client()
+    ref = TableRef("AwsDataCatalog", "analytics", "events", "dev", "us-east-1")
+    glue.get_column_statistics_for_table.return_value = {
+        "ColumnStatisticsList": [
+            {
+                "ColumnName": "computed",
+                "ColumnType": "string",
+                "AnalyzedTime": NOW,
+                "StatisticsData": {
+                    "Type": "STRING",
+                    "StringColumnStatisticsData": {"NumberOfNulls": 0},
+                },
+            }
+        ],
+        "Errors": [
+            {
+                "ColumnName": "secret_column",
+                "Error": {
+                    "ErrorCode": "AccessDeniedException",
+                    "ErrorMessage": "denied token=column-secret",
+                },
+            }
+        ],
+    }
+
+    result = await client.get_column_statistics(ref, ("computed", "secret_column"))
+
+    assert [row.column_name for row in result] == ["computed"]
+
+
+async def test_get_column_statistics_still_raises_when_nothing_succeeded() -> None:
+    """A total denial must stay an error, not render as "no statistics"."""
+    client, glue, _, _ = _client()
+    ref = TableRef("AwsDataCatalog", "analytics", "events", "dev", "us-east-1")
+    glue.get_column_statistics_for_table.return_value = {
+        "ColumnStatisticsList": [],
+        "Errors": [
+            {
+                "ColumnName": "secret_column",
+                "Error": {"ErrorCode": "AccessDeniedException", "ErrorMessage": "denied"},
+            }
+        ],
+    }
+
+    with pytest.raises(PermissionDeniedError):
+        await client.get_column_statistics(ref, ("secret_column",))
+
+
 async def test_list_jobs_page_maps_job_definitions_and_request() -> None:
     client, glue, _, _ = _client()
     glue.get_jobs.return_value = {

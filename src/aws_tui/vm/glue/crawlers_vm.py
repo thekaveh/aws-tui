@@ -10,7 +10,7 @@ from vmx.services.dispatcher import Dispatcher
 
 from aws_tui.domain.filesystem import ProviderError
 from aws_tui.domain.glue import GlueCrawlerDetail, GlueCrawlerSummary
-from aws_tui.vm._observable import ObserverSafeSubject
+from aws_tui.vm._observable import ObserverSafeSubject, send_value_free
 from aws_tui.vm._token_paging import reject_token_cycles
 from aws_tui.vm.file_manager.pane_vm import PaneState
 from aws_tui.vm.glue._errors import map_provider_error, map_unexpected_error
@@ -303,7 +303,9 @@ class GlueCrawlersVM:
     def _notify(self, property_name: str) -> None:
         if not self._is_alive():
             return
-        self._hub.send(PropertyChangedMessage.create(self, "glue.crawlers", property_name))
+        send_value_free(
+            self._hub, PropertyChangedMessage.create(self, "glue.crawlers", property_name)
+        )
         self._on_property_changed.on_next(property_name)
 
 

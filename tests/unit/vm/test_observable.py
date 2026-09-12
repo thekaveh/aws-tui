@@ -169,3 +169,32 @@ def test_observer_safe_subject_isolates_on_error_and_preserves_terminal_semantic
         ("late", "safe failure"),
     ]
     assert "HOSTILE_ON_ERROR_MARKER" not in caplog.text
+
+
+def test_isolated_subscriber_failure_records_the_type_but_never_the_message(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Diagnosable without leaking subscriber payload data.
+
+    The sibling tests pin the privacy half: a subscriber's exception text must
+    never reach this durable-log path, which also feeds the crash dump's log
+    tail. This pins the other half -- the record must still name the channel and
+    the exception *type*, or the line is useless for triage. A class name is not
+    user data; an exception message or an ``exc_info`` traceback can be.
+    """
+    subject = ObserverSafeSubject[str]()
+
+    def fail(_: str) -> None:
+        raise RuntimeError("HOSTILE_PAYLOAD_MARKER")
+
+    subject.subscribe(fail)
+    with caplog.at_level("ERROR"):
+        subject.on_next("changed")
+
+    records = [r for r in caplog.records if r.message == "observable.subscriber_failed"]
+    assert records, "subscriber failure was not reported at all"
+    record = records[0]
+    assert record.error_type == "RuntimeError"
+    assert record.channel == "on_next"
+    assert record.exc_info is None, "exc_info would leak the subscriber's message"
+    assert "HOSTILE_PAYLOAD_MARKER" not in caplog.text

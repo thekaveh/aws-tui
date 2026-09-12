@@ -586,6 +586,17 @@ def _partition_field_names(type_name: str) -> tuple[str, ...]:
         )
     except (SqlglotError, TypeError, ValueError):
         raise IcebergMetadataShapeError("invalid Iceberg partition struct type") from None
+    except RecursionError:
+        # sqlglot recurses over nested ``struct<...>``; a deeply nested type
+        # blows the stack with a RecursionError, which is not a SqlglotError and
+        # so escaped this handler as an unhandled crash. Same guard as
+        # ``sql_policy._parse``/``_tokenize``. Requires implausible Athena
+        # ``$partitions`` metadata to reach, so this is hardening, not a live
+        # defect -- but the failure mode if it were reached is a crash dump,
+        # not a message.
+        raise IcebergMetadataShapeError(
+            "Iceberg partition struct type is nested too deeply to parse"
+        ) from None
     if not isinstance(data_type, exp.DataType) or data_type.this is not exp.DataType.Type.STRUCT:
         raise IcebergMetadataShapeError("invalid Iceberg partition struct type")
     field_names: list[str] = []

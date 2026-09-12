@@ -101,8 +101,20 @@ RULES: tuple[Rule, ...] = (
     # classes to build each service's page/viewmodel tree, but it must not reach
     # upward into Textual widgets.
     ("services", "Services", ("textual", "aws_tui.ui")),
-    # demo/ is the runtime-mock layer. The composition root may opt into it, but
-    # production layers must not import demo fakes directly.
+    # demo/ is the runtime-mock layer. It stands in for real providers, so it
+    # may reach domain contracts and the connection resolver, but it must not
+    # reach upward -- a fake that imported a widget or a VM would couple the
+    # mock layer to the app shell. Listed as a source folder, not only as a
+    # banned target: every rule below names ``demo`` in position 2, so nothing
+    # ever walked ``src/aws_tui/demo`` and a `from textual ...` inside it
+    # passed CI silently.
+    (
+        "demo",
+        "Demo",
+        ("textual", "aws_tui.ui", "aws_tui.vm", "aws_tui.services", "aws_tui.composition"),
+    ),
+    # The composition root may opt into demo, but production layers must not
+    # import demo fakes directly.
     ("vm", "ViewModel", ("aws_tui.demo",)),
     ("domain", "Domain", ("aws_tui.demo",)),
     ("infra", "Infrastructure", ("aws_tui.demo",)),

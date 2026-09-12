@@ -1,4 +1,5 @@
 import os
+import re
 import stat
 import textwrap
 import xml.etree.ElementTree as ET
@@ -177,7 +178,12 @@ def test_check_committed_assets_detects_stale_and_unexpected_assets(tmp_path):
     ]
 
 
-def test_copy_assets_copies_pngs(tmp_path):
+def test_copy_assets_copies_pngs_and_leaves_svgs_behind(tmp_path):
+    """The wiki embeds PNGs only; copying SVGs too was ~5 MB of dead weight.
+
+    The wiki is a separate git repository, so anything synced into it stays in
+    that repository's history permanently.
+    """
     src = tmp_path / "docs" / "diagrams" / "img"
     src.mkdir(parents=True)
     (src / "system.png").write_bytes(b"\x89PNG\r\n\x1a\nDATA")
@@ -185,7 +191,7 @@ def test_copy_assets_copies_pngs(tmp_path):
     wiki_img = tmp_path / "generated" / "wiki" / "img"
     copy_assets(tmp_path, wiki_img)
     assert (wiki_img / "system.png").read_bytes().startswith(b"\x89PNG")
-    assert (wiki_img / "system.svg").read_text(encoding="utf-8") == "<svg/>"
+    assert not (wiki_img / "system.svg").exists()
 
 
 def test_render_svg_embeds_regular_and_bold_fonts_without_external_dependency(tmp_path):
@@ -313,11 +319,26 @@ def test_architecture_diagram_is_landscape_and_current():
     assert "TransferJournal" in groups["domain-models"]
     assert "EMR Serverless Client" in groups["domain-models"]
     assert "S3 log adapter" in groups["domain-models"]
-    assert 'd="M455 610V680"' not in svg
-    assert 'd="M715 610V680"' not in svg
-    assert 'd="M455 610V635H330V672H455V680"' in svg
-    assert 'd="M715 610V635H920V672H715V680"' in svg
-    assert 'x="625" y="658"' in svg
+    # The domain -> infrastructure arrows run straight, like every other band.
+    #
+    # They used to detour around the infrastructure caption, which sat centred
+    # at x=625 directly in their path. That removed the crossing but introduced
+    # a worse artifact: the two detours together traced a closed rectangle
+    # (x 330..920, y 635..672) around the caption, reading as an unlabeled box.
+    # The caption is now two shorter lines centred at x=585, inside the
+    # arrow-free gap between the x=455 and x=715 columns, so the arrows can run
+    # straight without crossing anything. Assert the property, not the path
+    # strings: every arrow in this band is vertical, and the caption sits
+    # strictly between two adjacent arrows.
+    band_arrows = sorted(int(x) for x in re.findall(r'd="M(\d+) 610V680"', svg))
+    assert band_arrows == [195, 455, 715, 975]
+    assert "V635H" not in svg, "the detour routing is back"
+    caption_group = re.search(r'<g fill="#fdba74"[^>]*>(.*?)</g>', svg, re.S)
+    assert caption_group is not None, "infrastructure caption group not found"
+    caption_x = [int(m) for m in re.findall(r'<text x="(\d+)"', caption_group.group(1))]
+    assert caption_x, "infrastructure caption not found"
+    for x in caption_x:
+        assert 455 < x < 715, f"caption at x={x} sits in an arrow's path"
 
 
 def test_operations_flow_assigns_transfer_journal_to_dual_pane() -> None:

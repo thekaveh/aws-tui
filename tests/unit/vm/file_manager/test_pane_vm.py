@@ -726,8 +726,11 @@ async def test_copy_selected_path_is_none_on_the_parent_link() -> None:
         await pane.navigate_to(PathRef(("b",)))
         entries = pane.filtered_entries
         parent_index = next((i for i, entry in enumerate(entries) if entry.name == ".."), None)
-        if parent_index is None:
-            pytest.skip("this listing exposes no parent link")
+        # Asserted, not skipped. The presence of ``..`` is the precondition this
+        # test exists to exercise, so a PaneVM that stopped emitting the parent
+        # link -- a real navigation regression -- would have turned this test
+        # green by skipping instead of failing.
+        assert parent_index is not None, "a subdirectory listing must expose a '..' parent link"
         pane.move_cursor_command.execute(parent_index - pane.cursor_index)
         assert pane.filtered_entries[pane.cursor_index].name == ".."
 
@@ -743,5 +746,27 @@ async def test_copy_selected_path_is_none_when_the_listing_is_empty() -> None:
         assert pane.viewmodel.copy_selected_path is None
         # The location itself is still copyable.
         assert pane.viewmodel.copy_path == "/"
+    finally:
+        pane.dispose()
+
+
+@pytest.mark.asyncio
+async def test_summary_count_excludes_the_synthetic_parent_link() -> None:
+    """``..`` is navigation chrome, not an object in the listing.
+
+    ``_marked_entries`` already filters ``is_parent_link``, so counting it in
+    the object total made the two halves of the same summary line disagree: a
+    three-file subdirectory rendered "4 obj", and an empty subdirectory
+    rendered "1 obj" rather than "empty".
+    """
+    pane = await _make_pane(await _seed_fs())
+    try:
+        await pane.navigate_to(PathRef(("b",)))
+        entries = pane.filtered_entries
+        real = [entry for entry in entries if entry.name != ".."]
+        assert len(entries) == len(real) + 1, "expected a parent link in this listing"
+
+        summary = pane.viewmodel.summary
+        assert summary.startswith(f"{len(real)} obj"), summary
     finally:
         pane.dispose()

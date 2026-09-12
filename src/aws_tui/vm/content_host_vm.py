@@ -29,6 +29,8 @@ from vmx import ComponentVM, Message, MessageHub, PropertyChangedMessage
 from vmx.lifecycle.status import ConstructionStatus
 from vmx.services.dispatcher import Dispatcher
 
+from aws_tui.vm._observable import send_value_free
+
 
 class ContentHostVM:
     """Owns the currently active service VM and orchestrates the swap."""
@@ -181,11 +183,11 @@ class ContentHostVM:
             self._current_id = None
 
         if shutdown_cancelled:
-            self._hub.send(PropertyChangedMessage.create(self, self.name, "current"))
+            send_value_free(self._hub, PropertyChangedMessage.create(self, self.name, "current"))
             raise asyncio.CancelledError
 
         if vm is None:
-            self._hub.send(PropertyChangedMessage.create(self, self.name, "current"))
+            send_value_free(self._hub, PropertyChangedMessage.create(self, self.name, "current"))
             return
 
         # Adopt the already-constructed candidate before driving setup. Adopting
@@ -198,7 +200,7 @@ class ContentHostVM:
         self._current_id = service_id
         if before_publish is not None:
             before_publish()
-        self._hub.send(PropertyChangedMessage.create(self, self.name, "current"))
+        send_value_free(self._hub, PropertyChangedMessage.create(self, self.name, "current"))
 
         setup = getattr(vm, "setup", None)
         if callable(setup):

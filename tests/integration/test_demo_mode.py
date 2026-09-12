@@ -31,6 +31,7 @@ from aws_tui.vm.athena.page_vm import AthenaPageVM
 from aws_tui.vm.chrome.focus_coordinator_vm import FocusSlot
 from aws_tui.vm.file_manager.pane_vm import PaneState
 from aws_tui.vm.glue.page_vm import GluePageVM
+from tests.helpers import drain_workers
 
 pytestmark = pytest.mark.asyncio
 
@@ -70,9 +71,17 @@ def _athena_client(ctx: AppContext, profile: str) -> InMemoryAthena:
 
 
 async def _invoke(app: AwsTuiApp, action_id: str) -> None:
+    """Dispatch an action and settle whatever it started.
+
+    Actions that reach AWS dispatch to a Textual worker rather than awaiting on
+    the message pump, so returning from the action only means the work was
+    started. Draining here keeps every caller's assertions honest without each
+    one having to remember.
+    """
     result = app.action_dispatch(action_id)
     if inspect.isawaitable(result):
         await result
+    await drain_workers(app)
 
 
 async def test_demo_mode_boots_with_four_demo_connections(tmp_path) -> None:

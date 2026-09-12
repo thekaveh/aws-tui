@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import asyncio
 from collections import OrderedDict
+from contextlib import aclosing
 from enum import StrEnum
 
 import reactivex as rx
@@ -31,7 +32,7 @@ from aws_tui.domain.emr_logs import (
 )
 from aws_tui.domain.filesystem import ProviderError
 from aws_tui.infra.redaction import redact_text
-from aws_tui.vm._observable import ObserverSafeSubject
+from aws_tui.vm._observable import ObserverSafeSubject, send_value_free
 from aws_tui.vm.emr_serverless._errors import map_provider_error
 from aws_tui.vm.operation_owner import OperationOwner, OperationSuperseded
 from aws_tui.vm.service_diagnostics import report_unexpected_service_error
@@ -223,20 +224,6 @@ class JobRunLogsVM:
         self._filter = filter_
         self._notify("filter")
 
-    def select_log_file(self, kind: LogFileKind) -> None:
-        """Pick a file from ``available_files`` by kind. No-op if
-        not loaded yet or no file with that kind exists."""
-        match = next((f for f in self._available_files if f.kind is kind), None)
-        if match is None or match == self._current_file:
-            return
-        self._current_file = match
-        self._lines = ()
-        self._bytes_read = 0
-        self._lines_scanned = 0
-        self._matched_count = 0
-        self._notify("current_file")
-        self._notify("lines")
-
     def select_log_file_key(self, key: str) -> None:
         """Pick one exact object, preserving executor and retry identity."""
         match = next((file for file in self._available_files if file.key == key), None)
@@ -306,6 +293,12 @@ class JobRunLogsVM:
             self._lines = ()
             self._bytes_read = 0
             self._lines_scanned = 0
+            # ``_matched_count`` belongs in this reset too. Without it every
+            # cache-miss reload (``r``, a filter edit, Shift+F) accumulated on
+            # top of the previous run's total, so a file with one match
+            # rendered "showing last 1 of 3 matches" -- and the inflated value
+            # was then written into the LRU cache.
+            self._matched_count = 0
             self._available_files = tuple(files)
             self._notify("available_files")
             if not files:
@@ -363,34 +356,42 @@ class JobRunLogsVM:
                 self._set_state(LogsState.TRUNCATED if cached_truncated else LogsState.READY)
                 return
             buffered: list[str] = []
-            async for chunk in self._client.stream(
-                log_file=self._current_file,
-                bucket=loc.bucket,
-                max_bytes=_MAX_RAW_BYTES,
-                filter_=self._filter,
-            ):
-                # Re-check target on EVERY chunk — set_target runs
-                # in a different worker group (emr-select-run /
-                # emr-select-app) and does NOT cancel emr-logs, so
-                # the stream can keep feeding chunks AFTER the user
-                # moved on. Without this guard, ``_notify("lines")``
-                # would paint the OLD run's lines under the NEW
-                # run's pane header. (Post-loop guard only catches
-                # the cache-write — the per-chunk paints already
-                # shipped to the view.)
-                if (self._application_id, self._job_run_id, self._log_uri) != target:
-                    return
-                buffered.extend(chunk.lines)
-                self._matched_count += chunk.matched_count
-                if len(buffered) > _MAX_MATCHED_LINES:
-                    buffered = buffered[-_MAX_MATCHED_LINES:]
-                self._lines = tuple(buffered)
-                self._bytes_read = chunk.bytes_read
-                self._lines_scanned = chunk.lines_scanned
-                self._notify("lines")
-                self._notify("matched_count")
-                self._notify("progress")
-                truncated = chunk.truncated
+            # ``aclosing``: the per-chunk guard below returns out of this loop
+            # by design, and ``set_target`` deliberately does not cancel this
+            # worker group. A bare ``async for`` therefore abandoned the
+            # generator on every job-run switch, stranding an open S3
+            # connection until the GC hook collected it.
+            async with aclosing(
+                self._client.stream(
+                    log_file=self._current_file,
+                    bucket=loc.bucket,
+                    max_bytes=_MAX_RAW_BYTES,
+                    filter_=self._filter,
+                )
+            ) as source:
+                async for chunk in source:
+                    # Re-check target on EVERY chunk — set_target runs
+                    # in a different worker group (emr-select-run /
+                    # emr-select-app) and does NOT cancel emr-logs, so
+                    # the stream can keep feeding chunks AFTER the user
+                    # moved on. Without this guard, ``_notify("lines")``
+                    # would paint the OLD run's lines under the NEW
+                    # run's pane header. (Post-loop guard only catches
+                    # the cache-write — the per-chunk paints already
+                    # shipped to the view.)
+                    if (self._application_id, self._job_run_id, self._log_uri) != target:
+                        return
+                    buffered.extend(chunk.lines)
+                    self._matched_count += chunk.matched_count
+                    if len(buffered) > _MAX_MATCHED_LINES:
+                        buffered = buffered[-_MAX_MATCHED_LINES:]
+                    self._lines = tuple(buffered)
+                    self._bytes_read = chunk.bytes_read
+                    self._lines_scanned = chunk.lines_scanned
+                    self._notify("lines")
+                    self._notify("matched_count")
+                    self._notify("progress")
+                    truncated = chunk.truncated
             if (self._application_id, self._job_run_id, self._log_uri) != target:
                 # Target changed during stream — drop the cache write
                 # (would key under the wrong target) and the state
@@ -474,7 +475,12 @@ class JobRunLogsVM:
         """Emit a PropertyChanged event on BOTH the shared hub AND
         the per-VM-instance Observable (round-3 / PR #103 retirement
         path)."""
-        self._hub.send(PropertyChangedMessage.create(self, "emr.job_run_logs", prop))
+        if self._disposed:
+            # The Athena and Glue VMs have always guarded this; these four
+            # did not, so a late callback could publish a property change
+            # for a disposed view model.
+            return
+        send_value_free(self._hub, PropertyChangedMessage.create(self, "emr.job_run_logs", prop))
         self._on_property_changed.on_next(prop)
 
     def _notify_all(self) -> None:

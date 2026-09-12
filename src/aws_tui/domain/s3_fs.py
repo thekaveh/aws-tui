@@ -158,7 +158,6 @@ class S3FS:
         return ("s3", self._endpoint_url, self._bucket, self._prefix)
 
     atomic_write_replaces = True
-    atomic_directory_replace = False
 
     # ------------------------------------------------------------------
     # Client helper

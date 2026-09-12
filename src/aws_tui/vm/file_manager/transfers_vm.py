@@ -21,6 +21,7 @@ from vmx import (
 from vmx.lifecycle.status import ConstructionStatus
 from vmx.services.dispatcher import Dispatcher
 
+from aws_tui.vm._observable import send_value_free
 from aws_tui.vm.file_manager.transfer_vm import (
     TransferDirection,
     TransferModel,
@@ -158,7 +159,9 @@ class TransfersVM:
             return existing
         self._transfers.append(vm)
         self._inner.append(vm.inner)
-        self._hub.send(PropertyChangedMessage.create(self, self._inner.name, "transfers"))
+        send_value_free(
+            self._hub, PropertyChangedMessage.create(self, self._inner.name, "transfers")
+        )
         self._trim_finished()
         return vm
 
@@ -167,7 +170,9 @@ class TransfersVM:
         if target is None:
             return
         target.cancel_command.execute()
-        self._hub.send(PropertyChangedMessage.create(self, self._inner.name, "transfers"))
+        send_value_free(
+            self._hub, PropertyChangedMessage.create(self, self._inner.name, "transfers")
+        )
 
     def update(
         self,
@@ -188,7 +193,9 @@ class TransfersVM:
             error=error,
         )
         self._trim_finished()
-        self._hub.send(PropertyChangedMessage.create(self, self._inner.name, "transfers"))
+        send_value_free(
+            self._hub, PropertyChangedMessage.create(self, self._inner.name, "transfers")
+        )
 
     # ── Hub subscriber ──────────────────────────────────────────────────────
 
@@ -224,7 +231,9 @@ class TransfersVM:
             state=new_state,
         )
         self._trim_finished()
-        self._hub.send(PropertyChangedMessage.create(self, self._inner.name, "transfers"))
+        send_value_free(
+            self._hub, PropertyChangedMessage.create(self, self._inner.name, "transfers")
+        )
 
     # ── Internal ────────────────────────────────────────────────────────────
 
@@ -232,7 +241,9 @@ class TransfersVM:
         for t in list(self._transfers):
             if t.is_active or t.state == TransferState.PENDING:
                 t.cancel_command.execute()
-        self._hub.send(PropertyChangedMessage.create(self, self._inner.name, "transfers"))
+        send_value_free(
+            self._hub, PropertyChangedMessage.create(self, self._inner.name, "transfers")
+        )
 
     def _find(self, transfer_id: str) -> TransferVM | None:
         for t in self._transfers:

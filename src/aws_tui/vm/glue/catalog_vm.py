@@ -21,7 +21,7 @@ from aws_tui.domain.data_catalog import (
 )
 from aws_tui.domain.filesystem import ProviderError
 from aws_tui.domain.s3_uri import parse_s3_uri
-from aws_tui.vm._observable import ObserverSafeSubject
+from aws_tui.vm._observable import ObserverSafeSubject, send_value_free
 from aws_tui.vm._token_paging import reject_token_cycles
 from aws_tui.vm.file_manager.pane_vm import PaneState
 from aws_tui.vm.glue._errors import map_provider_error, map_unexpected_error
@@ -1036,7 +1036,9 @@ class GlueCatalogVM:
     def _notify(self, property_name: str) -> None:
         if not self._is_alive():
             return
-        self._hub.send(PropertyChangedMessage.create(self, "glue.catalog", property_name))
+        send_value_free(
+            self._hub, PropertyChangedMessage.create(self, "glue.catalog", property_name)
+        )
         self._on_property_changed.on_next(property_name)
 
 

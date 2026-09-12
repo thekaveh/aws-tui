@@ -20,6 +20,7 @@ from aws_tui.ui.widgets.glue.iceberg_view import GlueIcebergView
 from aws_tui.ui.widgets.glue.page import GluePage
 from aws_tui.vm.chrome.focus_coordinator_vm import FocusCoordinatorVM, FocusSlot
 from aws_tui.vm.glue.page_vm import GluePageVM
+from tests.helpers import focus_and_settle
 from tests.unit.vm.glue._fake_glue import InMemoryGlue
 from tests.unit.vm.glue.test_iceberg_vm import RecordingInspector
 
@@ -399,7 +400,7 @@ async def test_enter_and_space_activate_focused_iceberg_tab(key: str) -> None:
 
     async with _GlueIcebergApp(vm).run_test(size=(100, 30)) as pilot:
         tab = pilot.app.query_one("#glue-iceberg-tab-history")
-        pilot.app.set_focus(tab)
+        await focus_and_settle(tab)
         await pilot.press(key)
         await _wait_until(lambda: len(inspector.calls) == 1)
         await pilot.pause()
@@ -417,7 +418,7 @@ async def test_enter_and_space_press_all_enabled_iceberg_buttons(key: str) -> No
     await vm.setup()
     async with _GlueIcebergApp(vm).run_test(size=(100, 30)) as pilot:
         snapshot_tab = pilot.app.query_one("#glue-iceberg-tab-snapshots")
-        pilot.app.set_focus(snapshot_tab)
+        await focus_and_settle(snapshot_tab)
         await pilot.press(key)
         await _wait_until(lambda: vm.catalog.iceberg.error_text is not None)
         await pilot.pause()
@@ -425,7 +426,7 @@ async def test_enter_and_space_press_all_enabled_iceberg_buttons(key: str) -> No
         inspector.errors.pop("snapshots")
         retry = pilot.app.query_one("#glue-iceberg-retry", Button)
         assert not retry.disabled
-        pilot.app.set_focus(retry)
+        await focus_and_settle(retry)
         await pilot.press(key)
         await _wait_until(lambda: len(vm.catalog.iceberg.snapshots) == 1)
         await pilot.pause()
@@ -433,7 +434,7 @@ async def test_enter_and_space_press_all_enabled_iceberg_buttons(key: str) -> No
 
         more = pilot.app.query_one("#glue-iceberg-more", Button)
         assert not more.disabled
-        pilot.app.set_focus(more)
+        await focus_and_settle(more)
         await pilot.press(key)
         await _wait_until(lambda: len(vm.catalog.iceberg.snapshots) == 2)
         await pilot.pause()
@@ -441,7 +442,7 @@ async def test_enter_and_space_press_all_enabled_iceberg_buttons(key: str) -> No
 
         time_travel = pilot.app.query_one("#glue-iceberg-time-travel", Button)
         assert not time_travel.disabled
-        pilot.app.set_focus(time_travel)
+        await focus_and_settle(time_travel)
         await pilot.press(key)
         await pilot.pause()
         assert pilot.app.action_ids == ["glue.time_travel_in_athena"]
@@ -456,7 +457,10 @@ async def test_glue_page_does_not_swallow_unhandled_iceberg_descendants() -> Non
         await pilot.click("#glue-iceberg-tab-snapshots")
         await pilot.pause()
         table = pilot.app.query_one("#glue-iceberg-table", DataTable)
-        pilot.app.set_focus(table)
+        await focus_and_settle(table)
+        # Assert the precondition rather than assume it: without focus on the
+        # table, ``activate_focused`` returns False for the wrong reason and the
+        # test passes while proving nothing.
         page = pilot.app.query_one(GluePage)
 
         assert page.activate_focused(space=False) is False

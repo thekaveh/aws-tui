@@ -1,6 +1,6 @@
 # Releasing aws-tui
 
-How to cut a release. Five minutes of human time per version.
+How to cut a release.
 
 ```text
 edit changelog + version + README
@@ -34,7 +34,18 @@ sed -i.bak 's/__version__ = "[^"]*"/__version__ = "X.Y.Z"/' \
 #    point at the new version. (Manual edit — paragraph is
 #    version-specific marketing copy.)
 
-git add CHANGELOG.md src/aws_tui/version.py README.md
+# 4. Re-record the snapshot goldens. `__version__` is rendered into the
+#    brand banner subtitle (ui/widgets/brand_banner.py), so every demo-mode
+#    golden embeds the version string and the bump makes them stale.
+uv run pytest tests/snapshot --snapshot-update
+
+# 5. Re-render the README/site hero. scripts/docs/render_hero.py rasterizes it
+#    FROM one of the goldens re-recorded in step 4, so `make docs-check` fails
+#    with "stale generated hero" until this runs and the PNG is committed.
+make docs-hero
+
+git add CHANGELOG.md src/aws_tui/version.py README.md \
+        tests/snapshot/__snapshots__ assets/screenshots/aws-tui-running.png
 git commit -m "chore(release): cut vX.Y.Z"
 git push -u origin release/vX.Y.Z
 gh pr create --title "chore(release): cut vX.Y.Z" --fill
@@ -125,6 +136,14 @@ contains v0.9 feature work while package metadata still reads `0.8.0`, prepare
 v0.9 by bumping the version and cutting its changelog section in the release PR;
 do not tag the current tree as v0.8.0.
 
+The v0.9.0 release PR must also dispose of the undated `## [0.8.0] - Pending`
+heading. `scripts/cut-changelog.sh` inserts the new section *above* it and has
+no branch that dates an already-declared heading, so left alone it stays in the
+file forever as a released-looking entry for a build that was never published.
+Fold its body into the new `[0.9.0]` section and delete the heading together
+with its `[0.8.0]:` reference link at the bottom of the file. Nothing downstream
+depends on it: `0.8.0` was never tagged and never reached PyPI.
+
 Then tag the merge commit and push:
 
 ```bash
@@ -165,8 +184,6 @@ After approval the pipeline:
    PyPI release.
 
 Skim the Homebrew PR and merge it when one is created.
-
-Done.
 
 ## 2. Rehearsing the TestPyPI Pipeline
 
@@ -216,7 +233,7 @@ is always "fix forward, never overwrite":
   (Project → Manage → Release → "Yank release"). Yanking hides
   the version from `pip install aws-tui` solver resolutions but
   keeps existing `aws-tui==X.Y.Z` pins working. Then cut a patch
-  version (for example, `0.8.1` after `0.8.0`) with the fix.
+  version (for example, `0.9.1` after `0.9.0`) with the fix.
 - **GitHub Release wrong / missing after PyPI succeeded.** Do **not**
   re-run the PyPI publish path for the same version. Create or repair
   the release manually from the existing tag and checked artifacts
@@ -298,6 +315,28 @@ fine-grained PAT scoped to the tap repo only:
 
 Token lifespan is the only routine recurring chore — set the
 calendar reminder for the expiry date.
+
+### 4.5. Wiki deploy key
+
+`.github/workflows/pages.yml` publishes the generated wiki surface. Its
+`wiki` job fails with `::error::WIKI_DEPLOY_KEY is not configured` when the
+secret is absent, so the key has to exist before the first documentation
+deploy.
+
+1. Generate a dedicated key pair:
+   `ssh-keygen -t ed25519 -C "aws-tui wiki deploy" -f ./wiki_deploy -N ""`.
+2. In `thekaveh/aws-tui` → Settings → **Deploy keys** → **Add deploy key**,
+   paste `wiki_deploy.pub` and tick **Allow write access**. The wiki lives in
+   the same repository, so one deploy key covers it.
+3. In Settings → **Secrets and variables** → **Actions**, add
+   `WIKI_DEPLOY_KEY` with the contents of the private `wiki_deploy` file.
+4. Optionally override `WIKI_REMOTE` (defaults to the repository's own
+   `.wiki.git`) and `WIKI_KNOWN_HOSTS` (defaults to the pinned GitHub host
+   key in `scripts/docs/push_wiki.py`).
+5. Delete the local key pair once both halves are stored.
+
+Verify without publishing anything: `make docs-wiki` renders the surface and
+runs `push_wiki --check`, which performs no network access.
 
 ## 5. Version policy
 

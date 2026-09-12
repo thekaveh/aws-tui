@@ -886,3 +886,54 @@ def test_log_filter_rejects_an_invalid_regex_at_construction() -> None:
     valid = LogFilter(mode=FilterMode.MATCH, patterns=("ERROR",))
     assert valid.matches("ERROR boom")
     assert not valid.matches("INFO fine")
+
+
+async def test_client_stream_closes_the_inner_generator_when_abandoned(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Abandoning the stream must release the S3 connection it holds.
+
+    ``stream_log`` keeps ``async with session.client("s3", ...)`` open across
+    its yields, holding a live connection and an open ``StreamingBody``. The
+    log VM deliberately ``return``s out of its ``async for`` whenever the user
+    selects a different job run -- ``set_target`` runs in a different worker
+    group and does not cancel the log worker -- so without an explicit close
+    each switch stranded one connection until the async-generator GC hook
+    happened to run.
+    """
+    from contextlib import aclosing
+
+    from aws_tui.domain import emr_logs
+
+    closed = False
+
+    async def fake_stream_log(**_kwargs: object):
+        nonlocal closed
+        try:
+            yield emr_logs.LogChunk(
+                lines=("first",), bytes_read=5, lines_scanned=1, matched_count=1, truncated=False
+            )
+            yield emr_logs.LogChunk(
+                lines=("second",), bytes_read=11, lines_scanned=2, matched_count=2, truncated=False
+            )
+        finally:
+            closed = True
+
+    monkeypatch.setattr(emr_logs, "stream_log", fake_stream_log)
+    client = emr_logs.EmrServerlessLogsClient(
+        session=AsyncMock(), region_name="us-east-1", boto_config=None
+    )
+    log_file = emr_logs.LogFile(key="logs/a.gz", kind=LogFileKind.DRIVER_STDOUT, size=10)
+
+    async with aclosing(
+        client.stream(
+            log_file=log_file,
+            bucket="b",
+            max_bytes=1024,
+            filter_=emr_logs.DEFAULT_LOG_FILTER,
+        )
+    ) as source:
+        async for _chunk in source:
+            break  # the consumer walks away mid-stream
+
+    assert closed, "the inner stream_log generator was never closed"

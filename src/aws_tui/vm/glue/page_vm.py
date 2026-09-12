@@ -8,6 +8,7 @@ from vmx.services.dispatcher import Dispatcher
 
 from aws_tui.domain.data_catalog import TableRef
 from aws_tui.infra.connection_resolver import Connection
+from aws_tui.vm._observable import send_value_free
 from aws_tui.vm.file_manager.pane_vm import PaneState
 from aws_tui.vm.glue._lifecycle import GlueOperationOwner
 from aws_tui.vm.glue.catalog_vm import GlueCatalogVM
@@ -122,7 +123,9 @@ class GluePageVM:
         self._operations.close()
         self._disposed = True
         self._lifecycle_generation += 1
-        self._hub.send(PropertyChangedMessage.create(self, "glue.page", "actions_available"))
+        send_value_free(
+            self._hub, PropertyChangedMessage.create(self, "glue.page", "actions_available")
+        )
         self.crawlers.dispose()
         self.jobs.dispose()
         self.catalog.dispose()
@@ -459,7 +462,7 @@ class GluePageVM:
     def _notify(self, property_name: str) -> None:
         if not self._is_alive():
             return
-        self._hub.send(PropertyChangedMessage.create(self, "glue.page", property_name))
+        send_value_free(self._hub, PropertyChangedMessage.create(self, "glue.page", property_name))
 
 
 __all__ = ["GluePageVM", "GlueView"]

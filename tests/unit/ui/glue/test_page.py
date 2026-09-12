@@ -26,6 +26,7 @@ from aws_tui.vm.file_manager.pane_vm import PaneState
 from aws_tui.vm.glue.page_vm import GluePageVM
 from aws_tui.vm.nav_menu_vm import NavMenuVM
 from aws_tui.vm.services_protocol import ServiceRegistry
+from tests.helpers import drain_workers
 from tests.unit.vm.glue._fake_glue import InMemoryGlue, seeded_glue
 
 
@@ -812,7 +813,7 @@ async def test_refresh_action_refreshes_only_the_active_view() -> None:
         before = len(fake.database_tokens)
         page.query_one(GlueCatalogView).query_one(OptionList).focus()
         await page.action_refresh_active()
-        await pilot.pause()
+        await drain_workers(app)
 
         assert len(fake.database_tokens) == before + 1
         assert fake.job_tokens == []
