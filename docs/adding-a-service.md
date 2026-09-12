@@ -102,7 +102,7 @@ needs a `construct → destruct → dispose` surface.
     - For storage-like services (lists with hierarchy): the file-
       manager VMs in `vm/file_manager/` work as-is — write a new
       `FileSystemProvider` (see `src/aws_tui/domain/filesystem.py`
-      for the protocol, and §2 / §3 of the design spec for the
+      for the protocol, and §3 / §4 of the design spec for the
       architectural shape) and reuse `PaneVM` + `DualPaneVM`.
     - For flat resource lists (EC2 instances, IAM users): write a new
       `ListPaneVM` under `vm/<service>/` and a corresponding widget
@@ -230,9 +230,8 @@ shipped service and demonstrates the richer per-service pattern:
   runs 60 s with 6:1 cadence decay while no run is active /
   detail 30 s with terminal-state suppression). Demo mode
   uses shorter 30 s / 30 s / 5 s cadences so sample data feels live.
-- **Service-specific modal pattern** (PR #83). `JobRunCloneModal`
-  is pushed via `app.push_screen` from the page binding
-  (`Binding("c", "clone_selected_run", "Clone")`). The
+- **Service-specific modal pattern.** `JobRunCloneModal`
+  is pushed via `app.push_screen`. The
   ``app.py::action_copy`` priority binding short-circuits to the
   EMR clone path when EMR is mounted (parallel to the dual-pane
   hijack pattern for `Tab` / arrow keys). Service-specific

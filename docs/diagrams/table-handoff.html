@@ -1,0 +1,123 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>aws-tui Table Handoff Sequence</title>
+  <style>
+    @font-face { font-family: "Fira Code Embedded"; src: url("../../assets/fonts/fira-code/FiraCode-Regular.ttf") format("truetype"); font-style: normal; font-weight: 400; }
+    @font-face { font-family: "Fira Code Embedded"; src: url("../../assets/fonts/fira-code/FiraCode-Bold.ttf") format("truetype"); font-style: normal; font-weight: 600 700; }
+    * { box-sizing: border-box; }
+    body { margin: 0; padding: 32px; background: #020617; color: #f8fafc; font-family: "Fira Code Embedded", monospace; }
+    main { width: min(1600px, 100%); margin: auto; }
+    h1 { margin: 0; font-size: 24px; letter-spacing: 0; }
+    p { margin: 8px 0 0; color: #94a3b8; font-size: 14px; }
+    .frame { margin-top: 20px; padding: 16px; overflow-x: auto; border: 1px solid #1e293b; border-radius: 8px; background: #07101f; }
+    svg { display: block; width: 100%; min-width: 1120px; height: auto; }
+  </style>
+</head>
+<body>
+<main>
+  <h1>aws-tui Table Handoff Sequence</h1>
+  <p>Glue to Athena to S3, with the ordering a component diagram cannot express</p>
+  <section class="frame">
+    <svg viewBox="0 0 1600 900" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="title desc">
+      <title id="title">aws-tui table handoff sequence</title>
+      <desc id="desc">A Glue catalog selection publishes an immutable table request on the message hub. The app validates connection and region identity, snapshots the destination for rollback, adopts the Athena page through the content host, and prefills one exact quoted statement without executing it. The user runs the statement explicitly, the read-only policy validates it fail-closed, and the client starts, polls and pages the execution. A succeeded execution can then hand its result location to the S3 pane under the same connection and region. Any failure restores the snapshot instead of leaving a half-switched service.</desc>
+      <defs>
+        <pattern id="grid" width="40" height="40" patternUnits="userSpaceOnUse"><path d="M40 0H0V40" fill="none" stroke="#1e293b" stroke-width="0.5"/></pattern>
+        <marker id="arrow" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto"><polygon points="0 0,10 3.5,0 7" fill="#94a3b8"/></marker>
+        <marker id="arrowRollback" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto"><polygon points="0 0,10 3.5,0 7" fill="#fb7185"/></marker>
+      </defs>
+      <rect width="1600" height="900" fill="#020617"/><rect width="1600" height="900" fill="url(#grid)"/>
+
+      <g fill="#07101f" stroke="#1e293b" stroke-width="1.5">
+        <rect x="30" y="150" width="1540" height="215" rx="8"/>
+        <rect x="30" y="385" width="1540" height="215" rx="8"/>
+        <rect x="30" y="620" width="1540" height="245" rx="8"/>
+      </g>
+      <g font-family="Fira Code Embedded" font-size="13" font-weight="700" text-anchor="start">
+        <text x="52" y="178" fill="#a78bfa">1 · HANDOFF REQUEST</text>
+        <text x="52" y="413" fill="#22d3ee">2 · ADOPT AND PREFILL — NOTHING EXECUTES</text>
+        <text x="52" y="648" fill="#34d399">3 · EXPLICIT RUN AND RESULT HANDOFF</text>
+      </g>
+
+      <g stroke="#334155" stroke-width="1.5" stroke-dasharray="5 6">
+        <path d="M110 120V870"/><path d="M320 120V870"/><path d="M530 120V870"/><path d="M740 120V870"/>
+        <path d="M950 120V870"/><path d="M1160 120V870"/><path d="M1370 120V870"/><path d="M1520 120V870"/>
+      </g>
+
+      <g font-family="Fira Code Embedded" text-anchor="middle">
+        <g fill="#0f172a" stroke="#22d3ee" stroke-width="2">
+          <rect x="35" y="55" width="150" height="56" rx="5"/><rect x="245" y="55" width="150" height="56" rx="5"/>
+          <rect x="455" y="55" width="150" height="56" rx="5"/><rect x="665" y="55" width="150" height="56" rx="5"/>
+          <rect x="875" y="55" width="150" height="56" rx="5"/><rect x="1085" y="55" width="150" height="56" rx="5"/>
+          <rect x="1295" y="55" width="150" height="56" rx="5"/><rect x="1455" y="55" width="130" height="56" rx="5"/>
+        </g>
+        <g fill="#f8fafc" font-size="13" font-weight="700">
+          <text x="110" y="80">User</text><text x="320" y="80">GlueCatalogVM</text>
+          <text x="530" y="80">MessageHub</text><text x="740" y="80">AwsTuiApp</text>
+          <text x="950" y="80">AthenaPageVM</text><text x="1160" y="80">AthenaClient</text>
+          <text x="1370" y="80">Amazon Athena</text><text x="1520" y="80">S3 pane</text>
+        </g>
+        <g fill="#94a3b8" font-size="11">
+          <text x="110" y="100">keyboard</text><text x="320" y="100">catalog view</text>
+          <text x="530" y="100">vmx hub</text><text x="740" y="100">composition root</text>
+          <text x="950" y="100">query page</text><text x="1160" y="100">boto adapter</text>
+          <text x="1370" y="100">service</text><text x="1520" y="100">dual pane</text>
+        </g>
+      </g>
+
+      <g fill="none" stroke="#94a3b8" stroke-width="2" marker-end="url(#arrow)">
+        <path d="M110 215H312"/>
+        <path d="M320 265H522"/>
+        <path d="M530 310H732"/>
+        <path d="M740 445H942"/>
+        <path d="M740 505H942"/>
+        <path d="M110 690H942"/>
+        <path d="M950 775H1152"/>
+        <path d="M1160 775H1362"/>
+        <path d="M740 850H1512"/>
+      </g>
+      <g fill="none" stroke="#94a3b8" stroke-width="2" marker-end="url(#arrow)" data-route="orthogonal">
+        <path d="M740 340H800V362H746"/>
+        <path d="M950 545H1010V567H956"/>
+        <path d="M950 715H1010V737H956"/>
+      </g>
+      <path d="M1370 812H1168" fill="none" stroke="#34d399" stroke-width="2"
+            stroke-dasharray="6 4" marker-end="url(#arrow)"/>
+
+      <g font-family="Fira Code Embedded" font-size="12" fill="#e2e8f0" text-anchor="middle">
+        <text x="211" y="205">y · Query table in Athena</text>
+        <text x="421" y="255">publish OpenAthenaTableRequest(TableRef)</text>
+        <text x="631" y="300">deliver to the composition root</text>
+        <text x="845" y="435">adopt candidate via ContentHostVM</text>
+        <text x="845" y="495">open_table(ref) — prefill only</text>
+        <text x="526" y="680">Run — the user, never the handoff</text>
+        <text x="1051" y="765">start_query(sql, context, token)</text>
+        <text x="1261" y="765">StartQueryExecution</text>
+        <text x="1126" y="840">OpenS3LocationRequest — same connection + region</text>
+      </g>
+      <g font-family="Fira Code Embedded" font-size="11" fill="#94a3b8" text-anchor="start">
+        <text x="806" y="333">validate identity · snapshot for rollback</text>
+        <text x="1016" y="538">editor := SELECT * FROM "db"."tbl" LIMIT 5</text>
+        <text x="1016" y="708">ReadOnlySqlPolicy — one statement, fail closed</text>
+      </g>
+      <text x="1269" y="804" font-family="Fira Code Embedded" font-size="11" fill="#34d399"
+            text-anchor="middle">poll GetQueryExecution · GetQueryResults page</text>
+
+      <g>
+        <rect x="240" y="556" width="600" height="34" rx="5" fill="#0f172a" stroke="#22d3ee" stroke-width="1.5"/>
+        <text x="540" y="578" font-family="Fira Code Embedded" font-size="12" font-weight="700" fill="#67e8f9" text-anchor="middle">A generated statement never executes on its own</text>
+      </g>
+      <g>
+        <rect x="60" y="760" width="560" height="62" rx="5" fill="#0f172a" stroke="#fb7185" stroke-width="1.5" stroke-dasharray="6 4"/>
+        <text x="340" y="784" font-family="Fira Code Embedded" font-size="12" font-weight="700" fill="#fb7185" text-anchor="middle">Failure at any step above</text>
+        <text x="340" y="806" font-family="Fira Code Embedded" font-size="11" fill="#fda4af" text-anchor="middle">the snapshot is restored — no half-switched service</text>
+      </g>
+      <path d="M620 791H734" fill="none" stroke="#fb7185" stroke-width="2" stroke-dasharray="6 4" marker-end="url(#arrowRollback)"/>
+    </svg>
+  </section>
+</main>
+</body>
+</html>

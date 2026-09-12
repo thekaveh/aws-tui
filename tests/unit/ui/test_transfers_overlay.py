@@ -10,6 +10,7 @@ from vmx import NULL_DISPATCHER, Message, MessageHub
 from aws_tui.ui.widgets.transfers_overlay import TransferRowWidget, TransfersOverlay
 from aws_tui.vm.file_manager.transfer_vm import TransferModel, TransferState, TransferVM
 from aws_tui.vm.file_manager.transfers_vm import TransfersVM
+from tests.helpers import focus_and_settle
 
 
 class _TransferRowApp(App[None]):
@@ -60,7 +61,7 @@ async def test_cancel_button_activates_the_vm_command_when_focused(key: str) -> 
         async with _TransferRowApp(vm, hub=hub).run_test(size=(60, 12)) as pilot:
             before = pilot.app.query_one("#before", Button)
             cancel = pilot.app.query_one("#cancel-btn", Button)
-            before.focus()
+            await focus_and_settle(before)
             await pilot.press("tab")
 
             assert pilot.app.focused is cancel

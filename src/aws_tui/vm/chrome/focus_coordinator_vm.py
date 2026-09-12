@@ -36,6 +36,8 @@ from vmx import ComponentVM, DiscriminatorVM, Message, MessageHub, PropertyChang
 from vmx.lifecycle.status import ConstructionStatus
 from vmx.services.dispatcher import Dispatcher
 
+from aws_tui.vm._observable import send_value_free
+
 
 class FocusSlot(StrEnum):
     """The app-wide focus slot discriminator.
@@ -304,7 +306,9 @@ class FocusCoordinatorVM:
     # ── Internal ────────────────────────────────────────────────────────────
 
     def _emit_changed(self, _slot: FocusSlot) -> None:
-        self._hub.send(PropertyChangedMessage.create(self, self._inner.name, "focused_slot"))
+        send_value_free(
+            self._hub, PropertyChangedMessage.create(self, self._inner.name, "focused_slot")
+        )
 
     def _cycle(self, order: tuple[FocusSlot, ...]) -> None:
         try:

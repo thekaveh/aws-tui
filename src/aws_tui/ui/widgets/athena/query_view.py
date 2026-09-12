@@ -126,22 +126,27 @@ class AthenaQueryView(DeferredWorkerMixin, Widget):
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
         if event.button.id == "athena-execute":
-            self._run_lifecycle_worker(
-                self._vm.execute,
-                group="athena-query-execute",
-            )
+            self.dispatch_execute()
         elif event.button.id == "athena-cancel":
-            self._run_lifecycle_worker(
-                self._vm.cancel,
-                group="athena-query-cancel",
-            )
+            self.dispatch_cancel()
 
-    async def execute(self) -> None:
+    def dispatch_execute(self) -> None:
+        """Start the query on a worker, never on the message pump.
+
+        ``AthenaQueryVM.execute`` awaits ``StartQueryExecution`` with a
+        10-second connect and 60-second read timeout across up to six adaptive
+        attempts. Textual awaits a binding's action inside the App's message
+        handler, so the keyboard path used to block the pump for that whole
+        round trip: no repaint, no key handling, and no way to reach the cancel
+        key -- while clicking the very same control stayed responsive, because
+        the button path already dispatched. Both paths now take this one.
+        """
         self._sync_sql_from_editor()
-        await self._vm.execute()
+        self._run_lifecycle_worker(self._vm.execute, group="athena-query-execute")
 
-    async def cancel(self) -> None:
-        await self._vm.cancel()
+    def dispatch_cancel(self) -> None:
+        """Cancel on a worker, for the same reason as :meth:`dispatch_execute`."""
+        self._run_lifecycle_worker(self._vm.cancel, group="athena-query-cancel")
 
     def action_focus_next(self) -> None:
         self._move_focus(forward=True)

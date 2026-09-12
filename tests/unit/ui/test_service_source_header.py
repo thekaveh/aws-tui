@@ -9,6 +9,7 @@ from textual.widgets import Static
 from aws_tui.ui.widgets.context_picker import ContextPicker
 from aws_tui.ui.widgets.service_source_header import ServiceSourceHeader
 from aws_tui.vm.service_source_vm import ServiceSourceContext
+from tests.helpers import focus_and_settle
 
 _DEV = ServiceSourceContext("analytics-dev", "dev-sso", "us-east-1")
 _PROD = ServiceSourceContext("analytics-prod", "prod-sso", "us-west-2")
@@ -51,7 +52,7 @@ async def test_source_header_emits_selected_connection_identity() -> None:
 
     async with _SourceHost(header).run_test() as pilot:
         picker = header.query_one(ContextPicker)
-        picker.focus()
+        await focus_and_settle(picker)
         await pilot.press("enter", "down", "enter")
 
         assert pilot.app.selections == [("analytics-prod", "us-west-2")]

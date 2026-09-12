@@ -39,7 +39,7 @@ and overwritten on the next build. Adding a page means adding it to
 The docs tooling lives in its own dependency group:
 
 ```
-uv sync --group docs      # markdown, Pillow, MkDocs Material
+uv sync --group docs      # MkDocs Material, cairosvg + fontTools (diagrams), PyYAML
 make docs-check           # the same gate CI runs
 uv run --group docs pytest tests/docs
 ```

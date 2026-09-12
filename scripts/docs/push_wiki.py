@@ -12,6 +12,7 @@ import subprocess
 import sys
 import tempfile
 from pathlib import Path
+from typing import Final
 from urllib.parse import urlsplit
 
 DEFAULT_REMOTE = "git@github.com:thekaveh/aws-tui.wiki.git"
@@ -92,11 +93,27 @@ def sync_wiki(src: str | Path, repo_dir: str | Path) -> None:
             shutil.copy2(item, target)
 
 
+# Every ``git`` call here gets a deadline. Without one, an SSH endpoint that
+# stalls mid-transfer (no RST, no FIN) blocks ``subprocess.run`` forever, and
+# the docs-publish job burns its whole runner slot before the workflow-level
+# timeout fires -- with no partial output to diagnose from. Network operations
+# get the longer budget; purely local plumbing should never approach its own.
+_LOCAL_GIT_TIMEOUT: Final[int] = 30
+_NETWORK_GIT_TIMEOUT: Final[int] = 120
+
+
 def _commit_if_changed(repo_dir: str | Path) -> None:
     repo_dir = Path(repo_dir)
     env = _env_with_ident()
-    subprocess.run(["git", "add", "-A"], cwd=repo_dir, check=True, env=env)
-    staged = subprocess.run(["git", "diff", "--cached", "--quiet"], cwd=repo_dir, env=env)
+    subprocess.run(
+        ["git", "add", "-A"], cwd=repo_dir, check=True, env=env, timeout=_LOCAL_GIT_TIMEOUT
+    )
+    staged = subprocess.run(
+        ["git", "diff", "--cached", "--quiet"],
+        cwd=repo_dir,
+        env=env,
+        timeout=_LOCAL_GIT_TIMEOUT,
+    )
     if staged.returncode == 0:
         return  # nothing staged — no-op
     if staged.returncode != 1:
@@ -109,6 +126,7 @@ def _commit_if_changed(repo_dir: str | Path) -> None:
         cwd=repo_dir,
         check=True,
         env=env,
+        timeout=_LOCAL_GIT_TIMEOUT,
     )
 
 
@@ -124,7 +142,11 @@ def push_wiki(
     if not push:
         # --check: validate we can init a repo and sync into it (no network).
         with tempfile.TemporaryDirectory() as tmp:
-            subprocess.run(["git", "init", "-q", "-b", "master", tmp], check=True)
+            subprocess.run(
+                ["git", "init", "-q", "-b", "master", tmp],
+                check=True,
+                timeout=_LOCAL_GIT_TIMEOUT,
+            )
             sync_wiki(src, tmp)
         return
     with tempfile.TemporaryDirectory() as tmp:
@@ -150,6 +172,7 @@ def push_wiki(
             ["git", "clone", "--depth", "1", remote, repo_dir],
             check=True,
             env=env,
+            timeout=_NETWORK_GIT_TIMEOUT,
         )
         sync_wiki(src, repo_dir)
         _commit_if_changed(repo_dir)
@@ -158,6 +181,7 @@ def push_wiki(
             cwd=repo_dir,
             check=True,
             env=env,
+            timeout=_NETWORK_GIT_TIMEOUT,
         )
 
 

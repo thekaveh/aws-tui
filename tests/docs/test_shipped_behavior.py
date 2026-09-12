@@ -25,7 +25,13 @@ def test_readme_describes_shipped_runtime_bindings_quick_look_and_palette() -> N
 
 def test_cookbook_describes_live_keybinding_overrides() -> None:
     text = _text("docs/cookbook.md")
-    changelog = _text("CHANGELOG.md").split("## 1.2.", maxsplit=1)[0]
+    # Scope to [Unreleased] by splitting at the next release heading. The
+    # previous token, "## 1.2.", occurs nowhere in CHANGELOG.md, so the split
+    # was a no-op and all three guards below silently asserted against the
+    # whole 131k-character file: the positive assertions could be satisfied
+    # by any historical section, and the negative ones over-constrained
+    # released history.
+    changelog = _text("CHANGELOG.md").split("## [0.8.0]", maxsplit=1)[0]
     active_docs = f"{text}\n{changelog}"
 
     assert "Runtime dispatch still uses `AwsTuiApp.BINDINGS`" not in text
@@ -56,7 +62,7 @@ def test_keybindings_describes_shipped_palette_and_runtime_resolver() -> None:
 
 
 def test_unreleased_changelog_does_not_contradict_shipped_handlers_or_demo() -> None:
-    unreleased = _text("CHANGELOG.md").split("## 1.2.", maxsplit=1)[0]
+    unreleased = _text("CHANGELOG.md").split("## [0.8.0]", maxsplit=1)[0]
 
     assert "(Quick Look, command palette) still need their own handlers" not in unreleased
     assert "seeded in-memory S3 + EMR fakes" not in unreleased
@@ -74,7 +80,7 @@ def test_current_docs_do_not_claim_deleted_first_run_or_resume_modals() -> None:
             "docs/recording-todo.md",
         )
     )
-    unreleased = _text("CHANGELOG.md").split("## 1.2.", maxsplit=1)[0]
+    unreleased = _text("CHANGELOG.md").split("## [0.8.0]", maxsplit=1)[0]
 
     assert "welcome modal exists" not in current.lower()
     assert "resume modal pops up" not in current.lower()

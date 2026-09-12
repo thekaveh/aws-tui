@@ -43,7 +43,7 @@ from aws_tui.domain.data_catalog import TableRef
 from aws_tui.domain.filesystem import AuthRequiredError, EntryKind
 from aws_tui.domain.s3_uri import parse_s3_uri
 from aws_tui.infra.aws_session import TokenState
-from aws_tui.infra.connection_resolver import Connection
+from aws_tui.infra.connection_resolver import Connection, ConnectionNotFound
 from aws_tui.infra.crash_dump import CrashDump
 from aws_tui.infra.redaction import redact_text
 from aws_tui.infra.theme_store import ThemeNotFound, ThemeStore
@@ -1513,10 +1513,6 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
                         _svc_id or "unknown",
                     ),
                     focus_coordinator=ctx.focus_coordinator,
-                    dual_pane_class=DualPane,
-                    emr_page_class=EmrServerlessPage,
-                    glue_page_class=GluePage,
-                    athena_page_class=AthenaPage,
                 )
                 await self._replace_content_widget(host, replacement)
                 if _svc_id in {"glue", "athena"}:
@@ -1920,20 +1916,33 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
         with contextlib.suppress(Exception):
             nav.focus()
 
-    def _forward_to_modal(self, *action_names: str) -> bool:
-        """When a modal is active, try each ``action_name`` on the active
-        screen and run the first that exists. Used to work around
-        Textual dispatching App-level priority bindings BEFORE modal
-        ones — without forwarding, things like ↑/↓/Enter in our modals
-        would never reach the modal's own handlers."""
+    def _consumed_by_modal(self, *action_names: str) -> bool:
+        """Route a key to the active modal and report whether the modal
+        layer consumed it.
+
+        When a modal is active, try each ``action_name`` on the active
+        screen and run the first that exists. This works around Textual
+        dispatching App-level priority bindings BEFORE modal ones —
+        without forwarding, things like ↑/↓/Enter in our modals would
+        never reach the modal's own handlers.
+
+        A modal consumes the keystroke **whether or not it implements a
+        handler for it**. Returning ``False`` for "no handler found" let
+        callers fall through to the pane/page behind the overlay, so
+        Enter and the arrow keys drove hidden content: with the Help
+        overlay open, Enter navigated the file pane underneath it and
+        ↑/↓ moved a cursor the user could not see. Every screen this app
+        pushes is a :class:`ModalScreen`, so an active screen stack is
+        always an overlay that must swallow the key.
+        """
         if len(self.screen_stack) <= 1:
             return False
         for name in action_names:
             forward = getattr(self.screen, name, None)
             if forward is not None:
                 forward()
-                return True
-        return False
+                break
+        return True
 
     def action_move_up(self) -> None:
         self.record_action("pane.move_up")
@@ -1942,7 +1951,7 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
             if callable(move):
                 move()
             return
-        if self._forward_to_modal("action_move_up"):
+        if self._consumed_by_modal("action_move_up"):
             return
         self._move_cursor(-1)
 
@@ -1953,7 +1962,7 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
             if callable(move):
                 move()
             return
-        if self._forward_to_modal("action_move_down"):
+        if self._consumed_by_modal("action_move_down"):
             return
         self._move_cursor(1)
 
@@ -2059,7 +2068,14 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
                 result = action()
                 if isinstance(result, Awaitable):
                     await result
-                return
+                break
+            # A modal swallows Enter even when it implements none of the
+            # handlers above. Falling through instead ran the ladder
+            # below against the content *behind* the overlay: with the
+            # Help modal open, Enter descended into the highlighted
+            # directory, and on a service page it committed a row
+            # activation the user never saw.
+            return
         # If Textual focus is in the NavMenu, forward Enter to its
         # own commit action (re-fires the switch on the
         # currently-highlighted row). Post-PR-#94 NavMenu is the
@@ -2110,7 +2126,7 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
             return
         # Forward Backspace to the active modal as a cancel-by-key
         # gesture (esc still works too).
-        if self._forward_to_modal("action_cancel", "action_close", "action_dismiss"):
+        if self._consumed_by_modal("action_cancel", "action_close", "action_dismiss"):
             return
         # EMR page: Backspace is currently a deliberate no-op (the
         # page is a 2-slot master-detail with no hierarchical
@@ -2143,7 +2159,7 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
         # button (or whatever the modal exposes as ``action_focus_prev``).
         # Outside any modal: behaves like ``ascend`` so file-pane
         # navigation is unchanged.
-        if self._forward_to_modal("action_focus_prev"):
+        if self._consumed_by_modal("action_focus_prev"):
             return
         emr_page = self._emr_page()
         if emr_page is not None and emr_page.select_adjacent_log_file(-1):
@@ -2158,7 +2174,7 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
         # In a modal: Right moves arrow-key focus to the next footer
         # button. Outside any modal: no-op (panes don't currently bind
         # Right to anything).
-        if self._forward_to_modal("action_focus_next"):
+        if self._consumed_by_modal("action_focus_next"):
             return
         emr_page = self._emr_page()
         if emr_page is not None:
@@ -3059,6 +3075,7 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
                 "service_source.rollback_failed",
                 service_id=service_id,
                 connection=connection.name,
+                error=str(exc),
                 error_type=type(exc).__name__,
             )
             return False
@@ -3417,8 +3434,27 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
             else:
                 try:
                     conn = self._app_ctx.connection_resolver.resolve(pane_name)
-                except Exception:
+                except ConnectionNotFound:
+                    # The connection was deleted in Settings; falling back to
+                    # the local filesystem is the intended recovery. A broader
+                    # catch also swallowed a locked keychain and a corrupt
+                    # config.toml, silently turning a live remote pane into a
+                    # local one -- so the next copy targeted ``~`` instead of
+                    # the bucket, with no toast and no log line.
                     await self._rebind_pane_to_local(pane)
+                except Exception as exc:
+                    self._app_ctx.log_sink.error(
+                        "pane.rebind.resolve_failed",
+                        connection=pane_name,
+                        error=str(exc),
+                        error_type=type(exc).__name__,
+                    )
+                    notifications.error(
+                        self._app_ctx.root_vm.chrome.toast_stack,
+                        subject="Connection",
+                        message=f"could not read connection '{pane_name}'",
+                        toast_id=f"pane-rebind-{pane_name}",
+                    )
                 else:
                     await self._rebind_pane_to_connection(pane, conn)
 
@@ -3781,6 +3817,7 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
                 self._app_ctx.log_sink.error(
                     "service_navigation.table_rollback_failed",
                     stage="restore",
+                    error=str(exc),
                     error_type=type(exc).__name__,
                 )
                 return False, cancelled
@@ -3835,6 +3872,7 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
                 connection=snapshot.connection.name,
                 service_id=snapshot.service_id,
                 stage="switch",
+                error=str(exc),
                 error_type=type(exc).__name__,
             )
             return False
@@ -4135,6 +4173,7 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
                 connection=connection.name,
                 service_id=service_id,
                 stage="switch",
+                error=str(exc),
                 error_type=type(exc).__name__,
             )
             return False
@@ -4163,7 +4202,7 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
             if athena is not None:
                 await current.restore_snapshot(athena)
             elif athena_result_execution_id is not None:
-                await current.results.load(athena_result_execution_id)
+                await current.results.load(athena_result_execution_id, from_history=True)
                 await current.select_view("results")
         elif service_id == "glue" and isinstance(current, GluePageVM) and glue is not None:
             await self._restore_glue_page_snapshot(current, glue)
@@ -4495,6 +4534,12 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
                 error=str(exc),
                 error_type=type(exc).__name__,
             )
+            # Same recovery as the ``set_content`` failure branch above.
+            # ``_replace_content_widget`` mounts its own generic placeholder,
+            # but without this the nav rail still showed Settings selected and
+            # no toast fired -- so a one-off mount failure read as "Settings is
+            # broken forever" rather than "that failed, try again".
+            self._restore_navigation_after_failed_adoption("Settings")
 
     async def _mount_service_view(
         self,
@@ -4572,6 +4617,7 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
             ctx.log_sink.error(
                 "app.mount_service_view.switch_service_failed",
                 service_id=service_id,
+                error=str(exc),
                 error_type=type(exc).__name__,
             )
             self._restore_navigation_after_failed_adoption(service_id)
@@ -4591,10 +4637,6 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
                 keymap=ctx.keymap_store,
                 source_candidates=_service_source_contexts(ctx, service_id),
                 focus_coordinator=ctx.focus_coordinator,
-                dual_pane_class=DualPane,
-                emr_page_class=EmrServerlessPage,
-                glue_page_class=GluePage,
-                athena_page_class=AthenaPage,
             )
             await self._replace_content_widget(host, replacement)
             if service_id in {"glue", "athena"}:
@@ -4841,9 +4883,11 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
 
         Public so tests and recovery flows can drive the modal without
         also having to raise an exception. The in-app crash path
-        (``_handle_exception``) does not currently call this — see the
-        ``deferred-from-m6`` note on ``record_action``/crash-modal
-        push_screen wiring.
+        (``_handle_exception``) does not currently call this — see
+        ``CHANGELOG.md``'s ``Deferred / v0.9 roadmap`` block. (The label
+        this used to cite, ``deferred-from-m6``, no longer exists anywhere,
+        and the ``record_action`` half of the claim it pointed at was false:
+        ``record_action`` is invoked from every bound action.)
         """
         ctx = self._app_ctx
         crash_vm = CrashVM(report, hub=ctx.hub, dispatcher=ctx.dispatcher)

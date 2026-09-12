@@ -25,6 +25,7 @@ from aws_tui.domain.emr_serverless import JobRunDetail, JobRunState
 from aws_tui.domain.filesystem import AuthRequiredError
 from aws_tui.ui.widgets.emr_serverless.clone_modal import JobRunCloneModal
 from aws_tui.vm.emr_serverless.clone_vm import JobRunCloneVM
+from tests.helpers import focus_and_settle
 
 _FIXED_TS = datetime(2026, 6, 27, 12, 0, 0, tzinfo=UTC)
 
@@ -127,9 +128,59 @@ async def test_enter_in_clone_input_submits_form() -> None:
     async with _CloneModalHostApp(vm, hub).run_test() as pilot:
         modal = pilot.app.screen
         assert isinstance(modal, JobRunCloneModal)
-        modal.query_one("#clone-name", Input).focus()
+        await focus_and_settle(modal.query_one("#clone-name", Input))
         await pilot.press("enter")
         await pilot.pause()
 
         vm.submit.assert_awaited_once()
         assert not isinstance(pilot.app.screen, JobRunCloneModal)
+
+
+async def test_second_submit_while_the_first_is_in_flight_launches_one_job() -> None:
+    """The re-entrancy guard is billing-critical and was untested.
+
+    ``vm.submit()`` awaits a multi-hundred-millisecond ``start_job_run``
+    round-trip. A second activation while the first is in flight would start a
+    SECOND EMR job for one user intent. ``clientToken`` does not save us here:
+    it is modelled ``idempotencyToken: true``, so botocore auto-fills a fresh
+    UUID per call -- a distinct token per submit, which is exactly what makes
+    the duplicate a real second run rather than a de-duplicated retry.
+    """
+    import asyncio
+
+    vm = _make_vm()
+    started = asyncio.Event()
+    release = asyncio.Event()
+    calls = 0
+
+    async def _slow_submit() -> str:
+        nonlocal calls
+        calls += 1
+        if calls > 1:
+            # Return immediately so a missing guard fails on the assertion
+            # below rather than deadlocking the test on ``release``.
+            return "r-003"
+        started.set()
+        await release.wait()
+        return "r-002"
+
+    vm.submit = _slow_submit  # type: ignore[method-assign]
+    hub: MessageHub[Message] = MessageHub()
+    app = _CloneModalHostApp(vm, hub)
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        modal = app.screen
+        assert isinstance(modal, JobRunCloneModal)
+
+        first = asyncio.ensure_future(modal.action_submit())
+        await asyncio.wait_for(started.wait(), timeout=5)
+
+        # Second activation arrives while the first round-trip is open.
+        await modal.action_submit()
+        assert calls == 1, "a second submit started another EMR job run"
+
+        release.set()
+        await asyncio.wait_for(first, timeout=5)
+
+    assert calls == 1

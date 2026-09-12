@@ -88,6 +88,29 @@ async def test_refresh_rows_safe_post_mount(tmp_path: Path) -> None:
         s3_vm.dispose()
 
 
+async def _settle_until(predicate, pilot, *, what: str, timeout: float = 30.0) -> None:
+    """Wait for ``predicate`` to hold rather than assuming one pause covers it.
+
+    ``S3ConnectionsPanel.on_connection_form_submitted`` awaits
+    ``S3ConnectionsVM.add_async`` / ``update_async`` / ``remove_async``, each of
+    which hands its persistence step to a worker thread -- the keyring reach and
+    the ``config.toml`` OS file lock must not run on the event loop. A single
+    ``pilot.pause()`` can therefore return before the handler has resumed past
+    the thread round-trip, so an assertion straight after the post reads state
+    from before the write. That is load- and platform-dependent: it passed on
+    macOS, Linux, Windows py3.11 and Windows py3.13, and failed on Windows
+    py3.12 in the same CI run. Reproduced locally by delaying the blocking half
+    by 0.4s, which fails the old one-pause form every time.
+    """
+    import asyncio
+
+    deadline = asyncio.get_running_loop().time() + timeout
+    while not predicate():
+        if asyncio.get_running_loop().time() >= deadline:
+            raise AssertionError(f"timed out after {timeout}s waiting for {what}")
+        await pilot.pause(0.01)
+
+
 @pytest.mark.asyncio
 async def test_panel_routes_form_submission_to_vm_add(tmp_path: Path) -> None:
     """When ConnectionFormSubmitted fires with mode='add', the panel
@@ -124,7 +147,11 @@ async def test_panel_routes_form_submission_to_vm_add(tmp_path: Path) -> None:
                 verify_tls=True,
             )
             panel.post_message(ConnectionFormSubmitted(form=form, mode="add", original_name=None))
-            await pilot.pause()
+            await _settle_until(
+                lambda: "from-event" in store.load().connections,
+                pilot,
+                what="the added connection to be persisted",
+            )
         # After event handling the row must be persisted.
         entry = store.load().connections["from-event"]
         assert entry.session_token == "TOKEN"
@@ -154,7 +181,11 @@ async def test_edit_preserves_hidden_session_token(tmp_path: Path) -> None:
             panel.post_message(
                 ConnectionFormSubmitted(form=submitted, mode="edit", original_name="sts")
             )
-            await pilot.pause()
+            await _settle_until(
+                lambda: store.load().connections["sts"].session_token == "TOK",
+                pilot,
+                what="the edited connection to be persisted",
+            )
 
         assert store.load().connections["sts"].session_token == "TOK"
     finally:
@@ -242,10 +273,74 @@ async def test_duplicate_name_keeps_form_open_and_surfaces_error(tmp_path: Path)
             form.post_message(
                 ConnectionFormSubmitted(form=form_obj, mode="add", original_name=None)
             )
-            await pilot.pause()
+            await _settle_until(
+                lambda: pilot.app.query_one("#form-name", Input).has_class("-invalid"),
+                pilot,
+                what="the duplicate name to be marked invalid",
+            )
             # Form must still be open
             assert form.has_class("-open")
             # Name field must be marked invalid
             assert pilot.app.query_one("#form-name", Input).has_class("-invalid")
+    finally:
+        s3_vm.dispose()
+
+
+@pytest.mark.asyncio
+async def test_unusable_keychain_renders_a_notice_instead_of_killing_the_app(
+    tmp_path: Path,
+) -> None:
+    """An unusable OS keyring must not tear the session down from ``compose()``.
+
+    ``S3ConnectionsVM.connections`` reaches the keyring through
+    ``ConnectionResolver``, which deliberately propagates a backend failure
+    rather than reporting "no credentials" -- silently returning ``None`` would
+    let the app fall back to different credentials. But this read happens inside
+    ``compose()``, and a ``compose()`` failure is not delivered to the mount
+    awaiter, so it bypassed the mount guard and reached ``_handle_exception``:
+    opening Settings, the one screen that could repair the connection, killed
+    the app. Reproduces a headless Linux box with no Secret Service, or a
+    cancelled macOS unlock prompt.
+    """
+    from aws_tui.infra.keychain import InMemoryKeychain
+
+    class _LockedKeychain(InMemoryKeychain):
+        def get(self, service: str, key: str) -> str | None:
+            del service, key
+            raise RuntimeError("keychain locked")
+
+    hub = _hub()
+    store = ConfigStore(path=tmp_path / "config.toml")
+    store.add_connection(
+        ConnectionEntry(
+            name="minio-local",
+            kind="s3-compatible",
+            endpoint_url="http://localhost:9000",
+            credentials="keychain:aws-tui:minio-local",
+        )
+    )
+    resolver = ConnectionResolver(
+        config_store=store,
+        keychain=_LockedKeychain(),
+        aws_config_path=tmp_path / "missing",
+        aws_credentials_path=tmp_path / "missing",
+    )
+    s3_vm = S3ConnectionsVM(
+        resolver=resolver, config_store=store, hub=hub, dispatcher=NULL_DISPATCHER
+    )
+    s3_vm.construct()
+    try:
+        panel = S3ConnectionsPanel(vm=s3_vm, hub=hub)
+        app = _PanelHost(panel)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            from textual.widgets import Static as _Static
+
+            rendered = " ".join(str(node.render()) for node in app.query(_Static))
+        assert "S3-compatible connections are unavailable" in rendered, rendered
+        assert "RuntimeError" in rendered, rendered
+        # The resolver itself must still refuse to disguise the failure.
+        with pytest.raises(RuntimeError, match="keychain locked"):
+            resolver.resolve("minio-local")
     finally:
         s3_vm.dispose()

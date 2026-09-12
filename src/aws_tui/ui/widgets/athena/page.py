@@ -346,10 +346,12 @@ class AthenaPage(DeferredWorkerMixin, HubSubscriberMixin, Widget):
         self.call_after_refresh(self._maybe_focus_active)
 
     async def action_execute(self) -> None:
-        await self.query_one(AthenaQueryView).execute()
+        # Dispatch rather than await: this runs inside the App's message
+        # handler, so awaiting the AWS round trip here froze the whole UI.
+        self.query_one(AthenaQueryView).dispatch_execute()
 
     async def action_cancel(self) -> None:
-        await self.query_one(AthenaQueryView).cancel()
+        self.query_one(AthenaQueryView).dispatch_cancel()
 
     async def insert_table_reference(self, identifier: str) -> bool:
         if not identifier:
@@ -420,6 +422,11 @@ class AthenaPage(DeferredWorkerMixin, HubSubscriberMixin, Widget):
         )
 
     async def action_refresh_active(self) -> None:
+        # Dispatch, matching `GluePage.action_refresh_active`. Every branch below
+        # issues AWS calls, and this runs inside the App's message handler.
+        self._run_lifecycle_worker(self._refresh_active, group="athena-refresh-active")
+
+    async def _refresh_active(self) -> None:
         active = self._vm.active_view
         if active == "query":
             await self._vm.refresh_query_context()
@@ -427,7 +434,10 @@ class AthenaPage(DeferredWorkerMixin, HubSubscriberMixin, Widget):
             await self._vm.history.refresh()
         elif active == "results":
             if self._vm.results.execution_id is not None:
-                await self._vm.results.load(self._vm.results.execution_id)
+                await self._vm.results.load(
+                    self._vm.results.execution_id,
+                    from_history=self._vm.results.from_history,
+                )
         else:
             await self._vm.saved.setup()
 

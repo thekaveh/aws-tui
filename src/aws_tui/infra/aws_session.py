@@ -156,8 +156,29 @@ class AwsSession:
         if not self._aws_config_path.is_file():
             return None
 
-        parser = configparser.ConfigParser()
-        parser.read(self._aws_config_path, encoding="utf-8-sig")
+        # ``RawConfigParser``, matching ``botocore.configloader.raw_config_parse``:
+        # botocore never interpolates AWS config values, and ``ConfigParser``
+        # does. A percent-encoded ``sso_start_url`` -- an ordinary shape for a
+        # tenant-qualified start URL -- makes ``.get()`` raise
+        # ``InterpolationSyntaxError``. Every ``probe_token`` caller catches
+        # broadly, so that surfaced as ``TokenState.MISSING``: the AWS CLI works
+        # and the TUI reports no credentials.
+        #
+        # The read is guarded for the same reason as
+        # ``connection_resolver._read_ini``: ``~/.aws/config`` is written by
+        # other tools and by hand, so a duplicate option, a missing section
+        # header, or a bad encoding is an ordinary state here, not an
+        # exceptional one. The two modules read the same file and must not hold
+        # opposite policies about it.
+        parser = configparser.RawConfigParser()
+        try:
+            parser.read(self._aws_config_path, encoding="utf-8-sig")
+        except (configparser.Error, OSError, UnicodeDecodeError) as exc:
+            _logger.warning(
+                "ignoring unreadable AWS config while resolving the SSO cache key",
+                extra={"path": str(self._aws_config_path), "error_type": type(exc).__name__},
+            )
+            return None
 
         section: str | None = None
         if parser.has_section(f"profile {profile}"):

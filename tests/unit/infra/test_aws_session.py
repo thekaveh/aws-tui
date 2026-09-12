@@ -228,6 +228,51 @@ class TestProbeTokenAws:
         result = session.probe_token(_aws_conn())
         assert result.state is TokenState.EXPIRED
 
+    def test_percent_in_the_start_url_still_resolves_the_cache_key(self, tmp_path: Path) -> None:
+        """A percent-encoded ``sso_start_url`` must not break token discovery.
+
+        botocore parses ``~/.aws/config`` with ``RawConfigParser`` and never
+        interpolates. Using ``ConfigParser`` here made ``.get()`` raise
+        ``InterpolationSyntaxError`` on a tenant-qualified start URL; every
+        ``probe_token`` caller catches broadly, so a perfectly good SSO profile
+        reported ``MISSING`` -- the AWS CLI worked and the TUI said it had no
+        credentials.
+        """
+        aws_cfg = tmp_path / ".aws" / "config"
+        start_url = "https://corp.awsapps.com/start#/?tenant=a%20b"
+        _write_aws_config_with_sso(
+            aws_cfg, profile="dev", sso_session=None, sso_start_url=start_url
+        )
+        cache_dir = tmp_path / "sso-cache"
+        _write_cache_entry(
+            cache_dir,
+            cache_key=_sha1(start_url),
+            expires_at=datetime.now(UTC) + timedelta(hours=1),
+        )
+
+        session = AwsSession(sso_cache_dir=cache_dir, aws_config_path=aws_cfg)
+        assert session.probe_token(_aws_conn()).state is TokenState.CONNECTED
+
+    def test_malformed_aws_config_degrades_instead_of_raising(self, tmp_path: Path) -> None:
+        """``~/.aws/config`` is hand-edited; a duplicate option is ordinary.
+
+        ``ConnectionResolver._read_ini`` already tolerates this. The two modules
+        read the same file and must not hold opposite policies about it.
+
+        An unreadable config degrades to the same state as an absent one --
+        "this profile has no SSO configuration", so there is no token to
+        check -- rather than raising out of ``probe_token``.
+        """
+        aws_cfg = tmp_path / ".aws" / "config"
+        aws_cfg.parent.mkdir(parents=True, exist_ok=True)
+        aws_cfg.write_text(
+            "[profile dev]\nsso_start_url = https://a/\nsso_start_url = https://b/\n",
+            encoding="utf-8",
+        )
+
+        session = AwsSession(sso_cache_dir=tmp_path / "sso-cache", aws_config_path=aws_cfg)
+        assert session.probe_token(_aws_conn()).state is TokenState.CONNECTED
+
 
 class TestProbeTokenS3Compatible:
     def test_present_keys_returns_connected(self, tmp_path: Path) -> None:

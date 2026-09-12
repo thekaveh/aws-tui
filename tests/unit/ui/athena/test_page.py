@@ -25,6 +25,7 @@ from aws_tui.vm.athena.page_vm import AthenaPageVM
 from aws_tui.vm.chrome.focus_coordinator_vm import FocusCoordinatorVM, FocusSlot
 from aws_tui.vm.nav_menu_vm import NavMenuVM
 from aws_tui.vm.services_protocol import ServiceRegistry
+from tests.helpers import focus_and_settle, seed_athena_sql
 from tests.unit.vm.athena.test_page_vm import PageClient, make_page_vm
 
 
@@ -489,13 +490,13 @@ async def test_populated_athena_context_picker_opens_by_mouse_and_keyboard(
         assert picker.is_open
 
         await pilot.press("escape")
-        picker.focus()
+        await focus_and_settle(picker)
         await pilot.press("enter")
         await pilot.pause()
         assert picker.is_open
 
         await pilot.press("escape")
-        picker.focus()
+        await focus_and_settle(picker)
         await pilot.press("space")
         await pilot.pause()
         assert picker.is_open
@@ -920,7 +921,7 @@ async def test_query_view_inserts_at_cursor_and_synchronizes_vm_without_executio
 
     async with app.run_test() as pilot:
         editor = app.query_one("#athena-editor", TextArea)
-        editor.text = "SELECT  LIMIT 10"
+        await seed_athena_sql(pilot, vm.query, editor, "SELECT  LIMIT 10")
         editor.selection = type(editor.selection).cursor((0, 7))
         await pilot.pause()
 
@@ -944,7 +945,7 @@ async def test_query_view_replaces_active_selection_and_preserves_surrounding_te
 
     async with app.run_test() as pilot:
         editor = app.query_one("#athena-editor", TextArea)
-        editor.text = "SELECT old_table WHERE enabled"
+        await seed_athena_sql(pilot, vm.query, editor, "SELECT old_table WHERE enabled")
         editor.selection = type(editor.selection)((0, 7), (0, 16))
         await pilot.pause()
 
@@ -968,7 +969,9 @@ async def test_query_view_replaces_reversed_multiline_selection_and_syncs_vm() -
 
     async with app.run_test() as pilot:
         editor = app.query_one("#athena-editor", TextArea)
-        editor.text = "SELECT\n  old_catalog.\n  old_table\nWHERE enabled"
+        await seed_athena_sql(
+            pilot, vm.query, editor, "SELECT\n  old_catalog.\n  old_table\nWHERE enabled"
+        )
         editor.selection = type(editor.selection)((2, 11), (1, 2))
         await pilot.pause()
 
@@ -992,7 +995,7 @@ async def test_query_view_rejects_empty_identifier_without_mutation() -> None:
 
     async with app.run_test() as pilot:
         editor = app.query_one("#athena-editor", TextArea)
-        editor.text = "SELECT 1"
+        await seed_athena_sql(pilot, vm.query, editor, "SELECT 1")
         editor.selection = type(editor.selection).cursor((0, 4))
         await pilot.pause()
 

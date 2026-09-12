@@ -1646,3 +1646,155 @@ async def test_snapshot_accepts_a_cancelled_submission_without_an_execution_ref(
     assert not valid(
         replace(base, state=QueryState.FAILED, pane_state=PaneState.EMPTY), base.context
     )
+
+
+async def test_a_denied_stop_does_not_accumulate_cleanup_refs() -> None:
+    """A denial is permanent for these credentials -- stop retaining the ref.
+
+    ``_stop_retained_ref`` only dropped a ref when ``StopQueryExecution``
+    SUCCEEDED, and ``_stop_pending_cleanup`` iterates the whole map on every
+    cancel, every context change and on shutdown. An IAM role without
+    ``athena:StopQueryExecution`` -- ordinary for a read-only analyst -- meant
+    the Nth cancel issued N sequential failing round trips, and the shutdown
+    fan-out ran under the lifecycle, page and content-host locks with all
+    navigation frozen behind it.
+    """
+    from aws_tui.domain.filesystem import PermissionDeniedError
+    from aws_tui.domain.query import QueryExecutionRef
+
+    fake = InMemoryAthena()
+    vm = make_query_vm(fake)
+    ref = QueryExecutionRef(
+        execution_id="q-1",
+        connection_name=vm.context.connection_name,
+        region=vm.context.region,
+        workgroup=vm.context.workgroup,
+    )
+    fake.stop_error = PermissionDeniedError("athena:StopQueryExecution denied")
+
+    vm._retain_cleanup(ref)
+    assert vm._pending_cleanup_refs
+
+    await vm._stop_pending_cleanup(report_error=False)
+
+    assert vm._pending_cleanup_refs == {}, "a denied stop was retained for retry"
+    assert fake.stop_calls.count("q-1") == 1
+
+    # A second drain must not re-issue the call.
+    await vm._stop_pending_cleanup(report_error=False)
+    assert fake.stop_calls.count("q-1") == 1
+
+    vm.dispose()
+
+
+async def test_an_expired_token_keeps_the_cleanup_ref_for_retry() -> None:
+    """An auth failure is recoverable within one session -- keep the ref.
+
+    ``AwsSession.client`` builds a fresh session per call, so an expired SSO
+    token is re-read once the user runs ``aws sso login`` in another terminal.
+    Design spec 7.4.4 "Flow 4 -- SSO token expires mid-session" describes that
+    recovery without a remount. Dropping the ref on ``AuthRequiredError``
+    abandoned the stop permanently and left the query scanning, and billing,
+    with nothing left to cancel it. Only a permission denial is permanent.
+    """
+    from aws_tui.domain.filesystem import AuthRequiredError
+    from aws_tui.domain.query import QueryExecutionRef
+
+    fake = InMemoryAthena()
+    vm = make_query_vm(fake)
+    ref = QueryExecutionRef(
+        execution_id="q-auth",
+        connection_name=vm.context.connection_name,
+        region=vm.context.region,
+        workgroup=vm.context.workgroup,
+    )
+    fake.stop_error = AuthRequiredError("aws sso login --profile dev")
+
+    vm._retain_cleanup(ref)
+    await vm._stop_pending_cleanup(report_error=False)
+    assert "q-auth" in vm._pending_cleanup_refs, "an expired token dropped the pending stop"
+
+    # After re-authentication the retained ref is what makes the stop land.
+    fake.stop_error = None
+    await vm._stop_pending_cleanup(report_error=False)
+    assert vm._pending_cleanup_refs == {}
+    assert fake.stop_calls.count("q-auth") == 2
+
+    vm.dispose()
+
+
+async def test_retained_cleanup_refs_are_bounded() -> None:
+    """The retention map is drained by iterating all of it, so it must be capped."""
+    from aws_tui.domain.query import QueryExecutionRef
+    from aws_tui.vm.athena.query_vm import _MAX_PENDING_CLEANUP_REFS
+
+    vm = make_query_vm(InMemoryAthena())
+    for index in range(_MAX_PENDING_CLEANUP_REFS + 10):
+        vm._retain_cleanup(
+            QueryExecutionRef(
+                execution_id=f"q-{index}",
+                connection_name=vm.context.connection_name,
+                region=vm.context.region,
+                workgroup=vm.context.workgroup,
+            )
+        )
+
+    assert len(vm._pending_cleanup_refs) == _MAX_PENDING_CLEANUP_REFS
+    # Oldest evicted, newest kept.
+    assert "q-0" not in vm._pending_cleanup_refs
+    assert f"q-{_MAX_PENDING_CLEANUP_REFS + 9}" in vm._pending_cleanup_refs
+
+    vm.dispose()
+
+
+async def test_a_failed_stop_does_not_poison_the_page_after_the_query_settles() -> None:
+    """A settled detail is authoritative -- it must clear the stale error.
+
+    A failed ``StopQueryExecution`` sets ``error_text`` while the poll keeps
+    running. When the execution then settles, ``_apply_detail`` reset
+    ``pane_state`` to IDLE but left ``error_text`` set, and
+    ``_snapshot_structure_is_valid`` rejects IDLE-plus-error for every terminal
+    state outside the CANCELLED carve-out. ``app.py`` turns that into a standing
+    "finish the active Athena operation before switching services" refusal, so
+    one failed cancel disabled every service handoff for the rest of the
+    session. Reachable with any role lacking ``athena:StopQueryExecution``.
+    """
+    vm = make_query_vm(InMemoryAthena())
+    vm._error_text = "Athena rejected the request"
+    vm._pane_state = PaneState.ERROR
+
+    vm._apply_detail(_detail("q-settled", QueryState.SUCCEEDED))
+
+    assert vm.pane_state is PaneState.IDLE
+    assert vm.error_text is None, "a settled execution kept a stale stop error"
+
+    vm.dispose()
+
+
+@pytest.mark.asyncio
+async def test_a_mid_flight_poll_tick_does_not_erase_a_failed_stop_error() -> None:
+    """Only a *settled* detail may clear the error.
+
+    ``_poll`` calls ``_apply_detail`` on every tick, so clearing the error
+    unconditionally erased a failed-cancel message within one poll interval.
+    ``_cancel_active`` returns early when ``_try_stop`` fails and does NOT bump
+    ``_generation``, so the poll survives the refusal: a role lacking
+    ``athena:StopQueryExecution`` saw "Athena access is forbidden" flash and
+    vanish while the query kept scanning and billing, with nothing left on the
+    page to say the cancel never happened.
+    """
+    vm = make_query_vm(InMemoryAthena())
+    vm._error_text = "Athena access is forbidden"
+    vm._pane_state = PaneState.FORBIDDEN
+
+    for non_terminal in (QueryState.QUEUED, QueryState.RUNNING):
+        vm._apply_detail(_detail("q-inflight", non_terminal))
+        assert vm.error_text == "Athena access is forbidden", (
+            f"a {non_terminal.name} poll tick erased the failed-stop error"
+        )
+
+    # The settle still clears it -- the behaviour the guard must not regress.
+    vm._apply_detail(_detail("q-inflight", QueryState.SUCCEEDED))
+    assert vm.error_text is None
+
+    vm.dispose()

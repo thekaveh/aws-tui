@@ -1,0 +1,158 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>aws-tui Operation States</title>
+  <style>
+    @font-face { font-family: "Fira Code Embedded"; src: url("../../assets/fonts/fira-code/FiraCode-Regular.ttf") format("truetype"); font-style: normal; font-weight: 400; }
+    @font-face { font-family: "Fira Code Embedded"; src: url("../../assets/fonts/fira-code/FiraCode-Bold.ttf") format("truetype"); font-style: normal; font-weight: 600 700; }
+    * { box-sizing: border-box; }
+    body { margin: 0; padding: 32px; background: #020617; color: #f8fafc; font-family: "Fira Code Embedded", monospace; }
+    main { width: min(1600px, 100%); margin: auto; }
+    h1 { margin: 0; font-size: 24px; letter-spacing: 0; }
+    p { margin: 8px 0 0; color: #94a3b8; font-size: 14px; }
+    .frame { margin-top: 20px; padding: 16px; overflow-x: auto; border: 1px solid #1e293b; border-radius: 8px; background: #07101f; }
+    svg { display: block; width: 100%; min-width: 1120px; height: auto; }
+  </style>
+</head>
+<body>
+<main>
+  <h1>aws-tui Operation States</h1>
+  <p>The four lifecycle enums the code actually defines, and who owns each transition</p>
+  <section class="frame">
+    <svg viewBox="0 0 1600 900" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="title desc">
+      <title id="title">aws-tui operation states</title>
+      <desc id="desc">Four independent state machines. An Athena query moves from queued to running and settles as succeeded, failed, or cancelled, where cancellation is app-owned and only ever applies to an execution this app started. A transfer moves from pending to running and settles as completed, skipped, failed, or cancelled, with per-entry cancellation. An EMR Serverless job run cycles through four pre-running states before running and settles as success, failed, or cancelled via a transient cancelling state; the app only observes these, never drives them. The log pane moves from an empty target through idle and loading to ready, truncated, no log configuration, no files, or error.</desc>
+      <defs>
+        <pattern id="grid" width="40" height="40" patternUnits="userSpaceOnUse"><path d="M40 0H0V40" fill="none" stroke="#1e293b" stroke-width="0.5"/></pattern>
+        <marker id="arrow" markerWidth="9" markerHeight="7" refX="8.5" refY="3.5" orient="auto"><polygon points="0 0,9 3.5,0 7" fill="#94a3b8"/></marker>
+      </defs>
+      <rect width="1600" height="900" fill="#020617"/><rect width="1600" height="900" fill="url(#grid)"/>
+
+      <g font-family="Fira Code Embedded" font-size="11" text-anchor="start">
+        <rect x="60" y="14" width="12" height="12" rx="2" fill="#0f172a" stroke="#22d3ee" stroke-width="2"/>
+        <text x="80" y="24" fill="#94a3b8">in flight</text>
+        <rect x="190" y="14" width="12" height="12" rx="2" fill="#0f172a" stroke="#34d399" stroke-width="2"/>
+        <text x="210" y="24" fill="#94a3b8">succeeded</text>
+        <rect x="340" y="14" width="12" height="12" rx="2" fill="#0f172a" stroke="#fb7185" stroke-width="2"/>
+        <text x="360" y="24" fill="#94a3b8">failed</text>
+        <rect x="450" y="14" width="12" height="12" rx="2" fill="#0f172a" stroke="#fbbf24" stroke-width="2"/>
+        <text x="470" y="24" fill="#94a3b8">cancelled</text>
+        <rect x="600" y="14" width="12" height="12" rx="2" fill="#0f172a" stroke="#38bdf8" stroke-width="2"/>
+        <text x="620" y="24" fill="#94a3b8">settled without a result</text>
+        <rect x="860" y="14" width="12" height="12" rx="2" fill="#0f172a" stroke="#f472b6" stroke-width="2"/>
+        <text x="880" y="24" fill="#94a3b8">transient</text>
+        <text x="1010" y="24" fill="#64748b">every state shown is a member of the enum named in its band</text>
+      </g>
+
+      <g fill="#07101f" stroke="#1e293b" stroke-width="1.5">
+        <rect x="30" y="40" width="1540" height="195" rx="8"/>
+        <rect x="30" y="250" width="1540" height="195" rx="8"/>
+        <rect x="30" y="460" width="1540" height="195" rx="8"/>
+        <rect x="30" y="670" width="1540" height="195" rx="8"/>
+      </g>
+      <g font-family="Fira Code Embedded" font-size="13" font-weight="700" text-anchor="start">
+        <text x="52" y="68" fill="#22d3ee">QueryState — domain/query.py · cancellation is app-owned</text>
+        <text x="52" y="278" fill="#a78bfa">TransferState — vm/messages.py · per-entry cancellation</text>
+        <text x="52" y="488" fill="#fbbf24">JobRunState — domain/emr_serverless.py · AWS owns every transition</text>
+        <text x="52" y="698" fill="#34d399">LogsState — vm/emr_serverless/job_run_logs_vm.py · load outcomes</text>
+      </g>
+
+      <g font-family="Fira Code Embedded" font-size="12" font-weight="700" text-anchor="middle">
+        <g fill="#0f172a" stroke="#22d3ee" stroke-width="2">
+          <rect x="60" y="120" width="150" height="48" rx="5"/><rect x="250" y="120" width="150" height="48" rx="5"/>
+        </g>
+        <g fill="#0f172a" stroke="#34d399" stroke-width="2"><rect x="520" y="120" width="170" height="48" rx="5"/></g>
+        <g fill="#0f172a" stroke="#fb7185" stroke-width="2"><rect x="730" y="120" width="150" height="48" rx="5"/></g>
+        <g fill="#0f172a" stroke="#fbbf24" stroke-width="2"><rect x="920" y="120" width="170" height="48" rx="5"/></g>
+        <g fill="#f8fafc">
+          <text x="135" y="150">QUEUED</text><text x="325" y="150">RUNNING</text>
+          <text x="605" y="150">SUCCEEDED</text><text x="805" y="150">FAILED</text><text x="1005" y="150">CANCELLED</text>
+        </g>
+
+        <g fill="#0f172a" stroke="#22d3ee" stroke-width="2">
+          <rect x="60" y="330" width="150" height="48" rx="5"/><rect x="250" y="330" width="150" height="48" rx="5"/>
+        </g>
+        <g fill="#0f172a" stroke="#34d399" stroke-width="2"><rect x="520" y="330" width="170" height="48" rx="5"/></g>
+        <g fill="#0f172a" stroke="#38bdf8" stroke-width="2"><rect x="730" y="330" width="150" height="48" rx="5"/></g>
+        <g fill="#0f172a" stroke="#fb7185" stroke-width="2"><rect x="920" y="330" width="150" height="48" rx="5"/></g>
+        <g fill="#0f172a" stroke="#fbbf24" stroke-width="2"><rect x="1110" y="330" width="170" height="48" rx="5"/></g>
+        <g fill="#f8fafc">
+          <text x="135" y="360">PENDING</text><text x="325" y="360">RUNNING</text>
+          <text x="605" y="360">COMPLETED</text><text x="805" y="360">SKIPPED</text>
+          <text x="995" y="360">FAILED</text><text x="1195" y="360">CANCELLED</text>
+        </g>
+
+        <g fill="#0f172a" stroke="#22d3ee" stroke-width="2">
+          <rect x="55" y="540" width="145" height="48" rx="5"/><rect x="215" y="540" width="145" height="48" rx="5"/>
+          <rect x="375" y="540" width="145" height="48" rx="5"/><rect x="535" y="540" width="145" height="48" rx="5"/>
+          <rect x="695" y="540" width="145" height="48" rx="5"/>
+        </g>
+        <g fill="#0f172a" stroke="#34d399" stroke-width="2"><rect x="855" y="540" width="145" height="48" rx="5"/></g>
+        <g fill="#0f172a" stroke="#fb7185" stroke-width="2"><rect x="1015" y="540" width="145" height="48" rx="5"/></g>
+        <g fill="#0f172a" stroke="#f472b6" stroke-width="2"><rect x="1175" y="540" width="165" height="48" rx="5"/></g>
+        <g fill="#0f172a" stroke="#fbbf24" stroke-width="2"><rect x="1355" y="540" width="165" height="48" rx="5"/></g>
+        <g fill="#f8fafc" font-size="11">
+          <text x="127" y="570">SUBMITTED</text><text x="287" y="570">PENDING</text>
+          <text x="447" y="570">SCHEDULED</text><text x="607" y="570">QUEUED</text>
+          <text x="767" y="570">RUNNING</text><text x="927" y="570">SUCCESS</text>
+          <text x="1087" y="570">FAILED</text><text x="1257" y="570">CANCELLING</text>
+          <text x="1437" y="570">CANCELLED</text>
+        </g>
+
+        <g fill="#0f172a" stroke="#22d3ee" stroke-width="2">
+          <rect x="55" y="750" width="165" height="48" rx="5"/><rect x="235" y="750" width="130" height="48" rx="5"/>
+          <rect x="380" y="750" width="140" height="48" rx="5"/>
+        </g>
+        <g fill="#0f172a" stroke="#34d399" stroke-width="2"><rect x="620" y="750" width="130" height="48" rx="5"/></g>
+        <g fill="#0f172a" stroke="#38bdf8" stroke-width="2"><rect x="765" y="750" width="155" height="48" rx="5"/></g>
+        <g fill="#0f172a" stroke="#38bdf8" stroke-width="2">
+          <rect x="935" y="750" width="185" height="48" rx="5"/><rect x="1135" y="750" width="145" height="48" rx="5"/>
+        </g>
+        <g fill="#0f172a" stroke="#fb7185" stroke-width="2"><rect x="1295" y="750" width="130" height="48" rx="5"/></g>
+        <g fill="#f8fafc" font-size="11">
+          <text x="137" y="780">EMPTY_TARGET</text><text x="300" y="780">IDLE</text>
+          <text x="450" y="780">LOADING</text><text x="685" y="780">READY</text>
+          <text x="842" y="780">TRUNCATED</text><text x="1027" y="780">NO_LOG_CONFIG</text>
+          <text x="1207" y="780">NO_FILES</text><text x="1360" y="780">ERROR</text>
+        </g>
+      </g>
+
+      <g fill="none" stroke="#94a3b8" stroke-width="2" marker-end="url(#arrow)">
+        <path d="M210 144H242"/>
+        <path d="M400 144H512"/>
+        <path d="M325 168V196H805V176"/>
+        <path d="M135 120V96H1005V112"/>
+
+        <path d="M210 354H242"/>
+        <path d="M400 354H512"/>
+        <path d="M325 378V406H805V386"/>
+        <path d="M325 378V406H995V386"/>
+        <path d="M135 330V306H1195V322"/>
+
+        <path d="M200 564H207"/><path d="M360 564H367"/><path d="M520 564H527"/><path d="M680 564H687"/>
+        <path d="M840 564H847"/>
+        <path d="M767 588V616H1087V596"/>
+        <path d="M767 588V616H1257V596"/>
+        <path d="M1340 564H1347"/>
+
+        <path d="M220 774H227"/><path d="M365 774H372"/><path d="M520 774H612"/>
+        <path d="M450 798V826H842V806"/>
+        <path d="M450 798V826H1027V806"/>
+        <path d="M450 798V826H1207V806"/>
+        <path d="M450 798V826H1360V806"/>
+      </g>
+
+      <g font-family="Fira Code Embedded" font-size="10" fill="#94a3b8" text-anchor="middle">
+        <text x="565" y="212">the app stops only an execution it started</text>
+        <text x="565" y="422">cancel is per marked entry, mid-flight</text>
+        <text x="935" y="632">the app polls; it never drives these</text>
+        <text x="646" y="842">one load, five possible outcomes</text>
+      </g>
+
+    </svg>
+  </section>
+</main>
+</body>
+</html>

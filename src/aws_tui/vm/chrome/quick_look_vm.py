@@ -22,6 +22,8 @@ from vmx import (
 from vmx.lifecycle.status import ConstructionStatus
 from vmx.services.dispatcher import Dispatcher
 
+from aws_tui.vm._observable import send_value_free
+
 
 @dataclass(frozen=True, slots=True)
 class QuickLookContent:
@@ -174,25 +176,25 @@ class QuickLookVM:
         if self._is_open == value:
             return
         self._is_open = value
-        self._hub.send(PropertyChangedMessage.create(self, self.name, "is_open"))
+        send_value_free(self._hub, PropertyChangedMessage.create(self, self.name, "is_open"))
 
     def _set_content(self, value: QuickLookContent | None) -> None:
         if self._content is value:
             return
         self._content = value
-        self._hub.send(PropertyChangedMessage.create(self, self.name, "content"))
+        send_value_free(self._hub, PropertyChangedMessage.create(self, self.name, "content"))
 
     def _set_scroll(self, value: int) -> None:
         if self._scroll_offset == value:
             return
         self._scroll_offset = value
-        self._hub.send(PropertyChangedMessage.create(self, self.name, "scroll_offset"))
+        send_value_free(self._hub, PropertyChangedMessage.create(self, self.name, "scroll_offset"))
 
     def _set_find_query(self, value: str) -> None:
         if self._find_query == value:
             return
         self._find_query = value
-        self._hub.send(PropertyChangedMessage.create(self, self.name, "find_query"))
+        send_value_free(self._hub, PropertyChangedMessage.create(self, self.name, "find_query"))
 
 
 __all__ = ["QuickLookContent", "QuickLookVM"]

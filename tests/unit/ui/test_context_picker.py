@@ -15,6 +15,7 @@ from textual.widgets import OptionList, Static
 from aws_tui.infra.theme_store import ThemeStore
 from aws_tui.ui.widgets.context_picker import ContextOption, ContextPicker
 from aws_tui.ui.widgets.overlay_option_list import OverlayOptionList, PickerOpenIntent
+from tests.helpers import focus_and_settle
 
 _OPTIONS = (
     ContextOption("primary", "primary"),
@@ -493,7 +494,7 @@ async def test_context_picker_commits_keyboard_selection() -> None:
     picker = _picker()
 
     async with PickerHost(picker).run_test() as pilot:
-        picker.focus()
+        await focus_and_settle(picker)
         await pilot.press("enter", "down", "enter")
 
         assert picker.value == "analytics"
@@ -506,7 +507,7 @@ async def test_context_picker_commits_upward_keyboard_selection() -> None:
     picker = _picker(selected="analytics")
 
     async with PickerHost(picker).run_test() as pilot:
-        picker.focus()
+        await focus_and_settle(picker)
         await pilot.press("enter", "up", "enter")
 
         assert picker.value == "primary"
@@ -519,7 +520,7 @@ async def test_context_picker_escape_restores_the_selected_option() -> None:
     picker = _picker()
 
     async with PickerHost(picker).run_test() as pilot:
-        picker.focus()
+        await focus_and_settle(picker)
         await pilot.press("enter", "down", "escape")
         await pilot.press("enter", "enter")
 
@@ -577,7 +578,7 @@ async def test_context_picker_disables_opening_when_disabled() -> None:
 
     async with PickerHost(picker).run_test() as pilot:
         picker.set_state(disabled=True)
-        picker.focus()
+        await focus_and_settle(picker)
         await pilot.press("enter")
 
         assert picker.disabled is True

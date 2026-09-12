@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import sys
 from collections.abc import AsyncIterator
 from pathlib import Path
 
@@ -11,6 +12,7 @@ import aioboto3
 import pytest
 
 from aws_tui.demo.in_memory_fs import InMemoryFS
+from aws_tui.domain import local_fs
 from aws_tui.domain.cross_fs import ConflictResolution, CrossFsCopy, CrossFsMove
 from aws_tui.domain.filesystem import (
     ConflictError,
@@ -21,6 +23,7 @@ from aws_tui.domain.filesystem import (
     PathRef,
     ProviderError,
     TransferProgress,
+    UnsupportedSourceError,
 )
 from aws_tui.domain.local_fs import LocalFS
 from aws_tui.domain.s3_fs import S3FS
@@ -2172,3 +2175,161 @@ async def test_nested_absent_directory_in_a_merge_is_preflighted_before_bytes_mo
         )
 
     assert dst.mutations == [], f"bytes moved before the preflight refused: {dst.mutations}"
+
+
+async def test_cancel_during_container_capture_does_not_publish_the_copy(
+    tmp_path: Path,
+) -> None:
+    """A cancel delivered during the stage *container* capture must abort.
+
+    ``_durably_run`` deliberately never re-raises cancellation -- it records it
+    so the caller can route it into ``_finish_durable``. The file-stage path
+    checked ``captured.cancelled`` but not ``container_capture.cancelled``, so a
+    cancel arriving in that window was swallowed: the stage was published and
+    the transfer reported success for a copy the user had already interrupted.
+
+    The destination must be a provider that actually stages
+    (``atomic_write_replaces = False``); ``InMemoryFS`` publishes directly and
+    never reaches this code.
+    """
+    # Capture order for a staged single-file copy: the stage container is
+    # claimed first, then the file inside it, then the container again for the
+    # ownership revision. It is that third call whose cancellation was dropped.
+    _CONTAINER_CAPTURE = 3
+    caller: list[asyncio.Task[None]] = []
+
+    class _CancelOnContainerCapture(LocalFS):
+        def __init__(self, root: Path) -> None:
+            super().__init__(root=root)
+            self.captures: list[str] = []
+
+        async def capture_stage_revision(self, path: PathRef) -> str:
+            self.captures.append(path.as_posix())
+            revision = await super().capture_stage_revision(path)
+            if len(self.captures) == _CONTAINER_CAPTURE:
+                caller[0].cancel()
+                await asyncio.sleep(0)
+            return revision
+
+    src = InMemoryFS()
+    dst = _CancelOnContainerCapture(tmp_path)
+    await _put_file(src, PathRef.from_posix("/source"), b"payload")
+
+    async def _run() -> None:
+        await CrossFsCopy(source=src, destination=dst).copy(
+            PathRef.from_posix("/source"), PathRef.from_posix("/target")
+        )
+
+    task: asyncio.Task[None] = asyncio.ensure_future(_run())
+    caller.append(task)
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    assert len(dst.captures) >= _CONTAINER_CAPTURE, f"container capture never ran: {dst.captures}"
+    assert not (tmp_path / "target").exists(), "cancelled copy was published anyway"
+
+
+@pytest.mark.skipif(
+    sys.platform == "win32",
+    reason="symlinks need admin on Windows; the reparse-point refusal is covered by "
+    "test_windows_reparse_refusal_is_an_unsupported_source_when_reading",
+)
+async def test_copying_a_symlink_reports_the_refusal_and_leaves_no_stage(
+    tmp_path: Path,
+) -> None:
+    """A source refusal must surface as itself, with the stage cleaned up.
+
+    ``LocalFS.write_stream`` creates ``container/payload`` before it consumes
+    the source, and the source raises its refusals on the first iteration. The
+    ``except ConflictError`` retry branch assumed a pristine container, so
+    ``_cleanup_empty_claim`` failed on a non-empty directory: the clean
+    "refusing symlink" became "file stage container cleanup failed: stage
+    changed: /.<name>.aws-tui-stage-<hex>", and that directory was left behind
+    permanently. Reachable today -- swap a pane to local, mark a symlink, copy.
+    """
+    src_root = tmp_path / "src"
+    dst_root = tmp_path / "dst"
+    src_root.mkdir()
+    dst_root.mkdir()
+    target = src_root / "real.txt"
+    target.write_bytes(b"payload")
+    (src_root / "link.txt").symlink_to(target)
+
+    src = LocalFS(root=src_root)
+    dst = LocalFS(root=dst_root)
+
+    with pytest.raises(ConflictError, match="refusing symlink"):
+        await CrossFsCopy(source=src, destination=dst).copy(
+            PathRef.from_posix("/link.txt"), PathRef.from_posix("/link.txt")
+        )
+
+    assert list(dst_root.iterdir()) == [], "the abandoned stage was left behind"
+
+
+@pytest.mark.skipif(
+    sys.platform == "win32",
+    reason="symlinks need admin on Windows; the reparse-point refusal is covered by "
+    "test_windows_reparse_refusal_is_an_unsupported_source_when_reading",
+)
+async def test_copying_a_symlink_under_rename_does_not_retry_the_source_refusal(
+    tmp_path: Path,
+) -> None:
+    """A refused *source* is permanent; no destination name can fix it.
+
+    ``_copy_file_atomically`` caught bare ``ConflictError`` and treated it as a
+    destination-name collision, so ``ConflictResolution.RENAME`` spent all
+    ``_MAX_RENAME_ATTEMPTS`` on an error that could never clear -- roughly one
+    and a half minutes against an atomic-write destination -- and then reported
+    "no available destination name", hiding "refusing symlink" behind a
+    destination-side error the destination never raised.
+    """
+    src_root = tmp_path / "src"
+    src_root.mkdir()
+    target = src_root / "real.txt"
+    target.write_bytes(b"payload")
+    (src_root / "link.txt").symlink_to(target)
+
+    # ``InMemoryFS`` sets ``atomic_write_replaces``, which is the shape that
+    # sent the retry loop around the full attempt budget.
+    destination = InMemoryFS()
+
+    with pytest.raises(UnsupportedSourceError, match="refusing symlink"):
+        await CrossFsCopy(source=LocalFS(root=src_root), destination=destination).copy(
+            PathRef.from_posix("/link.txt"),
+            PathRef.from_posix("/link.txt"),
+            on_conflict=ConflictResolution.RENAME,
+        )
+
+    assert await destination.list(PathRef.from_posix("/")) == []
+
+
+async def test_unsupported_source_error_is_still_a_conflict_error() -> None:
+    """Existing ``except ConflictError`` handlers must keep reporting it."""
+    assert issubclass(UnsupportedSourceError, ConflictError)
+
+
+def test_windows_reparse_refusal_is_an_unsupported_source_when_reading() -> None:
+    """Windows refuses a symlink as a reparse point, not via ``ELOOP``.
+
+    That refusal was a plain ``ConflictError``, so the
+    ``ConflictResolution.RENAME`` retry loop treated reading a symlink as a
+    destination-name collision on Windows exactly as it did on POSIX -- burning
+    the full attempt budget on an error no new name can fix. The POSIX half of
+    this is covered by the two symlink tests above, which cannot run on Windows;
+    this exercises the branch directly so the contract holds on every platform.
+    """
+    attributes = local_fs._WINDOWS_FILE_ATTRIBUTE_REPARSE_POINT
+
+    with pytest.raises(UnsupportedSourceError, match="refusing reparse point"):
+        local_fs._windows_reject_reparse(
+            attributes, "C:\\x\\link.txt", error=UnsupportedSourceError
+        )
+
+    # The destination side keeps the plain error: renaming past a reparse point
+    # at the target name genuinely works, so that retry must stay available.
+    with pytest.raises(ConflictError) as destination_refusal:
+        local_fs._windows_reject_reparse(attributes, "C:\\x\\link.txt")
+    assert not isinstance(destination_refusal.value, UnsupportedSourceError)
+
+    # A file with no reparse attribute is not refused at all.
+    local_fs._windows_reject_reparse(0, "C:\\x\\plain.txt", error=UnsupportedSourceError)

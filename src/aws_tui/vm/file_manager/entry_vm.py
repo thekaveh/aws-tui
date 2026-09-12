@@ -21,6 +21,7 @@ from vmx.lifecycle.status import ConstructionStatus
 from vmx.services.dispatcher import Dispatcher
 
 from aws_tui.domain.filesystem import EntryKind, FileEntry
+from aws_tui.vm._observable import send_value_free
 
 
 def _format_size(size: int | None, kind: EntryKind) -> str:
@@ -210,14 +211,18 @@ class EntryVM:
         if self._inner.model.is_selected == value:
             return
         self._inner.model = replace(self._inner.model, is_selected=value)
-        self._hub.send(PropertyChangedMessage.create(self, self._inner.name, "is_selected"))
+        send_value_free(
+            self._hub, PropertyChangedMessage.create(self, self._inner.name, "is_selected")
+        )
 
     def set_marked(self, value: bool) -> None:
         """Imperative setter used by ``PaneVM`` for select-all / clear-marks."""
         if self._inner.model.is_marked == value:
             return
         self._inner.model = replace(self._inner.model, is_marked=value)
-        self._hub.send(PropertyChangedMessage.create(self, self._inner.name, "is_marked"))
+        send_value_free(
+            self._hub, PropertyChangedMessage.create(self, self._inner.name, "is_marked")
+        )
 
     def toggle_select(self) -> None:
         self.set_selected(not self._inner.model.is_selected)

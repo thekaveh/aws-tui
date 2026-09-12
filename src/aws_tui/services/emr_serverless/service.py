@@ -13,7 +13,7 @@ host this VM as a singleton (see [[vmx-content-host-singleton-trap]])."""
 
 from __future__ import annotations
 
-from collections.abc import AsyncIterator, Callable
+from collections.abc import AsyncGenerator, Callable
 from typing import ClassVar, cast
 
 import aioboto3
@@ -68,7 +68,7 @@ class _FailedEmrLogsClient:
         bucket: str,
         max_bytes: int,
         filter_: LogFilter,
-    ) -> AsyncIterator[LogChunk]:
+    ) -> AsyncGenerator[LogChunk, None]:
         raise self._fresh_error()
         yield  # pragma: no cover
 

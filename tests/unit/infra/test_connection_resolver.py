@@ -678,3 +678,38 @@ def test_explicit_region_still_wins_over_the_profile_region(
 
     regions = {item.name: item.region for item in resolver.list()}
     assert regions["pinned"] == "ap-south-1"
+
+
+def test_percent_in_a_secret_key_is_read_verbatim(tmp_path: Path, store: ConfigStore) -> None:
+    """AWS credentials are read with botocore's semantics, not interpolated.
+
+    ``ConfigParser`` interpolates at ``.get()`` -- after ``_read_ini``'s guard --
+    so a ``%`` in a secret key raised ``InterpolationSyntaxError`` and surfaced
+    through Settings as "the OS keychain could not be read", while ``%%`` was
+    silently halved: aws-tui signed with ``ab%cd`` where the AWS CLI used
+    ``ab%%cd``, producing SignatureDoesNotMatch in this app only. botocore
+    parses both AWS ini files with ``RawConfigParser``.
+    """
+    creds = tmp_path / "credentials"
+    creds.write_text(
+        "[percent]\n"
+        "aws_access_key_id = AKIAPERCENT\n"
+        "aws_secret_access_key = abc%def/ghi\n"
+        "[doubled]\n"
+        "aws_access_key_id = AKIADOUBLED\n"
+        "aws_secret_access_key = ab%%cd\n",
+        encoding="utf-8",
+    )
+    resolver = ConnectionResolver(
+        config_store=store,
+        aws_config_path=tmp_path / "missing",
+        aws_credentials_path=creds,
+    )
+
+    assert resolver._read_aws_credentials_profile("percent") == (
+        "AKIAPERCENT",
+        "abc%def/ghi",
+        None,
+    )
+    # Verbatim, exactly as the AWS CLI would sign with it.
+    assert resolver._read_aws_credentials_profile("doubled")[1] == "ab%%cd"

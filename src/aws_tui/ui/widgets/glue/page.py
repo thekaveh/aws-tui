@@ -224,7 +224,11 @@ class GluePage(DeferredWorkerMixin, HubSubscriberMixin, Widget):
         self._maybe_focus_active(reference)
 
     async def action_refresh_active(self) -> None:
-        await self._vm.refresh_active()
+        # Dispatch rather than await. This runs inside the App's message
+        # handler, and the refresh issues Glue calls under the same
+        # 10s-connect / 60s-read / six-attempt botocore config as everything
+        # else -- awaiting it here froze the pump for the round trip.
+        self._run_lifecycle_worker(self._vm.refresh_active, group="glue-refresh-active")
 
     async def action_choose_run_state(self) -> None:
         await self.action_select_view("jobs")

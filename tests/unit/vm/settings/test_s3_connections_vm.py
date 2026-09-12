@@ -737,3 +737,112 @@ def test_read_only_mutations_reject_without_keychain_or_message_side_effects(
     assert keychain._store == {}
     assert received == []
     vm.dispose()
+
+
+async def test_async_writes_keep_blocking_credential_io_off_the_event_loop(
+    tmp_path: Path,
+) -> None:
+    """Persistence must not run on the loop the whole TUI shares.
+
+    ``add``/``update``/``remove`` reach the OS keyring and take an OS file lock
+    on ``config.toml``, polling with ``time.sleep`` while they wait. Neither is
+    bounded: a locked macOS Keychain shows a system prompt and a stalled Linux
+    D-Bus never answers. On the event loop that froze everything -- no repaint,
+    no key handling, and no progress on in-flight transfers, which share it.
+
+    The publish stays on the loop, because hub subscribers are view models bound
+    to it.
+    """
+    import asyncio
+
+    loop_thread = threading.get_ident()
+    seen: list[int] = []
+
+    class _ThreadRecordingKeychain(InMemoryKeychain):
+        def set(self, service: str, key: str, value: str) -> None:
+            seen.append(threading.get_ident())
+            super().set(service, key, value)
+
+    hub = _hub()
+    store = ConfigStore(path=tmp_path / "config.toml")
+    keychain = _ThreadRecordingKeychain()
+    resolver = ConnectionResolver(config_store=store, keychain=keychain)
+    vm = S3ConnectionsVM(
+        resolver=resolver,
+        config_store=store,
+        hub=hub,
+        dispatcher=NULL_DISPATCHER,
+        keychain=keychain,
+    )
+    vm.construct()
+    try:
+        published: list[Message] = []
+        hub.messages.subscribe(published.append)
+
+        await vm.add_async(_entry("minio-local"))
+
+        assert seen, "the keychain was never written"
+        assert all(tid != loop_thread for tid in seen), (
+            "credential persistence ran on the event loop"
+        )
+        # The publish is the half that must stay on the loop.
+        assert any(isinstance(m, ConnectionListChangedMessage) for m in published)
+        assert threading.get_ident() == loop_thread
+        await asyncio.sleep(0)
+    finally:
+        vm.dispose()
+
+
+async def test_update_async_and_remove_async_are_the_shipping_write_paths(
+    tmp_path: Path,
+) -> None:
+    """Cover the two async writes the panel actually calls.
+
+    The panel moved to ``add_async``/``update_async``/``remove_async`` so the
+    keyring and config-lock I/O leaves the event loop, which left the sync forms
+    with no production callers -- and only ``add_async`` had a VM-level test.
+    These two are the shipping paths for editing and deleting a connection.
+    """
+    import threading
+
+    loop_thread = threading.get_ident()
+    seen: list[int] = []
+
+    class _ThreadRecordingKeychain(InMemoryKeychain):
+        def set(self, service: str, key: str, value: str) -> None:
+            seen.append(threading.get_ident())
+            super().set(service, key, value)
+
+        def delete(self, service: str, key: str) -> None:
+            seen.append(threading.get_ident())
+            super().delete(service, key)
+
+    hub = _hub()
+    store = ConfigStore(path=tmp_path / "config.toml")
+    keychain = _ThreadRecordingKeychain()
+    resolver = ConnectionResolver(config_store=store, keychain=keychain)
+    vm = S3ConnectionsVM(
+        resolver=resolver,
+        config_store=store,
+        hub=hub,
+        dispatcher=NULL_DISPATCHER,
+        keychain=keychain,
+    )
+    vm.construct()
+    try:
+        published: list[Message] = []
+        hub.messages.subscribe(published.append)
+
+        await vm.add_async(_entry("minio-local"))
+        await vm.update_async("minio-local", _entry("minio-local", region="eu-west-1"))
+        assert [c.region for c in vm.connections] == ["eu-west-1"]
+
+        await vm.remove_async("minio-local")
+        assert vm.connections == ()
+
+        changes = [m.change for m in published if isinstance(m, ConnectionListChangedMessage)]
+        assert changes == ["added", "updated", "deleted"]
+        assert seen, "the keychain was never touched"
+        assert all(tid != loop_thread for tid in seen), "credential I/O ran on the event loop"
+    finally:
+        vm.dispose()

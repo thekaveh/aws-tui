@@ -4,6 +4,7 @@ from pathlib import Path
 import pytest
 import scripts.docs.render_diagrams as render_diagrams
 from scripts.docs.build_docs import (
+    DocsCheckError,
     _assert_dirs_equal,
     _copy_referenced_assets,
     _referenced_assets,
@@ -105,10 +106,21 @@ def test_three_surface_build_keeps_svg_assets_byte_identical(tmp_path, monkeypat
     render_site(m, root, site_dir)
     render_wiki(m, root, wiki_dir)
 
-    canonical = (canonical_dir / "architecture.svg").read_bytes()
-    site = (site_dir / "assets" / "img" / "architecture.svg").read_bytes()
-    wiki = (wiki_dir / "img" / "architecture.svg").read_bytes()
-    assert canonical == site == wiki
+    # One canonical asset, byte-identical on every surface that embeds it --
+    # but each surface embeds a different format. The site references the SVG;
+    # the generated wiki markdown references the PNG and never an SVG, so
+    # copying SVGs there too put ~5 MB of unreferenced bytes into the wiki's
+    # own git history on every sync. Assert the bytes each surface actually
+    # uses, and that the dead copy stays gone.
+    canonical_svg = (canonical_dir / "architecture.svg").read_bytes()
+    site_svg = (site_dir / "assets" / "img" / "architecture.svg").read_bytes()
+    assert canonical_svg == site_svg
+
+    canonical_png = (canonical_dir / "architecture.png").read_bytes()
+    wiki_png = (wiki_dir / "img" / "architecture.png").read_bytes()
+    assert canonical_png == wiki_png
+
+    assert not (wiki_dir / "img" / "architecture.svg").exists()
 
 
 def test_render_mkdocs_yml_has_nav_and_no_repo_url(tmp_path):
@@ -158,7 +170,10 @@ def test_assert_dirs_equal_detects_difference(tmp_path):
     b.mkdir()
     (a / "f.txt").write_text("one")
     (b / "f.txt").write_text("two")
-    with pytest.raises(AssertionError):
+    # ``DocsCheckError``, not ``AssertionError``: these are CI gates, and
+    # ``python -O`` strips ``assert`` -- which would let the determinism check
+    # pass silently while publishing drifted output.
+    with pytest.raises(DocsCheckError):
         _assert_dirs_equal(a, b)
 
 
@@ -190,7 +205,7 @@ def test_package_surface_is_generated_and_checked(tmp_path):
     )
     build(manifest_path, tmp_path, check=True)
     (tmp_path / "PYPI.md").write_text("stale\n", encoding="utf-8")
-    with pytest.raises(AssertionError, match="package README is stale"):
+    with pytest.raises(DocsCheckError, match="package README is stale"):
         build(manifest_path, tmp_path, check=True)
 
 

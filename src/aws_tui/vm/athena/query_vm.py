@@ -6,7 +6,7 @@ import logging
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager, suppress
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Final
 from uuid import uuid4
 
 import anyio
@@ -22,7 +22,10 @@ from vmx.lifecycle.status import ConstructionStatus
 from vmx.services.dispatcher import Dispatcher
 
 from aws_tui.domain.athena_runner import AthenaQueryRunner
-from aws_tui.domain.filesystem import ProviderError
+from aws_tui.domain.filesystem import (
+    PermissionDeniedError,
+    ProviderError,
+)
 from aws_tui.domain.query import (
     AthenaQueryError,
     QueryContext,
@@ -49,6 +52,14 @@ _logger = logging.getLogger(__name__)
 
 _QUERY_ERROR = "Athena query request failed"
 _CONTEXT_ERROR = "Athena returned a query outside the active context"
+#: Cap on refs awaiting a ``StopQueryExecution``. The map is drained by
+#: iterating all of it, and that drain runs on every cancel, every context
+#: change and on shutdown -- under the lifecycle, page and content-host
+#: locks. Unbounded, an IAM role without ``athena:StopQueryExecution``
+#: turned the Nth cancel into N sequential failing round trips with all
+#: navigation frozen behind them.
+_MAX_PENDING_CLEANUP_REFS: Final[int] = 32
+
 _SNAPSHOT_ERROR = "Athena query snapshot is invalid"
 _TERMINAL_QUERY_STATES = frozenset(
     {
@@ -361,6 +372,14 @@ class AthenaQueryVM:
         snapshot: AthenaQuerySnapshot,
         expected_context: QueryContext,
     ) -> bool:
+        # Results opened from the History view belong to a different execution
+        # than anything this query VM ran -- ``AthenaPageVM.results`` *is*
+        # ``AthenaPageVM.query.results`` -- so they must not be judged against
+        # ``execution_ref``. Without this, viewing history results once made
+        # every later ``export_snapshot`` raise, and ``app.py`` turned that into
+        # a permanent "finish the active Athena operation before switching
+        # services" refusal of the Athena->Glue handoff.
+        history_results = snapshot.results.from_history
         if (
             not valid_query_context(expected_context)
             or not valid_query_context(snapshot.context)
@@ -401,7 +420,7 @@ class AthenaQueryVM:
                 or snapshot.state_reason is not None
                 or snapshot.output_location is not None
                 or snapshot.engine_version is not None
-                or snapshot.results.execution_id is not None
+                or (snapshot.results.execution_id is not None and not history_results)
             ):
                 return False
             if snapshot.pane_state is PaneState.LOADING:
@@ -432,11 +451,11 @@ class AthenaQueryVM:
                 return False
             return snapshot.query_error is None and snapshot.results.execution_id is None
         if snapshot.state is QueryState.SUCCEEDED:
-            return (
-                snapshot.query_error is None
-                and snapshot.results.execution_id == snapshot.execution_ref.execution_id
+            return snapshot.query_error is None and (
+                history_results
+                or snapshot.results.execution_id == snapshot.execution_ref.execution_id
             )
-        if snapshot.results.execution_id is not None:
+        if snapshot.results.execution_id is not None and not history_results:
             return False
         return not (snapshot.state is QueryState.CANCELLED and snapshot.query_error is not None)
 
@@ -685,17 +704,44 @@ class AthenaQueryVM:
         *,
         report_error: bool = True,
     ) -> bool:
+        stopped, _retryable = await self._stop_outcome(ref, report_error=report_error)
+        return stopped
+
+    async def _stop_outcome(
+        self,
+        ref: QueryExecutionRef,
+        *,
+        report_error: bool = True,
+    ) -> tuple[bool, bool]:
+        """Attempt the stop; report ``(stopped, worth_retrying)``.
+
+        Only a *permission* denial is permanent. The role either has
+        ``athena:StopQueryExecution`` or it does not, and retrying it on every
+        later drain multiplies the failures.
+
+        An auth failure is NOT permanent, and treating it as one was a bug:
+        ``AwsSession.client`` builds a fresh session per call, so an expired SSO
+        token is re-read after the user runs ``aws sso login`` in another
+        terminal -- design spec §7.4.4 "Flow 4 -- SSO token expires mid-session"
+        describes exactly that recovery within one session. Dropping the ref
+        there abandoned the stop permanently, leaving the query scanning, and
+        billing, with nothing left to cancel it.
+        """
         try:
             await self._runner.stop(ref)
+        except PermissionDeniedError as exc:
+            if report_error:
+                self._apply_provider_error(exc)
+            return False, False
         except ProviderError as exc:
             if report_error:
                 self._apply_provider_error(exc)
-            return False
+            return False, True
         except Exception as exc:
             if report_error:
                 self._apply_unexpected_error("stop_query_execution", exc)
-            return False
-        return True
+            return False, True
+        return True, True
 
     async def _finalize_cancelled_submission(
         self,
@@ -717,6 +763,11 @@ class AthenaQueryVM:
 
     def _retain_cleanup(self, ref: QueryExecutionRef) -> None:
         self._pending_cleanup_refs[ref.execution_id] = ref
+        while len(self._pending_cleanup_refs) > _MAX_PENDING_CLEANUP_REFS:
+            # Oldest first: a ref this stale has already been retried on every
+            # intervening cancel. Dropping it abandons a server-side stop, which
+            # is strictly better than freezing navigation on a growing fan-out.
+            self._pending_cleanup_refs.pop(next(iter(self._pending_cleanup_refs)))
 
     async def _stop_retained_ref(
         self,
@@ -724,10 +775,12 @@ class AthenaQueryVM:
         *,
         report_error: bool,
     ) -> bool:
-        if not await self._try_stop(ref, report_error=report_error):
-            return False
-        self._pending_cleanup_refs.pop(ref.execution_id, None)
-        return True
+        stopped, retryable = await self._stop_outcome(ref, report_error=report_error)
+        if stopped or not retryable:
+            # A denial is permanent for this session's credentials: retrying it
+            # on every later cancel only multiplies the failures.
+            self._pending_cleanup_refs.pop(ref.execution_id, None)
+        return stopped
 
     async def _stop_pending_cleanup(self, *, report_error: bool) -> None:
         for ref in tuple(self._pending_cleanup_refs.values()):
@@ -762,6 +815,24 @@ class AthenaQueryVM:
         self._output_location = detail.output_location
         self._engine_version = detail.engine_version
         self._pane_state = PaneState.IDLE
+        # Clear the error with the pane state, but only once the execution has
+        # actually settled. A failed ``StopQueryExecution`` sets ``_error_text``
+        # while the poll keeps running; when the execution then settled,
+        # resetting only ``_pane_state`` left IDLE + a stale error, which
+        # ``_snapshot_structure_is_valid`` rejects for every terminal state
+        # except the CANCELLED carve-out — a page that refused every service
+        # handoff with "finish the active Athena operation" for the rest of the
+        # session.
+        #
+        # The terminal guard is load-bearing. ``_poll`` calls this on EVERY
+        # tick, so clearing unconditionally wiped the refusal within one poll
+        # interval: a role without ``athena:StopQueryExecution`` pressed Esc,
+        # ``_cancel_active`` returned early WITHOUT bumping ``_generation`` (so
+        # the poll survives), and the next RUNNING detail erased the message
+        # while the query kept scanning and billing. Only a settled detail is
+        # authoritative; a mid-flight one says nothing about a failed stop.
+        if detail.summary.state in _TERMINAL_QUERY_STATES:
+            self._error_text = None
         for property_name in (
             "state",
             "statistics",
@@ -770,6 +841,7 @@ class AthenaQueryVM:
             "output_location",
             "engine_version",
             "pane_state",
+            "error_text",
         ):
             self._notify(property_name)
 

@@ -12,7 +12,7 @@ else
   DOCS_PY := uv run python
 endif
 
-.PHONY: help docs-hero docs-diagrams docs-build docs-serve docs-check docs-wiki
+.PHONY: help docs-hero docs-diagrams docs-build docs-serve docs-check docs-wiki docs-package
 
 help:
 	@echo "docs-diagrams  render diagram masters -> SVG (site) + PNG (committed)"
@@ -21,6 +21,7 @@ help:
 	@echo "docs-serve     render diagrams + site, then mkdocs serve"
 	@echo "docs-check     verify diagrams + check_docs + mkdocs --strict"
 	@echo "docs-wiki      render wiki + push_wiki --check (no network)"
+	@echo "docs-package   regenerate PYPI.md from docs/package-readme.md"
 
 docs-hero:
 	$(DOCS_PY) -m scripts.docs.render_hero
@@ -44,6 +45,9 @@ docs-check:
 	$(DOCS_PY) -m scripts.docs.render_diagrams --check
 	$(DOCS_PY) -m scripts.docs.check_docs
 	uv run mkdocs build --strict
+
+docs-package:
+	$(DOCS_PY) -m scripts.docs.build_docs --package
 
 docs-wiki:
 	$(DOCS_PY) -m scripts.docs.render_diagrams

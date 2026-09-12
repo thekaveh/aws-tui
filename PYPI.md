@@ -19,7 +19,7 @@ navigation, deterministic demo mode, and built-in themes.
 
 - [Project documentation](https://thekaveh.github.io/aws-tui/)
 - [Canonical documentation source](https://github.com/thekaveh/aws-tui/tree/main/docs)
-- [Installation and quickstart](https://github.com/thekaveh/aws-tui#13-quickstart)
+- [Installation and quickstart](https://github.com/thekaveh/aws-tui#3-quickstart)
 - [Connection configuration](https://github.com/thekaveh/aws-tui/blob/main/docs/connections.md)
 - [Security policy](https://github.com/thekaveh/aws-tui/blob/main/SECURITY.md)
 - [Source and issue tracker](https://github.com/thekaveh/aws-tui)

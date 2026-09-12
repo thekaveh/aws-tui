@@ -287,9 +287,12 @@ must combine the raw built-in theme, then the shared operational layer, before
 installing a custom file:
 
 ```bash
+# Substitute your platform's config directory (see docs/platforms.md).
+THEME_DIR="$HOME/.config/aws-tui/themes"
+mkdir -p "$THEME_DIR"
 cat src/aws_tui/ui/themes/carbon.tcss \
     src/aws_tui/ui/themes/operational-panes.tcss \
-    > <config-dir>/themes/midnight.tcss
+    > "$THEME_DIR/midnight.tcss"
 ```
 
 Edit `midnight.tcss`, then select it with `t` or `:` then **Theme picker**.

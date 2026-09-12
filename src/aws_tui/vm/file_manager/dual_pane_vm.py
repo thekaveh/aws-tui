@@ -27,6 +27,7 @@ from vmx.services.dispatcher import Dispatcher
 from aws_tui.domain.cross_fs import ConflictResolution, CrossFsCopy, CrossFsMove
 from aws_tui.domain.filesystem import ProviderError, TransferProgress
 from aws_tui.domain.transfer_journal import TransferJournal
+from aws_tui.vm._observable import send_value_free
 from aws_tui.vm.file_manager.entry_vm import EntryVM
 from aws_tui.vm.file_manager.pane_vm import PaneVM
 from aws_tui.vm.messages import (
@@ -327,7 +328,7 @@ class DualPaneVM:
         if self._focused is pane:
             return
         self._focused = pane
-        self._hub.send(PropertyChangedMessage.create(self, self._inner.name, "focused"))
+        send_value_free(self._hub, PropertyChangedMessage.create(self, self._inner.name, "focused"))
 
     # ── Async cross-pane operations ────────────────────────────────────────
 
@@ -610,9 +611,14 @@ class DualPaneVM:
         # branch was dead code (asserted by the comment that used to
         # live there) and has been removed.
         cancel_event = self._cancel_events.get(transfer_id)
-        assert cancel_event is not None, (
-            f"cancel event missing for {transfer_id!r} — _pre_register_pending should install it"
-        )
+        if cancel_event is None:
+            # Raised, not asserted: ``python -O`` strips ``assert``, and the
+            # next line would then fail with ``AttributeError: 'NoneType' has
+            # no attribute 'is_set'`` in the middle of a live transfer.
+            raise RuntimeError(
+                f"cancel event missing for {transfer_id!r} — "
+                "_pre_register_pending should install it"
+            )
 
         # Pre-cancelled-while-PENDING fast path: the user clicked
         # cancel before this transfer got its turn. Skip the work
@@ -777,13 +783,19 @@ class DualPaneVM:
         self.set_focused(target)
 
     def _signal_copy_requested(self) -> None:
-        self._hub.send(PropertyChangedMessage.create(self, self._inner.name, "copy_requested"))
+        send_value_free(
+            self._hub, PropertyChangedMessage.create(self, self._inner.name, "copy_requested")
+        )
 
     def _signal_move_requested(self) -> None:
-        self._hub.send(PropertyChangedMessage.create(self, self._inner.name, "move_requested"))
+        send_value_free(
+            self._hub, PropertyChangedMessage.create(self, self._inner.name, "move_requested")
+        )
 
     def _signal_delete_requested(self) -> None:
-        self._hub.send(PropertyChangedMessage.create(self, self._inner.name, "delete_requested"))
+        send_value_free(
+            self._hub, PropertyChangedMessage.create(self, self._inner.name, "delete_requested")
+        )
 
 
 __all__ = ["DualPaneVM", "FocusedPane"]

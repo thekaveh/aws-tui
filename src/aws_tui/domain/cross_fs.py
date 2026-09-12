@@ -51,6 +51,7 @@ from aws_tui.domain.filesystem import (
     ProgressCallback,
     ProviderError,
     StageManifestEntry,
+    UnsupportedSourceError,
 )
 
 #: Maximum ``" (N)"`` suffixes the ``RENAME`` conflict resolver will try
@@ -304,6 +305,13 @@ class CrossFsCopy:
                     progress=progress,
                     overwrite=on_conflict == ConflictResolution.OVERWRITE,
                 )
+            except UnsupportedSourceError:
+                # A source the app refuses to copy (symlink, device node) is
+                # permanent: no destination name makes it copyable. Letting it
+                # fall into the RENAME arm below burned every rename attempt on
+                # it and then reported "no available destination name", hiding
+                # the real reason behind a destination-side error.
+                raise
             except ConflictError:
                 if on_conflict == ConflictResolution.RENAME:
                     continue
@@ -357,18 +365,17 @@ class CrossFsCopy:
                     progress=progress,
                     overwrite=False,
                 )
-            except ConflictError:
-                cleanup = await self._cleanup_empty_claim(
-                    container,
-                    claimed.value,
-                )
-                _finish_durable(
-                    None,
-                    context="file stage container cleanup",
-                    outcomes=[claimed, cleanup],
-                    ignore_not_found=True,
-                )
-                continue
+            # No ``except ConflictError`` retry branch here. It assumed the
+            # container was still pristine, but ``LocalFS.write_stream`` creates
+            # ``container/payload`` before it consumes the source, and the source
+            # raises its refusals on the first iteration -- so a ``ConflictError``
+            # from the SOURCE (refusing a symlink or a FIFO) arrived with the
+            # payload already present. ``_cleanup_empty_claim`` then failed on a
+            # non-empty directory, turning a clean "refusing symlink" into
+            # "file stage container cleanup failed: stage changed: /.<name>
+            # .aws-tui-stage-<hex>" and leaving that directory behind for good.
+            # The container name carries a uuid4, so the collision the retry
+            # existed for cannot realistically occur.
             except BaseException as exc:
                 await self._capture_file_stage(
                     publisher,
@@ -436,7 +443,13 @@ class CrossFsCopy:
             container_revision=container_capture.value,
             manifest=(StageManifestEntry(PathRef(()), EntryKind.FILE, captured.value),),
         )
-        if failure is not None or captured.cancelled:
+        # ``container_capture.cancelled`` belongs here too. ``_durably_run``
+        # deliberately never re-raises cancellation -- it records it so the
+        # caller can route it into ``_finish_durable`` -- so omitting this
+        # disjunct meant a cancel delivered during the container capture was
+        # swallowed: the stage was published and the transfer reported success
+        # for a copy the user had already interrupted.
+        if failure is not None or captured.cancelled or container_capture.cancelled:
             cleanup = await self._cleanup_owned_stage(owned)
             _finish_durable(
                 failure,

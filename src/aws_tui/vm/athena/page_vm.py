@@ -1064,7 +1064,7 @@ class AthenaPageVM:
             return
         context_generation = self._context_generation
         task = asyncio.current_task()
-        await self.results.load(execution_id)
+        await self.results.load(execution_id, from_history=True)
         if (
             (task is not None and task.cancelling())
             or not self._is_current_context(context_generation)

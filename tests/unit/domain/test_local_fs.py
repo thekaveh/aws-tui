@@ -1192,6 +1192,55 @@ async def test_read_stream_closes_descriptor_when_fstat_fails(
     assert closed == [777]
 
 
+async def test_read_stream_closes_descriptor_cancelled_during_the_thread_hop(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A cancel delivered while the opener thread runs must not leak the fd.
+
+    ``anyio.to_thread.run_sync`` defaults to ``abandon_on_cancel=False``, but
+    that shield is an anyio cancel scope and does not stop the raw
+    ``asyncio.Task.cancel()`` a Textual worker issues. The awaiting coroutine
+    unwinds *before* the worker thread returns, so the descriptor does not exist
+    yet when the caller's ``finally`` runs -- it is produced afterwards, with
+    nothing left holding it. ``_FdClaim`` closes it from the thread side in that
+    ordering. Both exclusive streaming groups cancel in-flight reads routinely.
+    """
+    import asyncio
+    import threading
+    import time
+
+    from aws_tui.domain import local_fs
+
+    (tmp_path / "payload.txt").write_bytes(b"payload")
+    closed: list[int] = []
+    entered = threading.Event()
+
+    def _slow_open(*_args: object, **_kwargs: object) -> int:
+        entered.set()
+        time.sleep(0.25)
+        return 777
+
+    open_name = "_windows_open" if os.name == "nt" else "_rooted_open"
+    monkeypatch.setattr(local_fs, open_name, _slow_open)
+    monkeypatch.setattr(local_fs.os, "close", closed.append)
+
+    stream = await LocalFS(root=tmp_path).read_stream(PathRef.from_posix("/payload.txt"))
+    task = asyncio.ensure_future(_drain(stream))
+    await asyncio.to_thread(entered.wait, 5)
+    task.cancel()
+    with suppress(BaseException):
+        await task
+
+    # The opener is still running; the claim closes the descriptor when it lands.
+    for _ in range(100):
+        if closed:
+            break
+        await asyncio.sleep(0.02)
+
+    assert closed == [777], "descriptor opened on the worker thread was not closed"
+
+
 # ---------------------------------------------------------------------------
 # Symlinks
 # ---------------------------------------------------------------------------

@@ -97,27 +97,6 @@ _LETTERS: dict[str, tuple[str, str, str, str, str, str]] = {
 
 _WORD = "AWS-TUI"
 
-# Six-row carbon (default) palette, inspired by genai-vanilla's blue/cyan
-# banner. The other themes use matching 6-stop sweeps in their own accent
-# color family, picked from the 256-color palette and tuned to roughly
-# track each theme's accent.
-_GRADIENT: tuple[str, ...] = (
-    "color(17)",
-    "color(18)",
-    "color(19)",
-    "color(20)",
-    "color(21)",
-    "color(26)",
-    "color(27)",
-    "color(33)",
-    "color(39)",
-    "color(45)",
-    "color(51)",
-    "color(87)",
-    "color(123)",
-    "color(159)",
-    "color(195)",
-)
 
 # ── Carbon-derived gradient transform ───────────────────────────────────────
 #

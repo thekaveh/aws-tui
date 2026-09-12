@@ -35,6 +35,7 @@ from vmx import (
 from vmx.lifecycle.status import ConstructionStatus
 from vmx.services.dispatcher import Dispatcher
 
+from aws_tui.vm._observable import send_value_free
 from aws_tui.vm.messages import PaletteActionFailedMessage
 
 #: User-supplied callable for a palette entry — sync or async (returns an awaitable).
@@ -243,7 +244,7 @@ class CommandPaletteVM:
         if self._filter_text == value:
             return
         self._filter_text = value
-        self._hub.send(PropertyChangedMessage.create(self, self.name, "filter_text"))
+        send_value_free(self._hub, PropertyChangedMessage.create(self, self.name, "filter_text"))
         self._recompute_filtered()
 
     @property
@@ -254,7 +255,9 @@ class CommandPaletteVM:
         if self._active_service_id == service_id:
             return
         self._active_service_id = service_id
-        self._hub.send(PropertyChangedMessage.create(self, self.name, "active_service_id"))
+        send_value_free(
+            self._hub, PropertyChangedMessage.create(self, self.name, "active_service_id")
+        )
         self._recompute_filtered()
 
     @property
@@ -368,7 +371,9 @@ class CommandPaletteVM:
         self._set_open(True)
         if self._filter_text != "":
             self._filter_text = ""
-            self._hub.send(PropertyChangedMessage.create(self, self.name, "filter_text"))
+            send_value_free(
+                self._hub, PropertyChangedMessage.create(self, self.name, "filter_text")
+            )
         self._recompute_filtered()
 
     def _close(self) -> None:
@@ -378,7 +383,7 @@ class CommandPaletteVM:
         if self._is_open == value:
             return
         self._is_open = value
-        self._hub.send(PropertyChangedMessage.create(self, self.name, "is_open"))
+        send_value_free(self._hub, PropertyChangedMessage.create(self, self.name, "is_open"))
 
     def _execute_selected(self) -> None:
         if not self._filtered:
@@ -449,7 +454,7 @@ class CommandPaletteVM:
         if self._selected_index == value:
             return
         self._selected_index = value
-        self._hub.send(PropertyChangedMessage.create(self, self.name, "selected_index"))
+        send_value_free(self._hub, PropertyChangedMessage.create(self, self.name, "selected_index"))
 
     # ── Filter machinery ───────────────────────────────────────────────────
 
@@ -472,7 +477,9 @@ class CommandPaletteVM:
         new_filtered = tuple(item_inner.model for item_inner in self._scored_filter.visible)
         if new_filtered != self._filtered:
             self._filtered = new_filtered
-            self._hub.send(PropertyChangedMessage.create(self, self.name, "filtered_entries"))
+            send_value_free(
+                self._hub, PropertyChangedMessage.create(self, self.name, "filtered_entries")
+            )
         if self._selected_index != 0:
             self._set_selected_index(0)
 

@@ -1,6 +1,6 @@
 # Connections
 
-> Mirror of spec §6.1–6.3 and §6.5. See also the
+> Mirror of spec §7.1–7.3 and §7.6. See also the
 > [cookbook](cookbook.md) for the "connect to local S3Mock" walkthrough.
 
 A **Connection** is the unit aws-tui authenticates as. Two kinds:
@@ -10,6 +10,11 @@ A **Connection** is the unit aws-tui authenticates as. Two kinds:
   discovered from `~/.aws/{config,credentials}` on every launch.
 - `kind = "s3-compatible"` — for MinIO, Cloudflare R2, Backblaze B2,
   Wasabi, Ceph, SeaweedFS, anything with an S3-compatible API.
+
+![aws-tui deployment boundaries showing the local process, platform config and keychain, multiple profile-scoped AWS accounts and regions, and optional S3-compatible endpoints.](diagrams/img/deployment.png)
+
+Each connection is a separate credential and endpoint boundary; nothing is
+shared between them at runtime.
 
 ## 1. Config Schema
 ```toml
@@ -168,7 +173,7 @@ Why this is useful day-to-day:
 
 The `,` key opens **Settings** where you can add, edit, or delete
 `s3-compatible` connections (see the
-[`docs/cookbook.md` S3Mock walkthrough](cookbook.md#1-connect-to-and-switch-between-data-sources).
+[`docs/cookbook.md` S3Mock walkthrough](cookbook.md#1-connect-to-and-switch-between-data-sources)).
 AWS profiles are read-only from aws-tui's perspective — manage those
 through the standard `~/.aws/` tooling.
 

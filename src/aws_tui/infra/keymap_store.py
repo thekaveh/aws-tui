@@ -3,7 +3,7 @@
 Every user-visible interaction in aws-tui is named by an action string
 (e.g. ``pane.copy``, ``app.command_palette``). The KeymapStore maps an
 action to one or more keystrokes; the defaults match the canonical spec
-§4.2 keymap. An overlay (typically ``[keybindings]`` from
+§5.2 keymap. An overlay (typically ``[keybindings]`` from
 ``config.toml``) replaces the default keys for an action wholesale —
 overlay never unions with defaults; the user is in charge.
 
