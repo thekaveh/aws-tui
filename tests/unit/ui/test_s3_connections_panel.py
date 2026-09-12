@@ -88,6 +88,29 @@ async def test_refresh_rows_safe_post_mount(tmp_path: Path) -> None:
         s3_vm.dispose()
 
 
+async def _settle_until(predicate, pilot, *, what: str, timeout: float = 30.0) -> None:
+    """Wait for ``predicate`` to hold rather than assuming one pause covers it.
+
+    ``S3ConnectionsPanel.on_connection_form_submitted`` awaits
+    ``S3ConnectionsVM.add_async`` / ``update_async`` / ``remove_async``, each of
+    which hands its persistence step to a worker thread -- the keyring reach and
+    the ``config.toml`` OS file lock must not run on the event loop. A single
+    ``pilot.pause()`` can therefore return before the handler has resumed past
+    the thread round-trip, so an assertion straight after the post reads state
+    from before the write. That is load- and platform-dependent: it passed on
+    macOS, Linux, Windows py3.11 and Windows py3.13, and failed on Windows
+    py3.12 in the same CI run. Reproduced locally by delaying the blocking half
+    by 0.4s, which fails the old one-pause form every time.
+    """
+    import asyncio
+
+    deadline = asyncio.get_running_loop().time() + timeout
+    while not predicate():
+        if asyncio.get_running_loop().time() >= deadline:
+            raise AssertionError(f"timed out after {timeout}s waiting for {what}")
+        await pilot.pause(0.01)
+
+
 @pytest.mark.asyncio
 async def test_panel_routes_form_submission_to_vm_add(tmp_path: Path) -> None:
     """When ConnectionFormSubmitted fires with mode='add', the panel
@@ -124,7 +147,11 @@ async def test_panel_routes_form_submission_to_vm_add(tmp_path: Path) -> None:
                 verify_tls=True,
             )
             panel.post_message(ConnectionFormSubmitted(form=form, mode="add", original_name=None))
-            await pilot.pause()
+            await _settle_until(
+                lambda: "from-event" in store.load().connections,
+                pilot,
+                what="the added connection to be persisted",
+            )
         # After event handling the row must be persisted.
         entry = store.load().connections["from-event"]
         assert entry.session_token == "TOKEN"
@@ -154,7 +181,11 @@ async def test_edit_preserves_hidden_session_token(tmp_path: Path) -> None:
             panel.post_message(
                 ConnectionFormSubmitted(form=submitted, mode="edit", original_name="sts")
             )
-            await pilot.pause()
+            await _settle_until(
+                lambda: store.load().connections["sts"].session_token == "TOK",
+                pilot,
+                what="the edited connection to be persisted",
+            )
 
         assert store.load().connections["sts"].session_token == "TOK"
     finally:
@@ -242,7 +273,11 @@ async def test_duplicate_name_keeps_form_open_and_surfaces_error(tmp_path: Path)
             form.post_message(
                 ConnectionFormSubmitted(form=form_obj, mode="add", original_name=None)
             )
-            await pilot.pause()
+            await _settle_until(
+                lambda: pilot.app.query_one("#form-name", Input).has_class("-invalid"),
+                pilot,
+                what="the duplicate name to be marked invalid",
+            )
             # Form must still be open
             assert form.has_class("-open")
             # Name field must be marked invalid
