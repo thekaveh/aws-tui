@@ -36,8 +36,10 @@ profile or S3 endpoint.
 > until the `aws-tui` project name is available on PyPI. Glue, Athena, and
 > their integrated Iceberg workflows are Unreleased v0.9.0 feature work. The
 > package metadata remains `0.8.0` until the release-preparation PR bumps it;
-> the current tree must not be tagged as v0.8.0. See the changelog
-> in the repository for the full per-PR delta.
+> the current tree must not be tagged as v0.8.0. The per-release history
+> lives in `CHANGELOG.md` in the repository, which is the one document these
+> surfaces cannot carry: its version headings resolve through `/compare/`
+> links into the repository itself.
 
 ## 1. Features
 

@@ -26,6 +26,18 @@ INTERNAL_DOC_PREFIXES: tuple[str, ...] = ("docs/superpowers/",)
 # the Contributor Covenant is reproduced verbatim.
 UNNUMBERED_DOCS: frozenset[str] = frozenset({"CHANGELOG.md", "CODE_OF_CONDUCT.md"})
 
+# Root documents that deliberately stay repo-only.
+#
+# ``README.md`` is the repository entry point; ``docs/index.md`` is the
+# published landing page, and publishing both would be two sources for one
+# page. ``PYPI.md`` is a generated output, declared as the manifest's
+# package surface. ``CHANGELOG.md`` cannot be published without breaking
+# self-containment: its version headings resolve through nine
+# ``/compare/`` links into the repository, and those are the whole point of
+# a Keep a Changelog reference block -- stripping them would leave
+# unresolved bracket text on the page.
+UNPUBLISHED_ROOT_DOCS: frozenset[str] = frozenset({"README.md", "PYPI.md", "CHANGELOG.md"})
+
 _PLACEHOLDER_RE = re.compile(r"\b(TODO|TBD|FIXME|XXX)\b")
 _HEADING_RE = re.compile(r"^(#{1,6})\s+(\d+(?:\.\d+)*)\.\s+\S")
 _MARKDOWN_HEADING_RE = re.compile(r"^#{1,6}\s+(.+?)\s*#*\s*$")
@@ -72,14 +84,27 @@ def check_self_containment(generated_root: str | Path, repo_root: str | Path) ->
 
 
 def check_completeness(manifest: Manifest, repo_root: str | Path) -> list[Finding]:
+    """Flag a canonical document that no surface publishes.
+
+    Root-level documents are in scope, not just ``docs/``. Scanning only
+    ``docs/`` meant a root document could never be reported: ``CONTRIBUTING.md``,
+    ``SECURITY.md`` and the code of conduct were numbering-checked as canonical
+    while reaching no published surface at all, and nothing could say so.
+    """
     repo_root = Path(repo_root)
     referenced = {leaf.source for leaf in manifest.leaves()}
     if manifest.package is not None:
         referenced.add(manifest.package.source)
     findings: list[Finding] = []
-    for md in sorted((repo_root / "docs").rglob("*.md")):
+    candidates = sorted((repo_root / "docs").rglob("*.md")) + sorted(repo_root.glob("*.md"))
+    for md in candidates:
         rel = md.relative_to(repo_root).as_posix()
-        if rel in INTERNAL_DOCS or rel.startswith(INTERNAL_DOC_PREFIXES) or rel in referenced:
+        if (
+            rel in INTERNAL_DOCS
+            or rel in UNPUBLISHED_ROOT_DOCS
+            or rel.startswith(INTERNAL_DOC_PREFIXES)
+            or rel in referenced
+        ):
             continue
         findings.append(Finding("error", f"{rel}: published doc not referenced by manifest"))
     return findings

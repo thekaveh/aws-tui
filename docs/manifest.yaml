@@ -21,6 +21,7 @@ sections:
       - { id: keybindings, title: Keybindings, source: docs/keybindings.md }
       - { id: cookbook, title: Cookbook, source: docs/cookbook.md }
       - { id: theming, title: Theming, source: docs/theming.md }
+      - { id: configuration, title: Configuration Reference, source: docs/configuration.md }
   - id: services
     title: Service Guides
     children:
@@ -35,6 +36,12 @@ sections:
       - { id: adding-service, title: Adding a New Service, source: docs/adding-a-service.md }
       - { id: contract-ledger, title: Consumed Contract Ledger, source: docs/contract-ledger.md }
   - { id: releasing, title: Releasing aws-tui, source: docs/RELEASING.md }
+  - id: project
+    title: Project
+    children:
+      - { id: contributing, title: Contributing to aws-tui, source: CONTRIBUTING.md }
+      - { id: security, title: Security Policy, source: SECURITY.md }
+      - { id: code-of-conduct, title: Contributor Covenant Code of Conduct, source: CODE_OF_CONDUCT.md }
   - { id: homebrew-bootstrap, title: Homebrew Bootstrap, source: docs/homebrew-bootstrap.md }
 diagrams:
   - { id: architecture, master: docs/diagrams/architecture.html }

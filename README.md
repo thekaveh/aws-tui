@@ -280,20 +280,21 @@ are indexed below for contributors and repository review.
    2. [Connections (AWS profiles + S3-compatible)](docs/connections.md) — configure connections, understand credential resolution, and set provider-specific endpoint options.
    3. [Keybindings](docs/keybindings.md) — wired key map, deferred action IDs, and shipped `[keybindings]` overlay behavior.
    4. [Theming](docs/theming.md) — built-in palettes, runtime theme switch, `.tcss` overlay and custom-theme drop-ins.
-   5. [Cookbook (common recipes)](docs/cookbook.md) — step-by-step walkthroughs (connect to local S3Mock, switch theme on the fly, prepare keybinding overlays, inspect transfer evidence after a crash).
-   6. [Supported Platforms](docs/platforms.md) — per-OS terminal + font recommendations and Windows launch notes.
-   7. [Local AWS test-services harness (`scripts/test-services/`)](scripts/test-services/README.md) — Adobe S3Mock Docker Compose + seed for offline development.
-   8. [S3 and local file manager](docs/services/s3.md) — sources, dual-pane operations, transfer safety, architecture, and verification.
-   9. [EMR Serverless](docs/services/emr-serverless.md) — source/application context, runs, logs, clone workflow, architecture, and verification.
-   10. [AWS Glue and Iceberg metadata](docs/services/glue.md) — catalog/jobs/crawlers, bounded metadata, Athena handoffs, architecture, and verification.
-   11. [Amazon Athena](docs/services/athena.md) — context, read-only SQL policy, lifecycle, results, handoffs, architecture, and verification.
+   5. [Configuration Reference](docs/configuration.md) — file locations, every environment variable aws-tui reads, and the localization position.
+   6. [Cookbook (common recipes)](docs/cookbook.md) — step-by-step walkthroughs (connect to local S3Mock, switch theme on the fly, prepare keybinding overlays, inspect transfer evidence after a crash).
+   7. [Supported Platforms](docs/platforms.md) — per-OS terminal + font recommendations and Windows launch notes.
+   8. [Local AWS test-services harness (`scripts/test-services/`)](scripts/test-services/README.md) — Adobe S3Mock Docker Compose + seed for offline development.
+   9. [S3 and local file manager](docs/services/s3.md) — sources, dual-pane operations, transfer safety, architecture, and verification.
+   10. [EMR Serverless](docs/services/emr-serverless.md) — source/application context, runs, logs, clone workflow, architecture, and verification.
+   11. [AWS Glue and Iceberg metadata](docs/services/glue.md) — catalog/jobs/crawlers, bounded metadata, Athena handoffs, architecture, and verification.
+   12. [Amazon Athena](docs/services/athena.md) — context, read-only SQL policy, lifecycle, results, handoffs, architecture, and verification.
 2. **Contributor-facing**
    1. [Architecture](docs/architecture.md) — five-layer model + composition root + lifecycle + messaging primer.
    2. [Adding a new service](docs/adding-a-service.md) — the `Service` protocol + per-layer wiring.
    3. [PyPI package blurb source](docs/package-readme.md) — the canonical
       source for `PYPI.md`; regenerate with `make docs-package` after editing.
    4. [VMx Python cheatsheet](docs/superpowers/notes/2026-06-14-vmx-python-cheatsheet.md) — facade pattern, message-protocol shape, lifecycle gotchas.
-   5. [Three-surface publish runbook](docs/superpowers/notes/2026-07-10-three-surface-docs-phase2-runbook.md) — gated Pages and wiki enablement, first publish, and verification steps.
+   6. [Three-surface publish runbook](docs/superpowers/notes/2026-07-10-three-surface-docs-phase2-runbook.md) — gated Pages and wiki enablement, first publish, and verification steps.
 3. **Design specs and implementation plans**
 
    Design specs, implementation plans, and working notes live in-tree under
@@ -313,51 +314,18 @@ are indexed below for contributors and repository review.
    3. [Security policy](SECURITY.md) — vulnerability reporting + supported versions.
    4. [Changelog](CHANGELOG.md) — user-visible unreleased and release deltas.
 
-## 5. File locations
+## 5. Configuration reference
 
-`<config-dir>` and `<cache-dir>` are platform-specific; see
-[`docs/platforms.md`](docs/platforms.md#1-quick-reference) for exact
-macOS, Linux, and Windows paths. Existing legacy XDG directories are
-preserved when present.
-
-| Path | Contents |
-|---|---|
-| `<config-dir>/config.toml` | Connections + defaults + keybindings |
-| `<config-dir>/theme.tcss` | Optional `.tcss` overlay over the active theme |
-| `<config-dir>/themes/<name>.tcss` | Optional full custom themes |
-| `<cache-dir>/log/aws-tui.log` | JSON-lines log (rotated 5 MiB × 5) |
-| `<cache-dir>/transfers/<id>.jsonl` | Per-transfer interrupted-operation diagnostics |
-| `<cache-dir>/crash/<ts>.txt` | Full traceback + log/action tail per crash |
-
-## 6. Environment variables
-
-| Variable | Default | Effect |
-|---|---|---|
-| `AWS_DEFAULT_PROFILE` | unset | Preferred AWS profile at launch when `[defaults].connection` is unset. Takes precedence over `AWS_PROFILE`. |
-| `AWS_PROFILE` | unset | AWS profile fallback after `[defaults].connection` and `AWS_DEFAULT_PROFILE`, before the first connection in resolver order (explicit `[connections.*]` entries precede auto-discovered profiles). |
-| `AWS_DEFAULT_REGION` | unset | Region fallback after an explicit connection region and the selected AWS profile's configured region, before `us-east-1`. |
-| `AWS_CONFIG_FILE` | `~/.aws/config` | Overrides the shared AWS config path used for profile discovery. `~` and environment variables in the value are expanded. |
-| `AWS_SHARED_CREDENTIALS_FILE` | `~/.aws/credentials` | Overrides the shared AWS credentials path used for profile discovery. `~` and environment variables in the value are expanded. |
-| `AWS_TUI_DEMO` | unset | Truthy values `1`, `true`, and `yes` launch demo mode with seeded in-memory data. Equivalent to `aws-tui --demo`. |
-| `${PREFIX}_ACCESS_KEY_ID` / `${PREFIX}_SECRET_ACCESS_KEY` / optional `${PREFIX}_SESSION_TOKEN` | per-connection | Read by `ConnectionResolver` when a `[connections.<name>]` entry in `config.toml` sets `credentials = "env:PREFIX_"`. See [`docs/connections.md`](docs/connections.md) for the full pattern. |
-| `XDG_CONFIG_HOME` | per-OS default | Linux: used by `platformdirs` when no legacy `~/.config/aws-tui` directory already exists. macOS and Windows use the platform-native location regardless. |
-| `XDG_CACHE_HOME` | per-OS default | Linux: used by `platformdirs` when no legacy `~/.cache/aws-tui` directory already exists. macOS and Windows use the platform-native location regardless. |
-| `AWS_TUI_TRANSFER_LINGER` | `3.0` | Seconds a finished transfer's row stays visible in the transfers overlay before it fades. Test-only knob — short values make `pytest` runs faster. |
+Where aws-tui keeps its files, every environment variable it reads, and the
+localization position live in
+[Configuration Reference](docs/configuration.md) — one page rather than three
+README sections, so the published site and wiki serve the same tables instead
+of pointing back here.
 
 aws-tui does not launch AWS CLI SSO setup; run `aws sso login --profile
-<name>` in a terminal when prompted. The app does not read `$PAGER` or
-`$EDITOR` in v0.8.x. The Quick Look full-file `$PAGER` shell-out is spec'd
-but not yet wired (see the
-`Deferred / v0.9 roadmap` block in the `[0.8.0]` section of
-`CHANGELOG.md`).
+<name>` in a terminal when prompted.
 
-## 7. Localization
-
-aws-tui is English-only in v0.8.x. User-facing strings are intentionally
-hardcoded until a localization pass introduces translation bundles and
-locale-aware formatting.
-
-## 8. Contributing
+## 6. Contributing
 
 See [CONTRIBUTING.md](CONTRIBUTING.md). License:
 [Apache License 2.0](LICENSE) (with [NOTICE](NOTICE)). Security:
