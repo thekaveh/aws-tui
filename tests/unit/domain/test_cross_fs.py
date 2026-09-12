@@ -2224,3 +2224,38 @@ async def test_cancel_during_container_capture_does_not_publish_the_copy(
 
     assert len(dst.captures) >= _CONTAINER_CAPTURE, f"container capture never ran: {dst.captures}"
     assert not (tmp_path / "target").exists(), "cancelled copy was published anyway"
+
+
+async def test_copying_a_symlink_reports_the_refusal_and_leaves_no_stage(
+    tmp_path: Path,
+) -> None:
+    """A source refusal must surface as itself, with the stage cleaned up.
+
+    ``LocalFS.write_stream`` creates ``container/payload`` before it consumes
+    the source, and the source raises its refusals on the first iteration. The
+    ``except ConflictError`` retry branch assumed a pristine container, so
+    ``_cleanup_empty_claim`` failed on a non-empty directory: the clean
+    "refusing symlink" became "file stage container cleanup failed: stage
+    changed: /.<name>.aws-tui-stage-<hex>", and that directory was left behind
+    permanently. Reachable today -- swap a pane to local, mark a symlink, copy.
+    """
+    src_root = tmp_path / "src"
+    dst_root = tmp_path / "dst"
+    src_root.mkdir()
+    dst_root.mkdir()
+    target = src_root / "real.txt"
+    target.write_bytes(b"payload")
+    try:
+        (src_root / "link.txt").symlink_to(target)
+    except (OSError, NotImplementedError):  # pragma: no cover - Windows privilege
+        pytest.skip("symlink creation requires privilege on this platform")
+
+    src = LocalFS(root=src_root)
+    dst = LocalFS(root=dst_root)
+
+    with pytest.raises(ConflictError, match="refusing symlink"):
+        await CrossFsCopy(source=src, destination=dst).copy(
+            PathRef.from_posix("/link.txt"), PathRef.from_posix("/link.txt")
+        )
+
+    assert list(dst_root.iterdir()) == [], "the abandoned stage was left behind"

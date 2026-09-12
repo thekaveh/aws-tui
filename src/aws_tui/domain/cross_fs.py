@@ -357,18 +357,17 @@ class CrossFsCopy:
                     progress=progress,
                     overwrite=False,
                 )
-            except ConflictError:
-                cleanup = await self._cleanup_empty_claim(
-                    container,
-                    claimed.value,
-                )
-                _finish_durable(
-                    None,
-                    context="file stage container cleanup",
-                    outcomes=[claimed, cleanup],
-                    ignore_not_found=True,
-                )
-                continue
+            # No ``except ConflictError`` retry branch here. It assumed the
+            # container was still pristine, but ``LocalFS.write_stream`` creates
+            # ``container/payload`` before it consumes the source, and the source
+            # raises its refusals on the first iteration -- so a ``ConflictError``
+            # from the SOURCE (refusing a symlink or a FIFO) arrived with the
+            # payload already present. ``_cleanup_empty_claim`` then failed on a
+            # non-empty directory, turning a clean "refusing symlink" into
+            # "file stage container cleanup failed: stage changed: /.<name>
+            # .aws-tui-stage-<hex>" and leaving that directory behind for good.
+            # The container name carries a uuid4, so the collision the retry
+            # existed for cannot realistically occur.
             except BaseException as exc:
                 await self._capture_file_stage(
                     publisher,

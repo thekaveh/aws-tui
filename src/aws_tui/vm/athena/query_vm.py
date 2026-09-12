@@ -815,6 +815,15 @@ class AthenaQueryVM:
         self._output_location = detail.output_location
         self._engine_version = detail.engine_version
         self._pane_state = PaneState.IDLE
+        # Clear the error with the pane state, not just the pane state. A failed
+        # ``StopQueryExecution`` sets ``_error_text`` while the poll keeps
+        # running; when the execution then settles, resetting only
+        # ``_pane_state`` left IDLE + a stale error, which
+        # ``_snapshot_structure_is_valid`` rejects for every terminal state
+        # except the CANCELLED carve-out. The result was a page that refused
+        # every service handoff with "finish the active Athena operation" for
+        # the rest of the session. A settled detail is authoritative.
+        self._error_text = None
         for property_name in (
             "state",
             "statistics",
@@ -823,6 +832,7 @@ class AthenaQueryVM:
             "output_location",
             "engine_version",
             "pane_state",
+            "error_text",
         ):
             self._notify(property_name)
 

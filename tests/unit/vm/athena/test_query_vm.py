@@ -1745,3 +1745,27 @@ async def test_retained_cleanup_refs_are_bounded() -> None:
     assert f"q-{_MAX_PENDING_CLEANUP_REFS + 9}" in vm._pending_cleanup_refs
 
     vm.dispose()
+
+
+async def test_a_failed_stop_does_not_poison_the_page_after_the_query_settles() -> None:
+    """A settled detail is authoritative -- it must clear the stale error.
+
+    A failed ``StopQueryExecution`` sets ``error_text`` while the poll keeps
+    running. When the execution then settles, ``_apply_detail`` reset
+    ``pane_state`` to IDLE but left ``error_text`` set, and
+    ``_snapshot_structure_is_valid`` rejects IDLE-plus-error for every terminal
+    state outside the CANCELLED carve-out. ``app.py`` turns that into a standing
+    "finish the active Athena operation before switching services" refusal, so
+    one failed cancel disabled every service handoff for the rest of the
+    session. Reachable with any role lacking ``athena:StopQueryExecution``.
+    """
+    vm = make_query_vm(InMemoryAthena())
+    vm._error_text = "Athena rejected the request"
+    vm._pane_state = PaneState.ERROR
+
+    vm._apply_detail(_detail("q-settled", QueryState.SUCCEEDED))
+
+    assert vm.pane_state is PaneState.IDLE
+    assert vm.error_text is None, "a settled execution kept a stale stop error"
+
+    vm.dispose()
