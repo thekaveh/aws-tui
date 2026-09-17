@@ -83,6 +83,7 @@ SAFE_CONTINUE_ACTIONS: Final[frozenset[str]] = frozenset(
         "glue.copy_table_ref",
         "glue.query_in_athena",
         "glue.time_travel_in_athena",
+        "glue.load_more",
         "glue.open_s3_location",
         "emr.logs.filter",
         "emr.next_application",

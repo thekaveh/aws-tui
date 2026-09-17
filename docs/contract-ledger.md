@@ -104,6 +104,7 @@ glue.choose_run_state
 glue.copy_table_ref
 glue.crawlers
 glue.jobs
+glue.load_more
 glue.open_s3_location
 glue.query_in_athena
 glue.time_travel_in_athena

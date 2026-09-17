@@ -86,6 +86,7 @@ _EXPECTED_ACTION_EFFECTS = {
     "athena.execute": "Execute the validated read-only SQL in the active Athena context.",
     "athena.cancel": "Stop interrupts query submission or the active app-owned Athena query.",
     "athena.load_more": "Load the next available page for the active Athena view.",
+    "glue.load_more": "Load the next available page for the focused Glue list.",
 }
 
 _EXPECTED_ACTION_REQUIREMENTS = {
@@ -99,6 +100,7 @@ _EXPECTED_ACTION_REQUIREMENTS = {
     "athena.execute": "Requires valid non-empty read-only SQL and an idle query runner.",
     "athena.cancel": "Requires query submission or an active app-owned Athena query.",
     "athena.load_more": "Requires another result page in the active Athena view.",
+    "glue.load_more": "Requires another page in the focused Glue list.",
 }
 
 _EXPECTED_ACTION_PRIORITIES = {
@@ -134,6 +136,7 @@ _COMPACT_LABELS = {
     "athena.execute": "run",
     "athena.cancel": "stop",
     "athena.load_more": "more",
+    "glue.load_more": "more",
 }
 
 

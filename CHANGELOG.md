@@ -165,6 +165,12 @@ section; the current tree must not be tagged as v0.8.0.
 
 ### Fixed
 
+- **Glue pagination is reachable.** Databases, tables, partitions, jobs, runs,
+  and crawlers reported `more available` but no keyboard, palette, or mouse
+  path called the view models' load-more methods, so a filtered runs list
+  could hide every older matching run. `l` (`glue.load_more`), the **Load
+  more Glue rows** palette command, and clicking a list footer now fetch the
+  next page for the focused list.
 - **EMR clone retries no longer start a second job.** `StartJobRun` now
   carries an app-owned `clientToken` held by the clone view model for the
   life of one form intent. Previously botocore minted a fresh token per call,

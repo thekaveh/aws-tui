@@ -1057,3 +1057,83 @@ async def test_view_refresh_is_safe_when_only_the_inner_option_list_is_gone() ->
             # The panes themselves are still mounted; only their inner
             # OptionLists are gone. This is the exact partial-teardown shape.
             view._refresh_all()  # type: ignore[attr-defined]
+
+
+@pytest.mark.asyncio
+async def test_load_more_action_pages_the_focused_runs_list() -> None:
+    fake = seeded_glue()
+    fake.run_page_size = 1
+    vm, _ = _build_vm(fake)
+    await vm.setup()
+    app = _GlueApp(vm)
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        page = app.query_one(GluePage)
+        await page.action_select_view("jobs")
+        await drain_workers(app)
+        await vm.jobs.select_job("nightly")
+        await drain_workers(app)
+        assert len(vm.jobs.runs) == 1
+        assert vm.jobs.has_more_runs
+
+        page.query_one("#glue-runs-pane", ResourceListPane).option_list.focus()
+        await pilot.pause()
+        assert page.can_load_more()
+        await page.action_load_more()
+        await drain_workers(app)
+
+        assert len(vm.jobs.runs) == 2
+        assert not vm.jobs.has_more_runs
+        assert not page.can_load_more()
+
+
+@pytest.mark.asyncio
+async def test_load_more_action_falls_back_to_the_list_with_another_page() -> None:
+    fake = seeded_glue()
+    fake.table_page_size = 1
+    vm, _ = _build_vm(fake)
+    await vm.setup()
+    app = _GlueApp(vm)
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        page = app.query_one(GluePage)
+        await vm.select_database("analytics")
+        await drain_workers(app)
+        assert len(vm.catalog.tables) == 1
+        app.set_focus(None)
+        await pilot.pause()
+
+        assert page.can_load_more()
+        await page.action_load_more()
+        await drain_workers(app)
+        assert len(vm.catalog.tables) == 2
+
+
+@pytest.mark.asyncio
+async def test_clicking_a_more_available_footer_loads_the_next_page() -> None:
+    fake = seeded_glue()
+    fake.crawler_page_size = 1
+    vm, _ = _build_vm(fake)
+    await vm.setup()
+    app = _GlueApp(vm)
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        page = app.query_one(GluePage)
+        await page.action_select_view("crawlers")
+        await drain_workers(app)
+        await pilot.pause()
+        await pilot.pause()
+        assert len(vm.crawlers.crawlers) == 1
+
+        footer = page.query_one("#glue-crawlers-pane .glue-list-footer", Static)
+        assert "more available" in str(footer.content)
+        await pilot.click(footer)
+        await drain_workers(app)
+        await pilot.pause()
+        await pilot.pause()
+
+        assert len(vm.crawlers.crawlers) == 2
+        assert "more available" not in str(footer.content)

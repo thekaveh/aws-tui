@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Awaitable, Callable
 from functools import partial
 from typing import ClassVar, cast
 
@@ -104,6 +105,14 @@ class GluePage(DeferredWorkerMixin, HubSubscriberMixin, Widget):
         height: 1fr;
     }
     """
+
+    _PANE_LOADERS: ClassVar[dict[str, str]] = {
+        "glue-databases-pane": "databases",
+        "glue-tables-pane": "tables",
+        "glue-jobs-pane": "jobs",
+        "glue-runs-pane": "runs",
+        "glue-crawlers-pane": "crawlers",
+    }
 
     def __init__(
         self,
@@ -229,6 +238,67 @@ class GluePage(DeferredWorkerMixin, HubSubscriberMixin, Widget):
         # 10s-connect / 60s-read / six-attempt botocore config as everything
         # else -- awaiting it here froze the pump for the round trip.
         self._run_lifecycle_worker(self._vm.refresh_active, group="glue-refresh-active")
+
+    def _focused_ids(self) -> set[str]:
+        focused = self.app.focused
+        if focused is None:
+            return set()
+        return {widget.id for widget in focused.ancestors_with_self if widget.id}
+
+    def _loader(self, target: str) -> tuple[Callable[[], Awaitable[None]], bool]:
+        vm = self._vm
+        return {
+            "databases": (vm.catalog.load_more_databases, vm.catalog.has_more_databases),
+            "tables": (vm.catalog.load_more_tables, vm.catalog.has_more_tables),
+            "partitions": (vm.catalog.load_more_partitions, vm.catalog.has_more_partitions),
+            "jobs": (vm.jobs.load_more_jobs, vm.jobs.has_more_jobs),
+            "runs": (vm.jobs.load_more_runs, vm.jobs.has_more_runs),
+            "crawlers": (vm.crawlers.load_more_crawlers, vm.crawlers.has_more_crawlers),
+        }[target]
+
+    def _load_more_target(self) -> str | None:
+        """The list the user means: the focused one, else the first with a page."""
+        focused = self._focused_ids()
+        for pane_id, target in self._PANE_LOADERS.items():
+            if pane_id in focused:
+                return target
+        if "glue-table-detail-region" in focused:
+            return "partitions"
+        candidates = {
+            "catalog": ("tables", "databases", "partitions"),
+            "jobs": ("runs", "jobs"),
+            "crawlers": ("crawlers",),
+        }.get(self._vm.active_view, ())
+        for target in candidates:
+            if self._loader(target)[1]:
+                return target
+        return candidates[0] if candidates else None
+
+    def can_load_more(self) -> bool:
+        target = self._load_more_target()
+        return target is not None and self._loader(target)[1]
+
+    async def action_load_more(self) -> None:
+        target = self._load_more_target()
+        if target is None:
+            return
+        method, has_more = self._loader(target)
+        if not has_more:
+            return
+        # Dispatch, never await: this runs inside the App's message pump and
+        # the page fetch is a Glue round trip (see action_refresh_active).
+        self._run_lifecycle_worker(method, group="glue-load-more")
+
+    def on_resource_list_pane_load_more_requested(
+        self, event: ResourceListPane.LoadMoreRequested
+    ) -> None:
+        event.stop()
+        target = self._PANE_LOADERS.get(event.pane_id)
+        if target is None:
+            return
+        method, has_more = self._loader(target)
+        if has_more:
+            self._run_lifecycle_worker(method, group="glue-load-more")
 
     async def action_choose_run_state(self) -> None:
         await self.action_select_view("jobs")

@@ -100,6 +100,7 @@ class KeymapStore:
             ("athena.query", "glue.catalog"),
             ("athena.history", "glue.jobs"),
             ("athena.results", "glue.crawlers"),
+            ("athena.load_more", "glue.load_more"),
         }
     )
 
@@ -151,6 +152,9 @@ class KeymapStore:
         "glue.copy_table_ref": ("y",),
         "glue.query_in_athena": ("Q",),
         "glue.time_travel_in_athena": ("V",),
+        # Shares ``l`` with athena.load_more the way ``1``-``3`` share view
+        # selection: the two pages are never mounted together.
+        "glue.load_more": ("l",),
         "athena.query": ("1",),
         "athena.history": ("2",),
         "athena.results": ("3",),

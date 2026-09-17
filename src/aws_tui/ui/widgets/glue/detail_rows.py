@@ -6,9 +6,11 @@ from datetime import datetime
 from typing import ClassVar
 
 from rich.text import Text
+from textual import events
 from textual.app import ComposeResult
 from textual.containers import VerticalScroll
 from textual.css.query import NoMatches
+from textual.message import Message
 from textual.widget import Widget
 from textual.widgets import OptionList, Static
 from textual.widgets.option_list import Option
@@ -76,6 +78,13 @@ class ResourceListPane(Widget):
     }
     """
 
+    class LoadMoreRequested(Message):
+        """The footer was clicked while another page was available."""
+
+        def __init__(self, pane_id: str) -> None:
+            super().__init__()
+            self.pane_id = pane_id
+
     def __init__(
         self,
         title: str,
@@ -87,6 +96,7 @@ class ResourceListPane(Widget):
         self._title = title
         self._empty_text = empty_text
         self._footer_text = ""
+        self._has_more = False
 
     def compose(self) -> ComposeResult:
         yield OptionList(
@@ -149,9 +159,21 @@ class ResourceListPane(Widget):
                     options.highlighted = index
                     break
         count = len(rows)
+        self._has_more = has_more and not limit_reached
         suffix = " · safety limit" if limit_reached else " · more available" if has_more else ""
         self._footer_text = f"{count} item{'s' if count != 1 else ''}{suffix}"
         self._refresh_footer()
+
+    def on_click(self, event: events.Click) -> None:
+        if not self._has_more or self.id is None:
+            return
+        footer = self.query_one(".glue-list-footer", Static)
+        if event.widget is not footer and (
+            event.widget is None or footer not in event.widget.ancestors_with_self
+        ):
+            return
+        event.stop()
+        self.post_message(self.LoadMoreRequested(self.id))
 
 
 class DetailRows(Widget):
