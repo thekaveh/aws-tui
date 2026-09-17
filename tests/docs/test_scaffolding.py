@@ -816,3 +816,16 @@ def test_release_recipe_cuts_on_develop_and_promotes_to_main() -> None:
     contributing = _read("CONTRIBUTING.md")
     assert "Reserve `main`" in contributing
     assert "release-promotion PRs from `develop`" in contributing
+
+
+def test_environment_variable_references_point_at_the_configuration_page() -> None:
+    """README §5 only links to the configuration page; it has no such section."""
+    readme = _read("README.md")
+    platforms = _read("docs/platforms.md")
+    configuration = _read("docs/configuration.md")
+
+    assert "## Environment variables" not in readme
+    assert 'README\'s "Environment variables"' not in platforms
+    assert "configuration.md#2-environment-variables" in platforms
+    assert "README carries" not in configuration
+    assert "links here" in configuration

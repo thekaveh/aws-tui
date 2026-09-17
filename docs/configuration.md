@@ -1,8 +1,8 @@
 # Configuration Reference
 
 > Where aws-tui keeps its files, every environment variable it reads, and
-> the localization position. The tables are the same ones the repository
-> README carries; this page is what the published surfaces serve.
+> the localization position. The repository README links here rather than
+> carrying its own copies, so the published surfaces serve one set of tables.
 
 ## 1. File locations
 

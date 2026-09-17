@@ -346,6 +346,10 @@ section; the current tree must not be tagged as v0.8.0.
 
 ### Docs
 
+- **Environment-variable cross-references.** `docs/platforms.md` pointed at
+  a README "Environment variables" section that no longer exists, and
+  `docs/configuration.md` claimed the README still carries the tables. Both
+  now point at the Configuration Reference.
 - **Table-handoff diagram names the right key.** The diagram said `y` starts
   "Query table in Athena"; `y` copies the table reference and `Shift+Q`
   queries it. Master corrected, SVG/PNG regenerated, and a contract test now
