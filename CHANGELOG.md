@@ -382,6 +382,12 @@ section; the current tree must not be tagged as v0.8.0.
 
 ### Build
 
+- Bumped `astral-sh/setup-uv` from v10.0.1 to v10.1.0, `ruff-pre-commit`
+  from v0.16.6 to v0.16.8, and the Adobe S3Mock harness image from 5.2.0 to
+  5.2.2 across the compose file, the integration conftest, the cookbook, and a
+  new dated pass in `docs/contract-ledger.md`. Also moved the unledgered
+  development-only `cairosvg`, `fonttools`, and `ruff` lock entries. Every
+  new ref was verified against its upstream tag or registry manifest.
 - Bumped `actions/deploy-pages` from 5.0.0 to 5.0.1 and recorded the new pin in
   `docs/contract-ledger.md`.
 - Recorded the removal of the resume and first-run modal flows.
