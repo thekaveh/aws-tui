@@ -83,6 +83,33 @@ def _sql_examples_after(text: str, marker: str) -> tuple[str, ...]:
     )
 
 
+def _fenced_blocks(text: str, language: str) -> list[str]:
+    """Return the bodies of every ```<language> fenced block in ``text``."""
+    pattern = re.compile(rf"^```{re.escape(language)}\s*\n(.*?)^```", re.S | re.M)
+    return [match.group(1) for match in pattern.finditer(text)]
+
+
+def test_lifecycle_recipe_merges_into_the_existing_bucket_configuration() -> None:
+    """``PutBucketLifecycleConfiguration`` replaces the whole configuration.
+
+    A single-rule payload silently deletes every expiration and transition
+    rule already on the bucket, so the recipe must fetch, merge, then put,
+    and the JSON it ships must be literal JSON a reader can save verbatim.
+    """
+    connections = _read("docs/connections.md")
+    section = connections.split("## 6. Recommended 1-Day MPU Abort Lifecycle Rule", 1)[1]
+    section = section.split("\n## ", 1)[0]
+
+    assert "```jsonc" not in section
+    assert "get-bucket-lifecycle-configuration" in section
+    assert "replaces the bucket's entire lifecycle configuration" in section
+    json_blocks = _fenced_blocks(section, "json")
+    assert json_blocks, "expected a literal JSON rule block"
+    for block in json_blocks:
+        parsed = json.loads(block)
+        assert parsed["Rules"][0]["AbortIncompleteMultipartUpload"] == {"DaysAfterInitiation": 1}
+
+
 def test_scripts_docs_package_imports():
     import scripts.docs  # noqa: F401
 

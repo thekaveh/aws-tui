@@ -346,6 +346,11 @@ section; the current tree must not be tagged as v0.8.0.
 
 ### Docs
 
+- **Lifecycle recipe no longer clobbers existing rules.** The MPU-abort recipe
+  in `docs/connections.md` now fetches the bucket's current lifecycle
+  configuration, appends the rule with `jq`, and puts the merged document,
+  because `put-bucket-lifecycle-configuration` replaces every existing rule.
+  The JSON is now literal JSON rather than a commented `jsonc` block.
 - **Three-surface layout standardized, landing poster repaired (#198).** The
   in-repo docs, the generated site, and the wiki now share one section
   hierarchy, and the landing poster renders on every surface.

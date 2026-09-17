@@ -259,21 +259,42 @@ or failure. A process termination or network failure can still interrupt
 cleanup before the abort reaches S3, and multipart upload IDs are not persisted
 for startup recovery, so the lifecycle rule remains the server-side backstop.
 
-```jsonc
-// lifecycle.json
-{
-  "Rules": [{
-    "ID": "abort-incomplete-mpu",
-    "Status": "Enabled",
-    "Filter": {},
-    "AbortIncompleteMultipartUpload": { "DaysAfterInitiation": 1 }
-  }]
-}
-```
+`put-bucket-lifecycle-configuration` replaces the bucket's entire lifecycle configuration with the document you send. Never apply a single-rule file to a bucket that already has rules: fetch the current rules, add this one, review the merged result, then put the merged document.
 
 ```bash
+# 1. Fetch the current rules. A bucket with no lifecycle configuration
+#    returns NoSuchLifecycleConfiguration; start from an empty rule list then.
+aws s3api get-bucket-lifecycle-configuration --bucket <name> \
+    > current-lifecycle.json \
+    || echo '{"Rules": []}' > current-lifecycle.json
+
+# 2. Append the abort rule to the existing Rules array. jq keeps every
+#    existing rule intact; an ID collision means the rule is already present.
+jq '.Rules += [{
+      "ID": "abort-incomplete-mpu",
+      "Status": "Enabled",
+      "Filter": {},
+      "AbortIncompleteMultipartUpload": { "DaysAfterInitiation": 1 }
+    }]' current-lifecycle.json > merged-lifecycle.json
+
+# 3. Review merged-lifecycle.json, then apply the merged document.
 aws s3api put-bucket-lifecycle-configuration \
-    --bucket <name> --lifecycle-configuration file://lifecycle.json
+    --bucket <name> --lifecycle-configuration file://merged-lifecycle.json
+```
+
+For a bucket with no existing rules the merged document is exactly:
+
+```json
+{
+  "Rules": [
+    {
+      "ID": "abort-incomplete-mpu",
+      "Status": "Enabled",
+      "Filter": {},
+      "AbortIncompleteMultipartUpload": { "DaysAfterInitiation": 1 }
+    }
+  ]
+}
 ```
 
 ## 7. First-run flow
