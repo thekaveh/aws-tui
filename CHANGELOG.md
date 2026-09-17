@@ -387,6 +387,10 @@ section; the current tree must not be tagged as v0.8.0.
 
 ### Build
 
+- Pages and wiki publication now also trigger on `CONTRIBUTING.md`,
+  `SECURITY.md`, and `CODE_OF_CONDUCT.md`; the manifest publishes all three,
+  but the workflow's path filter only watched `docs/**`. A guard test now
+  derives the required triggers from `docs/manifest.yaml`.
 - Bumped `astral-sh/setup-uv` from v10.0.1 to v10.1.0, `ruff-pre-commit`
   from v0.16.6 to v0.16.8, and the Adobe S3Mock harness image from 5.2.0 to
   5.2.2 across the compose file, the integration conftest, the cookbook, and a
