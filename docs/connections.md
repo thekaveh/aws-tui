@@ -262,11 +262,16 @@ for startup recovery, so the lifecycle rule remains the server-side backstop.
 `put-bucket-lifecycle-configuration` replaces the bucket's entire lifecycle configuration with the document you send. Never apply a single-rule file to a bucket that already has rules: fetch the current rules, add this one, review the merged result, then put the merged document.
 
 ```bash
-# 1. Fetch the current rules. A bucket with no lifecycle configuration
-#    returns NoSuchLifecycleConfiguration; start from an empty rule list then.
-aws s3api get-bucket-lifecycle-configuration --bucket <name> \
-    > current-lifecycle.json \
-    || echo '{"Rules": []}' > current-lifecycle.json
+# 1. Fetch the current rules. Only a bucket with no lifecycle configuration
+#    (NoSuchLifecycleConfiguration) may start from an empty rule list; any
+#    other failure aborts so an auth or network error cannot masquerade as
+#    "no rules" and wipe the bucket's policies in step 3.
+if ! aws s3api get-bucket-lifecycle-configuration --bucket <name> \
+        > current-lifecycle.json 2> get-lifecycle.err; then
+    grep -q NoSuchLifecycleConfiguration get-lifecycle.err \
+        || { cat get-lifecycle.err; exit 1; }
+    echo '{"Rules": []}' > current-lifecycle.json
+fi
 
 # 2. Append the abort rule to the existing Rules array. jq keeps every
 #    existing rule intact; an ID collision means the rule is already present.

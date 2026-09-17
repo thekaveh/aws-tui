@@ -103,6 +103,8 @@ def test_lifecycle_recipe_merges_into_the_existing_bucket_configuration() -> Non
     assert "```jsonc" not in section
     assert "get-bucket-lifecycle-configuration" in section
     assert "replaces the bucket's entire lifecycle configuration" in section
+    assert "NoSuchLifecycleConfiguration" in section
+    assert "|| echo '{\"Rules\": []}'" not in section
     json_blocks = _fenced_blocks(section, "json")
     assert json_blocks, "expected a literal JSON rule block"
     for block in json_blocks:
