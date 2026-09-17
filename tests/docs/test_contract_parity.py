@@ -462,3 +462,11 @@ def test_glue_get_job_runs_still_has_no_modeled_states_filter() -> None:
 
     assert set(members) == {"JobName", "MaxResults", "NextToken"}
     assert "States" not in members
+
+
+def test_table_handoff_diagram_labels_the_registered_query_key() -> None:
+    """The master said ``y``; ``y`` copies a reference and ``Q`` queries."""
+    master = _text("docs/diagrams/table-handoff.html")
+    labels = re.findall(r">([^<]*Query table in Athena)<", master)
+    assert labels == ["Shift+Q · Query table in Athena"], labels
+    assert "y · Query table in Athena" not in master

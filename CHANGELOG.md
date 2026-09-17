@@ -346,6 +346,10 @@ section; the current tree must not be tagged as v0.8.0.
 
 ### Docs
 
+- **Table-handoff diagram names the right key.** The diagram said `y` starts
+  "Query table in Athena"; `y` copies the table reference and `Shift+Q`
+  queries it. Master corrected, SVG/PNG regenerated, and a contract test now
+  pins the label to the registered binding.
 - **Release recipe follows the branch policy.** `docs/RELEASING.md` now cuts
   the release branch from `develop`, merges it back to `develop`, and reaches
   `main` through a merge-commit promotion PR, matching CONTRIBUTING §5. The
