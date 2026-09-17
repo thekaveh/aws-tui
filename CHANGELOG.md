@@ -346,6 +346,11 @@ section; the current tree must not be tagged as v0.8.0.
 
 ### Docs
 
+- **Release recipe follows the branch policy.** `docs/RELEASING.md` now cuts
+  the release branch from `develop`, merges it back to `develop`, and reaches
+  `main` through a merge-commit promotion PR, matching CONTRIBUTING §5. The
+  old recipe branched from `main` and would have shipped without unpromoted
+  `develop` work.
 - **TestPyPI rehearsal installs into the environment it creates.** The recipe
   now seeds pip with `uv venv --seed` and invokes the environment's own
   `python -m pip`; the previous bare `pip` had no pip in that venv and fell

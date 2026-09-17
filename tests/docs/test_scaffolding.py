@@ -792,3 +792,27 @@ def test_testpypi_rehearsal_uses_the_seeded_environment_pip() -> None:
     for line in bash.splitlines():
         assert not line.lstrip().startswith("pip "), f"bare pip invocation: {line!r}"
         assert "source /tmp/aws-tui-dry" not in line
+
+
+def test_release_recipe_cuts_on_develop_and_promotes_to_main() -> None:
+    """CONTRIBUTING reserves ``main`` for promotion PRs from ``develop``.
+
+    The routine-release recipe branched from ``main`` directly, so following
+    it produced a release that omitted every unpromoted ``develop`` commit and
+    contradicted the branch policy the same repository publishes.
+    """
+    releasing = _read("docs/RELEASING.md")
+    routine = releasing.split("## 1. Routine release", 1)[1].split("### 1.1.", 1)[0]
+    bash = "\n".join(_fenced_blocks(routine, "bash"))
+
+    assert "git checkout develop && git pull --ff-only" in bash
+    assert "git checkout -b release/vX.Y.Z" in bash
+    assert "git checkout main" not in bash
+    assert "--base develop" in bash
+    assert "promotion PR from `develop` to `main`" in routine
+    assert "merge commit" in routine
+    assert "never squash" in routine
+
+    contributing = _read("CONTRIBUTING.md")
+    assert "Reserve `main`" in contributing
+    assert "release-promotion PRs from `develop`" in contributing

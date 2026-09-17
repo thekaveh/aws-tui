@@ -16,10 +16,12 @@ merge auto-opened Homebrew bump PR (skim diff first)
 
 ## 1. Routine release
 
-From a clean `main`:
+Releases are cut on `develop` and reach `main` only through a promotion PR,
+the same path every other change takes (see CONTRIBUTING §5). From a clean
+`develop`:
 
 ```bash
-git checkout main && git pull --ff-only
+git checkout develop && git pull --ff-only
 git checkout -b release/vX.Y.Z
 
 # 1. Cut the changelog: rename [Unreleased] → [X.Y.Z] - <today>
@@ -48,10 +50,22 @@ git add CHANGELOG.md src/aws_tui/version.py README.md \
         tests/snapshot/__snapshots__ assets/screenshots/aws-tui-running.png
 git commit -m "chore(release): cut vX.Y.Z"
 git push -u origin release/vX.Y.Z
-gh pr create --title "chore(release): cut vX.Y.Z" --fill
+gh pr create --base develop --title "chore(release): cut vX.Y.Z" --fill
 ```
 
-Review the PR like any other change. Merge when CI is green.
+Review the PR like any other change and merge it into `develop` when CI is
+green. Then open the promotion PR from `develop` to `main`:
+
+```bash
+gh pr create --base main --head develop \
+    --title "chore(release): promote vX.Y.Z to main" --fill
+```
+
+Merge the promotion PR with a **merge commit, never squash** and never rebase:
+`main` must contain `develop`'s exact commits so the two branches stay
+semantically identical and the next back-merge is a no-op. The `ci gate`
+check must be green on the promotion PR itself; the ruleset's strict
+up-to-date policy means a `develop` push after opening it requires a rerun.
 
 ### 1.1. Pre-tag checklist
 
@@ -144,7 +158,7 @@ Fold its body into the new `[0.9.0]` section and delete the heading together
 with its `[0.8.0]:` reference link at the bottom of the file. Nothing downstream
 depends on it: `0.8.0` was never tagged and never reached PyPI.
 
-Then tag the merge commit and push:
+Then tag the promotion merge commit on `main` and push the tag:
 
 ```bash
 git checkout main && git pull --ff-only
