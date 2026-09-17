@@ -346,6 +346,11 @@ section; the current tree must not be tagged as v0.8.0.
 
 ### Docs
 
+- **Source-cycle order.** `docs/connections.md` §4 now describes the order
+  the resolver actually produces: `local`, then explicit `[connections.*]`
+  entries in config-file order regardless of kind, then auto-discovered AWS
+  profiles not shadowed by an explicit entry. The old example grouped all AWS
+  profiles ahead of all s3-compatible endpoints.
 - **Environment-variable cross-references.** `docs/platforms.md` pointed at
   a README "Environment variables" section that no longer exists, and
   `docs/configuration.md` claimed the README still carries the tables. Both

@@ -131,17 +131,21 @@ are validated by the live boto path.
 
 Every connection the resolver returns — AWS profiles, manually-configured
 `s3-compatible` entries, and auto-discovered AWS profiles alike — joins
-a single in-app source-cycle on the focused pane. Press **`Shift+S`** (or
-`S`) on a pane to step through it in this order:
+a single in-app source-cycle on the focused pane. The ring is `local` followed
+by the resolver's order: explicit `[connections.*]` entries first, in config-file order and regardless of kind, then auto-discovered AWS profiles
+from `~/.aws/config` and `~/.aws/credentials`. An explicit entry whose name
+matches a discovered profile shadows it, so each name appears once. Press
+**`Shift+S`** (or `S`) on a pane to step through it:
 
 ```
 local
-  → aws s3 · profile-1 · us-east-1
-  → aws s3 · profile-2 · us-west-2
-  → ... (every other AWS profile)
-  → s3-compatible · minio-local · localhost:9000
+  → s3-compatible · minio-local · localhost:9000     [connections.minio-local]
+  → aws s3 · prod · us-east-1                        [connections.prod]
   → s3-compatible · r2-prod · <account>.r2.cloudflarestorage.com
-  → ... (every other s3-compatible connection)
+  → ... (every other explicit [connections.*] entry, in file order)
+  → aws s3 · dev-sso · us-west-2                     discovered [profile dev-sso]
+  → aws s3 · analytics · eu-west-1                   discovered [profile analytics]
+  → ... (every other discovered profile not shadowed by an explicit entry)
   → local   ← wraps
 ```
 

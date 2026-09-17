@@ -829,3 +829,22 @@ def test_environment_variable_references_point_at_the_configuration_page() -> No
     assert "configuration.md#2-environment-variables" in platforms
     assert "README carries" not in configuration
     assert "links here" in configuration
+
+
+def test_source_cycle_example_states_the_resolver_order() -> None:
+    """``ConnectionResolver.list()`` returns ``[*explicit, *autos]``.
+
+    Explicit ``[connections.*]`` entries come first in config order whatever
+    their kind, then auto-discovered AWS profiles not shadowed by an explicit
+    entry. The example grouped every AWS profile before every s3-compatible
+    endpoint, which is not an order the resolver can produce when an explicit
+    s3-compatible entry exists alongside discovered profiles.
+    """
+    connections = _read("docs/connections.md")
+    section = connections.split("## 4. Switching between connections at runtime", 1)[1]
+    section = section.split("\n## ", 1)[0]
+
+    assert "explicit `[connections.*]` entries first, in config-file order" in section
+    assert "then auto-discovered AWS profiles" in section
+    assert "shadow" in section
+    assert "→ ... (every other AWS profile)" not in section
