@@ -111,6 +111,9 @@ def test_lifecycle_recipe_merges_into_the_existing_bucket_configuration() -> Non
         parsed = json.loads(block)
         assert parsed["Rules"][0]["AbortIncompleteMultipartUpload"] == {"DaysAfterInitiation": 1}
 
+    assert "exit 1" not in section
+    assert 'map(select(.ID != "abort-incomplete-mpu"))' in section
+
 
 def test_scripts_docs_package_imports():
     import scripts.docs  # noqa: F401
@@ -816,6 +819,9 @@ def test_release_recipe_cuts_on_develop_and_promotes_to_main() -> None:
     contributing = _read("CONTRIBUTING.md")
     assert "Reserve `main`" in contributing
     assert "release-promotion PRs from `develop`" in contributing
+
+    assert "Fix forward on `main`" not in releasing
+    assert "open promotion PR develop → main" in releasing
 
 
 def test_environment_variable_references_point_at_the_configuration_page() -> None:

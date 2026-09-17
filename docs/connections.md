@@ -269,22 +269,25 @@ for startup recovery, so the lifecycle rule remains the server-side backstop.
 # 1. Fetch the current rules. Only a bucket with no lifecycle configuration
 #    (NoSuchLifecycleConfiguration) may start from an empty rule list; any
 #    other failure aborts so an auth or network error cannot masquerade as
-#    "no rules" and wipe the bucket's policies in step 3.
+#    "no rules" and wipe the bucket's policies in step 3. Run these steps as
+#    a script; `false` stops a script, an interactive shell just prints the
+#    error.
 if ! aws s3api get-bucket-lifecycle-configuration --bucket <name> \
         > current-lifecycle.json 2> get-lifecycle.err; then
     grep -q NoSuchLifecycleConfiguration get-lifecycle.err \
-        || { cat get-lifecycle.err; exit 1; }
+        || { cat get-lifecycle.err; false; }
     echo '{"Rules": []}' > current-lifecycle.json
 fi
 
 # 2. Append the abort rule to the existing Rules array. jq keeps every
-#    existing rule intact; an ID collision means the rule is already present.
-jq '.Rules += [{
+#    other rule intact and replaces a previous abort-incomplete-mpu rule, so
+#    the step is safe to rerun.
+jq '.Rules |= (map(select(.ID != "abort-incomplete-mpu")) + [{
       "ID": "abort-incomplete-mpu",
       "Status": "Enabled",
       "Filter": {},
       "AbortIncompleteMultipartUpload": { "DaysAfterInitiation": 1 }
-    }]' current-lifecycle.json > merged-lifecycle.json
+    }])' current-lifecycle.json > merged-lifecycle.json
 
 # 3. Review merged-lifecycle.json, then apply the merged document.
 aws s3api put-bucket-lifecycle-configuration \

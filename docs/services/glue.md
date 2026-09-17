@@ -30,7 +30,7 @@ the VM-owned clipboard and, on a best-effort basis, the operating-system
 clipboard. The command palette can open a valid selected table location in S3
 under the same connection and region.
 
-Lists page through the Glue API 100 rows at a time. A footer reading
+Lists page through the Glue API 100 rows at a time (200 for job runs). A footer reading
 `N items · more available` means another page exists: press `l`, run **Load
 more Glue rows** from the command palette, or click the footer. Every list
 stops at 1,000 rows and then reads `safety limit`.

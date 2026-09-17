@@ -5,7 +5,9 @@ How to cut a release.
 ```text
 edit changelog + version + README
         ↓
-open release PR · merge
+open release PR (base develop) · merge
+        ↓
+open promotion PR develop → main · merge (merge commit, never squash)
         ↓
 git tag -a vX.Y.Z -m "vX.Y.Z" && git push origin vX.Y.Z
         ↓
@@ -261,9 +263,10 @@ is always "fix forward, never overwrite":
   serving the final artifact.
 - **Smoke install fails on one OS.** No PyPI artifact has shipped yet;
   the gate caught the problem before the approval step. Fix forward on
-  `main`, move or recreate the tag on the fixed commit before any PyPI
-  approval, and re-run the workflow. Do not yank or retag a published
-  version because nothing has been published yet.
+  `develop`, promote to `main` with a merge commit, move or recreate
+  the tag on the promotion merge commit before any PyPI approval, and
+  re-run the workflow. Do not yank or retag a published version because
+  nothing has been published yet.
 - **Tag/version mismatch.** The `verify` job fails fast and
   publishes nothing. Fix `version.py`, retag.
 

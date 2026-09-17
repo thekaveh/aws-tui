@@ -357,6 +357,12 @@ section; the current tree must not be tagged as v0.8.0.
 
 ### Docs
 
+- **Docs coherence after the audit pass.** The contract ledger's Glue
+  job-runs gap row and the release summary flow and rollback notes now match
+  the code and the promotion-only policy; the lifecycle recipe is rerunnable
+  and no longer `exit`s the reader's shell; the Glue paging note states the
+  200-row job-run page and the Iceberg tab; the EMR token note states the
+  open-form intent boundary.
 - **Source-cycle order.** `docs/connections.md` §4 now describes the order
   the resolver actually produces: `local`, then explicit `[connections.*]`
   entries in config-file order regardless of kind, then auto-discovered AWS
