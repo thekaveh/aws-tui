@@ -60,6 +60,10 @@ class InMemoryEmr:
         # Monotonic suffix so multiple ``start_job_run`` calls produce
         # unique ids without the tests needing to seed them.
         self._next_run_seq: int = 1
+        # Mirrors AWS's clientToken de-duplication: a repeated token
+        # returns the run already created for it instead of starting
+        # a second one.
+        self._run_ids_by_token: dict[str, str] = {}
         self._clock = DEMO_NOW - timedelta(days=1)
         # Hook for tests that need ``start_job_run`` to raise — set
         # this to a ``ProviderError`` (or any exception) to drive the
@@ -297,6 +301,7 @@ class InMemoryEmr:
         entry_point: str,
         entry_point_arguments: tuple[str, ...],
         spark_submit_parameters: str | None,
+        client_token: str,
         name: str | None = None,
     ) -> str:
         """Record the submit call + materialise a new ``SUBMITTED`` run.
@@ -304,6 +309,10 @@ class InMemoryEmr:
         Returns the synthesised ``job_run_id``. Tests that want to
         observe failure paths set ``self.start_job_run_exc`` first —
         that exception is raised in place of producing a new run.
+
+        Mirrors AWS's ``clientToken`` de-duplication: a repeated token
+        returns the run already created for it rather than starting a
+        second one.
 
         In demo mode the run also schedules an async state-machine walk
         (SUBMITTED → SCHEDULED → RUNNING → SUCCESS over ~5 s) so the
@@ -319,13 +328,18 @@ class InMemoryEmr:
                     entry_point_arguments,
                     spark_submit_parameters,
                     name,
+                    client_token,
                 ),
             )
         )
         if self.start_job_run_exc is not None:
             raise self.start_job_run_exc
+        existing = self._run_ids_by_token.get(client_token)
+        if existing is not None:
+            return existing
         new_id = f"r-clone-{self._next_run_seq:03d}"
         self._next_run_seq += 1
+        self._run_ids_by_token[client_token] = new_id
         ts = self._tick()
         s = JobRunSummary(
             application_id=application_id,

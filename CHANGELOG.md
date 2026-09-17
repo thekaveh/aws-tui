@@ -165,6 +165,11 @@ section; the current tree must not be tagged as v0.8.0.
 
 ### Fixed
 
+- **EMR clone retries no longer start a second job.** `StartJobRun` now
+  carries an app-owned `clientToken` held by the clone view model for the
+  life of one form intent. Previously botocore minted a fresh token per call,
+  so retrying after an accepted-but-lost request created a second billable
+  run. The token rotates on a field edit or a successful submit.
 - **Chrome legibility (#202).** The banner pedigree line is dimmed so it reads
   as secondary to the wordmark, and the EMR source/application row is laid out
   on one line instead of wrapping.

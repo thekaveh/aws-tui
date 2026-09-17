@@ -141,10 +141,11 @@ async def test_second_submit_while_the_first_is_in_flight_launches_one_job() -> 
 
     ``vm.submit()`` awaits a multi-hundred-millisecond ``start_job_run``
     round-trip. A second activation while the first is in flight would start a
-    SECOND EMR job for one user intent. ``clientToken`` does not save us here:
-    it is modelled ``idempotencyToken: true``, so botocore auto-fills a fresh
-    UUID per call -- a distinct token per submit, which is exactly what makes
-    the duplicate a real second run rather than a de-duplicated retry.
+    SECOND EMR job for one user intent. The app-owned ``clientToken``
+    (``JobRunCloneVM.client_token``) covers a *retry* of one intent, not two
+    concurrent activations: both in-flight submits would carry the same
+    token, and AWS would collapse them, but only after two round trips. The
+    guard keeps it to one.
     """
     import asyncio
 
