@@ -346,6 +346,10 @@ section; the current tree must not be tagged as v0.8.0.
 
 ### Docs
 
+- **TestPyPI rehearsal installs into the environment it creates.** The recipe
+  now seeds pip with `uv venv --seed` and invokes the environment's own
+  `python -m pip`; the previous bare `pip` had no pip in that venv and fell
+  through to whichever interpreter was first on `PATH`.
 - **Lifecycle recipe no longer clobbers existing rules.** The MPU-abort recipe
   in `docs/connections.md` now fetches the bucket's current lifecycle
   configuration, appends the rule with `jq`, and puts the merged document,

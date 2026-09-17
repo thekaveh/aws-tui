@@ -206,15 +206,17 @@ Verify the install end-to-end:
 ```bash
 VERSION="X.Y.Z.dev<RUN_NUMBER>"  # copy from the release workflow's verify output
 uv python install 3.13
-uv venv --python 3.13 /tmp/aws-tui-dry
-source /tmp/aws-tui-dry/bin/activate
+# --seed installs pip into the environment; a plain `uv venv` has no pip, so a
+# bare `pip` would resolve to whatever other interpreter is first on PATH.
+uv venv --seed --python 3.13 /tmp/aws-tui-dry
 mkdir -p /tmp/aws-tui-dry-artifacts
-pip download --pre --no-deps -i https://test.pypi.org/simple/ \
+/tmp/aws-tui-dry/bin/python -m pip download --pre --no-deps \
+    -i https://test.pypi.org/simple/ \
     "aws-tui==$VERSION" \
     -d /tmp/aws-tui-dry-artifacts
-pip install --index-url https://pypi.org/simple/ \
+/tmp/aws-tui-dry/bin/python -m pip install --index-url https://pypi.org/simple/ \
     /tmp/aws-tui-dry-artifacts/aws_tui-"$VERSION"-*.whl
-aws-tui --version
+/tmp/aws-tui-dry/bin/aws-tui --version
 ```
 
 The download step intentionally uses `--no-deps` so only the aws-tui

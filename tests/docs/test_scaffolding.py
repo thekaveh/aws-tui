@@ -776,3 +776,19 @@ def test_no_test_module_hand_copies_the_built_in_theme_list() -> None:
         "test modules embedding a literal copy of ThemeStore.BUILTIN_NAMES "
         f"({len(ThemeStore.BUILTIN_NAMES)} themes); derive it instead: {offenders}"
     )
+
+
+def test_testpypi_rehearsal_uses_the_seeded_environment_pip() -> None:
+    """``uv venv`` creates no pip; a bare ``pip`` resolves to some other install."""
+    releasing = _read("docs/RELEASING.md")
+    section = releasing.split("## 2. Rehearsing the TestPyPI Pipeline", 1)[1]
+    section = section.split("\n## ", 1)[0]
+    bash = "\n".join(_fenced_blocks(section, "bash"))
+
+    assert "uv venv --seed" in bash
+    assert "/tmp/aws-tui-dry/bin/python -m pip download" in bash
+    assert "/tmp/aws-tui-dry/bin/python -m pip install" in bash
+    assert "/tmp/aws-tui-dry/bin/aws-tui --version" in bash
+    for line in bash.splitlines():
+        assert not line.lstrip().startswith("pip "), f"bare pip invocation: {line!r}"
+        assert "source /tmp/aws-tui-dry" not in line
