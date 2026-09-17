@@ -10,7 +10,7 @@
 
 **Spec:** The two audit reports pasted into the 2026-09-17 session, verified finding-by-finding against `develop` at `516d1f75` plus PR #220. Verification notes per finding are in the task headers below.
 
-## Global Constraints
+## 1. Global Constraints
 
 - Branch every task from `develop`. `main` only receives promotion PRs from `develop`, merged with a **merge commit, never squash** (repo policy, CONTRIBUTING §5).
 - The `gitflow` ruleset requires the `ci gate` status check with the strict up-to-date policy on both `develop` and `main`. Multiple PRs must merge as a serial train; rebase each before the next.
@@ -22,7 +22,7 @@
 - Known flaky CI tests unrelated to this work: `tests/snapshot/test_demo_mode.py::test_demo_iceberg_snapshot[<theme>]` and `tests/integration/test_settings_flow.py::test_add_inline_form_persists_to_toml` on Windows. Rerun the failed job once; do not add retry plugins.
 - Task 8 and Task 9 change registered action / keybinding surfaces. Those surfaces are enumerated by contract tests in **seven** places; the task lists all of them. Missing one fails `ci gate`.
 
-## Finding verification summary
+## 2. Finding verification summary
 
 | Finding | Verdict | Evidence |
 |---|---|---|
@@ -40,7 +40,7 @@
 
 ---
 
-### Task 1: S3 lifecycle recipe must merge into the existing configuration (DOC-01)
+## 3. Task 1: S3 lifecycle recipe must merge into the existing configuration (DOC-01)
 
 **Files:**
 - Modify: `docs/connections.md:254-273` (section "6. Recommended 1-Day MPU Abort Lifecycle Rule")
@@ -174,7 +174,7 @@ Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>"
 
 ---
 
-### Task 2: Pages workflow must trigger on every manifest source (DOC-02)
+## 4. Task 2: Pages workflow must trigger on every manifest source (DOC-02)
 
 **Files:**
 - Modify: `.github/workflows/pages.yml:6-18`
@@ -280,7 +280,7 @@ Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>"
 
 ---
 
-### Task 3: TestPyPI rehearsal must use a seeded environment's own pip (DOC-03)
+## 5. Task 3: TestPyPI rehearsal must use a seeded environment's own pip (DOC-03)
 
 **Files:**
 - Modify: `docs/RELEASING.md:206-217`
@@ -373,7 +373,7 @@ Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>"
 
 ---
 
-### Task 4: Release recipe must cut on `develop` and promote to `main` (DOC-04)
+## 6. Task 4: Release recipe must cut on `develop` and promote to `main` (DOC-04)
 
 **Files:**
 - Modify: `docs/RELEASING.md:17-54` (section "1. Routine release" up to "Review the PR like any other change") and `docs/RELEASING.md:147-151` (tag step)
@@ -496,7 +496,7 @@ Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>"
 
 ---
 
-### Task 5: Table-handoff diagram must show the real query key (DOC-05)
+## 7. Task 5: Table-handoff diagram must show the real query key (DOC-05)
 
 **Files:**
 - Modify: `docs/diagrams/table-handoff.html:91`
@@ -572,7 +572,7 @@ Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>"
 
 ---
 
-### Task 6: Point the environment-variable references at the configuration page (DOC-06)
+## 8. Task 6: Point the environment-variable references at the configuration page (DOC-06)
 
 **Files:**
 - Modify: `docs/platforms.md:80`
@@ -649,7 +649,7 @@ Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>"
 
 ---
 
-### Task 7: Source-cycle example must match resolver order (DOC-07)
+## 9. Task 7: Source-cycle example must match resolver order (DOC-07)
 
 **Files:**
 - Modify: `docs/connections.md:132-146`
@@ -744,7 +744,7 @@ Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>"
 
 ---
 
-### Task 8: App-owned `clientToken` for EMR Serverless `StartJobRun` (R01)
+## 10. Task 8: App-owned `clientToken` for EMR Serverless `StartJobRun` (R01)
 
 **Files:**
 - Modify: `src/aws_tui/domain/emr_serverless.py:159-168` (protocol) and `:458-497` (client)
@@ -1039,7 +1039,7 @@ Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>"
 
 ---
 
-### Task 9: Reachable Glue pagination by keyboard, palette, and mouse (R02)
+## 11. Task 9: Reachable Glue pagination by keyboard, palette, and mouse (R02)
 
 **Files:**
 - Modify: `src/aws_tui/infra/keymap_store.py:94-104` (alias pairs) and `:146-153` (defaults)
@@ -1429,7 +1429,7 @@ Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>"
 
 ---
 
-### Task 10: Integrate
+## 12. Task 10: Integrate
 
 - [ ] **Step 1: Full local verification on the integrated branch**
 
@@ -1449,7 +1449,7 @@ Two PRs keep review tractable: one for Tasks 1–7 (`docs/audit-findings-2026-09
 
 After both land on `develop`, open the promotion PR `develop` → `main`, merge with a merge commit, then confirm `git diff --stat origin/main origin/develop` is empty.
 
-## Self-review
+## 13. Self-review
 
 - **Coverage:** DOC-01 → Task 1, DOC-02 → Task 2, DOC-03 → Task 3, DOC-04 → Task 4, DOC-05 → Task 5, DOC-06 → Task 6, DOC-07 → Task 7, R01 → Task 8, R02 → Task 9. R03 and the ruff-version note are closed by PR #220.
 - **Placeholders:** none; every step carries its content.
