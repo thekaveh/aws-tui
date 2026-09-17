@@ -167,13 +167,14 @@ class ResourceListPane(Widget):
     def on_click(self, event: events.Click) -> None:
         if not self._has_more or self.id is None:
             return
-        footer = self.query_one(".glue-list-footer", Static)
-        if event.widget is not footer and (
-            event.widget is None or footer not in event.widget.ancestors_with_self
-        ):
-            return
-        event.stop()
-        self.post_message(self.LoadMoreRequested(self.id))
+        with suppress(NoMatches):
+            footer = self.query_one(".glue-list-footer", Static)
+            if event.widget is not footer and (
+                event.widget is None or footer not in event.widget.ancestors_with_self
+            ):
+                return
+            event.stop()
+            self.post_message(self.LoadMoreRequested(self.id))
 
 
 class DetailRows(Widget):

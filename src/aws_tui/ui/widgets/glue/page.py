@@ -245,7 +245,7 @@ class GluePage(DeferredWorkerMixin, HubSubscriberMixin, Widget):
             return set()
         return {widget.id for widget in focused.ancestors_with_self if widget.id}
 
-    def _loader(self, target: str) -> tuple[Callable[[], Awaitable[None]], bool]:
+    def _loader(self, target: str) -> tuple[Callable[[], Awaitable[object]], bool]:
         vm = self._vm
         return {
             "databases": (vm.catalog.load_more_databases, vm.catalog.has_more_databases),
@@ -254,6 +254,7 @@ class GluePage(DeferredWorkerMixin, HubSubscriberMixin, Widget):
             "jobs": (vm.jobs.load_more_jobs, vm.jobs.has_more_jobs),
             "runs": (vm.jobs.load_more_runs, vm.jobs.has_more_runs),
             "crawlers": (vm.crawlers.load_more_crawlers, vm.crawlers.has_more_crawlers),
+            "iceberg": (vm.catalog.iceberg.load_more, vm.catalog.iceberg.has_more),
         }[target]
 
     def _load_more_target(self) -> str | None:
@@ -262,6 +263,12 @@ class GluePage(DeferredWorkerMixin, HubSubscriberMixin, Widget):
         for pane_id, target in self._PANE_LOADERS.items():
             if pane_id in focused:
                 return target
+        # The detail region composes BOTH the table detail rows and the
+        # Iceberg view (see GlueCatalogView.compose); check for the Iceberg
+        # view first so an Iceberg tab/control focused there routes to its
+        # own pager, not to catalog partitions.
+        if "glue-iceberg-view" in focused:
+            return "iceberg"
         if "glue-table-detail-region" in focused:
             return "partitions"
         candidates = {

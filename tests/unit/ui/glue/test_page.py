@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from dataclasses import replace
+
 import pytest
 from textual.app import App, ComposeResult
 from textual.containers import Horizontal, VerticalScroll
@@ -9,6 +11,7 @@ from vmx import NULL_DISPATCHER, MessageHub
 from vmx.messages.protocols import Message
 
 from aws_tui.app import AwsTuiApp
+from aws_tui.domain.data_catalog import TableFormat
 from aws_tui.infra.connection_resolver import Connection
 from aws_tui.infra.keymap_store import KeymapStore
 from aws_tui.infra.theme_store import ThemeStore
@@ -28,6 +31,7 @@ from aws_tui.vm.nav_menu_vm import NavMenuVM
 from aws_tui.vm.services_protocol import ServiceRegistry
 from tests.helpers import drain_workers
 from tests.unit.vm.glue._fake_glue import InMemoryGlue, seeded_glue
+from tests.unit.vm.glue.test_iceberg_vm import RecordingInspector
 
 
 def _build_vm(fake: InMemoryGlue | None = None) -> tuple[GluePageVM, InMemoryGlue]:
@@ -1109,6 +1113,64 @@ async def test_load_more_action_falls_back_to_the_list_with_another_page() -> No
         await page.action_load_more()
         await drain_workers(app)
         assert len(vm.catalog.tables) == 2
+
+
+@pytest.mark.asyncio
+async def test_load_more_action_targets_the_focused_iceberg_pager_not_partitions() -> None:
+    """The detail region composes DetailRows AND GlueIcebergView (see
+    GlueCatalogView.compose), so an Iceberg tab/control focused there must
+    route to the Iceberg pager, not fall through to catalog partitions --
+    even when partitions also have another page available.
+    """
+    fake = seeded_glue()
+    ref = fake.tables["analytics"][0].ref
+    fake.table_details[ref] = replace(
+        fake.table_details[ref],
+        table_format=TableFormat.ICEBERG,
+    )
+    fake.partition_page_size = 1
+    inspector = RecordingInspector()
+    hub: MessageHub[Message] = MessageHub()
+    vm = GluePageVM(
+        client=fake,
+        iceberg_inspector=inspector,
+        connection=Connection(
+            name="analytics-dev",
+            kind="aws",
+            region="us-east-1",
+            source="test",
+            profile="analytics-dev",
+        ),
+        hub=hub,
+        dispatcher=NULL_DISPATCHER,
+    )
+    vm.construct()
+    vm.catalog.iceberg._page_size = 1  # type: ignore[attr-defined]
+    await vm.setup()
+    app = _GlueApp(vm)
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        page = app.query_one(GluePage)
+
+        assert await vm.catalog.iceberg.select_view("snapshots")
+        await pilot.pause()
+        assert len(vm.catalog.iceberg.snapshots) == 1
+        assert vm.catalog.iceberg.has_more
+        # Partitions also have a second page here -- on purpose. Without the
+        # fix, focus anywhere under #glue-table-detail-region (which is what
+        # an Iceberg tab is) always resolved to "partitions".
+        assert vm.catalog.has_more_partitions
+        partitions_before = len(vm.catalog.partitions)
+
+        page.query_one("#glue-iceberg-tab-snapshots").focus()
+        await pilot.pause()
+        assert page.can_load_more()
+        await page.action_load_more()
+        await drain_workers(app)
+
+        assert len(vm.catalog.iceberg.snapshots) == 2
+        assert len(vm.catalog.partitions) == partitions_before
 
 
 @pytest.mark.asyncio
