@@ -414,7 +414,7 @@ Expected: FAIL on `"git checkout develop && git pull --ff-only" in bash`.
 
 In `docs/RELEASING.md` replace the text from `From a clean `main`:` through the two lines `git checkout main && git pull --ff-only` / `git checkout -b release/vX.Y.Z` with:
 
-```markdown
+````markdown
 Releases are cut on `develop` and reach `main` only through a promotion PR,
 the same path every other change takes (see CONTRIBUTING §5). From a clean
 `develop`:
@@ -423,6 +423,7 @@ the same path every other change takes (see CONTRIBUTING §5). From a clean
 git checkout develop && git pull --ff-only
 git checkout -b release/vX.Y.Z
 ```
+````
 
 (The steps 1–5 and the `git add` / `git commit` lines that follow are unchanged.)
 
@@ -442,7 +443,7 @@ gh pr create --base develop --title "chore(release): cut vX.Y.Z" --fill
 
 Then replace the paragraph `Review the PR like any other change. Merge when CI is green.` with:
 
-```markdown
+````markdown
 Review the PR like any other change and merge it into `develop` when CI is
 green. Then open the promotion PR from `develop` to `main`:
 
@@ -456,7 +457,7 @@ Merge the promotion PR with a **merge commit, never squash** and never rebase:
 semantically identical and the next back-merge is a no-op. The `ci gate`
 check must be green on the promotion PR itself; the ruleset's strict
 up-to-date policy means a `develop` push after opening it requires a rerun.
-```
+````
 
 - [ ] **Step 4: Fix the tag step**
 
