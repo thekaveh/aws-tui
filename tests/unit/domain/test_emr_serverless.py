@@ -534,6 +534,7 @@ async def test_start_job_run_forwards_form_fields_to_boto() -> None:
         entry_point="s3://b/job.py",
         entry_point_arguments=("--in", "s3://b/in/"),
         spark_submit_parameters="--conf spark.executor.instances=4",
+        client_token="tok-nightly-1",
         name="nightly",
     )
     assert new_id == "jr-new-1"
@@ -546,6 +547,7 @@ async def test_start_job_run_forwards_form_fields_to_boto() -> None:
     assert spark["entryPoint"] == "s3://b/job.py"
     assert spark["entryPointArguments"] == ["--in", "s3://b/in/"]
     assert spark["sparkSubmitParameters"] == "--conf spark.executor.instances=4"
+    assert kwargs["clientToken"] == "tok-nightly-1"
 
 
 @pytest.mark.asyncio
@@ -564,6 +566,7 @@ async def test_start_job_run_omits_name_and_blank_spark_params_when_unset() -> N
         entry_point="s3://b/job.py",
         entry_point_arguments=(),
         spark_submit_parameters="   ",
+        client_token="tok",
         name=None,
     )
     kwargs = stub.start_job_run.await_args.kwargs
@@ -588,6 +591,7 @@ async def test_start_job_run_maps_validation_exception_to_validation_error() -> 
             entry_point="not-an-s3-url",
             entry_point_arguments=(),
             spark_submit_parameters=None,
+            client_token="tok",
         )
 
 
@@ -605,6 +609,7 @@ async def test_in_memory_emr_start_job_run_records_and_materializes() -> None:
         entry_point="s3://b/job.py",
         entry_point_arguments=("--in", "s3://b/in/"),
         spark_submit_parameters="--conf x=y",
+        client_token="tok",
         name="cloned",
     )
     assert new_id.startswith("r-clone-")
@@ -631,6 +636,7 @@ async def test_in_memory_emr_start_job_run_can_raise_for_failure_paths() -> None
             entry_point="s3://b/job.py",
             entry_point_arguments=(),
             spark_submit_parameters=None,
+            client_token="tok",
         )
 
 
@@ -691,3 +697,23 @@ async def test_list_job_runs_page_first_page_omits_the_token() -> None:
     assert runs == []
     assert token is None
     stub.list_job_runs.assert_awaited_once_with(applicationId="app-1", maxResults=50)
+
+
+@pytest.mark.asyncio
+async def test_in_memory_emr_reuses_the_run_for_a_repeated_client_token() -> None:
+    """Mirror AWS: the same token returns the same job run, no second run."""
+    fake = _InMemoryEmr()
+    fake.add_application(app_id="00abc", name="etl")
+    kwargs = dict(
+        execution_role_arn="arn:aws:iam::123456789012:role/EmrJobRole",
+        entry_point="s3://b/job.py",
+        entry_point_arguments=(),
+        spark_submit_parameters=None,
+        client_token="tok-same",
+    )
+    first = await fake.start_job_run("00abc", **kwargs)
+    second = await fake.start_job_run("00abc", **kwargs)
+    assert first == second
+    assert len([c for c in fake.calls if c[0] == "start_job_run"]) == 2
+    runs = await fake.list_job_runs("00abc")
+    assert len(runs) == 1

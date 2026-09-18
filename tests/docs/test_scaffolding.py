@@ -83,6 +83,38 @@ def _sql_examples_after(text: str, marker: str) -> tuple[str, ...]:
     )
 
 
+def _fenced_blocks(text: str, language: str) -> list[str]:
+    """Return the bodies of every ```<language> fenced block in ``text``."""
+    pattern = re.compile(rf"^```{re.escape(language)}\s*\n(.*?)^```", re.S | re.M)
+    return [match.group(1) for match in pattern.finditer(text)]
+
+
+def test_lifecycle_recipe_merges_into_the_existing_bucket_configuration() -> None:
+    """``PutBucketLifecycleConfiguration`` replaces the whole configuration.
+
+    A single-rule payload silently deletes every expiration and transition
+    rule already on the bucket, so the recipe must fetch, merge, then put,
+    and the JSON it ships must be literal JSON a reader can save verbatim.
+    """
+    connections = _read("docs/connections.md")
+    section = connections.split("## 6. Recommended 1-Day MPU Abort Lifecycle Rule", 1)[1]
+    section = section.split("\n## ", 1)[0]
+
+    assert "```jsonc" not in section
+    assert "get-bucket-lifecycle-configuration" in section
+    assert "replaces the bucket's entire lifecycle configuration" in section
+    assert "NoSuchLifecycleConfiguration" in section
+    assert "|| echo '{\"Rules\": []}'" not in section
+    json_blocks = _fenced_blocks(section, "json")
+    assert json_blocks, "expected a literal JSON rule block"
+    for block in json_blocks:
+        parsed = json.loads(block)
+        assert parsed["Rules"][0]["AbortIncompleteMultipartUpload"] == {"DaysAfterInitiation": 1}
+
+    assert "exit 1" not in section
+    assert 'map(select(.ID != "abort-incomplete-mpu"))' in section
+
+
 def test_scripts_docs_package_imports():
     import scripts.docs  # noqa: F401
 
@@ -747,3 +779,78 @@ def test_no_test_module_hand_copies_the_built_in_theme_list() -> None:
         "test modules embedding a literal copy of ThemeStore.BUILTIN_NAMES "
         f"({len(ThemeStore.BUILTIN_NAMES)} themes); derive it instead: {offenders}"
     )
+
+
+def test_testpypi_rehearsal_uses_the_seeded_environment_pip() -> None:
+    """``uv venv`` creates no pip; a bare ``pip`` resolves to some other install."""
+    releasing = _read("docs/RELEASING.md")
+    section = releasing.split("## 2. Rehearsing the TestPyPI Pipeline", 1)[1]
+    section = section.split("\n## ", 1)[0]
+    bash = "\n".join(_fenced_blocks(section, "bash"))
+
+    assert "uv venv --seed" in bash
+    assert "/tmp/aws-tui-dry/bin/python -m pip download" in bash
+    assert "/tmp/aws-tui-dry/bin/python -m pip install" in bash
+    assert "/tmp/aws-tui-dry/bin/aws-tui --version" in bash
+    for line in bash.splitlines():
+        assert not line.lstrip().startswith("pip "), f"bare pip invocation: {line!r}"
+        assert "source /tmp/aws-tui-dry" not in line
+
+
+def test_release_recipe_cuts_on_develop_and_promotes_to_main() -> None:
+    """CONTRIBUTING reserves ``main`` for promotion PRs from ``develop``.
+
+    The routine-release recipe branched from ``main`` directly, so following
+    it produced a release that omitted every unpromoted ``develop`` commit and
+    contradicted the branch policy the same repository publishes.
+    """
+    releasing = _read("docs/RELEASING.md")
+    routine = releasing.split("## 1. Routine release", 1)[1].split("### 1.1.", 1)[0]
+    bash = "\n".join(_fenced_blocks(routine, "bash"))
+
+    assert "git checkout develop && git pull --ff-only" in bash
+    assert "git checkout -b release/vX.Y.Z" in bash
+    assert "git checkout main" not in bash
+    assert "--base develop" in bash
+    assert "promotion PR from `develop` to `main`" in routine
+    assert "merge commit" in routine
+    assert "never squash" in routine
+
+    contributing = _read("CONTRIBUTING.md")
+    assert "Reserve `main`" in contributing
+    assert "release-promotion PRs from `develop`" in contributing
+
+    assert "Fix forward on `main`" not in releasing
+    assert "open promotion PR develop → main" in releasing
+
+
+def test_environment_variable_references_point_at_the_configuration_page() -> None:
+    """README §5 only links to the configuration page; it has no such section."""
+    readme = _read("README.md")
+    platforms = _read("docs/platforms.md")
+    configuration = _read("docs/configuration.md")
+
+    assert "## Environment variables" not in readme
+    assert 'README\'s "Environment variables"' not in platforms
+    assert "configuration.md#2-environment-variables" in platforms
+    assert "README carries" not in configuration
+    assert "links here" in configuration
+
+
+def test_source_cycle_example_states_the_resolver_order() -> None:
+    """``ConnectionResolver.list()`` returns ``[*explicit, *autos]``.
+
+    Explicit ``[connections.*]`` entries come first in config order whatever
+    their kind, then auto-discovered AWS profiles not shadowed by an explicit
+    entry. The example grouped every AWS profile before every s3-compatible
+    endpoint, which is not an order the resolver can produce when an explicit
+    s3-compatible entry exists alongside discovered profiles.
+    """
+    connections = _read("docs/connections.md")
+    section = connections.split("## 4. Switching between connections at runtime", 1)[1]
+    section = section.split("\n## ", 1)[0]
+
+    assert "explicit `[connections.*]` entries first, in config-file order" in section
+    assert "then auto-discovered AWS profiles" in section
+    assert "shadow" in section
+    assert "→ ... (every other AWS profile)" not in section

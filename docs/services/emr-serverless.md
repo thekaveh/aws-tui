@@ -46,6 +46,13 @@ Serverless `StartJobRun` API through `EmrServerlessClient`; validation and
 provider errors keep the modal open with actionable feedback. The service does
 not currently expose a blank submit form or cancellation command.
 
+Submission carries an app-owned `clientToken`. The token is minted when the
+clone form opens and reused if a submit attempt fails before a response
+arrives, so pressing submit again after a timeout, while the clone form stays
+open, returns the run AWS already created instead of starting a second,
+separately billed job. Editing any field or a successful submit starts a new
+intent with a new token.
+
 ## 4. Architecture
 
 `EmrServerlessService` composes `EmrServerlessPageVM`, which owns

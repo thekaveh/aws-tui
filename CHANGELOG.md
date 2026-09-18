@@ -165,6 +165,17 @@ section; the current tree must not be tagged as v0.8.0.
 
 ### Fixed
 
+- **Glue pagination is reachable.** Databases, tables, partitions, jobs, runs,
+  and crawlers reported `more available` but no keyboard, palette, or mouse
+  path called the view models' load-more methods, so a filtered runs list
+  could hide every older matching run. `l` (`glue.load_more`), the **Load
+  more Glue rows** palette command, and clicking a list footer now fetch the
+  next page for the focused list.
+- **EMR clone retries no longer start a second job.** `StartJobRun` now
+  carries an app-owned `clientToken` held by the clone view model for the
+  life of one form intent. Previously botocore minted a fresh token per call,
+  so retrying after an accepted-but-lost request created a second billable
+  run. The token rotates on a field edit or a successful submit.
 - **Chrome legibility (#202).** The banner pedigree line is dimmed so it reads
   as secondary to the wordmark, and the EMR source/application row is laid out
   on one line instead of wrapping.
@@ -346,6 +357,39 @@ section; the current tree must not be tagged as v0.8.0.
 
 ### Docs
 
+- **Docs coherence after the audit pass.** The contract ledger's Glue
+  job-runs gap row and the release summary flow and rollback notes now match
+  the code and the promotion-only policy; the lifecycle recipe is rerunnable
+  and no longer `exit`s the reader's shell; the Glue paging note states the
+  200-row job-run page and the Iceberg tab; the EMR token note states the
+  open-form intent boundary.
+- **Source-cycle order.** `docs/connections.md` §4 now describes the order
+  the resolver actually produces: `local`, then explicit `[connections.*]`
+  entries in config-file order regardless of kind, then auto-discovered AWS
+  profiles not shadowed by an explicit entry. The old example grouped all AWS
+  profiles ahead of all s3-compatible endpoints.
+- **Environment-variable cross-references.** `docs/platforms.md` pointed at
+  a README "Environment variables" section that no longer exists, and
+  `docs/configuration.md` claimed the README still carries the tables. Both
+  now point at the Configuration Reference.
+- **Table-handoff diagram names the right key.** The diagram said `y` starts
+  "Query table in Athena"; `y` copies the table reference and `Shift+Q`
+  queries it. Master corrected, SVG/PNG regenerated, and a contract test now
+  pins the label to the registered binding.
+- **Release recipe follows the branch policy.** `docs/RELEASING.md` now cuts
+  the release branch from `develop`, merges it back to `develop`, and reaches
+  `main` through a merge-commit promotion PR, matching CONTRIBUTING §5. The
+  old recipe branched from `main` and would have shipped without unpromoted
+  `develop` work.
+- **TestPyPI rehearsal installs into the environment it creates.** The recipe
+  now seeds pip with `uv venv --seed` and invokes the environment's own
+  `python -m pip`; the previous bare `pip` had no pip in that venv and fell
+  through to whichever interpreter was first on `PATH`.
+- **Lifecycle recipe no longer clobbers existing rules.** The MPU-abort recipe
+  in `docs/connections.md` now fetches the bucket's current lifecycle
+  configuration, appends the rule with `jq`, and puts the merged document,
+  because `put-bucket-lifecycle-configuration` replaces every existing rule.
+  The JSON is now literal JSON rather than a commented `jsonc` block.
 - **Three-surface layout standardized, landing poster repaired (#198).** The
   in-repo docs, the generated site, and the wiki now share one section
   hierarchy, and the landing poster renders on every surface.
@@ -382,6 +426,10 @@ section; the current tree must not be tagged as v0.8.0.
 
 ### Build
 
+- Pages and wiki publication now also trigger on `CONTRIBUTING.md`,
+  `SECURITY.md`, and `CODE_OF_CONDUCT.md`; the manifest publishes all three,
+  but the workflow's path filter only watched `docs/**`. A guard test now
+  derives the required triggers from `docs/manifest.yaml`.
 - Bumped `astral-sh/setup-uv` from v10.0.1 to v10.1.0, `ruff-pre-commit`
   from v0.16.6 to v0.16.8, and the Adobe S3Mock harness image from 5.2.0 to
   5.2.2 across the compose file, the integration conftest, the cookbook, and a

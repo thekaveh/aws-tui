@@ -131,17 +131,21 @@ are validated by the live boto path.
 
 Every connection the resolver returns — AWS profiles, manually-configured
 `s3-compatible` entries, and auto-discovered AWS profiles alike — joins
-a single in-app source-cycle on the focused pane. Press **`Shift+S`** (or
-`S`) on a pane to step through it in this order:
+a single in-app source-cycle on the focused pane. The ring is `local` followed
+by the resolver's order: explicit `[connections.*]` entries first, in config-file order and regardless of kind, then auto-discovered AWS profiles
+from `~/.aws/config` and `~/.aws/credentials`. An explicit entry whose name
+matches a discovered profile shadows it, so each name appears once. Press
+**`Shift+S`** (or `S`) on a pane to step through it:
 
 ```
 local
-  → aws s3 · profile-1 · us-east-1
-  → aws s3 · profile-2 · us-west-2
-  → ... (every other AWS profile)
-  → s3-compatible · minio-local · localhost:9000
+  → s3-compatible · minio-local · localhost:9000     [connections.minio-local]
+  → aws s3 · prod · us-east-1                        [connections.prod]
   → s3-compatible · r2-prod · <account>.r2.cloudflarestorage.com
-  → ... (every other s3-compatible connection)
+  → ... (every other explicit [connections.*] entry, in file order)
+  → aws s3 · dev-sso · us-west-2                     discovered [profile dev-sso]
+  → aws s3 · analytics · eu-west-1                   discovered [profile analytics]
+  → ... (every other discovered profile not shadowed by an explicit entry)
   → local   ← wraps
 ```
 
@@ -259,21 +263,50 @@ or failure. A process termination or network failure can still interrupt
 cleanup before the abort reaches S3, and multipart upload IDs are not persisted
 for startup recovery, so the lifecycle rule remains the server-side backstop.
 
-```jsonc
-// lifecycle.json
-{
-  "Rules": [{
-    "ID": "abort-incomplete-mpu",
-    "Status": "Enabled",
-    "Filter": {},
-    "AbortIncompleteMultipartUpload": { "DaysAfterInitiation": 1 }
-  }]
-}
-```
+`put-bucket-lifecycle-configuration` replaces the bucket's entire lifecycle configuration with the document you send. Never apply a single-rule file to a bucket that already has rules: fetch the current rules, add this one, review the merged result, then put the merged document.
 
 ```bash
+# 1. Fetch the current rules. Only a bucket with no lifecycle configuration
+#    (NoSuchLifecycleConfiguration) may start from an empty rule list; any
+#    other failure aborts so an auth or network error cannot masquerade as
+#    "no rules" and wipe the bucket's policies in step 3. Run these steps as
+#    a script; `false` stops a script, an interactive shell just prints the
+#    error.
+if ! aws s3api get-bucket-lifecycle-configuration --bucket <name> \
+        > current-lifecycle.json 2> get-lifecycle.err; then
+    grep -q NoSuchLifecycleConfiguration get-lifecycle.err \
+        || { cat get-lifecycle.err; false; }
+    echo '{"Rules": []}' > current-lifecycle.json
+fi
+
+# 2. Append the abort rule to the existing Rules array. jq keeps every
+#    other rule intact and replaces a previous abort-incomplete-mpu rule, so
+#    the step is safe to rerun.
+jq '.Rules |= (map(select(.ID != "abort-incomplete-mpu")) + [{
+      "ID": "abort-incomplete-mpu",
+      "Status": "Enabled",
+      "Filter": {},
+      "AbortIncompleteMultipartUpload": { "DaysAfterInitiation": 1 }
+    }])' current-lifecycle.json > merged-lifecycle.json
+
+# 3. Review merged-lifecycle.json, then apply the merged document.
 aws s3api put-bucket-lifecycle-configuration \
-    --bucket <name> --lifecycle-configuration file://lifecycle.json
+    --bucket <name> --lifecycle-configuration file://merged-lifecycle.json
+```
+
+For a bucket with no existing rules the merged document is exactly:
+
+```json
+{
+  "Rules": [
+    {
+      "ID": "abort-incomplete-mpu",
+      "Status": "Enabled",
+      "Filter": {},
+      "AbortIncompleteMultipartUpload": { "DaysAfterInitiation": 1 }
+    }
+  ]
+}
 ```
 
 ## 7. First-run flow

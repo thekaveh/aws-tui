@@ -77,7 +77,8 @@ The AWS CLI uses identical default paths on every OS: `~/.aws/config` and
 `AWS_SHARED_CREDENTIALS_FILE` override those paths; aws-tui expands `%VAR%`,
 `$VAR`, and `~` in their values. Silent SSO discovery and the
 `AWS_DEFAULT_PROFILE` / `AWS_PROFILE` startup precedence work the same way as
-on macOS/Linux. See the README's "Environment variables" section.
+on macOS/Linux. See [Environment variables](configuration.md#2-environment-variables) in the
+Configuration Reference.
 
 ## 3. macOS
 

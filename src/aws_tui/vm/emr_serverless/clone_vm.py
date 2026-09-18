@@ -12,6 +12,8 @@ plain Python attributes + ``apply_field`` / ``submit`` / ``cancel``."""
 
 from __future__ import annotations
 
+from uuid import uuid4
+
 from vmx import ComponentVM, Message, MessageHub, PropertyChangedMessage
 from vmx.lifecycle.status import ConstructionStatus
 from vmx.services.dispatcher import Dispatcher
@@ -61,6 +63,11 @@ class JobRunCloneVM:
         self._entry_point: str = detail.entry_point or ""
         self._entry_point_arguments: tuple[str, ...] = detail.entry_point_arguments
         self._spark_submit_parameters: str | None = detail.spark_submit_parameters
+        # One idempotency token per form intent. Reused verbatim when a
+        # submit attempt raises (the ambiguous-retry case AWS's clientToken
+        # exists for), rotated when a field value changes or a submit
+        # succeeds, because either of those is a new intent.
+        self._client_token: str = uuid4().hex
         # Caller may call :meth:`cancel` for symmetry with the other
         # modal VMs (Confirm / Crash); the page widget
         # itself reads the modal's dismiss value rather than awaiting
@@ -122,6 +129,7 @@ class JobRunCloneVM:
         """
         if field_name not in _FIELDS:
             raise KeyError(f"unknown field {field_name!r}; valid: {_FIELDS}")
+        before = self._intent()
         if field_name == "entry_point_arguments":
             if not isinstance(value, tuple):
                 raise TypeError("entry_point_arguments must be a tuple[str, ...]")
@@ -137,6 +145,8 @@ class JobRunCloneVM:
                 self._entry_point = value
             else:  # spark_submit_parameters
                 self._spark_submit_parameters = value or None
+        if self._intent() != before:
+            self._client_token = uuid4().hex
         send_value_free(self._hub, PropertyChangedMessage.create(self, self.vm_name, field_name))
 
     def is_valid(self) -> tuple[bool, str | None]:
@@ -170,9 +180,11 @@ class JobRunCloneVM:
             entry_point=self._entry_point,
             entry_point_arguments=self._entry_point_arguments,
             spark_submit_parameters=self._spark_submit_parameters,
+            client_token=self._client_token,
             name=self._name,
         )
         self._submitted_id = new_id
+        self._client_token = uuid4().hex
         return new_id
 
     def cancel(self) -> None:
@@ -190,6 +202,19 @@ class JobRunCloneVM:
     @property
     def submitted_id(self) -> str | None:
         return self._submitted_id
+
+    @property
+    def client_token(self) -> str:
+        return self._client_token
+
+    def _intent(self) -> tuple[object, ...]:
+        return (
+            self._name,
+            self._execution_role_arn,
+            self._entry_point,
+            self._entry_point_arguments,
+            self._spark_submit_parameters,
+        )
 
     # ── Lifecycle ───────────────────────────────────────────────────────────
 

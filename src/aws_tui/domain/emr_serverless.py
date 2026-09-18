@@ -164,6 +164,7 @@ class EmrServerlessClientProtocol(Protocol):
         entry_point: str,
         entry_point_arguments: tuple[str, ...],
         spark_submit_parameters: str | None,
+        client_token: str,
         name: str | None = None,
     ) -> str: ...
 
@@ -463,6 +464,7 @@ class EmrServerlessClient:
         entry_point: str,
         entry_point_arguments: tuple[str, ...],
         spark_submit_parameters: str | None,
+        client_token: str,
         name: str | None = None,
     ) -> str:
         """Submit a new job run. Returns the new ``job_run_id``.
@@ -471,7 +473,13 @@ class EmrServerlessClient:
         from a :class:`JobRunDetail` then calls this to fire the
         re-run. Errors from boto3 are mapped through
         :func:`_map_boto_error` to the domain :class:`ProviderError`
-        hierarchy so the modal can surface a typed error inline."""
+        hierarchy so the modal can surface a typed error inline.
+
+        ``client_token`` is the app-owned ``clientToken``. The model marks it
+        ``idempotencyToken: true``, so left unset botocore mints a fresh UUID
+        per call; that turns a retry after an ambiguous failure (accepted
+        request, lost response) into a second billable job. The clone VM owns
+        one token per form intent and reuses it across such retries."""
         try:
             async with self._session.client(
                 "emr-serverless", region_name=self._region_name, config=_EMR_BOTO_CONFIG
@@ -486,6 +494,7 @@ class EmrServerlessClient:
                     "applicationId": application_id,
                     "executionRoleArn": execution_role_arn,
                     "jobDriver": {"sparkSubmit": spark_submit},
+                    "clientToken": client_token,
                 }
                 if name is not None:
                     kwargs["name"] = name

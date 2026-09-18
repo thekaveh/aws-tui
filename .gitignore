@@ -74,3 +74,6 @@ snapshot_report.html
 /generated/
 /mkdocs.yml
 /site/
+
+# Local git worktrees (superpowers)
+.worktrees/

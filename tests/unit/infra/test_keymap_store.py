@@ -17,6 +17,7 @@ _APPROVED_ALIAS_PAIRS = (
     ("athena.query", "glue.catalog"),
     ("athena.history", "glue.jobs"),
     ("athena.results", "glue.crawlers"),
+    ("athena.load_more", "glue.load_more"),
 )
 
 
@@ -44,6 +45,9 @@ class TestDefaults:
     def test_glue_query_in_athena_has_a_dedicated_binding(self) -> None:
         store = KeymapStore()
         assert store.resolve("glue.query_in_athena") == ("Q",)
+
+    def test_resolve_glue_load_more_default(self) -> None:
+        assert KeymapStore().resolve("glue.load_more") == ("l",)
 
     def test_athena_controls_have_dedicated_bindings(self) -> None:
         store = KeymapStore()

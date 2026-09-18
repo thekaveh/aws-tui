@@ -146,6 +146,7 @@ same size.
 | Cursor up / down | `↑` `↓` (also `k` / `j`) | Moves the focused resource list or scrolls detail. |
 | Cycle focus | `Tab` / `Shift+Tab` | Walks the complete deterministic Glue ring described below; reverse traversal is the exact inverse. |
 | Refresh active view | `r` | Reloads only the selected Catalog, Jobs, or Crawlers view. |
+| Load more rows in the focused list | `l`, or `:` / `Ctrl+K`, then **Load more Glue rows** | Runs `glue.load_more`. Fetches the next page for the focused Glue list (databases, tables, partitions, jobs, runs, crawlers, or the focused Iceberg metadata tab); clicking a list footer that reads `more available` does the same. Disabled when the list has no further page or hit its 1,000-item safety limit. |
 | Switch AWS source | `Shift+S` | Runs `app.swap_source` and rebuilds Glue under the next resolver-ordered supported AWS profile and region. The bordered **Source** selector can instead choose an exact source. |
 | Copy selected table reference | `y` | Runs `glue.copy_table_ref`. The canonical, fully quoted identifier and its source identity are retained in the authoritative typed in-app clipboard; OS clipboard delivery is best effort. |
 | Open selected table location in S3 | `:` / `Ctrl+K`, then **Open table location in S3** | `glue.open_s3_location` is palette-only and absent from `KeymapStore.DEFAULT_BINDINGS`. It preserves the exact Glue connection name and region; malformed or missing locations do not navigate. |
@@ -304,6 +305,7 @@ unbound until a handler ships.
 | `glue.open_s3_location` | none (command palette) | yes | Open the selected Glue table's S3 location under the exact source connection and region |
 | `glue.query_in_athena` | `Q` (`shift+q`) | yes | Open the selected Glue table in Athena and prefill exact quoted `SELECT * ... LIMIT 5` SQL without executing it |
 | `glue.time_travel_in_athena` | `V` (`shift+v`) | yes | Open the selected visible Iceberg snapshot in Athena and prefill exact bounded `FOR VERSION AS OF` SQL without executing it |
+| `glue.load_more` | `l` | yes | Fetch the next page for the focused Glue list |
 | `athena.query` | `1` | yes | Select the Athena Query view |
 | `athena.history` | `2` | yes | Select the Athena History view |
 | `athena.results` | `3` | yes | Select the Athena Results view |

@@ -53,6 +53,7 @@ _SERVICE_ACTIONS: dict[str, tuple[str, ...]] = {
         "glue.copy_table_ref",
         "glue.query_in_athena",
         "glue.time_travel_in_athena",
+        "glue.load_more",
         "pane.refresh",
         "app.swap_source",
     ),
@@ -123,6 +124,7 @@ _ACTION_LABELS: dict[str, str] = {
     "glue.copy_table_ref": "copy",
     "glue.query_in_athena": "Athena",
     "glue.time_travel_in_athena": "snapshot",
+    "glue.load_more": "more",
     "athena.query": "query",
     "athena.history": "history",
     "athena.results": "results",
@@ -171,6 +173,7 @@ _ACTION_EFFECTS: dict[str, str] = {
         "Open the selected Iceberg snapshot in Athena and prefill FOR VERSION AS OF SQL. "
         "This does not execute the query."
     ),
+    "glue.load_more": "Load the next available page for the focused Glue list.",
     "athena.query": "Show the Athena query editor.",
     "athena.history": "Show read-only Athena query history.",
     "athena.results": "Show rows for the current Athena execution.",
@@ -191,6 +194,7 @@ _ACTION_REQUIREMENTS: dict[str, str] = {
     "glue.copy_table_ref": "Requires a visible selected Glue table.",
     "glue.query_in_athena": "Requires a visible selected Glue table.",
     "glue.time_travel_in_athena": "Requires a visible selected snapshot row.",
+    "glue.load_more": "Requires another page in the focused Glue list.",
     "athena.insert_table_ref": "Requires a copied table from the active Athena source.",
     "athena.execute": "Requires valid non-empty read-only SQL and an idle query runner.",
     "athena.cancel": "Requires query submission or an active app-owned Athena query.",
