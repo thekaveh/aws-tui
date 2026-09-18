@@ -453,16 +453,22 @@ async def test_border_row_hover_offers_the_path_and_click_copies_it() -> None:
     vm = PaneVM(provider=await _seed(), hub=hub, dispatcher=dispatcher, id_prefix="pane.test")
     vm.construct()
     await vm.setup()
+    copied: list[tuple[str, str]] = []
     try:
-
+        # ``copy_value`` is the app-level seam the pane hands values to.
+        # The pane deliberately does not call ``copy_to_clipboard``
+        # itself: only the app can tell an OSC 52 write that vanished
+        # from one the OS clipboard actually took, and only the app has
+        # the toast stack to say which happened.
         class _App(App[None]):
             def compose(self) -> ComposeResult:
                 yield Pane(vm, hub=hub, id="pane")
 
+            def copy_value(self, value: str, label: str) -> None:
+                copied.append((value, label))
+
         app = _App()
-        copied: list[str] = []
         async with app.run_test(size=(80, 20)) as pilot:
-            app.copy_to_clipboard = copied.append  # type: ignore[assignment]
             await pilot.pause()
             await pilot.pause()
             pane = app.query_one(Pane)
@@ -476,7 +482,7 @@ async def test_border_row_hover_offers_the_path_and_click_copies_it() -> None:
 
             await pilot.click(Pane, offset=(4, 0))
             await pilot.pause()
-            assert copied == [vm.viewmodel.copy_path]
+            assert copied == [(vm.viewmodel.copy_path, "path")]
     finally:
         vm.dispose()
         hub.dispose()
@@ -491,16 +497,18 @@ async def test_clicking_a_row_selects_it_rather_than_copying() -> None:
     vm = PaneVM(provider=await _seed(), hub=hub, dispatcher=dispatcher, id_prefix="pane.test")
     vm.construct()
     await vm.setup()
+    copied: list[tuple[str, str]] = []
     try:
 
         class _App(App[None]):
             def compose(self) -> ComposeResult:
                 yield Pane(vm, hub=hub, id="pane")
 
+            def copy_value(self, value: str, label: str) -> None:
+                copied.append((value, label))
+
         app = _App()
-        copied: list[str] = []
         async with app.run_test(size=(80, 20)) as pilot:
-            app.copy_to_clipboard = copied.append  # type: ignore[assignment]
             await pilot.pause()
             await pilot.pause()
             rows = list(app.query(EntryRow))
@@ -510,6 +518,50 @@ async def test_clicking_a_row_selects_it_rather_than_copying() -> None:
             await pilot.pause()
 
             assert copied == [], "a row click selects; it must not reach the clipboard"
+    finally:
+        vm.dispose()
+        hub.dispose()
+
+
+@pytest.mark.asyncio
+async def test_border_click_never_writes_the_clipboard_from_the_pane() -> None:
+    """The pane hands the value up; it does not write the clipboard itself.
+
+    ``Pane`` used to own a private ``_copy_to_clipboard`` that called
+    ``App.copy_to_clipboard`` and then announced "Copied" -- a second copy
+    of the same lie, on a widget with no way to find out whether OSC 52
+    reached anything. Deleting it is only durable if something fails when
+    it comes back.
+    """
+    hub: MessageHub[Message] = MessageHub()
+    dispatcher = RxDispatcher.immediate()
+    vm = PaneVM(provider=await _seed(), hub=hub, dispatcher=dispatcher, id_prefix="pane.test")
+    vm.construct()
+    await vm.setup()
+    handed_up: list[tuple[str, str]] = []
+    written: list[str] = []
+    try:
+
+        class _App(App[None]):
+            def compose(self) -> ComposeResult:
+                yield Pane(vm, hub=hub, id="pane")
+
+            def copy_value(self, value: str, label: str) -> None:
+                handed_up.append((value, label))
+
+            def copy_to_clipboard(self, text: str) -> None:
+                written.append(text)
+
+        app = _App()
+        async with app.run_test(size=(80, 20)) as pilot:
+            await pilot.pause()
+            await pilot.pause()
+
+            await pilot.click(Pane, offset=(4, 0))
+            await pilot.pause()
+
+            assert handed_up == [(vm.viewmodel.copy_path, "path")]
+            assert written == [], "the pane must not reach the terminal write itself"
     finally:
         vm.dispose()
         hub.dispose()

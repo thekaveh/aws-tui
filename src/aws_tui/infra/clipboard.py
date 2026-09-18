@@ -68,8 +68,12 @@ _WINDOWS_BOM: Final[str] = "\ufeff"
 # ``%SystemRoot%`` is always set on Windows; the literal is the last resort.
 _WINDOWS_SYSTEM_ROOT: Final[str] = "C:\\Windows"
 
-# No helper was found, or the session has no display to own a clipboard.
-_NO_MECHANISM: Final[str] = "none"
+#: ``ClipboardResult.mechanism`` when nothing was spawned at all: no helper
+#: was found, or the session has no display to own a clipboard. Public
+#: because it is the only way a caller can tell "the helper failed" (which
+#: is worth reporting and logging) from "there was never a helper" (which
+#: is not a fault) without matching on a bare string literal.
+NO_MECHANISM: Final[str] = "none"
 
 # A non-zero exit is not an exception here (``check=False``), but it is the
 # condition ``subprocess`` names ``CalledProcessError``. Reporting that name
@@ -162,7 +166,7 @@ class NativeClipboard:
         """Hand ``text`` to the first available helper."""
         candidate = self._resolve()
         if candidate is None:
-            return ClipboardResult(ok=False, mechanism=_NO_MECHANISM)
+            return ClipboardResult(ok=False, mechanism=NO_MECHANISM)
         mechanism, argv = candidate
         try:
             # The encode is INSIDE the try on purpose. UnicodeEncodeError is a
@@ -269,6 +273,7 @@ class InMemoryClipboard:
 
 
 __all__ = [
+    "NO_MECHANISM",
     "ClipboardPort",
     "ClipboardResult",
     "InMemoryClipboard",

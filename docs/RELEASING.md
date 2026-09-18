@@ -113,7 +113,10 @@ up-to-date policy means a `develop` push after opening it requires a rerun.
   tests with injected fakes — nothing in CI ever spawns `pbcopy`, `xclip`,
   `wl-copy`, `xsel` or `clip.exe`, so delivery itself is unverified by the
   suite. On each supported OS, copy a path (`P`) and paste it somewhere
-  outside the terminal. On **Windows** this is the only check that exists:
+  outside the terminal, and read the toast while doing it: it may say
+  `copied path` only when the paste actually produces that path. On a
+  terminal with no clipboard helper on `PATH` it must name OSC 52 instead
+  of claiming a copy. On **Windows** this is the only check that exists:
   copy a path containing non-ASCII characters, paste it into Notepad, and
   confirm the **whole** string arrives — `clip.exe` is fed BOM-prefixed
   UTF-16LE and a wrong guess there truncates at the first character while

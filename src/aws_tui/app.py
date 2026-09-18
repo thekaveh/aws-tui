@@ -22,6 +22,7 @@ from functools import partial
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, ClassVar, cast
 
+import anyio
 from reactivex.abc import DisposableBase
 from rich.markup import escape
 from textual import events
@@ -43,6 +44,7 @@ from aws_tui.domain.data_catalog import TableRef
 from aws_tui.domain.filesystem import AuthRequiredError, EntryKind
 from aws_tui.domain.s3_uri import parse_s3_uri
 from aws_tui.infra.aws_session import TokenState
+from aws_tui.infra.clipboard import NO_MECHANISM
 from aws_tui.infra.connection_resolver import Connection, ConnectionNotFound
 from aws_tui.infra.crash_dump import CrashDump
 from aws_tui.infra.redaction import redact_text
@@ -2247,13 +2249,106 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
         if pane is not None:
             await pane.refresh()
 
-    def _put_on_clipboard(self, value: str, label: str) -> None:
-        """Copy ``value`` and confirm it, so the keystroke is not silent."""
-        with contextlib.suppress(Exception):
-            self.copy_to_clipboard(value)
-        self.notify(f"Copied {label}", timeout=3)
+    async def _put_on_clipboard(self, value: str, label: str) -> None:
+        """Copy ``value`` on both channels and report what actually happened.
 
-    def action_copy_entry_path(self) -> None:
+        Two channels, only one of which can be checked. ``copy_to_clipboard``
+        emits OSC 52, and OSC 52 has no acknowledgement: macOS Terminal.app
+        ignores it outright and iTerm2 does unless the user opted in, and
+        neither says so. Reporting "Copied" off that write is a guess dressed
+        as a fact, so the toast is driven by :attr:`AppContext.clipboard` --
+        the port that spawns the platform helper and returns whether the
+        write landed -- and by nothing else.
+
+        Three outcomes, each honest: the helper wrote it; a helper existed
+        and failed (worth a toast and a log line); or there was no helper at
+        all, in which case the terminal is the only channel left and the
+        toast says exactly that instead of claiming success.
+        """
+        # The OSC 52 write stays guarded. Textual base64s
+        # ``text.encode("utf-8")``, and a POSIX name that is not valid UTF-8
+        # arrives here carrying lone surrogates (``domain/local_fs.py``
+        # decodes with ``surrogateescape``), so this genuinely can raise --
+        # and an escape would both skip the native write below and, inside a
+        # worker, take the app down with it. Log the exception's class name
+        # and never the payload: a copied path may be a credential.
+        osc52_written = True
+        try:
+            self.copy_to_clipboard(value)
+        except Exception as exc:
+            osc52_written = False
+            self._app_ctx.log_sink.warning(
+                "clipboard.osc52_write_failed",
+                error_type=type(exc).__name__,
+            )
+        # ``pbcopy`` is ~2 ms, but an ``xclip`` with a wedged X server is not,
+        # and the port lets it run to its own timeout. Off the event loop it
+        # costs a thread; on it, it would look exactly like the freeze this
+        # branch exists to remove. anyio, never ``asyncio.to_thread`` -- the
+        # repo runs its blocking work through anyio's limiter.
+        result = await anyio.to_thread.run_sync(partial(self._app_ctx.clipboard.write, value))
+        stack = self._app_ctx.root_vm.chrome.toast_stack
+        slug = label.replace(" ", "-")
+        if result.ok:
+            notifications.success(
+                stack,
+                subject="Source",
+                message=f"copied {label}",
+                toast_id=f"clipboard-{slug}",
+            )
+            return
+        if result.mechanism != NO_MECHANISM:
+            # A helper was there and refused the payload. That is a fault
+            # worth a durable record; the toast carries which helper failed
+            # so the user can reproduce it from a shell.
+            self._app_ctx.log_sink.warning(
+                "clipboard.native_write_failed",
+                mechanism=result.mechanism,
+                error_type=result.error_type,
+            )
+            notifications.advise(
+                stack,
+                subject="Source",
+                message=f"could not copy {label} to the system clipboard",
+                action=f"{result.mechanism} failed; the terminal was sent OSC 52 instead",
+                toast_id=f"clipboard-failed-{slug}",
+            )
+            return
+        if osc52_written:
+            # No helper is not a fault -- ssh, tmux, a headless CI shell --
+            # so no log line. The toast names the one channel that was used
+            # and refuses to call an unacknowledged write a success.
+            notifications.advise(
+                stack,
+                subject="Source",
+                message=f"sent {label} to the terminal via OSC 52",
+                action="no native clipboard helper; your terminal may ignore it",
+                toast_id=f"clipboard-osc52-{slug}",
+            )
+            return
+        notifications.advise(
+            stack,
+            subject="Source",
+            message=f"could not copy {label}",
+            action="no native clipboard helper, and the terminal refused OSC 52",
+            toast_id=f"clipboard-unavailable-{slug}",
+        )
+
+    def copy_value(self, value: str, label: str) -> None:
+        """Put ``value`` on the clipboard from a synchronous caller.
+
+        The public seam for widgets that hold a value but have no route to
+        the toast stack -- ``Pane`` reaches it by duck typing. The write is
+        deferred into a worker because the port blocks; ``exclusive`` in the
+        ``clipboard`` group means a second copy supersedes a first that is
+        still waiting on a wedged helper, which is what the user meant.
+        """
+        self._run_lifecycle_worker(
+            partial(self._put_on_clipboard, value, label),
+            group="clipboard",
+        )
+
+    async def action_copy_entry_path(self) -> None:
         """Copy the focused pane's cursor entry path.
 
         The pane's view model owns the formatting, so this reads the prepared
@@ -2266,17 +2361,24 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
             return
         target = pane.viewmodel.copy_selected_path
         if target is None:
-            self.notify("Nothing selected to copy", severity="warning", timeout=3)
+            # Through the toast stack, never ``self.notify``: Textual's own
+            # notifier wrecks the footer (see ``_raise_theme_changed_toast``).
+            notifications.advise(
+                self._app_ctx.root_vm.chrome.toast_stack,
+                subject="Source",
+                message="nothing selected to copy",
+                toast_id="clipboard-nothing-selected",
+            )
             return
-        self._put_on_clipboard(target, "file path")
+        await self._put_on_clipboard(target, "file path")
 
-    def action_copy_path(self) -> None:
+    async def action_copy_path(self) -> None:
         """Copy the focused pane's current location."""
         self.record_action("pane.copy_path")
         pane = self._focused_file_pane()
         if pane is None:
             return
-        self._put_on_clipboard(pane.viewmodel.copy_path, "path")
+        await self._put_on_clipboard(pane.viewmodel.copy_path, "path")
 
     async def action_help(self) -> None:
         """Show the help overlay with the active configurable keymap."""
@@ -3532,19 +3634,11 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
         copied = clipboard.copied_table
         if copied is None:
             return
-        try:
-            self.copy_to_clipboard(copied.sql_identifier)
-        except Exception as exc:
-            self._app_ctx.log_sink.warning(
-                "table_clipboard.system_copy_unavailable",
-                error_type=type(exc).__name__,
-            )
-        notifications.success(
-            self._app_ctx.root_vm.chrome.toast_stack,
-            subject="Source",
-            message="copied table reference",
-            toast_id="glue-table-reference-copied",
-        )
+        # The typed in-app clipboard above is authoritative and already
+        # holds the reference; this is the OS-clipboard leg, and it goes
+        # through the same honest writer as every other copy. It used to
+        # raise a success toast whether or not the write reached anything.
+        self.copy_value(copied.sql_identifier, "table reference")
 
     def _advance_service_navigation(
         self,

@@ -16,8 +16,6 @@ when ``entries`` or ``state`` change.
 
 from __future__ import annotations
 
-import contextlib
-
 from rich.markup import escape as _markup_escape
 from rich.text import Text
 from textual.app import ComposeResult
@@ -401,25 +399,44 @@ class Pane(HubSubscriberMixin, Widget):
         else:
             self.remove_class("-focused")
 
-    def _copy_to_clipboard(self, value: str, label: str) -> None:
-        """Put ``value`` on the system clipboard and say so."""
-        with contextlib.suppress(Exception):
-            self.app.copy_to_clipboard(value)
-        with contextlib.suppress(Exception):
-            self.app.notify(f"Copied {label}", timeout=3)
+    def _hand_to_app(self, value: str, label: str) -> None:
+        """Hand ``value`` to the app's clipboard writer, if the host has one.
+
+        The app owns the only honest clipboard report: it has the port that
+        can tell a real write from an unacknowledged OSC 52, and it has the
+        toast stack. A ``Pane`` has neither -- ``DualPane.compose`` gives it
+        a view model and the hub and nothing else -- so it hands the value
+        up and says nothing itself.
+
+        Duck-typed on purpose, the existing idiom in this file (see
+        ``on_click``'s ``type(node).__name__ == "DualPane"``): the pane is
+        mounted under a bare ``App`` in several tests, and ``ui/`` may not
+        import the composition root regardless.
+
+        It passes the value rather than calling ``action_copy_path``,
+        which resolves the *focused* pane. ``on_click``'s border branch
+        returns before the focus-switch fall-through, so routing through the
+        action would copy the other pane's path on a border click.
+        """
+        handler = getattr(self.app, "copy_value", None)
+        if handler is not None:
+            handler(value, label)
 
     def copy_current_path(self) -> None:
         """Copy this pane's location. Bound to the border affordance and a key."""
-        self._copy_to_clipboard(self._vm.viewmodel.copy_path, "path")
+        self._hand_to_app(self._vm.viewmodel.copy_path, "path")
 
     def copy_selected_path(self) -> None:
-        """Copy the cursor entry's full location, if there is one."""
+        """Copy the cursor entry's full location, if there is one.
+
+        Silent on the parent link and on an empty listing: the pane cannot
+        raise a toast, and the keyboard path for this
+        (``AwsTuiApp.action_copy_entry_path``) advises there instead.
+        """
         target = self._vm.viewmodel.copy_selected_path
         if target is None:
-            with contextlib.suppress(Exception):
-                self.app.notify("Nothing selected to copy", severity="warning", timeout=3)
             return
-        self._copy_to_clipboard(target, "file path")
+        self._hand_to_app(target, "file path")
 
     def on_mouse_move(self, event: object) -> None:
         """Offer the full path while the pointer is on the top border row.

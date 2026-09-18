@@ -33,7 +33,7 @@ section; the current tree must not be tagged as v0.8.0.
   workgroup/catalog/database choices with named commands and complete
   forward/reverse focus rings. Glue can copy a selected table's canonical,
   fully quoted identifier to an authoritative VMx-backed in-app clipboard
-  (`y`) and best-effort OS clipboard, while Athena can insert that value at
+  (`y`) and to the OS clipboard, while Athena can insert that value at
   the editor cursor (`i`) or replace a selection. Cross-source insertion is
   refused without mutating the editor or switching profiles; the existing
   source-preserving **Query table in Athena** workflow remains available.
@@ -165,6 +165,16 @@ section; the current tree must not be tagged as v0.8.0.
 
 ### Fixed
 
+- **Copy tells the truth about where the text went.** Copying a path or a Glue
+  table reference used to announce `Copied …` unconditionally. The only write
+  it made was OSC 52, which macOS Terminal.app ignores outright and iTerm2
+  ignores unless the user opted in, and which no terminal acknowledges — so on
+  those terminals the confirmation was simply wrong and the clipboard still
+  held whatever it held before. Every copy now also goes through a real
+  clipboard helper (`pbcopy`, `clip`, `wl-copy`, `xclip`, `xsel`) and reports
+  what actually happened: copied, the helper failed, or there was no helper and
+  only the terminal was written. An unconfirmable OSC-52-only delivery is never
+  called a copy.
 - **Glue pagination is reachable.** Databases, tables, partitions, jobs, runs,
   and crawlers reported `more available` but no keyboard, palette, or mouse
   path called the view models' load-more methods, so a filtered runs list

@@ -15,6 +15,7 @@ from aws_tui.demo.in_memory_athena import InMemoryAthena
 from aws_tui.domain.data_catalog import TableRef
 from aws_tui.domain.query import QueryState, ResultColumn
 from aws_tui.infra.aws_session import TokenState
+from aws_tui.infra.clipboard import InMemoryClipboard
 from aws_tui.infra.connection_resolver import Connection
 from aws_tui.services.athena.service import AthenaService
 from aws_tui.ui.widgets.athena.page import AthenaPage
@@ -477,22 +478,43 @@ async def test_clicking_glue_athena_hint_uses_the_registered_handoff_action(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("system_clipboard_fails", [False, True])
-async def test_glue_copy_updates_typed_clipboard_and_system_clipboard_best_effort(
+@pytest.mark.parametrize(
+    ("native_ok", "expected_toast_id"),
+    [
+        (True, "clipboard-table-reference"),
+        (False, "clipboard-failed-table-reference"),
+    ],
+)
+async def test_glue_copy_updates_typed_clipboard_and_reports_the_native_write_honestly(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
-    system_clipboard_fails: bool,
+    native_ok: bool,
+    expected_toast_id: str,
 ) -> None:
+    """The typed clipboard is authoritative; the toast reports the OS write.
+
+    This assertion used to be the opposite: the success toast fired even
+    when the clipboard write raised, so "copied table reference" was a
+    claim about nothing. The toast now follows the clipboard port, which
+    is the only channel that can report a result at all.
+    """
     ctx = build_app_context(
         config_dir=tmp_path / "config",
         cache_dir=tmp_path / "cache",
         demo=True,
     )
+    # Never a real pbcopy/xclip/clip from a test -- the suite runs on
+    # Linux, macOS and Windows, and the macOS leg has a working pbcopy
+    # that would put the payload on the developer's own clipboard.
+    fake_clipboard = InMemoryClipboard(
+        ok=native_ok,
+        mechanism="pbcopy",
+        error_type=None if native_ok else "CalledProcessError",
+    )
+    ctx.clipboard = fake_clipboard
     copied: list[str] = []
 
     def copy_to_clipboard(_app: AwsTuiApp, value: str) -> None:
-        if system_clipboard_fails:
-            raise RuntimeError("OSC 52 unavailable")
         copied.append(value)
 
     monkeypatch.setattr(AwsTuiApp, "copy_to_clipboard", copy_to_clipboard)
@@ -503,6 +525,7 @@ async def test_glue_copy_updates_typed_clipboard_and_system_clipboard_best_effor
             assert isinstance(glue, GluePageVM)
 
             await _invoke(app, "glue.copy_table_ref")
+            await drain_workers(app)
             await pilot.pause()
 
             payload = ctx.table_clipboard_vm.copied_table
@@ -515,10 +538,12 @@ async def test_glue_copy_updates_typed_clipboard_and_system_clipboard_best_effor
                 "us-east-1",
             )
             assert payload.sql_identifier == ('"AwsDataCatalog"."dev_analytics"."dev_events"')
-            assert copied == ([] if system_clipboard_fails else [payload.sql_identifier])
-            assert ctx.root_vm.chrome.toast_stack.toasts[-1].model.id == (
-                "glue-table-reference-copied"
-            )
+            # Both channels are always attempted; only one can be checked.
+            assert copied == [payload.sql_identifier]
+            assert fake_clipboard.writes == [payload.sql_identifier]
+            assert ctx.root_vm.chrome.toast_stack.toasts[-1].model.id == expected_toast_id
+            if not native_ok:
+                assert "copied" not in ctx.root_vm.chrome.toast_stack.toasts[-1].model.text
             assert ctx.root_vm.content_host.current is glue
     finally:
         with contextlib.suppress(Exception):
