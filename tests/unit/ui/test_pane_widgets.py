@@ -11,6 +11,7 @@ import pytest
 from textual.app import App, ComposeResult
 from textual.color import Color
 from textual.containers import VerticalScroll
+from textual.content import Content
 from textual.widgets import Static
 from vmx import Message, MessageHub, RxDispatcher
 
@@ -431,7 +432,14 @@ async def test_truncated_names_get_a_tooltip_and_short_ones_do_not() -> None:
 
             assert tips[long_name] is not None, "a cut-off name must be readable somehow"
             assert long_name in str(tips[long_name])
-            assert "press p" in str(tips[long_name])
+            # The key leads, and it names the CURSOR entry: ``p`` copies
+            # whatever the cursor is on, which is not necessarily the row
+            # the pointer happens to be resting on.
+            assert "press p to copy the cursor entry's path" in str(tips[long_name])
+            # A row is not a copy click target -- clicking it moves the
+            # cursor (see ``test_clicking_a_row_selects_it_rather_than_copying``),
+            # so the tooltip must not offer a click the way the border's does.
+            assert "click" not in str(tips[long_name])
             # A tooltip echoing a fully visible name is noise on every row.
             assert tips["ok.txt"] is None
     finally:
@@ -473,16 +481,79 @@ async def test_border_row_hover_offers_the_path_and_click_copies_it() -> None:
             await pilot.pause()
             pane = app.query_one(Pane)
 
-            assert "\U0001f4cb" in str(pane.border_title), "the path must look copyable"
+            # The border title is the path and nothing else. The trailing
+            # U+1F4CB spent two cells of a title that truncates, to hint at
+            # a mouse-only affordance the tooltip already names in words.
+            # (``_BorderTitle.__get__`` re-serialises to markup, but this
+            # path has nothing to escape, so it is the painted text.)
+            assert "\U0001f4cb" not in str(pane.border_title)
+            assert str(pane.border_title) == vm.viewmodel.border_title
 
             await pilot.hover(Pane, offset=(4, 0))
             await pilot.pause()
             assert pane.tooltip is not None
             assert vm.viewmodel.copy_path in str(pane.tooltip)
+            # The key leads -- it is the affordance that works with no
+            # pointer -- but the click survives in words, because with the
+            # glyph gone nothing else advertises that the border is a
+            # target at all.
+            assert "press P to copy, or click here" in str(pane.tooltip)
 
             await pilot.click(Pane, offset=(4, 0))
             await pilot.pause()
             assert copied == [(vm.viewmodel.copy_path, "path")]
+    finally:
+        vm.dispose()
+        hub.dispose()
+
+
+@pytest.mark.asyncio
+async def test_a_bracketed_path_still_renders_literally_in_the_border() -> None:
+    """Dropping the glyph must not take the markup escape with it.
+
+    Textual's ``_BorderTitle`` descriptor runs every assigned value through
+    ``Content.from_markup`` and there is no per-widget knob to disable it.
+    ``[draft]`` parses as a style tag and is swallowed whole, so an
+    unescaped title would paint ``/`` where the user's folder name should
+    be. Nothing pinned that before; the assignment is now one expression
+    instead of an f-string, which is exactly the shape somebody
+    "simplifies" by inlining the raw value.
+
+    The folder is named for the docstring's own example. A numeric one
+    (``releases[2025]``) would not discriminate: an all-digit tag name is
+    invalid markup and survives verbatim either way.
+    """
+    hub: MessageHub[Message] = MessageHub()
+    dispatcher = RxDispatcher.immediate()
+    fs = InMemoryFS()
+    await fs.mkdir(PathRef(("[draft]",)))
+    await fs.write_stream(PathRef(("[draft]", "notes.txt")), _astream(b"n"))
+    vm = PaneVM(provider=fs, hub=hub, dispatcher=dispatcher, id_prefix="pane.test")
+    vm.construct()
+    await vm.setup()
+    try:
+
+        class _App(App[None]):
+            def compose(self) -> ComposeResult:
+                yield Pane(vm, hub=hub, id="pane")
+
+        app = _App()
+        async with app.run_test(size=(80, 20)) as pilot:
+            await pilot.pause()
+            await pilot.pause()
+            await vm.navigate_to(PathRef(("[draft]",)))
+            await pilot.pause()
+            await pilot.pause()
+
+            pane = app.query_one(Pane)
+            assert vm.viewmodel.border_title == "/[draft]"
+            # ``__get__`` hands back markup, so parse it to get the text the
+            # border paints. Drop the escape in ``_apply_border_title`` and
+            # ``[draft]`` is consumed as a style tag: this reads ``/``.
+            title = pane.border_title
+            assert title is not None
+            assert Content.from_markup(title).plain == "/[draft]"
+            assert app.query_one("#pane-body", VerticalScroll).query(EntryRow)
     finally:
         vm.dispose()
         hub.dispose()

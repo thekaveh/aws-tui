@@ -47,8 +47,8 @@ as the universal escape hatch.
 | New folder | `pane.new` action — *(deferred)* | No handler wired in v0.8.x |
 | Rename in place | `pane.move` action — *(deferred)* | Bundled into the move handler; not wired |
 | Refresh pane | `r` | |
-| Copy cursor entry path | `p` | Copies the full path of the entry under the cursor |
-| Copy pane path | `P` (`shift+p`) | Copies the pane's current directory path; the pane's top border is also a click target |
+| Copy cursor entry path | `p` | Copies the full path of the entry under the cursor. Also listed in the command palette as **Copy cursor entry path**. |
+| Copy pane path | `P` (`shift+p`) | Copies the pane's current directory path; the pane's top border is also a click target. Also listed in the command palette as **Copy pane path**. |
 
 ### 1.4. Overlays
 
@@ -290,8 +290,8 @@ unbound until a handler ships.
 | `pane.delete` | `d` | yes | Delete marked entries (confirms) |
 | `pane.new` | `n` | *(deferred)* | New folder / bucket |
 | `pane.refresh` | `r` | yes | Re-run `provider.list()` |
-| `pane.copy_entry_path` | `p` | yes | Copy the cursor entry's full path to the clipboard |
-| `pane.copy_path` | `P` (`shift+p`) | yes | Copy the pane's current path to the clipboard |
+| `pane.copy_entry_path` | `p` | yes | Copy the cursor entry's full path to the clipboard; keyed and palette-visible (**Copy cursor entry path**, file manager only) |
+| `pane.copy_path` | `P` (`shift+p`) | yes | Copy the pane's current path to the clipboard; keyed and palette-visible (**Copy pane path**, file manager only) |
 | `auth.authenticate` | `a` (when auth toast active) | *(deferred)* | Reserved for a future auth helper; currently run `aws sso login --profile <name>` yourself |
 | `emr.next_application` | `A` (`shift+a`) | yes | Cycle to the next EMR application |
 | `emr.clone` | `c` (when EMR page mounted) | yes | Open the EMR clone-job-run modal pre-filled from the focused run. |

@@ -150,6 +150,15 @@ section; the current tree must not be tagged as v0.8.0.
   fallback, and `AWS_CONFIG_FILE` / `AWS_SHARED_CREDENTIALS_FILE` override
   expanded shared-file paths.
 
+- **The path copies are discoverable without the border glyph.** The pane's
+  top border no longer ends in a clipboard emoji. It cost two cells of the
+  one piece of chrome that truncates to the pane width, and it advertised a
+  mouse-only affordance while saying nothing about `p` / `P`, which work
+  with no pointer at all. The border is still a click target, the hover
+  tooltip now leads with the key and still names the click, and
+  **Copy cursor entry path** / **Copy pane path** are command-palette
+  entries on the file-manager page.
+
 - **Interaction-surface parity.** Restored configured keymap overlays at
   startup, filtered contextual palette commands by active service, clarified
   CSS ownership for shared selectors and tabs, and aligned the canonical

@@ -10,15 +10,21 @@ from vmx import NULL_DISPATCHER
 
 from aws_tui.app import AwsTuiApp
 from aws_tui.domain.data_catalog import TableFormat
+from aws_tui.infra.clipboard import InMemoryClipboard
 from aws_tui.infra.connection_resolver import Connection
 from aws_tui.ui.widgets.command_palette import CommandPalette
 from aws_tui.ui.widgets.glue.page import GluePage
 from aws_tui.vm.glue.page_vm import GluePageVM
+from tests.helpers import drain_workers
 from tests.unit.vm.glue._fake_glue import seeded_glue
 from tests.unit.vm.glue.test_iceberg_vm import RecordingInspector
 
 _GLOBAL = {"Theme picker", "Cycle theme", "Settings", "Help", "Quit"}
 _SOURCE = {"Switch source"}
+# Scoped to the file manager: ``pane.copy_entry_path`` / ``pane.copy_path``
+# resolve through ``_focused_file_pane()``, and only the S3 service hosts a
+# ``DualPaneVM``, so they are inert on every other page.
+_PANE = {"Copy cursor entry path", "Copy pane path"}
 _GLUE = {
     "Glue catalog",
     "Glue jobs",
@@ -66,7 +72,7 @@ async def test_palette_projects_only_global_and_active_service_commands(
         assert {entry.label for entry in vm.filtered_entries} == _GLOBAL | _SOURCE | _ATHENA
 
         vm.set_active_service("s3")
-        assert {entry.label for entry in vm.filtered_entries} == _GLOBAL | _SOURCE
+        assert {entry.label for entry in vm.filtered_entries} == _GLOBAL | _SOURCE | _PANE
 
         vm.set_active_service("emr-serverless")
         assert {entry.label for entry in vm.filtered_entries} == _GLOBAL | _SOURCE | _EMR
@@ -84,7 +90,7 @@ async def test_colon_opens_command_palette(app_context_factory) -> None:  # type
         await pilot.pause()
         assert isinstance(app.screen, CommandPalette)
         labels = {entry.label for entry in app._app_ctx.command_palette_vm.filtered_entries}
-        assert labels == _GLOBAL | _SOURCE
+        assert labels == _GLOBAL | _SOURCE | _PANE
         assert app._crash_report is None  # type: ignore[attr-defined]
 
 
@@ -163,6 +169,50 @@ async def test_enter_executes_filtered_palette_entry_with_production_bindings(
         await pilot.pause()
 
         assert calls == ["cycle"]
+        assert not isinstance(app.screen, CommandPalette)
+
+
+@pytest.mark.asyncio
+async def test_palette_is_the_discoverability_route_for_the_path_copies(
+    app_context_factory,  # type: ignore[no-untyped-def]
+) -> None:
+    """The pane border carries no copy glyph, so the palette must carry it.
+
+    ``p`` / ``P`` were reachable only by already knowing them once the
+    clipboard emoji left the border title, and the Commands legend has no
+    room for two more chips. This drives the whole production route -- open
+    with ``:``, type the label, press ``enter`` -- because the label set
+    assertions above would still pass if the entry dispatched nothing.
+
+    ``pane.copy_path`` is ``async def`` and hands the port call to a
+    worker, so the write lands after the palette has already closed;
+    ``drain_workers`` is what makes the assertion honest rather than a
+    race.
+    """
+    port = InMemoryClipboard()
+    ctx = app_context_factory(clipboard=port)
+    app = AwsTuiApp(ctx)
+    async with app.run_test(size=(120, 40)) as pilot:
+        await pilot.pause()
+        await drain_workers(app)
+        await pilot.pause()
+        dual = ctx.root_vm.content_host.current
+        expected = dual.focused_pane.viewmodel.copy_path
+
+        await pilot.press("colon")
+        await pilot.pause()
+        assert isinstance(app.screen, CommandPalette)
+        await pilot.press(*"Copy pane path")
+        await pilot.pause()
+        vm = ctx.command_palette_vm
+        assert [entry.label for entry in vm.filtered_entries] == ["Copy pane path"]
+
+        await pilot.press("enter")
+        await pilot.pause()
+        await drain_workers(app)
+        await pilot.pause()
+
+        assert port.writes == [expected]
         assert not isinstance(app.screen, CommandPalette)
 
 

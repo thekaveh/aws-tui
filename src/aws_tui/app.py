@@ -148,6 +148,12 @@ class _ThemeApplyFailure:
 _SOURCE_SERVICE_IDS = frozenset({"s3", "emr-serverless", "glue", "athena"})
 _GLUE_SERVICE_IDS = frozenset({"glue"})
 _ATHENA_SERVICE_IDS = frozenset({"athena"})
+# The dual-pane file manager, and therefore every ``pane.*`` action that
+# resolves through ``_focused_file_pane()``. Only ``S3Service`` builds a
+# ``DualPaneVM`` (``services/s3/service.py``); EMR, Glue and Athena host page
+# view models, so ``_dual_pane()`` returns None there and the pane copy
+# actions would be inert palette rows under any wider scope.
+_PANE_SERVICE_IDS = frozenset({"s3"})
 
 # Copy and delete run in SEPARATE exclusive groups. Sharing one group meant
 # ``exclusive=True`` made a confirmed delete cancel an in-flight copy: the copy
@@ -181,6 +187,24 @@ _PALETTE_COMMANDS: tuple[PaletteEntry, ...] = (
         "Switch source",
         "source",
         service_ids=_SOURCE_SERVICE_IDS,
+    ),
+    # The two path copies are keyed (``p`` / ``P``), footer-labelled and in
+    # the help overlay, but they were reachable only by already knowing the
+    # key -- the border glyph that used to hint at them is gone and the
+    # Commands legend has no room (adding chips would take s3 from six to
+    # eight and change ``_fit_actions`` eviction at 120 cols). The palette is
+    # the discoverability surface that costs no chrome.
+    PaletteEntry(
+        "pane.copy_entry_path",
+        "Copy cursor entry path",
+        "pane",
+        service_ids=_PANE_SERVICE_IDS,
+    ),
+    PaletteEntry(
+        "pane.copy_path",
+        "Copy pane path",
+        "pane",
+        service_ids=_PANE_SERVICE_IDS,
     ),
     PaletteEntry(
         "emr.next_application",

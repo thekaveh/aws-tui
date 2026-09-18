@@ -134,8 +134,16 @@ class EntryRow(Widget):
         under the pointer stops being this row -- so moving the mouse toward a
         button drawn in it would destroy it first. Naming the keybinding is the
         honest alternative to drawing a control that cannot be clicked.
+
+        It names the *cursor* entry rather than this row: ``p``
+        (``pane.copy_entry_path``) copies whatever the cursor is on, and the
+        pointer can rest on a row the cursor has not reached. The earlier
+        "its path" implied the hovered row and was wrong whenever those two
+        differed.
         """
-        text = None if full_name is None else f"{full_name}\n\npress p to copy its path"
+        text = (
+            None if full_name is None else f"{full_name}\n\npress p to copy the cursor entry's path"
+        )
         if text == self._tooltip_text:
             return
         self._tooltip_text = text
@@ -446,11 +454,18 @@ class Pane(HubSubscriberMixin, Widget):
         widget over the border, so the tooltip is attached and withdrawn as the
         pointer enters and leaves row 0 -- otherwise it would appear anywhere
         over the pane, which is worse than not having it.
+
+        The key leads and the click follows: ``P`` works from the keyboard
+        with no pointer and no hunting for the one row that is a target,
+        and it is the affordance the footer, the help overlay and the
+        command palette all name. The click is still mentioned because the
+        border carries no glyph any more -- drop the word and the surviving
+        click target becomes undiscoverable.
         """
         offset = getattr(event, "offset", None)
         on_border = offset is not None and offset.y == 0
         vm = self._vm.viewmodel
-        text = f"{vm.copy_path}\n\nclick to copy, or press P" if on_border else None
+        text = f"{vm.copy_path}\n\npress P to copy, or click here" if on_border else None
         if text != self._path_tooltip_text:
             self._path_tooltip_text = text
             self.tooltip = text
@@ -512,12 +527,20 @@ class Pane(HubSubscriberMixin, Widget):
         before assignment so brackets render as literal text.
         """
         vm = self._vm.viewmodel
-        # U+1F4CB CLIPBOARD marks the path as clickable. It is an SMP
-        # single-codepoint emoji, so it renders as a 2-cell colour glyph on any
-        # font with emoji support -- the rule this project learned through
-        # PR #76 -> #77 -> #79, where BMP symbols with VS-16 came out as 1-cell
-        # text outlines and broke the surrounding width maths.
-        self.border_title = f"{_markup_escape(vm.border_title)} \U0001f4cb"
+        # No glyph marks the path as copyable. The border title is the one
+        # piece of chrome that truncates to the pane width, and a trailing
+        # U+1F4CB CLIPBOARD spent two cells of it restating what the hover
+        # tooltip, the footer, the help overlay and the command palette all
+        # say in words -- while advertising a mouse-only affordance as if it
+        # were the whole story.
+        #
+        # If a marker is ever wanted back here it must be an SMP
+        # single-codepoint emoji such as U+1F4CB, which measures 2 cells. Do
+        # NOT reach for a BMP symbol (U+2398, U+29C9) instead: those
+        # measure 1, and this project already paid for that lesson through
+        # PR #76 -> #77 -> #79, where BMP symbols with VS-16 came out as
+        # 1-cell text outlines and broke the surrounding width maths.
+        self.border_title = _markup_escape(vm.border_title)
         if vm.border_subtitle is not None:
             self.border_subtitle = _markup_escape(vm.border_subtitle)
 
