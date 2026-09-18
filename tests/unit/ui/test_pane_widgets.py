@@ -508,3 +508,159 @@ async def test_clicking_a_row_selects_it_rather_than_copying() -> None:
     finally:
         vm.dispose()
         hub.dispose()
+
+
+# ── Hub fan-out and imperative row state ──────────────────────────────────
+
+
+async def _seed_n(count: int) -> InMemoryFS:
+    """A filesystem with exactly ``count`` files at the root (no ``..``)."""
+    fs = InMemoryFS()
+    for index in range(count):
+        await fs.write_stream(PathRef((f"file-{index:04d}.txt",)), _astream(b"x"))
+    return fs
+
+
+def _single_pane_app(vm: PaneVM, hub: MessageHub[Message]) -> App[None]:
+    """One-pane host app. A factory rather than a class defined in the caller's
+    loop body so the closure binds the arguments, not the loop variables."""
+
+    class _App(App[None]):
+        def compose(self) -> ComposeResult:
+            yield Pane(vm, hub=hub, id="pane")
+
+    return _App()
+
+
+@pytest.mark.asyncio
+async def test_hub_observer_count_is_independent_of_row_count() -> None:
+    """The pane's hub fan-out must not scale with the number of rows.
+
+    Constraint 24 forbids asserting wall-clock time, so the invariant is
+    asserted structurally instead: the number of observers attached to the
+    hub's subject with 5 rows mounted must equal the number with 200 rows
+    mounted.
+
+    Before this fix each ``EntryRow`` carried its own two-property hub
+    subscription on top of the pane's six, making the observer count
+    ``6 + 2N`` exactly — 16 at 5 rows, 406 at 200. Because ``MessageHub``
+    fans every message out to every observer, that made each keystroke
+    O(N) in observer callbacks and the pane O(N²) overall. With the rows
+    driven imperatively by their owning ``Pane`` the only subscriber is the
+    pane itself, so the count no longer moves with the listing size.
+    """
+    counts: dict[int, int] = {}
+    for row_count in (5, 200):
+        hub: MessageHub[Message] = MessageHub()
+        dispatcher = RxDispatcher.immediate()
+        vm = PaneVM(
+            provider=await _seed_n(row_count),
+            hub=hub,
+            dispatcher=dispatcher,
+            id_prefix="pane.test",
+        )
+        vm.construct()
+        await vm.setup()
+        try:
+            app = _single_pane_app(vm, hub)
+            async with app.run_test(size=(120, 30)) as pilot:
+                await pilot.pause()
+                await pilot.pause()
+                # Named precondition: the invariance below is meaningless
+                # unless the rows are actually mounted at both sizes.
+                assert len(app.query(EntryRow)) == row_count
+                counts[row_count] = len(hub._subject.observers)
+        finally:
+            vm.dispose()
+            hub.dispose()
+
+    assert counts[5] > 0, "the pane itself must still subscribe to the hub"
+    assert counts[5] == counts[200], f"hub fan-out scales with row count: {counts}"
+
+
+@pytest.mark.asyncio
+async def test_cursor_move_flips_selected_and_repaints_the_cursor_glyph() -> None:
+    """Moving the cursor must move ``-selected`` AND redraw the glyph.
+
+    ``EntryRow.render`` draws ``cursor_glyph``/``mark_glyph`` from the VM, so a
+    CSS class flip alone leaves the bar painted on the old row — Textual does
+    not repaint content when classes change. ``render_line`` returns the
+    widget's cached strip unless the widget was refreshed, so asserting on it
+    (rather than on ``render()``, which recomputes unconditionally) is what
+    proves the repaint actually happened.
+    """
+    hub: MessageHub[Message] = MessageHub()
+    dispatcher = RxDispatcher.immediate()
+    vm = PaneVM(provider=await _seed(), hub=hub, dispatcher=dispatcher, id_prefix="pane.test")
+    vm.construct()
+    await vm.setup()
+    try:
+
+        class _App(App[None]):
+            def compose(self) -> ComposeResult:
+                yield Pane(vm, hub=hub, id="pane")
+
+        app = _App()
+        async with app.run_test(size=(120, 30)) as pilot:
+            await pilot.pause()
+            await pilot.pause()
+            rows = list(app.query(EntryRow))
+            assert len(rows) == 5
+            before = ["-selected" in row.classes for row in rows]
+            assert before == [True, False, False, False, False]
+
+            vm.move_cursor_command.execute(1)
+            await pilot.pause()
+            await pilot.pause()
+
+            after = ["-selected" in row.classes for row in rows]
+            assert after == [False, True, False, False, False]
+            # The painted line, not a fresh render(): the cursor bar has to
+            # have been repainted on both the row it left and the row it
+            # reached.
+            assert "▌" not in rows[0].render_line(0).text
+            assert "▌" in rows[1].render_line(0).text
+    finally:
+        vm.dispose()
+        hub.dispose()
+
+
+@pytest.mark.asyncio
+async def test_marking_an_entry_flips_marked_and_repaints_the_mark_glyph() -> None:
+    """Same contract as the cursor for the multi-select ``*`` glyph."""
+    hub: MessageHub[Message] = MessageHub()
+    dispatcher = RxDispatcher.immediate()
+    vm = PaneVM(provider=await _seed(), hub=hub, dispatcher=dispatcher, id_prefix="pane.test")
+    vm.construct()
+    await vm.setup()
+    try:
+
+        class _App(App[None]):
+            def compose(self) -> ComposeResult:
+                yield Pane(vm, hub=hub, id="pane")
+
+        app = _App()
+        async with app.run_test(size=(120, 30)) as pilot:
+            await pilot.pause()
+            await pilot.pause()
+            rows = list(app.query(EntryRow))
+            assert len(rows) == 5
+            assert "-marked" not in rows[2].classes
+            assert "*" not in rows[2].render_line(0).text
+
+            vm.toggle_mark_at(2)
+            await pilot.pause()
+            await pilot.pause()
+
+            assert "-marked" in rows[2].classes
+            assert "*" in rows[2].render_line(0).text
+
+            vm.toggle_mark_at(2)
+            await pilot.pause()
+            await pilot.pause()
+
+            assert "-marked" not in rows[2].classes
+            assert "*" not in rows[2].render_line(0).text
+    finally:
+        vm.dispose()
+        hub.dispose()

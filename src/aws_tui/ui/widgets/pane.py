@@ -6,10 +6,12 @@ view layer because they depend on the actual rendered Pane width
 user-visible string — the view just decides how much horizontal space
 to give each column at the current Pane size.
 
-Flicker discipline: cursor moves do NOT re-mount the entry list. Each
-:class:`EntryRow` subscribes to its own :class:`EntryVM` on the hub and
-self-refreshes on ``is_selected`` / ``is_marked`` changes. The Pane only
-re-renders the body when ``entries`` or ``state`` change.
+Flicker discipline: cursor moves do NOT re-mount the entry list. The
+Pane holds the only hub subscription and drives each :class:`EntryRow`
+imperatively via :meth:`EntryRow.sync_state`; the rows carry no
+subscription of their own, so the hub's observer count stays constant
+instead of growing by two per entry. The Pane only re-renders the body
+when ``entries`` or ``state`` change.
 """
 
 from __future__ import annotations
@@ -84,12 +86,15 @@ def _column_header_for(name_width: int) -> str:
     return f"   {name} {size}  {modified}"
 
 
-class EntryRow(HubSubscriberMixin, Widget):
+class EntryRow(Widget):
     """One entry row in a pane — bound to a single :class:`EntryVM`.
 
-    Subscribes to the entry's own ``is_selected``/``is_marked`` changes so
-    cursor moves and multi-select toggles update *this* row in place
-    instead of triggering a body re-mount on the parent pane.
+    Deliberately NOT a hub subscriber. A listing mounts one row per entry, so
+    a per-row subscription made the hub's observer count ``6 + 2N`` and turned
+    every property change into O(N) observer callbacks. The owning
+    :class:`Pane` holds the single subscription and pushes state down through
+    :meth:`sync_state`, which still updates *this* row in place instead of
+    triggering a body re-mount on the parent pane.
 
     Column widths are read from the parent Pane (which tracks its actual
     rendered size via :meth:`Pane.on_resize`), so NAME expands on wide
@@ -106,15 +111,17 @@ class EntryRow(HubSubscriberMixin, Widget):
         self,
         entry_vm: EntryVM,
         *,
-        hub: MessageHub[Message],
         id: str | None = None,
         classes: str | None = None,
     ) -> None:
         merged = " ".join(c for c in (classes, "entry-row") if c)
         super().__init__(id=id, classes=merged)
         self._entry_vm = entry_vm
-        self._hub = hub
         self._tooltip_text: str | None = None
+        # Last (is_selected, is_marked) pushed in by the Pane. ``None`` until
+        # the first paint so the early-return in ``sync_state`` cannot swallow
+        # it. Primed in ``on_mount``.
+        self._state_cache: tuple[bool, bool] | None = None
 
     @property
     def entry_vm(self) -> EntryVM:
@@ -157,20 +164,27 @@ class EntryRow(HubSubscriberMixin, Widget):
 
     def on_mount(self) -> None:
         self._apply_state_classes()
-        self.subscribe_to_vm(
-            hub=self._hub,
-            vm=self._entry_vm,
-            property_names=("is_selected", "is_marked"),
-            on_property_changed=self._on_entry_changed,
-        )
+        vm = self._entry_vm
+        self._state_cache = (vm.is_selected, vm.is_marked)
 
-    def on_unmount(self) -> None:
-        self.unsubscribe_from_vm()
+    def sync_state(self, *, is_selected: bool, is_marked: bool) -> None:
+        """Imperative mirror of the VM flags, driven by the owning Pane.
 
-    def _on_entry_changed(self, property_name: str) -> None:
-        if property_name in ("is_selected", "is_marked"):
-            self._apply_state_classes()
-            self.refresh()
+        The ``refresh()`` is NOT optional. :meth:`render` draws the VM's
+        ``cursor_glyph`` and ``mark_glyph``, and Textual does not repaint
+        content when a class changes — so a class flip alone would leave the
+        cursor bar and the ``*`` painted on the wrong row. This is the same
+        contract ``NavRow.set_selected`` documents.
+
+        Never touches ``-alt``: the zebra stripe is assigned once, by
+        :meth:`Pane._render_body`, from the row's position in the listing.
+        """
+        if self._state_cache == (is_selected, is_marked):
+            return
+        self._state_cache = (is_selected, is_marked)
+        self.set_class(is_selected, "-selected")
+        self.set_class(is_marked, "-marked")
+        self.refresh()
 
     async def on_click(self, event: object) -> None:
         """Click handling:
@@ -216,7 +230,11 @@ class EntryRow(HubSubscriberMixin, Widget):
         await host.vm.activate(target_index)
 
     def _apply_state_classes(self) -> None:
-        """Sync CSS classes to mirror VM flags (purely cosmetic)."""
+        """Sync CSS classes to mirror VM flags (purely cosmetic).
+
+        The initial-paint path only; every later change comes through
+        :meth:`sync_state`. Like that method it must never touch ``-alt``.
+        """
         if self._entry_vm.is_selected:
             self.add_class("-selected")
         else:
@@ -287,6 +305,11 @@ class Pane(HubSubscriberMixin, Widget):
         # so wider terminals get wider NAME columns automatically.
         self._name_column_width: int = _DEFAULT_NAME_WIDTH
         self._path_tooltip_text: str | None = None
+        # Mounted rows in filtered order. The Pane owns their state because
+        # the rows no longer subscribe to the hub themselves.
+        self._rows: list[EntryRow] = []
+        self._cursor_row: int | None = None
+        self._body_refresh_pending: bool = False
 
     @property
     def vm(self) -> PaneVM:
@@ -367,7 +390,9 @@ class Pane(HubSubscriberMixin, Widget):
         except Exception:
             return
         header.update(_column_header_for(self._name_column_width))
-        for row in self.query(EntryRow):
+        # ``self._rows`` rather than a query: same O(N) walk without the DOM
+        # traversal, and it cannot pick up rows that are pending removal.
+        for row in self._rows:
             row.refresh()
 
     def set_focused(self, value: bool) -> None:
@@ -485,23 +510,53 @@ class Pane(HubSubscriberMixin, Widget):
         elif property_name in _CHROME_REFRESH_PROPS:
             self.call_after_refresh(self._refresh_chrome)
         elif property_name in _SCROLL_TRACK_PROPS:
-            self.call_after_refresh(self._scroll_to_cursor)
+            self.call_after_refresh(self._apply_cursor)
 
-    def _scroll_to_cursor(self) -> None:
-        """Keep the selected row inside the visible viewport. No-ops if
-        the body is in a placeholder state or the row is already visible.
+    def _apply_cursor(self) -> None:
+        """Repaint the row the cursor left and the row it reached, then scroll.
+
+        O(1) in rows: the previous cursor position is remembered, so a
+        keystroke touches at most two widgets instead of walking the body.
+
+        The flags are read back off ``entry_vm`` instead of being assumed to
+        be ``True``/``False``: ``PaneVM._sync_cursor_selection`` has already
+        run synchronously before the ``cursor_index`` notify, so the VM is
+        authoritative and this stays an exact mirror — which is also what
+        leaves a marked row's ``-marked`` intact as the cursor passes over it.
         """
+        if not self._rows:
+            self._cursor_row = None
+            return
+        new = self._vm.cursor_index
+        if not (0 <= new < len(self._rows)):
+            return
+        old = self._cursor_row
+        if old is not None and old != new and old < len(self._rows):
+            prev = self._rows[old]
+            prev.sync_state(
+                is_selected=prev.entry_vm.is_selected,
+                is_marked=prev.entry_vm.is_marked,
+            )
+        self._cursor_row = new
+        row = self._rows[new]
+        row.sync_state(is_selected=row.entry_vm.is_selected, is_marked=row.entry_vm.is_marked)
         try:
-            body = self.query_one("#pane-body", VerticalScroll)
+            self.query_one("#pane-body", VerticalScroll).scroll_to_widget(row, animate=False)
         except Exception:
             return
-        target_vm = self._vm.selected_entry
-        if target_vm is None:
-            return
-        for row in body.query(EntryRow):
-            if row.entry_vm is target_vm:
-                body.scroll_to_widget(row, animate=False)
-                return
+
+    def _sync_marks(self) -> None:
+        """Mirror every row's mark/selection flags back off its own VM.
+
+        Driven by the ``"viewmodel"`` notify, which every mark mutation already
+        emits (``toggle_mark_at``, ``mark_at``, ``_toggle_select_cursor``,
+        ``_select_all``, ``_clear_marks``). O(N) attribute reads with a per-row
+        early return in ``sync_state``, so a bulk mark costs one repaint per
+        row that actually changed and nothing for the rest.
+        """
+        for row in self._rows:
+            vm = row.entry_vm
+            row.sync_state(is_selected=vm.is_selected, is_marked=vm.is_marked)
 
     def _refresh_chrome(self) -> None:
         """Update header / footer Statics in place — no remount."""
@@ -516,6 +571,7 @@ class Pane(HubSubscriberMixin, Widget):
         header.update(_column_header_for(self._name_column_width))
         footer.update(vm.summary)
         self._apply_border_title()
+        self._sync_marks()
 
     def _refresh_all(self) -> None:
         self._refresh_chrome()
@@ -526,8 +582,9 @@ class Pane(HubSubscriberMixin, Widget):
             body = self.query_one("#pane-body", VerticalScroll)
         except Exception:
             return
-        for child in list(body.children):
-            child.remove()
+        body.remove_children()
+        self._rows = []
+        self._cursor_row = None
 
         vm = self._vm.viewmodel
         if vm.placeholder_text is not None:
@@ -545,9 +602,23 @@ class Pane(HubSubscriberMixin, Widget):
             body.mount(Static(vm.placeholder_text, classes=placeholder_class, markup=False))
             return
 
-        for entry_vm in self._vm.filtered_entries:
-            row = EntryRow(entry_vm, hub=self._hub)
-            body.mount(row)
+        # ``-alt`` is the zebra stripe, assigned here and nowhere else.
+        # An explicit class rather than ``:odd``/``:even``: the pseudo-class
+        # selectors are catastrophically slow on long listings (3,000 rows
+        # measured at 0.956 s -> 18.303 s).
+        rows = [
+            EntryRow(entry_vm, classes="-alt" if index % 2 else None)
+            for index, entry_vm in enumerate(self._vm.filtered_entries)
+        ]
+        if rows:
+            # ONE batched mount, not one call per row: ``Widget.mount``
+            # schedules a ``update_styles`` callback over the parent's children
+            # on every call, so the per-row loop was O(N^2) in scheduled
+            # callbacks (3,000 rows measured at 3.022 s -> 1.100 s).
+            body.mount(*rows)
+        self._rows = rows
+        self._apply_cursor()
+        self._sync_marks()
 
 
 __all__ = ["EntryRow", "Pane"]
