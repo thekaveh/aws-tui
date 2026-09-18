@@ -1029,6 +1029,8 @@ class PaneVM:
         #
         # The batch stops at the loops on purpose — see the ordering note
         # below, which must run with the composite fully published.
+        # Pinned structurally by
+        # ``test_replace_entries_writes_the_cursor_only_after_a_filter_recompute``.
         with self._inner.batch_update():
             for child in self._entries:
                 if child.inner in self._inner:
@@ -1042,12 +1044,25 @@ class PaneVM:
         # ORDER MATTERS: ``_recompute_filtered()`` MUST run before
         # ``self._cursor_index = 0`` because the setter reads
         # ``self._filtered`` to map filtered-position → entry inner.
-        # ``self._filtered`` still holds indices into the OLD
-        # entries list at this point; if the new ``_entries`` is
-        # shorter than ``max(_filtered) + 1`` the setter dereferences
-        # past the end and raises IndexError. (E.g. filter narrows
-        # to row 5 of 10, then refresh returns 3 entries.) Sibling
-        # call site ``_set_filter_text`` already has this ordering.
+        # A ``_filtered`` still holding indices into the OLD entries
+        # list makes the setter dereference past the end of a shorter
+        # new one and raise IndexError (filter narrows to row 5 of 10,
+        # refresh returns 3). ``test_a_stale_filtered_list_makes_the
+        # _cursor_write_raise`` pins that mechanism directly.
+        #
+        # Defence in depth, not the only defence: leaving the batch
+        # above already emits the coalesced ``action="reset"``, which
+        # ``FilteredCompositeVM`` turns into a ``_recompute()`` and so
+        # into ``_sync_filtered_from_composite()`` — ``_filtered`` is
+        # therefore fresh by the time this line is reached, and a
+        # ``set_predicate`` moved inside the batch would not be
+        # suppressed either (it calls ``_recompute()`` directly rather
+        # than through ``on_collection_changed``). Both regressions run
+        # green end-to-end; keeping the sequence here and in this order
+        # is what stops a later edit from landing the cursor write in
+        # the one window — inside the batch, before any recompute —
+        # where the IndexError is real. Sibling call site
+        # ``_set_filter_text`` already has this ordering.
         self._recompute_filtered()
         self._cursor_index = 0
         self._sync_cursor_selection()

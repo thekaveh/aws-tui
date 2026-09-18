@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 from collections.abc import AsyncIterator
 from typing import cast
 
@@ -867,17 +868,88 @@ async def test_replace_entries_publishes_one_collection_event_per_listing() -> N
     assert large[1] == "reset"
 
 
-@pytest.mark.asyncio
-async def test_replace_entries_keeps_the_filter_recompute_outside_the_batch() -> None:
-    """The cursor reset must still see a freshly recomputed filtered list.
+def test_replace_entries_writes_the_cursor_only_after_a_filter_recompute() -> None:
+    """Structural guard for Constraint 20: the ordering in ``_replace_entries``.
 
-    ``_recompute_filtered()`` runs before ``self._cursor_index = 0`` because
-    the cursor setter maps a filtered position to an entry inner through
-    ``self._filtered``, which still holds indices into the OLD entries list.
-    Batching that sequence would leave the filtered list stale while the
-    setter dereferences it — an IndexError whenever the new listing is
-    shorter than the old one. Here the filter narrows a 10-entry listing to
-    one row and the refresh returns 2, which is exactly that shape.
+    This one is deliberately a source-shape assertion, in the spirit of
+    ``tests/docs/test_snapshot_harness.py``. The invariant cannot be pinned
+    by behaviour through the public surface: leaving the batch already emits
+    one coalesced ``CollectionChangedEvent(action="reset")``, which runs
+    ``FilteredCompositeVM._recompute()`` → ``_sync_filtered_from_composite()``
+    and re-derives ``_filtered`` from the NEW ``_entries``; and
+    ``set_predicate`` calls ``_recompute()`` directly rather than through
+    ``on_collection_changed``, so even a ``_recompute_filtered()`` moved
+    inside the batch would still refresh it. Both regressions therefore run
+    green end-to-end (verified by mutation), while still destroying the
+    margin that keeps the cursor write off a stale ``_filtered`` — the
+    failure mode pinned by
+    ``test_a_stale_filtered_list_makes_the_cursor_write_raise``.
+    """
+    lines = inspect.getsource(PaneVM._replace_entries).splitlines()
+
+    def _sole_index(statement: str) -> int:
+        matches = [i for i, line in enumerate(lines) if line.strip() == statement]
+        assert len(matches) == 1, f"expected exactly one {statement!r}, found {len(matches)}"
+        return matches[0]
+
+    def _indent(index: int) -> int:
+        return len(lines[index]) - len(lines[index].lstrip())
+
+    batch_at = _sole_index("with self._inner.batch_update():")
+    recompute_at = _sole_index("self._recompute_filtered()")
+    cursor_at = _sole_index("self._cursor_index = 0")
+
+    for label, index in (("_recompute_filtered()", recompute_at), ("_cursor_index = 0", cursor_at)):
+        assert index > batch_at, f"{label} must follow the batch block, not precede it"
+        assert _indent(index) == _indent(batch_at), (
+            f"{label} is nested inside `with self._inner.batch_update():` — "
+            "Constraint 20 keeps that sequence outside the batch"
+        )
+    assert recompute_at < cursor_at, (
+        "_recompute_filtered() must run BEFORE the cursor write; the setter "
+        "dereferences self._entries[self._filtered[...]]"
+    )
+
+
+@pytest.mark.asyncio
+async def test_a_stale_filtered_list_makes_the_cursor_write_raise() -> None:
+    """Pin the mechanism the ordering above defends against.
+
+    The cursor setter maps a filtered position to an entry inner through
+    ``self._filtered``, which holds indices into ``self._entries``. Drive the
+    exact window a cursor write inside the batch would sit in — ``_entries``
+    already swapped for a shorter listing, ``_filtered`` not yet re-derived —
+    and the setter indexes past the end. This is what makes the ordering
+    load-bearing rather than decorative.
+    """
+    fs = InMemoryFS()
+    for index in range(10):
+        await fs.write_stream(PathRef((f"row{index}.txt",)), _astream(b"x"))
+    pane = await _make_pane(fs)
+    original = pane._entries
+    try:
+        pane.set_filter_command.execute("row7")
+        assert pane._filtered == (7,), "precondition: the filter narrowed to the 8th entry"
+
+        pane._entries = original[:2]
+        with pytest.raises(IndexError):
+            pane._cursor_index = 0
+    finally:
+        pane._entries = original
+        pane.dispose()
+
+
+@pytest.mark.asyncio
+async def test_a_filtered_listing_survives_a_shrinking_refresh() -> None:
+    """A filter that outlives its listing: refresh must not raise, and must
+    re-derive the filtered view from the NEW entries.
+
+    The filter narrows a 10-entry listing to one row, then the re-list
+    returns 2 rows that the filter no longer matches. The filtered view must
+    come back empty rather than still pointing at a row index that no longer
+    exists. (The ordering inside ``_replace_entries`` is pinned structurally
+    by ``test_replace_entries_writes_the_cursor_only_after_a_filter_recompute``;
+    this test covers the end-to-end outcome, not the statement order.)
     """
     fs = InMemoryFS()
     for index in range(10):
@@ -894,9 +966,46 @@ async def test_replace_entries_keeps_the_filter_recompute_outside_the_batch() ->
                 await fs.delete(PathRef((f"row{index}.txt",)))
         await pane.refresh()
 
-        # No IndexError, and the filtered view is derived from the NEW list.
-        assert len(pane.entries) == 2
+        # No IndexError, and the filtered view is re-derived from the NEW
+        # list: "row7" matches nothing in it, so it is empty rather than
+        # stale.
+        assert [entry.name for entry in pane.entries] == ["row0.txt", "row1.txt"]
+        assert pane.filtered_entries == ()
+        assert pane._filtered == ()
+        assert pane.selected_entry is None
+    finally:
+        pane.dispose()
+
+
+@pytest.mark.asyncio
+async def test_a_shrinking_refresh_rederives_the_filter_from_the_new_listing() -> None:
+    """The companion case where the filter still matches after the shrink.
+
+    Here the cursor write really does dereference ``_entries`` (the previous
+    test's filter matches nothing, so the setter takes its ``if not
+    self._filtered`` early return). The surviving row sits at index 8 of the
+    old listing and index 2 of the new one, so a filtered list carried over
+    from before the refresh would either raise or select the wrong row.
+    """
+    fs = InMemoryFS()
+    for index in range(10):
+        await fs.write_stream(PathRef((f"row{index}.txt",)), _astream(b"x"))
+    pane = await _make_pane(fs)
+    try:
+        pane.set_filter_command.execute("row8")
+        assert pane._filtered == (8,)
+
+        for index in range(10):
+            if index not in (0, 1, 8):
+                await fs.delete(PathRef((f"row{index}.txt",)))
+        await pane.refresh()
+
+        assert [entry.name for entry in pane.entries] == ["row0.txt", "row1.txt", "row8.txt"]
+        assert pane._filtered == (2,), "the filtered index was re-derived against the new listing"
+        assert [entry.name for entry in pane.filtered_entries] == ["row8.txt"]
         assert pane.cursor_index == 0
-        assert all(entry in pane.entries for entry in pane.filtered_entries)
+        selected = pane.selected_entry
+        assert selected is not None
+        assert selected.name == "row8.txt"
     finally:
         pane.dispose()
