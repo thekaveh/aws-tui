@@ -109,6 +109,16 @@ up-to-date policy means a `develop` push after opening it requires a rerun.
   insert the copied table reference in Athena under the same source. Refuse a
   copied reference from another source and confirm the editor, typed clipboard,
   and active profile are unchanged.
+- **Clipboard smoke (per OS).** The clipboard port is covered only by unit
+  tests with injected fakes — nothing in CI ever spawns `pbcopy`, `xclip`,
+  `wl-copy`, `xsel` or `clip.exe`, so delivery itself is unverified by the
+  suite. On each supported OS, copy a path (`P`) and paste it somewhere
+  outside the terminal. On **Windows** this is the only check that exists:
+  copy a path containing non-ASCII characters, paste it into Notepad, and
+  confirm the **whole** string arrives — `clip.exe` is fed BOM-prefixed
+  UTF-16LE and a wrong guess there truncates at the first character while
+  still exiting 0. On macOS and Linux also confirm a path whose name is not
+  valid UTF-8 pastes byte-for-byte.
 - **Athena release smoke.** On `demo-dev`, execute a valid bounded query and
   observe QUEUED/RUNNING/SUCCEEDED lifecycle state. Enter `DELETE FROM events`
   and verify that aws-tui will reject an unsafe statement before dispatch.

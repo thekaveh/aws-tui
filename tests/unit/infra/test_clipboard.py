@@ -10,6 +10,8 @@ per copy.
 from __future__ import annotations
 
 import logging
+import ntpath
+import posixpath
 import subprocess
 from typing import Any
 
@@ -25,9 +27,30 @@ from aws_tui.infra.clipboard import (
 
 SECRET = "s3://bucket/kéy-with-ünicode"
 
+# The absolute path the win32 branch must probe and spawn. A bare "clip"
+# would be searched for in the current directory first, by shutil.which and
+# by CreateProcess alike.
+CLIP = "C:\\Windows\\System32\\clip.exe"
+WINDOWS_ENVIRON = {"SystemRoot": "C:\\Windows"}
+
+# A POSIX file name whose bytes are not valid UTF-8. ``Path.iterdir`` decodes
+# it with surrogateescape, so this is the exact ``str`` a pane VM hands the
+# port for a file called ``caf<0xe9>.txt`` on ext4, NFS or an old archive.
+SURROGATE_PATH = "/tmp/caf\udce9.txt"
+SURROGATE_BYTES = b"/tmp/caf\xe9.txt"
+
+# A lone HIGH surrogate — outside the U+DC80..U+DCFF window surrogateescape
+# can round-trip, so no encoder on any platform accepts it.
+UNENCODABLE = "/tmp/\ud83d-broken.txt"
+
 
 class FakeWhich:
-    """Resolves only the named helpers; records every probe."""
+    """Resolves only the named helpers; records every probe.
+
+    Mirrors the one ``shutil.which`` rule the win32 candidate leans on: a
+    name carrying a directory part is looked up in that directory alone and
+    never through ``PATH`` — nor, on win32, through ``os.curdir``.
+    """
 
     def __init__(self, *installed: str) -> None:
         self.installed = set(installed)
@@ -35,7 +58,11 @@ class FakeWhich:
 
     def __call__(self, name: str) -> str | None:
         self.probes.append(name)
-        return f"/usr/bin/{name}" if name in self.installed else None
+        if name not in self.installed:
+            return None
+        if ntpath.dirname(name) or posixpath.dirname(name):
+            return name
+        return f"/usr/bin/{name}"
 
 
 class FakeRun:
@@ -73,7 +100,7 @@ class TestCandidateResolution:
         which, run = FakeWhich("pbcopy"), FakeRun()
         result = _port(platform="darwin", which=which, run=run).write(SECRET)
         assert result == ClipboardResult(ok=True, mechanism="pbcopy")
-        assert run.calls == [(["pbcopy"], SECRET.encode("utf-8"))]
+        assert run.calls == [(["/usr/bin/pbcopy"], SECRET.encode("utf-8"))]
 
     def test_darwin_ignores_a_display_variable(self) -> None:
         # A macOS session under X11 forwarding still owns a real clipboard.
@@ -81,17 +108,50 @@ class TestCandidateResolution:
         port = _port(platform="darwin", which=which, run=run, environ={"DISPLAY": ":0"})
         assert port.write(SECRET).mechanism == "pbcopy"
 
-    def test_win32_uses_clip_with_utf16le(self) -> None:
-        # clip.exe mangles non-ASCII fed as UTF-8. This is the only guard
-        # for that, and it is unobservable on a macOS or Linux box.
-        which, run = FakeWhich("clip"), FakeRun()
-        result = _port(platform="win32", which=which, run=run).write(SECRET)
-        assert result == ClipboardResult(ok=True, mechanism="clip")
+    def test_win32_uses_clip_with_bom_prefixed_utf16le(self) -> None:
+        # What this actually pins is the ENCODING SELECTION: BOM-prefixed
+        # UTF-16LE rather than UTF-8. It does NOT and cannot demonstrate what
+        # clip.exe does with those bytes — nothing on a macOS or Linux box,
+        # and no test in this suite, can drive clip.exe. The Windows leg of
+        # the manual smoke list in docs/RELEASING.md is the only real check.
+        which, run = FakeWhich(CLIP), FakeRun()
+        port = _port(platform="win32", which=which, run=run, environ=WINDOWS_ENVIRON)
+        assert port.write(SECRET) == ClipboardResult(ok=True, mechanism="clip")
         argv, payload = run.calls[0]
-        assert argv == ["clip"]
-        assert payload == SECRET.encode("utf-16-le")
+        assert argv == [CLIP]
+        assert payload.startswith(b"\xff\xfe")
+        assert payload == ("\ufeff" + SECRET).encode("utf-16-le")
         assert payload != SECRET.encode("utf-8")
-        assert payload.decode("utf-16-le") == SECRET
+        assert payload.decode("utf-16").removeprefix("\ufeff") == SECRET
+
+    def test_win32_probes_and_spawns_clip_only_out_of_system32(self) -> None:
+        # CWE-426. shutil.which prepends os.curdir to the search path on
+        # win32 and CreateProcess with a NULL lpApplicationName searches the
+        # current directory too, so a bare "clip" would let a clip.exe in the
+        # launch directory receive the payload. Naming the directory takes
+        # both the CWD and the ambient PATH out of the probe and the spawn.
+        which, run = FakeWhich(CLIP), FakeRun()
+        port = _port(platform="win32", which=which, run=run, environ=WINDOWS_ENVIRON)
+        assert port.write(SECRET).ok is True
+        assert which.probes == [CLIP]
+        assert run.calls[0][0] == [CLIP]
+        assert all(ntpath.dirname(probe) for probe in which.probes)
+
+    def test_win32_follows_a_relocated_system_root(self) -> None:
+        relocated = "D:\\WinNT\\System32\\clip.exe"
+        which, run = FakeWhich(relocated), FakeRun()
+        port = _port(platform="win32", which=which, run=run, environ={"SystemRoot": "D:\\WinNT"})
+        assert port.write(SECRET).ok is True
+        assert which.probes == [relocated]
+
+    def test_the_path_which_resolved_is_what_gets_spawned(self) -> None:
+        # The probe and the spawn must agree on one file. Handing the bare
+        # name to subprocess.run would make the OS repeat a different search.
+        which, run = FakeWhich("xclip"), FakeRun()
+        port = _port(platform="linux", which=which, run=run, environ={"DISPLAY": ":0"})
+        assert port.write(SECRET).ok is True
+        assert which.probes == ["xclip"]
+        assert run.calls[0][0][0] == "/usr/bin/xclip"
 
     def test_wayland_prefers_wl_copy(self) -> None:
         which, run = FakeWhich("wl-copy", "xclip"), FakeRun()
@@ -102,7 +162,7 @@ class TestCandidateResolution:
             environ={"WAYLAND_DISPLAY": "wayland-0", "DISPLAY": ":0"},
         )
         assert port.write(SECRET).mechanism == "wl-copy"
-        assert run.calls == [(["wl-copy"], SECRET.encode("utf-8"))]
+        assert run.calls == [(["/usr/bin/wl-copy"], SECRET.encode("utf-8"))]
 
     def test_wayland_without_wl_copy_falls_through_to_xclip(self) -> None:
         which, run = FakeWhich("xclip"), FakeRun()
@@ -113,19 +173,23 @@ class TestCandidateResolution:
             environ={"WAYLAND_DISPLAY": "wayland-0", "DISPLAY": ":0"},
         )
         assert port.write(SECRET).mechanism == "xclip"
-        assert run.calls == [(["xclip", "-selection", "clipboard"], SECRET.encode("utf-8"))]
+        assert run.calls == [
+            (["/usr/bin/xclip", "-selection", "clipboard"], SECRET.encode("utf-8"))
+        ]
 
     def test_x11_uses_xclip_with_the_clipboard_selection(self) -> None:
         which, run = FakeWhich("xclip", "xsel"), FakeRun()
         port = _port(platform="linux", which=which, run=run, environ={"DISPLAY": ":0"})
         assert port.write(SECRET).mechanism == "xclip"
-        assert run.calls == [(["xclip", "-selection", "clipboard"], SECRET.encode("utf-8"))]
+        assert run.calls == [
+            (["/usr/bin/xclip", "-selection", "clipboard"], SECRET.encode("utf-8"))
+        ]
 
     def test_x11_falls_back_to_xsel(self) -> None:
         which, run = FakeWhich("xsel"), FakeRun()
         port = _port(platform="linux", which=which, run=run, environ={"DISPLAY": ":0"})
         assert port.write(SECRET).mechanism == "xsel"
-        assert run.calls == [(["xsel", "-ib"], SECRET.encode("utf-8"))]
+        assert run.calls == [(["/usr/bin/xsel", "-ib"], SECRET.encode("utf-8"))]
 
     def test_wayland_only_never_probes_the_x11_helpers(self) -> None:
         which, run = FakeWhich("wl-copy"), FakeRun()
@@ -189,10 +253,54 @@ class TestFailureMapping:
         )
 
     def test_failure_keeps_the_mechanism_that_was_tried(self) -> None:
-        which, run = FakeWhich("clip"), FakeRun(raises=PermissionError())
-        result = _port(platform="win32", which=which, run=run).write(SECRET)
+        which, run = FakeWhich(CLIP), FakeRun(raises=PermissionError())
+        port = _port(platform="win32", which=which, run=run, environ=WINDOWS_ENVIRON)
+        result = port.write(SECRET)
         assert result.mechanism == "clip"
         assert result.ok is False
+
+    @pytest.mark.parametrize(
+        ("platform", "environ", "installed"),
+        [
+            ("darwin", {}, "pbcopy"),
+            ("win32", WINDOWS_ENVIRON, CLIP),
+            ("linux", {"DISPLAY": ":0"}, "xclip"),
+        ],
+    )
+    def test_an_unencodable_payload_returns_a_result_instead_of_raising(
+        self, platform: str, environ: dict[str, str], installed: str
+    ) -> None:
+        # UnicodeEncodeError is a ValueError, NOT an OSError, so it used to
+        # escape write() entirely and break the contract that this port
+        # always reports what happened. Task 6 awaits write() inside an async
+        # action handler with no try of its own — an escape there is a
+        # Textual crash report, on the one path whose whole purpose is to
+        # stop copy lying.
+        which, run = FakeWhich(installed), FakeRun()
+        port = _port(platform=platform, which=which, run=run, environ=environ)
+        result = port.write(UNENCODABLE)
+        assert result.ok is False
+        assert result.error_type == "UnicodeEncodeError"
+        assert result.mechanism != "none"
+        assert run.calls == []
+
+    def test_posix_hands_over_the_filesystem_bytes_byte_for_byte(self) -> None:
+        # A path from Path.iterdir() whose name is not valid UTF-8 arrives
+        # carrying lone surrogates. surrogateescape gives the original bytes
+        # back, so the paste matches the name on disk instead of failing.
+        which, run = FakeWhich("xclip"), FakeRun()
+        port = _port(platform="linux", which=which, run=run, environ={"DISPLAY": ":0"})
+        assert port.write(SURROGATE_PATH) == ClipboardResult(ok=True, mechanism="xclip")
+        assert run.calls[0][1] == SURROGATE_BYTES
+
+    def test_win32_reports_a_surrogate_path_it_cannot_encode(self) -> None:
+        # utf-16-le has no surrogateescape handler, so the POSIX rescue does
+        # not exist here. The honest outcome is a result, not an exception.
+        which, run = FakeWhich(CLIP), FakeRun()
+        port = _port(platform="win32", which=which, run=run, environ=WINDOWS_ENVIRON)
+        assert port.write(SURROGATE_PATH) == ClipboardResult(
+            ok=False, mechanism="clip", error_type="UnicodeEncodeError"
+        )
 
 
 class TestPayloadIsNeverDisclosed:
@@ -221,6 +329,19 @@ class TestPayloadIsNeverDisclosed:
             "TimeoutExpired",
         )
 
+    def test_an_encode_failure_discloses_no_fragment_of_the_payload(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        # UnicodeEncodeError's own message quotes the offending character and
+        # its position. Only the class name may survive into the result.
+        caplog.set_level(logging.DEBUG)
+        which, run = FakeWhich("pbcopy"), FakeRun()
+        result = _port(platform="darwin", which=which, run=run).write(UNENCODABLE)
+        assert result.error_type == "UnicodeEncodeError"
+        assert "\ud83d" not in repr(result)
+        assert "broken" not in repr(result)
+        assert caplog.text == ""
+
     def test_error_type_carries_no_exception_message(self) -> None:
         which = FakeWhich("pbcopy")
         run = FakeRun(raises=PermissionError(13, f"cannot write {SECRET}"))
@@ -248,7 +369,7 @@ class TestSubprocessContract:
         port = NativeClipboard(which=FakeWhich("pbcopy"), platform="darwin", environ={})
         assert port.write(SECRET).ok is True
 
-        assert captured["argv"] == ["pbcopy"]
+        assert captured["argv"] == ["/usr/bin/pbcopy"]
         kwargs = captured["kwargs"]
         assert kwargs["input"] == SECRET.encode("utf-8")
         assert kwargs["timeout"] == pytest.approx(2.0)
