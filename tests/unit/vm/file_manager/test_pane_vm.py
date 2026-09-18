@@ -817,3 +817,86 @@ async def test_set_marked_entries_marks_notifies_once_and_skips_the_parent_link(
         assert notified.count("viewmodel") == 1, notified
     finally:
         pane.dispose()
+
+
+@pytest.mark.asyncio
+async def test_replace_entries_publishes_one_collection_event_per_listing() -> None:
+    """A listing rebuild must cost ONE collection event, not 2N.
+
+    ``_replace_entries`` removes every old child and appends every new one.
+    Unbatched that is ``2N`` ``CollectionChangedEvent``s, and the
+    ``FilteredCompositeVM`` fed by this composite subscribes with
+    ``lambda _: self._recompute()`` — so every one of them re-derived the
+    whole visible list, making a plain directory listing quadratic in the row
+    count. ``CompositeVM.batch_update()`` coalesces the burst into a single
+    ``action="reset"``, which costs exactly one recompute.
+
+    The count must be invariant in the number of entries; that invariance,
+    not the absolute number, is what proves the batch is open across both
+    loops rather than around one of them.
+    """
+
+    async def _events_for(count: int) -> tuple[int, str | None, int]:
+        fs = InMemoryFS()
+        for index in range(count):
+            await fs.write_stream(PathRef((f"f{index:03d}.txt",)), _astream(b"x"))
+        pane = await _make_pane(fs)
+        try:
+            events: list[object] = []
+            sub = pane._inner.on_collection_changed.subscribe(on_next=events.append)
+            try:
+                await pane.refresh()
+            finally:
+                sub.dispose()
+            first_action = getattr(events[0], "action", None) if events else None
+            return len(events), first_action, len(pane.filtered_entries)
+        finally:
+            pane.dispose()
+
+    small = await _events_for(4)
+    large = await _events_for(40)
+
+    # Named preconditions: the listings really did differ in size, so the
+    # equal event counts below are not two empty rebuilds agreeing.
+    assert small[2] == 4
+    assert large[2] == 40
+
+    assert small[0] == 1, f"expected one coalesced event, got {small[0]}"
+    assert small[0] == large[0], f"event count scaled with row count: {small[0]} vs {large[0]}"
+    assert small[1] == "reset"
+    assert large[1] == "reset"
+
+
+@pytest.mark.asyncio
+async def test_replace_entries_keeps_the_filter_recompute_outside_the_batch() -> None:
+    """The cursor reset must still see a freshly recomputed filtered list.
+
+    ``_recompute_filtered()`` runs before ``self._cursor_index = 0`` because
+    the cursor setter maps a filtered position to an entry inner through
+    ``self._filtered``, which still holds indices into the OLD entries list.
+    Batching that sequence would leave the filtered list stale while the
+    setter dereferences it — an IndexError whenever the new listing is
+    shorter than the old one. Here the filter narrows a 10-entry listing to
+    one row and the refresh returns 2, which is exactly that shape.
+    """
+    fs = InMemoryFS()
+    for index in range(10):
+        await fs.write_stream(PathRef((f"row{index}.txt",)), _astream(b"x"))
+    pane = await _make_pane(fs)
+    try:
+        pane.set_filter_command.execute("row7")
+        assert [entry.name for entry in pane.filtered_entries] == ["row7.txt"]
+        assert pane.cursor_index == 0
+
+        # Shrink the backing store under the pane, then re-list.
+        for index in range(10):
+            if index not in (0, 1):
+                await fs.delete(PathRef((f"row{index}.txt",)))
+        await pane.refresh()
+
+        # No IndexError, and the filtered view is derived from the NEW list.
+        assert len(pane.entries) == 2
+        assert pane.cursor_index == 0
+        assert all(entry in pane.entries for entry in pane.filtered_entries)
+    finally:
+        pane.dispose()

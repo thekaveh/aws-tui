@@ -16,7 +16,7 @@ from aws_tui.demo.in_memory_fs import InMemoryFS
 from aws_tui.domain.filesystem import PathRef
 from aws_tui.domain.transfer_journal import TransferJournal
 from aws_tui.ui.widgets.dual_pane import DualPane
-from aws_tui.ui.widgets.pane import EntryRow, Pane
+from aws_tui.ui.widgets.pane import _BODY_REFRESH_PROPS, EntryRow, Pane
 from aws_tui.vm.file_manager.dual_pane_vm import DualPaneVM, FocusedPane
 from aws_tui.vm.file_manager.pane_vm import PaneVM
 
@@ -900,6 +900,117 @@ async def test_rerendering_the_body_keeps_the_row_list_mirroring_the_dom() -> No
                 False,
             ]
             assert "▌" in rows[2].render_line(0).text
+    finally:
+        vm.dispose()
+        hub.dispose()
+
+
+class _CountingPane(Pane):
+    """Pane that records every real body rebuild and the notifies behind them.
+
+    A counter wrapped around the real methods, not a mock: the body still
+    renders, so the assertions after the count can read the actual DOM.
+    """
+
+    def __init__(
+        self,
+        vm: PaneVM,
+        *,
+        hub: MessageHub[Message],
+        id: str | None = None,
+        classes: str | None = None,
+    ) -> None:
+        super().__init__(vm, hub=hub, id=id, classes=classes)
+        # One (state name, row count) tuple per completed _render_body.
+        self.render_log: list[tuple[str, int]] = []
+        self.body_notifies: int = 0
+
+    def _on_vm_property_changed(self, property_name: str) -> None:
+        if property_name in _BODY_REFRESH_PROPS:
+            self.body_notifies += 1
+        super()._on_vm_property_changed(property_name)
+
+    def _render_body(self) -> None:
+        self.render_log.append((self._vm.state.name, len(self._vm.filtered_entries)))
+        super()._render_body()
+
+
+@pytest.mark.asyncio
+async def test_one_navigation_renders_the_listing_exactly_once() -> None:
+    """One ``navigate_to`` must rebuild the listing ONCE, not once per notify.
+
+    ``navigate_to`` publishes four properties that are all in
+    ``_BODY_REFRESH_PROPS``: ``path``, then ``state`` -> LOADING, then
+    ``entries`` from ``_replace_entries``, then ``state`` -> IDLE. Each one
+    used to schedule its own ``_refresh_all``, so a single keypress tore the
+    body down and remounted every row FOUR times.
+
+    The ``_body_refresh_pending`` latch coalesces each back-to-back run of
+    notifies into one render. Two runs survive here, and the split is not an
+    accident: ``PaneVM._reload`` awaits ``provider.list`` between them, which
+    yields to the event loop and lets the first scheduled callback paint the
+    LOADING placeholder. That placeholder is deliberate — it is what stops a
+    slow listing from looking like a hang — so the honest claim this test
+    pins is that the *listing itself* is rendered exactly once, and that no
+    render ever observes a stale intermediate IDLE state.
+
+    Measured on this fixture: 4 renders before the latch, 2 after.
+    """
+    hub: MessageHub[Message] = MessageHub()
+    dispatcher = RxDispatcher.immediate()
+    fs = await _seed()
+    # Populate the subdirectory so the post-navigation listing is
+    # distinguishable from both the root listing and an empty one.
+    await fs.write_stream(PathRef(("data", "one.txt")), _astream(b"1"))
+    await fs.write_stream(PathRef(("data", "two.txt")), _astream(b"2"))
+    vm = PaneVM(provider=fs, hub=hub, dispatcher=dispatcher, id_prefix="pane.test")
+    vm.construct()
+    await vm.setup()
+    try:
+
+        class _App(App[None]):
+            def compose(self) -> ComposeResult:
+                yield _CountingPane(vm, hub=hub, id="pane")
+
+        app = _App()
+        async with app.run_test(size=(120, 30)) as pilot:
+            await pilot.pause()
+            await pilot.pause()
+            pane = app.query_one(_CountingPane)
+            # Named precondition: the mount render happened, and it is
+            # excluded from the measurement below.
+            assert pane.render_log
+            assert len(app.query(EntryRow)) == 5
+            pane.render_log.clear()
+            pane.body_notifies = 0
+
+            await vm.navigate_to(PathRef(("data",)))
+            await pilot.pause()
+            await pilot.pause()
+
+            assert pane.body_notifies == 4, (
+                f"expected path / state(LOADING) / entries / state(IDLE); got {pane.body_notifies}"
+            )
+            # Exactly one placeholder paint, then exactly one listing paint.
+            # Without the latch this list is four entries long, each state
+            # rendered twice.
+            assert [state for state, _ in pane.render_log] == ["LOADING", "IDLE"]
+            assert pane.render_log[-1] == ("IDLE", 3)
+
+            # The surviving render observed the final state, not an
+            # intermediate one, and the DOM agrees with the VM.
+            assert [row.entry_vm.name for row in pane._rows] == ["..", "one.txt", "two.txt"]
+            assert pane._rows == list(app.query(EntryRow))
+            assert len(app.query(EntryRow)) == len(vm.filtered_entries)
+            # The latch is released, so the next navigation is not swallowed.
+            assert pane._body_refresh_pending is False
+
+            pane.render_log.clear()
+            await vm.navigate_to(PathRef(()))
+            await pilot.pause()
+            await pilot.pause()
+            assert [state for state, _ in pane.render_log] == ["LOADING", "IDLE"]
+            assert len(app.query(EntryRow)) == 5
     finally:
         vm.dispose()
         hub.dispose()

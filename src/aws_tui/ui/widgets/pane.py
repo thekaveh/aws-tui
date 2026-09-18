@@ -506,6 +506,17 @@ class Pane(HubSubscriberMixin, Widget):
 
     def _on_vm_property_changed(self, property_name: str) -> None:
         if property_name in _BODY_REFRESH_PROPS:
+            # Coalesce: one ``navigate_to`` emits ``path``, ``state`` (LOADING),
+            # ``entries`` and ``state`` (IDLE), and each of those used to
+            # schedule its own full teardown + remount of every row. The flag
+            # collapses the burst into a single callback, which then observes
+            # the FINAL VM state instead of four callbacks each observing an
+            # intermediate one. ``_refresh_all`` clears it first thing, so a
+            # notify arriving after the render begins still schedules a fresh
+            # pass.
+            if self._body_refresh_pending:
+                return
+            self._body_refresh_pending = True
             self.call_after_refresh(self._refresh_all)
         elif property_name in _CHROME_REFRESH_PROPS:
             self.call_after_refresh(self._refresh_chrome)
@@ -574,6 +585,9 @@ class Pane(HubSubscriberMixin, Widget):
         self._sync_marks()
 
     def _refresh_all(self) -> None:
+        # FIRST statement, deliberately: everything below reads the VM, so a
+        # notify that lands mid-render must be able to queue another pass.
+        self._body_refresh_pending = False
         self._refresh_chrome()
         self._render_body()
 

@@ -1017,15 +1017,28 @@ class PaneVM:
         )
 
     def _replace_entries(self, new_entries: list[EntryVM]) -> None:
-        for child in self._entries:
-            if child.inner in self._inner:
-                self._inner.remove(child.inner)
-            child.dispose()
-        self._entries = new_entries
-        for child in self._entries:
-            if self._inner.is_constructed:
-                child.construct()
-            self._inner.append(child.inner)
+        # ONE batch around both loops: ``CompositeVM.batch_update()`` is
+        # ref-counted and suppresses the per-mutation events, emitting a
+        # single ``CollectionChangedEvent(action="reset")`` on exit. Without
+        # it a listing of N entries publishes 2N events, and the
+        # ``FilteredCompositeVM`` this composite feeds recomputes its whole
+        # visible list on every one of them — quadratic in the row count.
+        # Its subscription is ``lambda _: self._recompute()``, so the
+        # coalesced "reset" action costs exactly one recompute; no consumer
+        # in this repo reads the event's ``action`` field.
+        #
+        # The batch stops at the loops on purpose — see the ordering note
+        # below, which must run with the composite fully published.
+        with self._inner.batch_update():
+            for child in self._entries:
+                if child.inner in self._inner:
+                    self._inner.remove(child.inner)
+                child.dispose()
+            self._entries = new_entries
+            for child in self._entries:
+                if self._inner.is_constructed:
+                    child.construct()
+                self._inner.append(child.inner)
         # ORDER MATTERS: ``_recompute_filtered()`` MUST run before
         # ``self._cursor_index = 0`` because the setter reads
         # ``self._filtered`` to map filtered-position → entry inner.
