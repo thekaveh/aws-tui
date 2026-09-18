@@ -508,6 +508,32 @@ def _mutation_log_context(dual: object) -> dict[str, str]:
     return context
 
 
+def _flash_cursor_fallback_marks(
+    src_pane: object,
+    targets: list[object],
+    *,
+    marked: bool,
+) -> None:
+    """Show which row a cursor-fallback copy/delete is acting on.
+
+    Routed through ``PaneVM.set_marked_entries`` rather than
+    ``EntryVM.set_marked``: the rows no longer subscribe to the hub
+    themselves, so only the pane-level ``"viewmodel"`` notify that
+    ``set_marked_entries`` emits repaints them. A direct ``set_marked``
+    here mutates the model and paints nothing.
+
+    ``src_pane`` is the pane captured when the action fired, not
+    ``dual.focused_pane`` re-read here — focus can move while the confirm
+    modal is open, and the flash must land on the pane the targets came
+    from. ``getattr`` because the worker's collaborators are duck-typed
+    (same convention as ``copy_across``/``delete_in_focused`` above).
+    """
+    setter = getattr(src_pane, "set_marked_entries", None)
+    if setter is None:
+        return
+    setter(targets, marked=marked)
+
+
 class AwsTuiApp(DeferredWorkerMixin, App[None]):
     """The aws-tui Textual application.
 
@@ -2316,13 +2342,14 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
             return
         self._confirmation_pending = True
         self.run_worker(
-            self._confirm_copy(dual, list(targets), used_cursor_fallback, request),
+            self._confirm_copy(dual, src_pane, list(targets), used_cursor_fallback, request),
             group="confirmation",
         )
 
     async def _confirm_copy(
         self,
         dual: object,
+        src_pane: object,
         targets: list[object],
         used_cursor_fallback: bool,
         request: ConfirmRequest,
@@ -2333,7 +2360,7 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
             if not await ctx.confirm_vm.ask(request, dialog_service=dialogs):
                 return
             self._run_lifecycle_worker(
-                partial(self._run_copy, dual, targets, used_cursor_fallback),
+                partial(self._run_copy, dual, src_pane, targets, used_cursor_fallback),
                 group=_TRANSFER_COPY_GROUP,
             )
         finally:
@@ -2342,6 +2369,7 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
     async def _run_copy(
         self,
         dual: object,
+        src_pane: object,
         targets: list[object],
         used_cursor_fallback: bool,
     ) -> None:
@@ -2352,8 +2380,7 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
         if copy_across is None:
             return
         if used_cursor_fallback:
-            for entry in targets:
-                entry.set_marked(True)  # type: ignore[attr-defined]
+            _flash_cursor_fallback_marks(src_pane, targets, marked=True)
         try:
             await copy_across()
         except Exception as exc:
@@ -2382,8 +2409,7 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
             )
         finally:
             if used_cursor_fallback:
-                for entry in targets:
-                    entry.set_marked(False)  # type: ignore[attr-defined]
+                _flash_cursor_fallback_marks(src_pane, targets, marked=False)
 
     async def action_delete(self) -> None:
         """Delete the focused pane's marked entries (or the cursor row if
@@ -2425,13 +2451,14 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
             return
         self._confirmation_pending = True
         self.run_worker(
-            self._confirm_delete(dual, list(targets), used_cursor_fallback, request),
+            self._confirm_delete(dual, src_pane, list(targets), used_cursor_fallback, request),
             group="confirmation",
         )
 
     async def _confirm_delete(
         self,
         dual: object,
+        src_pane: object,
         targets: list[object],
         used_cursor_fallback: bool,
         request: ConfirmRequest,
@@ -2442,7 +2469,7 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
             if not await ctx.confirm_vm.ask(request, dialog_service=dialogs):
                 return
             self._run_lifecycle_worker(
-                partial(self._run_delete, dual, targets, used_cursor_fallback),
+                partial(self._run_delete, dual, src_pane, targets, used_cursor_fallback),
                 group=_TRANSFER_DELETE_GROUP,
             )
         finally:
@@ -2451,6 +2478,7 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
     async def _run_delete(
         self,
         dual: object,
+        src_pane: object,
         targets: list[object],
         used_cursor_fallback: bool,
     ) -> None:
@@ -2460,8 +2488,7 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
         if delete_in_focused is None:
             return
         if used_cursor_fallback:
-            for entry in targets:
-                entry.set_marked(True)  # type: ignore[attr-defined]
+            _flash_cursor_fallback_marks(src_pane, targets, marked=True)
         try:
             await delete_in_focused()
         except Exception as exc:
@@ -2482,8 +2509,7 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
             )
         finally:
             if used_cursor_fallback:
-                for entry in targets:
-                    entry.set_marked(False)  # type: ignore[attr-defined]
+                _flash_cursor_fallback_marks(src_pane, targets, marked=False)
 
     def action_cycle_theme(self) -> None:
         """Cycle to the next theme without opening the picker modal —

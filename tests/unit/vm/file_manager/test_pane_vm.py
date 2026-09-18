@@ -770,3 +770,50 @@ async def test_summary_count_excludes_the_synthetic_parent_link() -> None:
         assert summary.startswith(f"{len(real)} obj"), summary
     finally:
         pane.dispose()
+
+
+@pytest.mark.asyncio
+async def test_set_marked_entries_marks_notifies_once_and_skips_the_parent_link() -> None:
+    """``set_marked_entries`` is the only supported way to mark from outside.
+
+    ``app.py``'s copy/delete workers flash the cursor-fallback target as
+    marked for the duration of a transfer. They used to call
+    ``EntryVM.set_marked`` directly, which mutates the model and emits a
+    per-entry message that nothing subscribes to any more — the rows repaint
+    off the pane-level ``"viewmodel"`` notify. This pins the three properties
+    the pane depends on: the synthetic ``..`` row stays unmarkable, a batch
+    costs exactly one notify, and a no-op batch costs none (so the ``finally``
+    clear on a transfer that never marked anything cannot start a repaint).
+    """
+    fs = await _seed_fs()
+    hub = _hub()
+    notified: list[str] = []
+    hub.messages.subscribe(
+        on_next=lambda m: notified.append(getattr(m, "property_name", "")) if m else None
+    )
+    pane = await _make_pane(fs, hub=hub)
+    try:
+        await pane.navigate_to(PathRef(("b",)))
+        entries = pane.filtered_entries
+        parent = entries[0]
+        assert parent.is_parent_link, "expected a parent link first in this listing"
+        targets = [entry for entry in entries if not entry.is_parent_link]
+        assert targets, "expected at least one real entry to mark"
+
+        notified.clear()
+        pane.set_marked_entries(entries, marked=True)
+
+        assert parent.is_marked is False, "the .. row must stay unmarkable"
+        assert all(entry.is_marked for entry in targets)
+        assert notified.count("viewmodel") == 1, notified
+
+        notified.clear()
+        pane.set_marked_entries(entries, marked=True)
+        assert notified.count("viewmodel") == 0, "re-marking must be a silent no-op"
+
+        notified.clear()
+        pane.set_marked_entries(entries, marked=False)
+        assert all(not entry.is_marked for entry in targets)
+        assert notified.count("viewmodel") == 1, notified
+    finally:
+        pane.dispose()

@@ -767,6 +767,35 @@ class PaneVM:
         entry_vm.set_marked(marked)
         self._notify("viewmodel")
 
+    def set_marked_entries(self, entries: Iterable[EntryVM], *, marked: bool) -> None:
+        """Set the mark flag on specific entries and republish the viewmodel.
+
+        The app-level copy/delete workers flash the cursor-fallback target as
+        marked for the duration of the transfer, so the user can see which row
+        the operation is acting on. They hold the ``EntryVM`` objects directly
+        rather than filtered indices, which is why this takes entries and not
+        positions like :meth:`mark_at`.
+
+        The ``_notify`` is the whole point: ``EntryVM.set_marked`` publishes a
+        per-entry ``PropertyChangedMessage`` that nothing subscribes to any
+        more — the pane repaints its rows off the pane-level ``"viewmodel"``
+        notify (``Pane._sync_marks``). Calling ``entry.set_marked`` directly
+        from outside the VM therefore mutates the model and paints nothing.
+
+        Deliberately does NOT enter multi-select mode: this is a transient
+        visual flash owned by a worker, not a user selection, and flipping
+        ``is_multiselect_mode`` would rewrite the footer summary for the
+        duration of the transfer.
+        """
+        changed = False
+        for entry in entries:
+            if entry.is_parent_link or entry.is_marked == marked:
+                continue
+            entry.set_marked(marked)
+            changed = True
+        if changed:
+            self._notify("viewmodel")
+
     def move_cursor_to(self, target_index: int) -> None:
         """Place the cursor directly at ``target_index`` (clamped). Used by
         view-side input adapters that translate a click coordinate into a

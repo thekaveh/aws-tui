@@ -269,3 +269,58 @@ async def test_delete_worker_does_not_cancel_an_in_flight_copy(
         app.run_worker(_long("copy-2"), exclusive=True, group=_TRANSFER_COPY_GROUP)
         await asyncio.sleep(0.05)
         assert cancelled == ["copy"]
+
+
+@pytest.mark.asyncio
+async def test_cursor_fallback_copy_marks_the_row_it_is_acting_on(
+    app_context_factory: AppContextBuilder,
+) -> None:
+    """A copy with nothing marked must show which row it is transferring.
+
+    With no multi-selection the copy falls back to the cursor row, and the
+    worker marks that row for the duration of the transfer — the only
+    on-screen confirmation of what is moving. The rows no longer hold their
+    own hub subscription, so this is visible only because the worker goes
+    through ``PaneVM.set_marked_entries`` (which republishes ``"viewmodel"``)
+    instead of ``EntryVM.set_marked`` (which republishes nothing anybody
+    listens to). Asserted on the mounted widget's classes, not on
+    ``entry_vm.is_marked``: the model flag stayed correct throughout the
+    regression this pins, while the screen showed nothing.
+
+    ``_BlockingReadFS`` holds the transfer open so the flash can be observed
+    mid-flight; the app is torn down with the worker still running, exactly
+    as ``test_switching_to_settings_cancels_active_copy_worker`` does.
+    """
+    fs = _BlockingReadFS()
+    await fs.write_stream(PathRef(("alpha.txt",)), _stream(b"alpha-content"))
+    ctx = app_context_factory(fs=fs)
+    _use_injected_s3_connection(ctx)
+    app = AwsTuiApp(ctx)
+    async with app.run_test(size=(120, 40)) as pilot:
+        await pilot.pause()
+        await pilot.pause()
+
+        rows = await _wait_until_entry_rows(app)
+        target = next(row for row in rows if row.entry_vm.name == "alpha.txt")
+        assert "-marked" not in target.classes, "precondition: nothing is marked yet"
+
+        await pilot.press("c")
+        await pilot.pause()
+        await pilot.press("enter")
+        await asyncio.wait_for(fs.read_started.wait(), timeout=2.0)
+        await pilot.pause()
+        await pilot.pause()
+
+        assert "-marked" in target.classes, (
+            "the cursor-fallback row is not painted as the copy's target"
+        )
+        assert "*" in target.render_line(0).text
+
+        # Cancel the in-flight worker so teardown is not racing it.
+        await pilot.press("comma")
+        await pilot.pause()
+        await asyncio.wait_for(fs.read_cancelled.wait(), timeout=2.0)
+
+        assert app._crash_report is None, (  # type: ignore[attr-defined]
+            f"the mark flash crashed the app: {app._crash_report}"  # type: ignore[attr-defined]
+        )

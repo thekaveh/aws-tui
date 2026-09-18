@@ -782,3 +782,124 @@ async def test_cursor_move_keeps_the_cursor_row_scrolled_into_view() -> None:
     finally:
         vm.dispose()
         hub.dispose()
+
+
+@pytest.mark.asyncio
+async def test_cursor_fallback_mark_repaints_the_row_during_a_transfer() -> None:
+    """A copy/delete with nothing marked must still show its target.
+
+    ``app.py``'s ``_run_copy``/``_run_delete`` flash the cursor row as marked
+    for the duration of the transfer, so the user can see which row the
+    operation is acting on. The rows no longer subscribe to the hub, so the
+    only thing that repaints them is the pane-level ``"viewmodel"`` notify
+    that ``PaneVM.set_marked_entries`` emits — a bare
+    ``EntryVM.set_marked(True)`` from the worker mutates the model and paints
+    nothing. Asserted on ``render_line`` (the painted strip) as well as the
+    class, because the ``*`` glyph comes from ``render()``.
+    """
+    hub: MessageHub[Message] = MessageHub()
+    dispatcher = RxDispatcher.immediate()
+    vm = PaneVM(provider=await _seed(), hub=hub, dispatcher=dispatcher, id_prefix="pane.test")
+    vm.construct()
+    await vm.setup()
+    try:
+        app = _single_pane_app(vm, hub)
+        async with app.run_test(size=(120, 30)) as pilot:
+            await pilot.pause()
+            await pilot.pause()
+            rows = list(app.query(EntryRow))
+            assert len(rows) == 5
+            target = vm.filtered_entries[1]
+            assert rows[1].entry_vm is target
+            assert "-marked" not in rows[1].classes
+
+            # Exactly what the worker does on the cursor-fallback path.
+            vm.set_marked_entries([target], marked=True)
+            await pilot.pause()
+            await pilot.pause()
+
+            assert "-marked" in rows[1].classes
+            assert "*" in rows[1].render_line(0).text
+
+            vm.set_marked_entries([target], marked=False)
+            await pilot.pause()
+            await pilot.pause()
+
+            assert "-marked" not in rows[1].classes
+            assert "*" not in rows[1].render_line(0).text
+    finally:
+        vm.dispose()
+        hub.dispose()
+
+
+@pytest.mark.asyncio
+async def test_rerendering_the_body_keeps_the_row_list_mirroring_the_dom() -> None:
+    """``Pane._rows`` must mirror the mounted rows after EVERY render.
+
+    ``_apply_cursor``, ``_sync_marks`` and ``_reflow_columns`` all index
+    ``self._rows`` instead of querying the DOM, so that list *is* the pane's
+    model of its own body. Every other test in this module renders the body
+    once, at mount; this one navigates into a directory and back out, so
+    ``_render_body`` runs three times over three different listings.
+
+    A ``_rows`` that accumulated across renders instead of being reset would
+    leave the pane indexing unmounted, disposed widgets — the cursor bar
+    would stop tracking the cursor and ``scroll_to_widget`` would target a
+    removed widget, silently, behind ``_apply_cursor``'s bare ``except``.
+    Verified discriminating: making ``_render_body`` append to ``self._rows``
+    rather than replace it fails the identity assertion below.
+    """
+    hub: MessageHub[Message] = MessageHub()
+    dispatcher = RxDispatcher.immediate()
+    vm = PaneVM(provider=await _seed(), hub=hub, dispatcher=dispatcher, id_prefix="pane.test")
+    vm.construct()
+    await vm.setup()
+    try:
+        app = _single_pane_app(vm, hub)
+        async with app.run_test(size=(120, 30)) as pilot:
+            await pilot.pause()
+            await pilot.pause()
+            pane = app.query_one(Pane)
+            assert pane._rows == list(app.query(EntryRow))
+
+            data_index = next(
+                index
+                for index, entry in enumerate(vm.filtered_entries)
+                if entry.entry.name == "data"
+            )
+            # Into the (empty) subdirectory: one ".." row, so the body
+            # shrinks — an accumulating _rows keeps the five root rows.
+            await vm.activate(data_index)
+            await pilot.pause()
+            await pilot.pause()
+
+            assert [row.entry_vm.name for row in pane._rows] == [".."]
+            assert pane._rows == list(app.query(EntryRow))
+            assert len(app.query(EntryRow)) == len(vm.filtered_entries)
+
+            # Back out through "..": the body grows again.
+            await vm.activate(0)
+            await pilot.pause()
+            await pilot.pause()
+
+            rows = list(app.query(EntryRow))
+            assert len(rows) == len(vm.filtered_entries) == 5
+            assert pane._rows == rows
+            assert all(row.is_mounted for row in pane._rows)
+
+            # And the cursor still addresses the rows that are actually
+            # mounted after the re-render.
+            vm.move_cursor_to(2)
+            await pilot.pause()
+            await pilot.pause()
+            assert [("-selected" in row.classes) for row in rows] == [
+                False,
+                False,
+                True,
+                False,
+                False,
+            ]
+            assert "▌" in rows[2].render_line(0).text
+    finally:
+        vm.dispose()
+        hub.dispose()
