@@ -4,9 +4,11 @@ from __future__ import annotations
 
 from collections.abc import AsyncIterator
 from pathlib import Path
+from typing import Any
 
 import pytest
 from textual.app import App, ComposeResult
+from textual.containers import VerticalScroll
 from textual.widgets import Static
 from vmx import Message, MessageHub, RxDispatcher
 
@@ -661,6 +663,122 @@ async def test_marking_an_entry_flips_marked_and_repaints_the_mark_glyph() -> No
 
             assert "-marked" not in rows[2].classes
             assert "*" not in rows[2].render_line(0).text
+    finally:
+        vm.dispose()
+        hub.dispose()
+
+
+@pytest.mark.asyncio
+async def test_cursor_move_repaints_only_the_two_affected_rows(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """One keystroke must repaint two rows, whatever the listing size.
+
+    This is the O(1)-per-keystroke claim stated as a count rather than as a
+    duration (Constraint 24 forbids wall-clock assertions). ``EntryRow.refresh``
+    is the repaint: :meth:`EntryRow.sync_state` calls it exactly once per row
+    whose flags actually moved, and returns early otherwise. Sixty rows are
+    mounted so that a full-body repaint would be unmistakable (60, not 2).
+
+    What this pins is the *invariant*, held jointly by ``Pane._apply_cursor``
+    (which touches the two affected rows) and ``Pane._sync_marks`` (which walks
+    every row but early-returns on all the unchanged ones). It therefore
+    catches either of them regressing into a repaint storm — the realistic
+    failure — but it cannot attribute the two repaints to one or the other,
+    because ``PaneVM`` emits ``"viewmodel"`` immediately after ``"cursor_index"``
+    on every cursor move (``pane_vm.py`` ``_move_cursor``/``move_cursor_to``) and
+    both handlers run before the pause returns. The behaviour that *is*
+    exclusive to ``_apply_cursor`` is pinned by the scroll test below.
+    """
+    hub: MessageHub[Message] = MessageHub()
+    dispatcher = RxDispatcher.immediate()
+    vm = PaneVM(provider=await _seed_n(60), hub=hub, dispatcher=dispatcher, id_prefix="pane.test")
+    vm.construct()
+    await vm.setup()
+
+    repainted: list[str] = []
+    original_refresh = EntryRow.refresh
+
+    def _counting_refresh(self: EntryRow, *args: Any, **kwargs: Any) -> Any:
+        repainted.append(self.entry_vm.display_name)
+        return original_refresh(self, *args, **kwargs)
+
+    monkeypatch.setattr(EntryRow, "refresh", _counting_refresh)
+    try:
+        app = _single_pane_app(vm, hub)
+        async with app.run_test(size=(120, 30)) as pilot:
+            await pilot.pause()
+            await pilot.pause()
+            # Named precondition: counting repaints across two rows is only
+            # meaningful against a body far larger than two rows.
+            assert len(app.query(EntryRow)) == 60
+            # The initial mount paints everything; only the steady state is
+            # under test, so start counting from here.
+            repainted.clear()
+
+            vm.move_cursor_command.execute(1)
+            await pilot.pause()
+            await pilot.pause()
+
+            assert repainted == [
+                "file-0000.txt",
+                "file-0001.txt",
+            ], (
+                f"a cursor move must repaint exactly the row it left and the row it reached: {repainted}"
+            )
+    finally:
+        vm.dispose()
+        hub.dispose()
+
+
+@pytest.mark.asyncio
+async def test_cursor_move_keeps_the_cursor_row_scrolled_into_view() -> None:
+    """The cursor must not walk off the bottom of a listing taller than the pane.
+
+    This is the whole surviving purpose of the deleted ``_scroll_to_cursor``:
+    ``Pane._apply_cursor`` ends in ``scroll_to_widget`` behind a bare
+    ``except Exception: return``, so nothing else in the widget keeps the
+    cursor row on screen. Stub ``_apply_cursor`` to a no-op and this test is
+    the one that fails — every other pane test stays green, because the
+    ``"viewmodel"`` notify makes ``_sync_marks`` cover the repaint.
+
+    Sixty rows at 30 terminal lines overflows the body by roughly 2x;
+    ``max_scroll_y`` is asserted as a named precondition so a future layout
+    change that made the listing fit would fail loudly instead of silently
+    turning this into a tautology.
+    """
+    hub: MessageHub[Message] = MessageHub()
+    dispatcher = RxDispatcher.immediate()
+    vm = PaneVM(provider=await _seed_n(60), hub=hub, dispatcher=dispatcher, id_prefix="pane.test")
+    vm.construct()
+    await vm.setup()
+    try:
+        app = _single_pane_app(vm, hub)
+        async with app.run_test(size=(120, 30)) as pilot:
+            await pilot.pause()
+            await pilot.pause()
+            body = app.query_one(Pane).query_one("#pane-body", VerticalScroll)
+            assert body.max_scroll_y > 0, (
+                "the listing must overflow the body for this to mean anything"
+            )
+            assert body.scroll_offset.y == 0
+
+            last = len(vm.filtered_entries) - 1
+            vm.move_cursor_to(last)
+            await pilot.pause()
+            await pilot.pause()
+
+            assert body.scroll_offset.y > 0, (
+                "the cursor row scrolled off the bottom and the body never followed it"
+            )
+
+            vm.move_cursor_to(0)
+            await pilot.pause()
+            await pilot.pause()
+
+            assert body.scroll_offset.y == 0, (
+                "returning to the first row must scroll back to the top"
+            )
     finally:
         vm.dispose()
         hub.dispose()
