@@ -16,7 +16,7 @@ from vmx.messages.protocols import Message
 
 from aws_tui.demo.in_memory_emr import InMemoryEmr as _InMemoryEmr
 from aws_tui.domain.emr_serverless import JobRunDetail, JobRunState
-from aws_tui.domain.filesystem import ValidationError
+from aws_tui.domain.filesystem import ProviderUnreachableError, ValidationError
 from aws_tui.vm.emr_serverless.clone_vm import JobRunCloneVM
 
 
@@ -182,3 +182,52 @@ def test_dispose_is_idempotent() -> None:
     vm, _ = _make()
     vm.dispose()
     vm.dispose()  # Must not raise.
+
+
+@pytest.mark.asyncio
+async def test_submit_passes_the_vm_client_token_to_the_client() -> None:
+    vm, fake = _make()
+    token = vm.client_token
+    await vm.submit()
+    submit_calls = [c for c in fake.calls if c[0] == "start_job_run"]
+    assert submit_calls[0][1][6] == token
+    vm.dispose()
+
+
+@pytest.mark.asyncio
+async def test_retry_after_an_ambiguous_failure_reuses_the_same_client_token() -> None:
+    """A timeout after AWS accepted the request must not mint a second job.
+
+    The first attempt raises; the user presses submit again; AWS sees the same
+    ``clientToken`` and returns the run it already created.
+    """
+    vm, fake = _make()
+    fake.start_job_run_exc = ProviderUnreachableError("read timeout")
+    with pytest.raises(ProviderUnreachableError):
+        await vm.submit()
+    fake.start_job_run_exc = None
+    await vm.submit()
+
+    tokens = [c[1][6] for c in fake.calls if c[0] == "start_job_run"]
+    assert len(tokens) == 2
+    assert tokens[0] == tokens[1]
+    vm.dispose()
+
+
+def test_editing_a_field_rotates_the_client_token() -> None:
+    vm, _fake = _make()
+    before = vm.client_token
+    vm.apply_field("name", "nightly")  # unchanged value: same intent
+    assert vm.client_token == before
+    vm.apply_field("name", "nightly-rerun")
+    assert vm.client_token != before
+    vm.dispose()
+
+
+@pytest.mark.asyncio
+async def test_successful_submit_rotates_the_client_token() -> None:
+    vm, _fake = _make()
+    before = vm.client_token
+    await vm.submit()
+    assert vm.client_token != before
+    vm.dispose()

@@ -220,6 +220,12 @@ _PALETTE_COMMANDS: tuple[PaletteEntry, ...] = (
         service_ids=_GLUE_SERVICE_IDS,
     ),
     PaletteEntry(
+        "glue.load_more",
+        "Load more Glue rows",
+        "glue",
+        service_ids=_GLUE_SERVICE_IDS,
+    ),
+    PaletteEntry(
         "glue.time_travel_in_athena",
         "Query Iceberg snapshot in Athena",
         "glue",
@@ -630,6 +636,7 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
         )
         self._actions.register("glue.open_s3_location", self.action_open_glue_s3_location)
         self._actions.register("glue.query_in_athena", self.action_query_glue_table_in_athena)
+        self._actions.register("glue.load_more", self.action_load_more_glue)
         self._actions.register(
             "glue.time_travel_in_athena",
             self.action_time_travel_glue_table_in_athena,
@@ -2849,6 +2856,12 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
             toast_id="glue-athena-table-unavailable",
         )
 
+    async def action_load_more_glue(self) -> None:
+        self.record_action("glue.load_more")
+        page = self._glue_page()
+        if page is not None:
+            await page.action_load_more()
+
     def action_copy_glue_table_reference(self) -> None:
         self.record_action("glue.copy_table_ref")
         page = self._glue_page()
@@ -4277,6 +4290,8 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
             glue_page.vm,
             glue_page.vm.catalog,
             glue_page.vm.catalog.iceberg,
+            glue_page.vm.jobs,
+            glue_page.vm.crawlers,
         }:
             self._recompute_hint_disables()
             return
@@ -4339,6 +4354,8 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
                 glue_disabled.add("glue.query_in_athena")
             if not glue_page.vm.can_time_travel_in_athena:
                 glue_disabled.add("glue.time_travel_in_athena")
+            if not glue_page.can_load_more():
+                glue_disabled.add("glue.load_more")
             self._app_ctx.root_vm.chrome.hint_legend.set_disabled_actions(frozenset(glue_disabled))
             return
         dual = self._dual_pane()
@@ -4373,7 +4390,7 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
         )
 
     def on_descendant_focus(self, _event: events.DescendantFocus) -> None:
-        if self._athena_page() is not None:
+        if self._athena_page() is not None or self._glue_page() is not None:
             self._recompute_hint_disables()
 
     def _on_nav_selection_changed(self, msg: object) -> None:

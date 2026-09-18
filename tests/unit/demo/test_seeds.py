@@ -212,6 +212,7 @@ async def test_clone_state_machine_walks_to_success(monkeypatch: pytest.MonkeyPa
         entry_point="s3://demo/etl.py",
         entry_point_arguments=(),
         spark_submit_parameters=None,
+        client_token="tok-test-clone",
         name="test-clone",
     )
     # Wait for the state walk to complete.
@@ -236,6 +237,7 @@ async def test_successive_demo_clones_are_newest_and_strictly_ordered() -> None:
         entry_point="s3://demo/etl.py",
         entry_point_arguments=(),
         spark_submit_parameters=None,
+        client_token="tok-first-clone",
         name="first-clone",
     )
     second_id = await emr.start_job_run(
@@ -244,6 +246,7 @@ async def test_successive_demo_clones_are_newest_and_strictly_ordered() -> None:
         entry_point="s3://demo/etl.py",
         entry_point_arguments=(),
         spark_submit_parameters=None,
+        client_token="tok-second-clone",
         name="second-clone",
     )
     try:
@@ -276,6 +279,7 @@ async def test_concurrent_demo_clones_each_report_five_second_duration(
             entry_point="s3://demo/etl.py",
             entry_point_arguments=(),
             spark_submit_parameters=None,
+            client_token="tok-first-concurrent-clone",
             name="first-concurrent-clone",
         ),
         emr.start_job_run(
@@ -284,6 +288,7 @@ async def test_concurrent_demo_clones_each_report_five_second_duration(
             entry_point="s3://demo/etl.py",
             entry_point_arguments=(),
             spark_submit_parameters=None,
+            client_token="tok-second-concurrent-clone",
             name="second-concurrent-clone",
         ),
     )
@@ -318,6 +323,7 @@ async def test_demo_state_walk_failure_is_logged(
             entry_point="s3://demo/etl.py",
             entry_point_arguments=(),
             spark_submit_parameters=None,
+            client_token="tok-broken-clone",
             name="broken-clone",
         )
         for _ in range(5):
@@ -344,6 +350,7 @@ async def test_aclose_cancels_and_drains_in_flight_state_walks() -> None:
         entry_point="s3://demo/etl.py",
         entry_point_arguments=(),
         spark_submit_parameters=None,
+        client_token="tok-never-finishes",
         name="never-finishes",
     )
     assert emr._state_tasks, "expected at least one tracked task"
@@ -363,6 +370,7 @@ async def test_dispose_requests_state_walk_cancellation() -> None:
         entry_point="s3://demo/etl.py",
         entry_point_arguments=(),
         spark_submit_parameters=None,
+        client_token="tok-dispose-cancels",
         name="dispose-cancels",
     )
     tasks = tuple(emr._state_tasks)

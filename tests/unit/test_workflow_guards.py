@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import fnmatch
 import tomllib
 from pathlib import Path
 from typing import Any
@@ -555,3 +556,43 @@ def test_release_creation_does_not_depend_on_runner_gh_cli() -> None:
 
     assert "gh release create" not in release
     assert "api.github.com/repos" in release
+
+
+def _manifest_sources() -> set[str]:
+    manifest = yaml.safe_load((REPO_ROOT / "docs" / "manifest.yaml").read_text(encoding="utf-8"))
+    sources: set[str] = {manifest["package"]["source"]}
+
+    def walk(entries: list[dict]) -> None:
+        for entry in entries:
+            if "source" in entry:
+                sources.add(entry["source"])
+            walk(entry.get("children", []))
+
+    walk(manifest["sections"])
+    for diagram in manifest.get("diagrams", []):
+        sources.add(diagram["master"])
+    return sources
+
+
+def _path_filter_matches(pattern: str, path: str) -> bool:
+    # GitHub's ``**`` matches across directory separators; fnmatch's ``*``
+    # already does, so ``docs/**`` becomes ``docs/*``.
+    return fnmatch.fnmatchcase(path, pattern.replace("**", "*"))
+
+
+def test_pages_publication_triggers_on_every_manifest_source() -> None:
+    """A manifest source outside the trigger filters publishes stale copies.
+
+    ``CONTRIBUTING.md``, ``SECURITY.md``, and ``CODE_OF_CONDUCT.md`` are
+    published from the manifest but lived outside ``docs/**``, so an edit
+    confined to one of them never redeployed Pages or the wiki.
+    """
+    workflow = _workflow(".github/workflows/pages.yml")
+    patterns = workflow[True]["push"]["paths"]
+
+    missing = sorted(
+        source
+        for source in _manifest_sources()
+        if not any(_path_filter_matches(pattern, source) for pattern in patterns)
+    )
+    assert missing == [], f"manifest sources absent from pages.yml push paths: {missing}"

@@ -113,6 +113,7 @@ class _FailedEmrClient:
         entry_point: str,
         entry_point_arguments: tuple[str, ...],
         spark_submit_parameters: str | None,
+        client_token: str,
         name: str | None = None,
     ) -> str:
         raise self._fresh_error()

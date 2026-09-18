@@ -65,7 +65,7 @@
             stroke-dasharray="6 4" marker-end="url(#arrow)"/>
 
       <g font-family="Fira Code Embedded" font-size="12" fill="#e2e8f0" text-anchor="middle">
-        <text x="211" y="205">y · Query table in Athena</text>
+        <text x="211" y="205">Shift+Q · Query table in Athena</text>
         <text x="421" y="255">publish OpenAthenaTableRequest(TableRef)</text>
         <text x="631" y="300">deliver to the composition root</text>
         <text x="845" y="435">adopt candidate via ContentHostVM</text>

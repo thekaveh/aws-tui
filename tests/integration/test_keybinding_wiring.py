@@ -63,6 +63,7 @@ _EXPECTED: set[tuple[str, str, bool, bool]] = {
     ("y", "dispatch('glue.copy_table_ref')", False, False),
     ("Q", "dispatch('glue.query_in_athena')", False, False),
     ("V", "dispatch('glue.time_travel_in_athena')", False, False),
+    ("l", "dispatch('glue.load_more')", False, False),
     ("1", "dispatch('athena.query')", False, False),
     ("2", "dispatch('athena.history')", False, False),
     ("3", "dispatch('athena.results')", False, False),

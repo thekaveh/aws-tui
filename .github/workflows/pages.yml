@@ -11,6 +11,12 @@ on:
       # redeploying Pages.
       - "assets/**"
       - "docs/**"
+      # Root project documents the manifest publishes to the site and wiki.
+      # They live outside docs/**, so an edit confined to one of them shipped
+      # nothing until the next unrelated docs change.
+      - "CONTRIBUTING.md"
+      - "SECURITY.md"
+      - "CODE_OF_CONDUCT.md"
       - "scripts/docs/**"
       - "Makefile"
       - "pyproject.toml"

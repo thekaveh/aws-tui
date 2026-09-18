@@ -28,6 +28,7 @@ _GLUE = {
     "Copy Glue table reference",
     "Open table location in S3",
     "Query table in Athena",
+    "Load more Glue rows",
     "Query Iceberg snapshot in Athena",
 }
 _EMR = {"Next EMR application"}
@@ -226,11 +227,12 @@ async def test_glue_handoff_disabled_state_tracks_table_and_snapshot_selection(
                 "glue.copy_table_ref",
                 "glue.query_in_athena",
                 "glue.time_travel_in_athena",
+                "glue.load_more",
             }
 
             await vm.select_view("catalog")
             await pilot.pause()
-            assert disabled_actions() == {"glue.time_travel_in_athena"}
+            assert disabled_actions() == {"glue.time_travel_in_athena", "glue.load_more"}
 
             fake.add_database("empty")
             await vm.catalog.refresh_databases()
@@ -240,23 +242,24 @@ async def test_glue_handoff_disabled_state_tracks_table_and_snapshot_selection(
                 "glue.copy_table_ref",
                 "glue.query_in_athena",
                 "glue.time_travel_in_athena",
+                "glue.load_more",
             }
 
             await vm.select_database("analytics")
             assert await vm.catalog.iceberg.select_view("snapshots")
             assert vm.catalog.iceberg.select_snapshot(43)
             await pilot.pause()
-            assert disabled_actions() == set()
+            assert disabled_actions() == {"glue.load_more"}
 
             projections.clear()
             assert await vm.catalog.iceberg.load_more()
             await pilot.pause()
-            assert frozenset() in projections
-            assert disabled_actions() == set()
+            assert frozenset({"glue.load_more"}) in projections
+            assert disabled_actions() == {"glue.load_more"}
 
             assert await vm.catalog.iceberg.select_view("history")
             await pilot.pause()
-            assert disabled_actions() == {"glue.time_travel_in_athena"}
+            assert disabled_actions() == {"glue.time_travel_in_athena", "glue.load_more"}
 
             projections.clear()
             await vm.shutdown()
@@ -266,6 +269,7 @@ async def test_glue_handoff_disabled_state_tracks_table_and_snapshot_selection(
                 "glue.copy_table_ref",
                 "glue.query_in_athena",
                 "glue.time_travel_in_athena",
+                "glue.load_more",
             }
 
             toast_count = len(ctx.root_vm.chrome.toast_stack.toasts)
@@ -324,7 +328,7 @@ async def test_direct_glue_page_disposal_disables_handoffs_without_advisory_toas
             assert await vm.catalog.iceberg.select_view("snapshots")
             assert vm.catalog.iceberg.select_snapshot(43)
             await pilot.pause()
-            assert disabled_actions() == set()
+            assert disabled_actions() == {"glue.load_more"}
 
             vm.dispose()
             await pilot.pause()
@@ -332,6 +336,7 @@ async def test_direct_glue_page_disposal_disables_handoffs_without_advisory_toas
                 "glue.copy_table_ref",
                 "glue.query_in_athena",
                 "glue.time_travel_in_athena",
+                "glue.load_more",
             }
 
             toast_count = len(ctx.root_vm.chrome.toast_stack.toasts)
