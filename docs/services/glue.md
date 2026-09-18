@@ -26,8 +26,10 @@ crawl detail. Access denial remains scoped to the affected pane and does not
 invalidate the AWS source for other services.
 
 `y` copies the selected table as a fully quoted, source-aware `TableRef` into
-the VM-owned clipboard and, on a best-effort basis, the operating-system
-clipboard. The command palette can open a valid selected table location in S3
+the VM-owned clipboard, then hands it to the single app-level clipboard writer
+for the operating-system clipboard. That writer's toast names the channel that
+actually accepted the text and never reports an unacknowledged OSC 52 write as
+a copy. The command palette can open a valid selected table location in S3
 under the same connection and region.
 
 Lists page through the Glue API 100 rows at a time (200 for job runs). A footer reading

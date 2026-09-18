@@ -17,6 +17,7 @@ never reported as "copied".
 from __future__ import annotations
 
 import asyncio
+import threading
 from collections.abc import AsyncIterator
 
 import pytest
@@ -24,7 +25,7 @@ import pytest
 from aws_tui.app import AwsTuiApp
 from aws_tui.demo.in_memory_fs import InMemoryFS
 from aws_tui.domain.filesystem import PathRef
-from aws_tui.infra.clipboard import InMemoryClipboard
+from aws_tui.infra.clipboard import ClipboardResult, InMemoryClipboard
 from aws_tui.ui.widgets.pane import EntryRow
 from aws_tui.vm.chrome.toast_vm import ToastLevel
 from tests.helpers import drain_workers
@@ -231,3 +232,79 @@ async def test_nothing_selected_advises_through_the_toast_stack(
 
         assert port.writes == []
         assert ctx.root_vm.chrome.toast_stack.toasts[-1].model.id == "clipboard-nothing-selected"
+
+
+class _WedgedClipboard:
+    """A port whose ``write`` blocks until the test lets it go.
+
+    An ``xclip`` against a stalled X server, a ``pbcopy`` waiting on a hung
+    pasteboard server: the call does return, but only after the port's own
+    ~2 s timeout. Whatever awaits it for that long is unavailable for that
+    long, which is the whole question this fake exists to ask.
+    """
+
+    def __init__(self) -> None:
+        self.entered = threading.Event()
+        self.release = threading.Event()
+        self.writes: list[str] = []
+
+    def write(self, text: str) -> ClipboardResult:
+        self.entered.set()
+        # Bounded so a regression cannot hang the suite: the assertions
+        # below fail long before this expires.
+        self.release.wait(timeout=30.0)
+        self.writes.append(text)
+        return ClipboardResult(ok=True, mechanism="pbcopy")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("action", ["pane.copy_path", "pane.copy_entry_path"])
+async def test_copy_keystroke_does_not_wait_on_the_helper(
+    app_context_factory: AppContextBuilder,
+    action: str,
+) -> None:
+    """``p``/``P`` must hand the write to a worker, not await it inline.
+
+    Offloading the port call to a thread keeps the *event loop* spinning; it
+    does not keep the App's *message pump* free, and the pump is where every
+    subsequent key event -- ``ctrl+q`` included -- is dequeued. An action
+    handler that awaits the write blocks the pump for the helper's full
+    timeout, which is exactly the unresponsive window this branch exists to
+    remove, and it would do it on the keyboard path only: the border click
+    and the Glue ``y`` path already go through the worker seam.
+
+    So the assertion is an ordering one, not a timing one: the handler is
+    finished while the helper is still wedged.
+    """
+    port = _WedgedClipboard()
+    ctx = app_context_factory(fs=await _seed(), clipboard=port)
+    _use_injected_s3_connection(ctx)
+    app = AwsTuiApp(ctx)
+    async with app.run_test(size=(120, 40)) as pilot:
+        try:
+            await pilot.pause()
+            await drain_workers(app)
+            await pilot.pause()
+            assert await _wait_until_entry_rows(app)
+
+            result = app.action_dispatch(action)
+            if result is not None:
+                # A regression makes this await the wedged helper, so the
+                # timeout turns a freeze into a failure instead of a hang.
+                await asyncio.wait_for(result, timeout=10.0)
+
+            # The pump is free again: a later message is still serviced.
+            await asyncio.wait_for(pilot.pause(), timeout=10.0)
+
+            for _ in range(500):
+                if port.entered.is_set():
+                    break
+                await asyncio.sleep(0.01)
+            assert port.entered.is_set(), "precondition: the worker reached the helper"
+            assert port.writes == [], "the handler returned before the write completed"
+        finally:
+            port.release.set()
+        await drain_workers(app)
+        await pilot.pause()
+
+        assert len(port.writes) == 1, "and the deferred write still lands"

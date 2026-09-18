@@ -174,7 +174,9 @@ section; the current tree must not be tagged as v0.8.0.
   clipboard helper (`pbcopy`, `clip`, `wl-copy`, `xclip`, `xsel`) and reports
   what actually happened: copied, the helper failed, or there was no helper and
   only the terminal was written. An unconfirmable OSC-52-only delivery is never
-  called a copy.
+  called a copy. The helper runs in a worker on every path, so a wedged
+  `xclip` or a hung pasteboard server can no longer make the app deaf to
+  keystrokes — `ctrl+q` included — while it times out.
 - **Glue pagination is reachable.** Databases, tables, partitions, jobs, runs,
   and crawlers reported `more available` but no keyboard, palette, or mouse
   path called the view models' load-more methods, so a filtered runs list

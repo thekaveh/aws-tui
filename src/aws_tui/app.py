@@ -2282,10 +2282,16 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
                 error_type=type(exc).__name__,
             )
         # ``pbcopy`` is ~2 ms, but an ``xclip`` with a wedged X server is not,
-        # and the port lets it run to its own timeout. Off the event loop it
-        # costs a thread; on it, it would look exactly like the freeze this
-        # branch exists to remove. anyio, never ``asyncio.to_thread`` -- the
-        # repo runs its blocking work through anyio's limiter.
+        # and the port lets it run to its own timeout. Two offloads stand
+        # between that timeout and a frozen app, and neither substitutes for
+        # the other: ``run_sync`` keeps the blocking call off the event loop,
+        # and every caller reaches this coroutine through :meth:`copy_value`'s
+        # worker, which keeps it off the App's own message pump. Awaiting it
+        # inline from an action handler would leave the loop spinning and the
+        # pump still blocked -- and the pump is where the next keypress,
+        # ``ctrl+q`` included, is dequeued. anyio, never
+        # ``asyncio.to_thread`` -- the repo runs its blocking work through
+        # anyio's limiter.
         result = await anyio.to_thread.run_sync(partial(self._app_ctx.clipboard.write, value))
         stack = self._app_ctx.root_vm.chrome.toast_stack
         slug = label.replace(" ", "-")
@@ -2335,13 +2341,15 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
         )
 
     def copy_value(self, value: str, label: str) -> None:
-        """Put ``value`` on the clipboard from a synchronous caller.
+        """Put ``value`` on the clipboard without blocking the caller.
 
-        The public seam for widgets that hold a value but have no route to
-        the toast stack -- ``Pane`` reaches it by duck typing. The write is
-        deferred into a worker because the port blocks; ``exclusive`` in the
-        ``clipboard`` group means a second copy supersedes a first that is
-        still waiting on a wedged helper, which is what the user meant.
+        The one seam every copy goes through: widgets that hold a value but
+        have no route to the toast stack reach it by duck typing (``Pane``),
+        and the keyboard actions call it rather than awaiting the writer, so
+        no copy path can stall the App's message pump on a wedged helper.
+        ``exclusive`` in the ``clipboard`` group means a second copy
+        supersedes a first that is still waiting, which is what the user
+        meant.
         """
         self._run_lifecycle_worker(
             partial(self._put_on_clipboard, value, label),
@@ -2353,7 +2361,10 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
 
         The pane's view model owns the formatting, so this reads the prepared
         payload rather than reassembling a path from chrome that the border may
-        have truncated for display.
+        have truncated for display. The write itself goes through
+        :meth:`copy_value` rather than being awaited here: this handler runs on
+        the App's message pump, and awaiting the ~2 s port timeout on it would
+        make the app deaf to every later keystroke, ``ctrl+q`` included.
         """
         self.record_action("pane.copy_entry_path")
         pane = self._focused_file_pane()
@@ -2370,15 +2381,20 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
                 toast_id="clipboard-nothing-selected",
             )
             return
-        await self._put_on_clipboard(target, "file path")
+        self.copy_value(target, "file path")
 
     async def action_copy_path(self) -> None:
-        """Copy the focused pane's current location."""
+        """Copy the focused pane's current location.
+
+        Through :meth:`copy_value`, for the same reason as
+        :meth:`action_copy_entry_path`: the port call belongs in a worker, not
+        on the pump that dequeues the next key.
+        """
         self.record_action("pane.copy_path")
         pane = self._focused_file_pane()
         if pane is None:
             return
-        await self._put_on_clipboard(pane.viewmodel.copy_path, "path")
+        self.copy_value(pane.viewmodel.copy_path, "path")
 
     async def action_help(self) -> None:
         """Show the help overlay with the active configurable keymap."""
