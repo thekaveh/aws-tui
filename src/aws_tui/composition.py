@@ -30,6 +30,7 @@ from vmx.services.dispatcher import Dispatcher
 
 from aws_tui.domain.transfer_journal import TransferJournal
 from aws_tui.infra.aws_session import AwsSession
+from aws_tui.infra.clipboard import ClipboardPort, NativeClipboard
 from aws_tui.infra.config_store import ConfigStore
 from aws_tui.infra.connection_resolver import Connection, ConnectionResolver
 from aws_tui.infra.keychain import KeychainBackend, Keyring
@@ -65,6 +66,7 @@ class AppContext:
 
     __slots__ = (
         "aws_session",
+        "clipboard",
         "command_palette_vm",
         "config_store",
         "confirm_vm",
@@ -112,6 +114,7 @@ class AppContext:
         s3_connections_vm: S3ConnectionsVM,
         focus_coordinator: FocusCoordinatorVM | None = None,
         table_clipboard_vm: TableClipboardVM | None = None,
+        clipboard: ClipboardPort | None = None,
         demo: bool = False,
         demo_emrs: dict[str, InMemoryEmr] | None = None,
         unreachable_connections: set[tuple[str, str]] | None = None,
@@ -151,6 +154,11 @@ class AppContext:
         )
         if table_clipboard_vm is None:
             self.table_clipboard_vm.construct()
+        # Same "keep pre-existing harnesses working" default as above, but
+        # this one is a plain infra port, not a VMx disposable: it owns no
+        # resources, so it is deliberately absent from ``close_unstarted``
+        # and from ``AwsTuiApp._aws_tui_shutdown``.
+        self.clipboard: ClipboardPort = clipboard if clipboard is not None else NativeClipboard()
         self.demo = demo
         # Populated lazily in demo mode; each AWS source owns a separate
         # provider so profile switches cannot share clone mutations or data.
