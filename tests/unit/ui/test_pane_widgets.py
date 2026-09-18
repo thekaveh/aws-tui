@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+import re
 from collections.abc import AsyncIterator
 from pathlib import Path
 from typing import Any
 
 import pytest
 from textual.app import App, ComposeResult
+from textual.color import Color
 from textual.containers import VerticalScroll
 from textual.widgets import Static
 from vmx import Message, MessageHub, RxDispatcher
@@ -15,6 +17,7 @@ from vmx import Message, MessageHub, RxDispatcher
 from aws_tui.demo.in_memory_fs import InMemoryFS
 from aws_tui.domain.filesystem import PathRef
 from aws_tui.domain.transfer_journal import TransferJournal
+from aws_tui.infra.theme_store import ThemeStore
 from aws_tui.ui.widgets.dual_pane import DualPane
 from aws_tui.ui.widgets.pane import _BODY_REFRESH_PROPS, EntryRow, Pane
 from aws_tui.vm.file_manager.dual_pane_vm import DualPaneVM, FocusedPane
@@ -1011,6 +1014,131 @@ async def test_one_navigation_renders_the_listing_exactly_once() -> None:
             await pilot.pause()
             assert [state for state, _ in pane.render_log] == ["LOADING", "IDLE"]
             assert len(app.query(EntryRow)) == 5
+    finally:
+        vm.dispose()
+        hub.dispose()
+
+
+@pytest.mark.asyncio
+async def test_every_other_row_carries_the_zebra_class() -> None:
+    """Row ``i`` carries ``-alt`` iff ``i % 2`` — and cursor state never moves it.
+
+    The stripe is an explicit class assigned once, at mount, in
+    ``_render_body``. It deliberately is NOT ``:odd``/``:even``: those
+    pseudo-classes are excluded from Textual's ``RulesMap`` cache
+    (``Stylesheet._EXCLUDE_PSEUDO_CLASSES_FROM_CACHE``) and each match runs
+    an O(N) sibling scan, measured at 0.956 s -> 18.303 s over 3,000 rows —
+    it would hand back the exact quadratic the batched mount removed.
+
+    The second half of this test is the part that rots silently:
+    ``_apply_state_classes`` and ``sync_state`` own ``-selected``,
+    ``-marked`` and ``-dir``, and must never touch ``-alt``. A
+    ``set_classes``-style rewrite there would strip the stripe off whichever
+    row the cursor most recently visited, leaving a listing that de-stripes
+    itself as you arrow through it.
+    """
+    hub: MessageHub[Message] = MessageHub()
+    dispatcher = RxDispatcher.immediate()
+    vm = PaneVM(provider=await _seed(), hub=hub, dispatcher=dispatcher, id_prefix="pane.test")
+    vm.construct()
+    await vm.setup()
+    try:
+        app = _single_pane_app(vm, hub)
+        async with app.run_test(size=(120, 30)) as pilot:
+            await pilot.pause()
+            await pilot.pause()
+            rows = list(app.query(EntryRow))
+            # Named precondition: the listing this asserts over is the real one.
+            assert len(rows) == len(vm.filtered_entries) == 5
+
+            assert [("-alt" in row.classes) for row in rows] == [
+                False,
+                True,
+                False,
+                True,
+                False,
+            ]
+
+            # Walk the cursor across a striped row and back off it.
+            for index in (1, 2, 3):
+                vm.move_cursor_to(index)
+                await pilot.pause()
+                await pilot.pause()
+                assert [("-alt" in row.classes) for row in rows] == [
+                    False,
+                    True,
+                    False,
+                    True,
+                    False,
+                ], f"cursor at {index} disturbed the zebra classes"
+                assert [("-selected" in row.classes) for row in rows] == [
+                    position == index for position in range(5)
+                ]
+    finally:
+        vm.dispose()
+        hub.dispose()
+
+
+@pytest.mark.asyncio
+async def test_cursor_bar_beats_the_stripe_on_a_striped_row() -> None:
+    """A row that is both ``-alt`` and ``-selected`` renders the cursor bar.
+
+    ``Pane .entry-row.-alt`` and ``Pane .entry-row.-selected`` score the
+    identical specificity ``(0, 2, 1)``, so nothing but source order decides
+    the winner, and Textual's tie-break hands it to the rule declared LAST.
+    ``tests/unit/ui/test_themes.py::test_zebra_rule_precedes_the_selected_rule``
+    guards that ordering as text; this guards the consequence live, through a
+    real stylesheet resolution, so the two cannot drift apart if the
+    tie-break rule itself ever changes upstream.
+
+    Carbon is the default theme and the one every snapshot golden is keyed
+    to; the tokens are read out of the theme rather than hard-coded so a
+    palette change retunes the assertion instead of breaking it.
+    """
+    theme_css = ThemeStore().load_builtin("carbon")
+    tokens = {
+        name: value
+        for name, value in re.findall(r"^\s*(\$[\w-]+):\s*(#[0-9a-fA-F]{6});", theme_css, re.M)
+    }
+    bg_alt = Color.parse(tokens["$bg-alt"])
+    bg_sel = Color.parse(tokens["$bg-sel"])
+    assert bg_alt != bg_sel
+
+    hub: MessageHub[Message] = MessageHub()
+    dispatcher = RxDispatcher.immediate()
+    vm = PaneVM(provider=await _seed(), hub=hub, dispatcher=dispatcher, id_prefix="pane.test")
+    vm.construct()
+    await vm.setup()
+    try:
+
+        class _ThemedApp(App[None]):
+            CSS = theme_css
+
+            def compose(self) -> ComposeResult:
+                yield Pane(vm, hub=hub, id="pane")
+
+        app = _ThemedApp()
+        async with app.run_test(size=(120, 30)) as pilot:
+            await pilot.pause()
+            await pilot.pause()
+            rows = list(app.query(EntryRow))
+            assert len(rows) == 5
+
+            # Row 1 is striped; park the cursor on row 3, the other stripe,
+            # so one striped row is selected and one is not.
+            vm.move_cursor_to(3)
+            await pilot.pause()
+            await pilot.pause()
+            assert "-alt" in rows[1].classes
+            assert "-selected" not in rows[1].classes
+            assert "-alt" in rows[3].classes
+            assert "-selected" in rows[3].classes
+
+            # The unselected stripe actually paints — otherwise the assertion
+            # below would pass just as well with no zebra rule at all.
+            assert rows[1].styles.background == bg_alt
+            # And the cursor row is the cursor bar, not a stripe.
+            assert rows[3].styles.background == bg_sel
     finally:
         vm.dispose()
         hub.dispose()
