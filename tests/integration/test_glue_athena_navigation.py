@@ -498,20 +498,24 @@ async def test_glue_copy_updates_typed_clipboard_and_reports_the_native_write_ho
     claim about nothing. The toast now follows the clipboard port, which
     is the only channel that can report a result at all.
     """
-    ctx = build_app_context(
-        config_dir=tmp_path / "config",
-        cache_dir=tmp_path / "cache",
-        demo=True,
-    )
     # Never a real pbcopy/xclip/clip from a test -- the suite runs on
     # Linux, macOS and Windows, and the macOS leg has a working pbcopy
     # that would put the payload on the developer's own clipboard.
+    # Injected at build time rather than assigned onto the built context:
+    # ``ClipboardVM`` is constructed around the port, so a later
+    # ``ctx.clipboard = fake`` would leave the view model holding the real
+    # helper and this test spawning it.
     fake_clipboard = InMemoryClipboard(
         ok=native_ok,
         mechanism="pbcopy",
         error_type=None if native_ok else "CalledProcessError",
     )
-    ctx.clipboard = fake_clipboard
+    ctx = build_app_context(
+        config_dir=tmp_path / "config",
+        cache_dir=tmp_path / "cache",
+        demo=True,
+        clipboard=fake_clipboard,
+    )
     copied: list[str] = []
 
     def copy_to_clipboard(_app: AwsTuiApp, value: str) -> None:

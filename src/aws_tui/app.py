@@ -22,7 +22,6 @@ from functools import partial
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, ClassVar, cast
 
-import anyio
 from reactivex.abc import DisposableBase
 from rich.markup import escape
 from textual import events
@@ -45,7 +44,6 @@ from aws_tui.domain.data_catalog import TableRef
 from aws_tui.domain.filesystem import AuthRequiredError, EntryKind
 from aws_tui.domain.s3_uri import parse_s3_uri
 from aws_tui.infra.aws_session import TokenState
-from aws_tui.infra.clipboard import NO_MECHANISM
 from aws_tui.infra.connection_resolver import Connection, ConnectionNotFound
 from aws_tui.infra.crash_dump import CrashDump
 from aws_tui.infra.redaction import redact_text
@@ -86,6 +84,7 @@ from aws_tui.vm.chrome.crash_vm import CrashChoice, CrashReport, CrashVM
 from aws_tui.vm.chrome.focus_coordinator_vm import FocusSlot
 from aws_tui.vm.chrome.quick_look_vm import QuickLookContent
 from aws_tui.vm.chrome.theme_picker_vm import ThemePickerVM
+from aws_tui.vm.clipboard_vm import ClipboardChannel
 from aws_tui.vm.file_manager.dual_pane_vm import DualPaneVM, FocusedPane
 from aws_tui.vm.file_manager.pane_vm import PaneState
 from aws_tui.vm.glue.iceberg_vm import IcebergView
@@ -2335,14 +2334,19 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
         emits OSC 52, and OSC 52 has no acknowledgement: macOS Terminal.app
         ignores it outright and iTerm2 does unless the user opted in, and
         neither says so. Reporting "Copied" off that write is a guess dressed
-        as a fact, so the toast is driven by :attr:`AppContext.clipboard` --
-        the port that spawns the platform helper and returns whether the
-        write landed -- and by nothing else.
+        as a fact, so the report is driven by
+        :class:`~aws_tui.vm.clipboard_vm.ClipboardVM` -- which owns the port
+        that spawns the platform helper and returns whether the write landed
+        -- and by nothing else.
 
-        Three outcomes, each honest: the helper wrote it; a helper existed
-        and failed (worth a toast and a log line); or there was no helper at
-        all, in which case the terminal is the only channel left and the
-        toast says exactly that instead of claiming success.
+        The split is deliberate. The OSC 52 leg stays here because it is
+        Textual's own ``App.copy_to_clipboard`` and ``vm/`` may not import
+        textual; the port, the thread offload and the four-way classification
+        are the view model's, so this method never sees a
+        :class:`~aws_tui.infra.clipboard.ClipboardResult` or compares a
+        mechanism string. What is left is the mapping from an outcome to a
+        toast and a log line, which is where every other multi-outcome report
+        in this app already lives -- no view model in this repo raises a toast.
         """
         # The OSC 52 write stays guarded. Textual base64s
         # ``text.encode("utf-8")``, and a POSIX name that is not valid UTF-8
@@ -2351,30 +2355,29 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
         # and an escape would both skip the native write below and, inside a
         # worker, take the app down with it. Log the exception's class name
         # and never the payload: a copied path may be a credential.
-        osc52_written = True
+        terminal_written = True
         try:
             self.copy_to_clipboard(value)
         except Exception as exc:
-            osc52_written = False
+            terminal_written = False
             self._app_ctx.log_sink.warning(
                 "clipboard.osc52_write_failed",
                 error_type=type(exc).__name__,
             )
-        # ``pbcopy`` is ~2 ms, but an ``xclip`` with a wedged X server is not,
-        # and the port lets it run to its own timeout. Two offloads stand
-        # between that timeout and a frozen app, and neither substitutes for
-        # the other: ``run_sync`` keeps the blocking call off the event loop,
-        # and every caller reaches this coroutine through :meth:`copy_value`'s
-        # worker, which keeps it off the App's own message pump. Awaiting it
-        # inline from an action handler would leave the loop spinning and the
-        # pump still blocked -- and the pump is where the next keypress,
-        # ``ctrl+q`` included, is dequeued. anyio, never
-        # ``asyncio.to_thread`` -- the repo runs its blocking work through
-        # anyio's limiter.
-        result = await anyio.to_thread.run_sync(partial(self._app_ctx.clipboard.write, value))
+        # Two offloads stand between a wedged ``xclip`` and a frozen app, and
+        # neither substitutes for the other: the VM's ``run_sync`` keeps the
+        # blocking call off the event loop, and every caller reaches this
+        # coroutine through :meth:`copy_value`'s worker, which keeps it off
+        # the App's own message pump. Awaiting it inline from an action
+        # handler would leave the loop spinning and the pump still blocked --
+        # and the pump is where the next keypress, ``ctrl+q`` included, is
+        # dequeued.
+        write = await self._app_ctx.clipboard_vm.write_async(
+            value, terminal_written=terminal_written
+        )
         stack = self._app_ctx.root_vm.chrome.toast_stack
         slug = label.replace(" ", "-")
-        if result.ok:
+        if write.channel is ClipboardChannel.NATIVE:
             notifications.success(
                 stack,
                 subject="Source",
@@ -2382,24 +2385,24 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
                 toast_id=f"clipboard-{slug}",
             )
             return
-        if result.mechanism != NO_MECHANISM:
+        if write.channel is ClipboardChannel.HELPER_FAILED:
             # A helper was there and refused the payload. That is a fault
             # worth a durable record; the toast carries which helper failed
             # so the user can reproduce it from a shell.
             self._app_ctx.log_sink.warning(
                 "clipboard.native_write_failed",
-                mechanism=result.mechanism,
-                error_type=result.error_type,
+                mechanism=write.mechanism,
+                error_type=write.error_type,
             )
             notifications.advise(
                 stack,
                 subject="Source",
                 message=f"could not copy {label} to the system clipboard",
-                action=f"{result.mechanism} failed; the terminal was sent OSC 52 instead",
+                action=f"{write.mechanism} failed; the terminal was sent OSC 52 instead",
                 toast_id=f"clipboard-failed-{slug}",
             )
             return
-        if osc52_written:
+        if write.channel is ClipboardChannel.TERMINAL_ONLY:
             # No helper is not a fault -- ssh, tmux, a headless CI shell --
             # so no log line. The toast names the one channel that was used
             # and refuses to call an unacknowledged write a success.
@@ -5359,6 +5362,7 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
             ("confirm_vm.dispose", ctx.confirm_vm),
             ("transfers_vm.dispose", ctx.transfers_vm),
             ("table_clipboard_vm.dispose", ctx.table_clipboard_vm),
+            ("clipboard_vm.dispose", ctx.clipboard_vm),
             ("root_vm.dispose", ctx.root_vm),
             ("focus_coordinator.dispose", ctx.focus_coordinator),
         ):

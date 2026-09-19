@@ -7,11 +7,14 @@ unconditionally. Textual's ``copy_to_clipboard`` writes OSC 52 and returns
 does, iTerm2 only if the user opted in -- so the suppressed handler was
 unreachable and the toast was a guess presented as a fact.
 
-Three outcomes now, each of which a user can act on: the platform helper
+Four outcomes now, each of which a user can act on: the platform helper
 took the text; a helper was there and failed; there was no helper, so only
-the terminal was written and that is said plainly. The fourth assertion
-this file makes is the one that matters most: an OSC-52-only delivery is
-never reported as "copied".
+the terminal was written and that is said plainly; or there was no helper
+AND the terminal refused, so nothing was copied at all. The decision of
+which one happened belongs to ``ClipboardVM`` (pinned in
+``tests/unit/vm/test_clipboard_vm.py``); what this file pins is that each
+one reaches the user as a distinct, honest toast. The assertion that
+matters most: an OSC-52-only delivery is never reported as "copied".
 """
 
 from __future__ import annotations
@@ -77,37 +80,75 @@ async def _copy_current_path(app: AwsTuiApp) -> None:
     await drain_workers(app)
 
 
+def _refuse_osc52(_app: AwsTuiApp, _value: str) -> None:
+    """Stand in for a terminal write that cannot be encoded.
+
+    ``App.copy_to_clipboard`` base64s ``text.encode("utf-8")``, and a POSIX
+    name decoded with ``surrogateescape`` carries lone surrogates, so the
+    real call genuinely raises on such a path. Raising here is how the
+    fourth outcome -- no helper AND no terminal -- is reachable from a test
+    at all.
+    """
+    raise RuntimeError("OSC 52 unavailable")
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("ok", "mechanism", "error_type", "toast_id", "level"),
+    ("ok", "mechanism", "error_type", "osc52_raises", "toast_id", "level"),
     [
         pytest.param(
-            True, "pbcopy", None, "clipboard-path", ToastLevel.SUCCESS, id="native-helper-took-it"
+            True,
+            "pbcopy",
+            None,
+            False,
+            "clipboard-path",
+            ToastLevel.SUCCESS,
+            id="native-helper-took-it",
         ),
         pytest.param(
             False,
             "pbcopy",
             "CalledProcessError",
+            False,
             "clipboard-failed-path",
             ToastLevel.WARNING,
             id="native-helper-failed",
         ),
         pytest.param(
-            False, "none", None, "clipboard-osc52-path", ToastLevel.WARNING, id="no-native-helper"
+            False,
+            "none",
+            None,
+            False,
+            "clipboard-osc52-path",
+            ToastLevel.WARNING,
+            id="no-native-helper",
+        ),
+        pytest.param(
+            False,
+            "none",
+            None,
+            True,
+            "clipboard-unavailable-path",
+            ToastLevel.WARNING,
+            id="no-native-helper-and-the-terminal-refused",
         ),
     ],
 )
 async def test_copy_path_reports_each_outcome_distinctly(
     app_context_factory: AppContextBuilder,
+    monkeypatch: pytest.MonkeyPatch,
     ok: bool,
     mechanism: str,
     error_type: str | None,
+    osc52_raises: bool,
     toast_id: str,
     level: ToastLevel,
 ) -> None:
     # Built inside the test, not in the parameter list: a port built at
     # collection time is one shared mutable object for the whole session.
     port = InMemoryClipboard(ok=ok, mechanism=mechanism, error_type=error_type)
+    if osc52_raises:
+        monkeypatch.setattr(AwsTuiApp, "copy_to_clipboard", _refuse_osc52)
     ctx = app_context_factory(fs=await _seed(), clipboard=port)
     _use_injected_s3_connection(ctx)
     app = AwsTuiApp(ctx)
@@ -199,6 +240,53 @@ async def test_native_write_failure_is_logged_without_the_payload(
             )
         ]
         assert port.writes, "precondition: the port was actually asked to write"
+
+
+@pytest.mark.asyncio
+async def test_a_refused_terminal_write_is_logged_without_the_payload(
+    app_context_factory: AppContextBuilder,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The OSC 52 leg can fail too, and the app must survive and say so.
+
+    ``copy_to_clipboard`` raising used to be covered in
+    ``test_glue_athena_navigation.py``; that axis was replaced by a
+    native-helper-failure axis in the same change that ADDED the
+    ``try``/``except`` around the terminal write and the fourth toast it
+    decides, leaving both uncovered. This is that coverage, in the file
+    that owns clipboard reporting.
+
+    The record carries the exception's class name and nothing else, the
+    same payload contract ``clipboard.native_write_failed`` keeps: a copied
+    path is on occasion a credential.
+    """
+    port = InMemoryClipboard(ok=False, mechanism="none")
+    ctx = app_context_factory(fs=await _seed(), clipboard=port)
+    _use_injected_s3_connection(ctx)
+    warnings: list[tuple[str, dict[str, object]]] = []
+    original = ctx.log_sink.warning
+
+    def _record(event: str, **fields: object) -> None:
+        warnings.append((event, dict(fields)))
+        original(event, **fields)
+
+    monkeypatch.setattr(ctx.log_sink, "warning", _record)
+    monkeypatch.setattr(AwsTuiApp, "copy_to_clipboard", _refuse_osc52)
+    app = AwsTuiApp(ctx)
+    async with app.run_test(size=(120, 40)) as pilot:
+        await pilot.pause()
+        await drain_workers(app)
+        await pilot.pause()
+        assert await _wait_until_entry_rows(app)
+
+        await _copy_current_path(app)
+        await pilot.pause()
+
+        logged = [entry for entry in warnings if entry[0] == "clipboard.osc52_write_failed"]
+        assert logged == [("clipboard.osc52_write_failed", {"error_type": "RuntimeError"})]
+        assert app._crash_report is None, (  # type: ignore[attr-defined]
+            f"a refused terminal write must not crash the app: {app._crash_report}"  # type: ignore[attr-defined]
+        )
 
 
 @pytest.mark.asyncio
