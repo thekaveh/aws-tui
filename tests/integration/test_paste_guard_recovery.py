@@ -20,7 +20,6 @@ never touches the parser, which is exactly the layer that breaks.
 from __future__ import annotations
 
 import asyncio
-import time
 from collections.abc import Iterable
 
 import pytest
@@ -44,6 +43,31 @@ _SPLIT_GAP_SECONDS = constants.ESCAPE_DELAY + 0.05
 _TEST_IDLE_TIMEOUT = 0.4
 _TEST_ABANDON_GRACE = 0.05
 _SETTLE_TIMEOUT_SECONDS = 30.0
+
+
+class _ManualClock:
+    """A clock the test advances by hand.
+
+    The guard's bounds are wall-clock by nature, and the first Windows CI run
+    proved that testing them against a real clock is a race: between the wedge
+    and the "still deaf" assertion, a slow runner can drift past
+    ``_TEST_IDLE_TIMEOUT`` on its own, the guard recovers early and the key
+    arrives before the test expects it. ``GuardedXTermParser`` takes its clock
+    as a parameter precisely so this can be driven instead of slept through.
+
+    The ``asyncio.sleep`` in ``_wedge`` stays real: that one has to outlast
+    ``constants.ESCAPE_DELAY`` inside UPSTREAM's parse generator, which reads
+    its own clock and is not ours to inject.
+    """
+
+    def __init__(self) -> None:
+        self._now = 0.0
+
+    def __call__(self) -> float:
+        return self._now
+
+    def advance(self, seconds: float) -> None:
+        self._now += seconds
 
 
 async def _seed() -> InMemoryFS:
@@ -99,23 +123,32 @@ async def test_app_answers_a_key_after_the_guard_recovers(app_context_factory) -
         await pilot.pause()
         driver = app._driver
         assert driver is not None
+        clock = _ManualClock()
         parser = GuardedXTermParser(
             guard=BracketedPasteGuard(
                 idle_timeout=_TEST_IDLE_TIMEOUT,
                 abandon_grace=_TEST_ABANDON_GRACE,
-            )
+            ),
+            clock=clock,
         )
 
         await _wedge(parser, driver, pilot)
-        # Still deaf at this point -- the guard has not fired yet.
+        # Still deaf at this point: the clock has not moved, so the guard
+        # cannot have fired no matter how slow the runner is.
         _pump(driver, parser.feed(_HELP_BYTE))
         await pilot.pause()
         assert not isinstance(app.screen, HelpModal)
+        assert parser.guard.recoveries == 0
 
-        deadline = time.monotonic() + _SETTLE_TIMEOUT_SECONDS
-        while time.monotonic() < deadline and not parser.guard.recoveries:
+        # Now step the clock past both bounds. Two ticks are needed: the first
+        # marks the paste abandoned, the second recovers it once the grace has
+        # also elapsed.
+        for _ in range(5):
+            clock.advance(_TEST_IDLE_TIMEOUT + _TEST_ABANDON_GRACE)
             _pump(driver, parser.tick())
-            await pilot.pause(0.02)
+            await pilot.pause()
+            if parser.guard.recoveries:
+                break
         assert parser.guard.recoveries == 1, "the guard never recovered the parser"
 
         # The byte the user types after the recovery reaches the app.
