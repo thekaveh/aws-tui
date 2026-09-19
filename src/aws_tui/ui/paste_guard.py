@@ -125,6 +125,8 @@ from textual._xterm_parser import (
 from textual.driver import Driver
 from textual.message import Message
 
+from aws_tui.ui.terminal_protocol import CellMouseXTermParser
+
 __all__ = [
     "DEFAULT_ABANDON_GRACE",
     "DEFAULT_IDLE_TIMEOUT",
@@ -278,12 +280,18 @@ class BracketedPasteGuard:
         self._end_seen = False
 
 
-class GuardedXTermParser(XTermParser):
+class GuardedXTermParser(CellMouseXTermParser):
     """``XTermParser`` that cannot stay deaf inside an unclosed paste.
 
     Overrides only ``feed`` and ``tick``; the 190-line ``parse`` generator is
     untouched, so the guard adds no second implementation of the protocol to
     keep in step with upstream.
+
+    It derives from :class:`~aws_tui.ui.terminal_protocol.CellMouseXTermParser`
+    rather than from ``XTermParser`` directly because there is only one seam
+    for swapping the drivers' parser in, and both guards need it. That base
+    contributes a single ``parse_mouse_code`` override; see its docstring for
+    the unrelated defect it closes.
     """
 
     def __init__(

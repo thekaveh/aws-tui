@@ -207,11 +207,20 @@ section; the current tree must not be tagged as v0.8.0.
   painting the old geometry with no way back. Keys still answered; the frame
   was simply stale, which reads as a freeze. aws-tui now starts with the
   in-band protocol off and `SIGWINCH` back in charge. The switch is
-  Textual's own `TEXTUAL_SMOOTH_SCROLL`, which gates nothing but that one
-  negotiation in 8.2.8 despite its name, so no rendering behaviour changes;
-  exporting `TEXTUAL_SMOOTH_SCROLL=1` restores Textual's default. This is a
-  no-op on Terminal.app and iTerm2, which never negotiate mode 2048, and on
-  Windows, whose driver has no in-band resize path. See
+  Textual's own `TEXTUAL_SMOOTH_SCROLL`, which despite its name gates only
+  that one negotiation; exporting `TEXTUAL_SMOOTH_SCROLL=1` restores
+  Textual's default. Layout, colours and pane contents are untouched, but
+  two pointer niceties ride on the same negotiation and are given up with
+  it: a scrollbar drag now animates towards the pointer instead of tracking
+  it, and mouse coordinates stay whole cells rather than sub-cell pixels.
+  Both
+  are already how Textual behaves on Terminal.app and iTerm2, which never
+  negotiate mode 2048, and on Windows, whose driver has no in-band resize
+  path; only Ghostty, WezTerm, kitty and their kin are affected either way.
+  A related trap is closed at the same time: a terminal left with mode 2048
+  set by some earlier app used to put the input parser into pixel-coordinate
+  mode that was never actually negotiated, which collapsed every click
+  towards the top-left corner after the first resize. See
   [Platforms](docs/platforms.md#31-window-resize).
 - **Switching away no longer leaves the pointer's leftovers on screen.** When
   the terminal loses focus — changing macOS Spaces, switching tabs, or

@@ -1,12 +1,18 @@
 """The in-band-resize default, and the upstream facts it is built on.
 
-``test_stock_parser_negotiates_in_band_resize_while_smooth_scroll_is_set`` is
-the control: it exercises the Textual 8.2.8 branch this module exists to
-switch off, so the default below is measured against reproduced upstream
-behaviour rather than against an assumption. The three source tripwires at
-the bottom fail loudly if a Textual bump moves the branch, renames the
-attribute, or starts reading it by value — any of which would silently turn
-:func:`prefer_sigwinch_resize` into a no-op.
+Two control tests exercise the stock Textual 8.2.8 parser — one for the
+negotiation this module switches off, one for the stale-mode coordinate
+collapse :class:`CellMouseXTermParser` closes — so both behaviours are
+measured against reproduced upstream code rather than against an assumption.
+
+The source tripwires at the bottom fail loudly if a Textual bump moves the
+branch, renames the attribute, or starts reading it by value (any of which
+would silently turn :func:`prefer_sigwinch_resize` into a no-op), and if it
+moves either of the two *indirect* consumers of the gated branch, which is
+what the default actually costs. The use-site count is deliberately not
+presented as proof that the cost is nil: ``SMOOTH_SCROLL`` is already wired
+to scroll behaviour and to mouse granularity one hop away, and a literal-name
+count cannot see either.
 """
 
 from __future__ import annotations
@@ -18,16 +24,33 @@ from pathlib import Path
 
 import pytest
 import textual
-from textual import constants
+from textual import app as textual_app
+from textual import constants, events, scrollbar
 from textual._xterm_parser import XTermParser
 from textual.drivers import linux_driver
 from textual.messages import InBandWindowResize
 
-from aws_tui.ui.terminal_protocol import SMOOTH_SCROLL_ENV, prefer_sigwinch_resize
+from aws_tui.ui.terminal_protocol import (
+    SMOOTH_SCROLL_ENV,
+    CellMouseXTermParser,
+    prefer_sigwinch_resize,
+)
 
 # DECRPM reply for "mode 2048 is supported but currently reset" — what a
 # Ghostty / WezTerm / kitty class terminal answers to ``ESC [ ? 2048 $ p``.
 _MODE_2048_SUPPORTED_RESET = "\x1b[?2048;2$y"
+
+# DECRPM reply for "mode 2048 is supported and already SET" — what a terminal
+# answers when some earlier Textual app was killed before it could reset the
+# mode. The terminal then keeps volunteering in-band reports unasked.
+_MODE_2048_ALREADY_SET = "\x1b[?2048;1$y"
+
+# An unsolicited in-band window-resize report: 40 rows x 200 columns, in a
+# window 680 x 1600 pixels. Ratio 8 px per cell each way.
+_IN_BAND_REPORT = "\x1b[48;40;200;680;1600t"
+
+# SGR mouse press at column 101, row 21, which is cell (100, 20) zero-based.
+_SGR_PRESS_AT_CELL_100_20 = "\x1b[<0;101;21M"
 
 _SENTINEL_UNTOUCHED = "sentinel: prefer_sigwinch_resize must not write this"
 
@@ -151,6 +174,91 @@ def test_the_default_stops_the_parser_accepting_the_2048_report(
     assert [token for token in tokens if isinstance(token, InBandWindowResize)] == []
 
 
+def _only_mouse_event(tokens: list[object]) -> events.MouseEvent:
+    mouse = [token for token in tokens if isinstance(token, events.MouseEvent)]
+    assert len(mouse) == 1, tokens
+    return mouse[0]
+
+
+def _feed_a_stale_in_band_session(parser: XTermParser) -> events.MouseEvent:
+    """Drive the sequence a terminal with mode 2048 already set produces.
+
+    The DECRPM reply says "supported and enabled", then the terminal
+    volunteers a resize report of its own accord, then the user clicks.
+    """
+    assert _parse(parser, _MODE_2048_ALREADY_SET) == [], "the reply must be refused"
+    _parse(parser, _IN_BAND_REPORT)
+    return _only_mouse_event(_parse(parser, _SGR_PRESS_AT_CELL_100_20))
+
+
+def test_stock_parser_divides_cell_coordinates_after_a_stale_in_band_report(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Control: the second upstream defect, reproduced against stock Textual.
+
+    Refusing the DECRPM reply suppresses only the *acceptance* branch, and
+    with it ``LinuxDriver._enable_mouse_pixels`` and its ``\x1b[?1016h``. The
+    handler for an in-band *report* (``_xterm_parser.py:271-283``) is gated on
+    nothing, so it sets ``mouse_pixels`` anyway and the parser starts dividing
+    coordinates the terminal is still sending in cells.
+    """
+    monkeypatch.setattr("textual._xterm_parser.IS_ITERM", False)
+    monkeypatch.delenv(SMOOTH_SCROLL_ENV, raising=False)
+    monkeypatch.setattr(constants, "SMOOTH_SCROLL", True)
+    prefer_sigwinch_resize()
+
+    parser = XTermParser()
+    event = _feed_a_stale_in_band_session(parser)
+
+    assert parser.mouse_pixels is True, "set behind our back by the report handler"
+    # 8 px per cell each way: the click collapses towards the top-left corner.
+    assert (event.x, event.y) == (12, 1)
+
+
+def test_the_guarded_parser_reads_a_stale_in_band_session_in_cells(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The fix: no pixel conversion, because 1016 was never negotiated."""
+    monkeypatch.setattr("textual._xterm_parser.IS_ITERM", False)
+    monkeypatch.delenv(SMOOTH_SCROLL_ENV, raising=False)
+    monkeypatch.setattr(constants, "SMOOTH_SCROLL", True)
+    prefer_sigwinch_resize()
+
+    event = _feed_a_stale_in_band_session(CellMouseXTermParser())
+
+    assert (event.x, event.y) == (100, 20)
+
+
+def test_the_guard_leaves_the_smooth_scroll_opt_in_alone(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``TEXTUAL_SMOOTH_SCROLL=1`` still gets sub-cell coordinates.
+
+    There the DECRPM reply *is* accepted, so the driver really does send
+    ``\x1b[?1016h`` and the terminal really is reporting pixels.
+    """
+    monkeypatch.setattr("textual._xterm_parser.IS_ITERM", False)
+    monkeypatch.setenv(SMOOTH_SCROLL_ENV, "1")
+    monkeypatch.setattr(constants, "SMOOTH_SCROLL", True)
+
+    assert prefer_sigwinch_resize() is False
+
+    parser = CellMouseXTermParser()
+    accepted = _parse(parser, _MODE_2048_ALREADY_SET)
+    assert [token for token in accepted if isinstance(token, InBandWindowResize)] != []
+    _parse(parser, _IN_BAND_REPORT)
+    event = _only_mouse_event(_parse(parser, _SGR_PRESS_AT_CELL_100_20))
+
+    assert (event.x, event.y) == (12, 1)
+
+
+def test_the_parser_the_drivers_actually_build_carries_the_guard() -> None:
+    """The override is worthless unless it rides on the installed parser."""
+    from aws_tui.ui.paste_guard import GuardedXTermParser
+
+    assert issubclass(GuardedXTermParser, CellMouseXTermParser)
+
+
 def test_the_sigwinch_handler_is_still_gated_on_the_in_band_flag() -> None:
     """Tripwire: this gate is the reason the default is worth having."""
     source = inspect.getsource(linux_driver)
@@ -171,11 +279,18 @@ def test_textual_still_reads_smooth_scroll_as_a_live_module_attribute() -> None:
     assert "from textual import constants" in source or "from . import constants" in source
 
 
-def test_smooth_scroll_gates_nothing_but_the_in_band_branch() -> None:
-    """Tripwire: it is why clearing the flag costs no rendering quality.
+def test_smooth_scroll_has_exactly_one_use_site_in_the_installed_package() -> None:
+    """Tripwire: a use-site count, and nothing more than that.
 
-    If a future Textual wires ``SMOOTH_SCROLL`` to real scroll rendering,
-    this fails and the trade-off has to be re-argued instead of inherited.
+    It pins that the flag is still read in exactly one place — the
+    ``mode_id == "2048"`` guard — so :func:`prefer_sigwinch_resize` still
+    switches off exactly what this module says it does, and a future Textual
+    that reads the flag somewhere new fails here.
+
+    It is **not** evidence that clearing the flag is free. The branch it gates
+    already reaches scroll behaviour and mouse granularity one hop further on,
+    through names this count cannot see; those are pinned by
+    :func:`test_the_gated_branch_still_drives_smooth_scrolling_and_pixel_mouse`.
     """
     package = Path(next(iter(textual.__path__)))
     hits = {
@@ -190,3 +305,44 @@ def test_smooth_scroll_gates_nothing_but_the_in_band_branch() -> None:
     # line, plus the variable again in its docstring. _xterm_parser.py: the
     # single ``mode_id == "2048"`` guard, and nothing else in the package.
     assert hits == {"constants.py": 3, "_xterm_parser.py": 1}
+
+
+def test_the_gated_branch_still_drives_smooth_scrolling_and_pixel_mouse() -> None:
+    """Tripwire: the two things refusing mode 2048 actually costs.
+
+    Neither is reachable through the literal name ``SMOOTH_SCROLL``, so the
+    use-site count above is blind to both. If a Textual bump moves either, the
+    documented trade-off has to be re-measured instead of inherited.
+    """
+    app_source = inspect.getsource(textual_app)
+    scrollbar_source = inspect.getsource(scrollbar)
+    driver_source = inspect.getsource(linux_driver)
+
+    # Written only from the message the refused branch would have produced ...
+    assert app_source.count("self.supports_smooth_scrolling = message.enabled") == 1
+    # ... and read only to decide whether a scrollbar drag animates or tracks.
+    assert "animate=not self.app.supports_smooth_scrolling" in scrollbar_source
+
+    # Pixel-precision mouse reporting is requested from that branch and
+    # nowhere else, so refusing the branch keeps coordinates cell-granular.
+    assert driver_source.count("self._enable_mouse_pixels()") == 1
+    assert (
+        "                    super().process_message(InBandWindowResize(True, True))\n"
+        "                self._enable_mouse_pixels()\n" in driver_source
+    )
+    assert 'self.write("\\x1b[?1016h")' in driver_source
+
+
+def test_the_in_band_report_handler_still_sets_mouse_pixels_ungated() -> None:
+    """Tripwire: the reason :class:`CellMouseXTermParser` has to exist.
+
+    Three occurrences and no more: the ``__init__`` default, the single
+    ungated write in the in-band *report* handler, and the single read in
+    ``parse_mouse_code``. The one read is what makes a one-line override
+    total; if upstream gates the write on ``SMOOTH_SCROLL``, the override
+    becomes redundant and should go.
+    """
+    source = inspect.getsource(sys.modules["textual._xterm_parser"])
+
+    assert source.count("self.mouse_pixels") == 3
+    assert source.count("self.mouse_pixels = True") == 1
