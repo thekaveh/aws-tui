@@ -36,6 +36,7 @@ from textual.binding import BindingsMap, BindingType
 from textual.containers import Container, Horizontal
 from textual.css.errors import StylesheetError
 from textual.css.tokenizer import TokenError
+from textual.driver import Driver
 from textual.widget import Widget
 from textual.widgets import Input, Static, TextArea
 
@@ -52,6 +53,7 @@ from aws_tui.infra.theme_store import ThemeNotFound, ThemeStore
 from aws_tui.ui import notifications
 from aws_tui.ui.actions import ActionRegistry
 from aws_tui.ui.bindings import BindingResolver
+from aws_tui.ui.paste_guard import guarded_driver_class
 from aws_tui.ui.widgets._worker import DeferredWorkerMixin
 from aws_tui.ui.widgets.athena.page import AthenaPage
 from aws_tui.ui.widgets.brand_banner import BrandBanner
@@ -840,6 +842,20 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
     @property
     def app_ctx(self) -> AppContext:
         return self._app_ctx
+
+    def get_driver_class(self) -> type[Driver]:
+        """Wrap the platform driver in the bracketed-paste guard.
+
+        Textual 8.2.8's ``XTermParser`` can be stranded permanently inside a
+        bracketed paste when the closing ``\\x1b[201~`` is split by more than
+        ``ESCAPE_DELAY`` — the app keeps repainting while every key, ``q`` and
+        ``Ctrl+C`` included, is swallowed into the paste buffer. See
+        ``ui/paste_guard.py`` for the mechanism. Wrapping whatever driver the
+        platform (or ``TEXTUAL_DRIVER``) chose keeps the guard on every real
+        terminal path without refusing bracketed paste, which the Athena
+        editor and the EMR log filter genuinely need.
+        """
+        return guarded_driver_class(super().get_driver_class())
 
     def compose(self) -> ComposeResult:
         # Profile/region/auth identity lives in the left pane's border:

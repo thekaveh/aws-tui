@@ -174,6 +174,25 @@ section; the current tree must not be tagged as v0.8.0.
 
 ### Fixed
 
+- **A half-delivered paste can no longer make the app permanently deaf
+  (upstream Textual defect).** Textual 8.2.8's terminal parser
+  (`textual/_xterm_parser.py`, `XTermParser.parse`) enters bracketed-paste
+  mode on `\x1b[200~` and leaves it only on an exact `\x1b[201~`, but its
+  escape-sequence loop abandons a partial sequence after `ESCAPE_DELAY`
+  (0.1 s) without putting the bytes it consumed back. If the terminal
+  delivers the closing marker split — the `\x1b` in one read and `[201~` in
+  the next more than 0.1 s later, which is ordinary over a laggy ssh or tmux
+  link — the parser stays in paste mode forever: the screen keeps repainting
+  while every keystroke, `q` and `Ctrl+C` included, is swallowed into the
+  paste buffer, and only killing the process from another terminal ends the
+  session. aws-tui now wraps its terminal driver in a guard that bounds how
+  long the parser may stay in paste mode and recovers by closing the paste
+  and delivering what was buffered, instead of staying deaf. The bound is on
+  input *silence*, not on how long a paste takes, so a slow paste of a large
+  file is never truncated; bracketed paste itself is still requested, because
+  pasting a multi-line query into the Athena editor or the EMR log filter is
+  a real feature.
+
 - **Switching away no longer leaves the pointer's leftovers on screen.** When
   the terminal loses focus — changing macOS Spaces, switching tabs, or
   clicking into another window — a tooltip that was open stayed painted over
