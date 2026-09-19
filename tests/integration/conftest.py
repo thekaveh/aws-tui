@@ -28,6 +28,7 @@ from aws_tui.demo.in_memory_fs import InMemoryFS
 from aws_tui.domain.filesystem import FileSystemProvider
 from aws_tui.domain.transfer_journal import TransferJournal
 from aws_tui.infra.aws_session import AwsSession
+from aws_tui.infra.clipboard import ClipboardPort, InMemoryClipboard
 from aws_tui.infra.config_store import ConfigStore
 from aws_tui.infra.connection_resolver import Connection, ConnectionResolver
 from aws_tui.infra.keymap_store import KeymapStore
@@ -159,6 +160,9 @@ def app_context_factory() -> Iterator[AppContextBuilder]:
             one.
         initial_theme: theme name set on the returned context.
             Defaults to ``"carbon"``.
+        clipboard: clipboard port injected into the context. Defaults to
+            a fresh :class:`InMemoryClipboard` that reports success, so
+            no test can ever spawn a real ``pbcopy``/``xclip``/``clip``.
     """
     # Track every ``tempfile.mkdtemp`` the builder produces so the
     # fixture's teardown can purge them. Previously the builder
@@ -171,6 +175,7 @@ def app_context_factory() -> Iterator[AppContextBuilder]:
         *,
         fs: FileSystemProvider | None = None,
         initial_theme: str = "carbon",
+        clipboard: ClipboardPort | None = None,
     ) -> AppContext:
         tmp = Path(tempfile.mkdtemp(prefix="aws-tui-ictx-"))
         created_tmpdirs.append(tmp)
@@ -246,6 +251,12 @@ def app_context_factory() -> Iterator[AppContextBuilder]:
             dispatcher=dispatcher,
             initial_theme=initial_theme,
             s3_connections_vm=s3_connections_vm,
+            # Never the default NativeClipboard here. It spawns the real
+            # platform helper, so an integration test that copies anything
+            # would put the payload on the developer's (or the macOS CI
+            # runner's) own clipboard, and on a Linux runner with xclip
+            # installed but no DISPLAY it would block until the timeout.
+            clipboard=clipboard if clipboard is not None else InMemoryClipboard(),
         )
 
     try:

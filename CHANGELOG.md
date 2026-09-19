@@ -33,7 +33,7 @@ section; the current tree must not be tagged as v0.8.0.
   workgroup/catalog/database choices with named commands and complete
   forward/reverse focus rings. Glue can copy a selected table's canonical,
   fully quoted identifier to an authoritative VMx-backed in-app clipboard
-  (`y`) and best-effort OS clipboard, while Athena can insert that value at
+  (`y`) and to the OS clipboard, while Athena can insert that value at
   the editor cursor (`i`) or replace a selection. Cross-source insertion is
   refused without mutating the editor or switching profiles; the existing
   source-preserving **Query table in Athena** workflow remains available.
@@ -150,6 +150,15 @@ section; the current tree must not be tagged as v0.8.0.
   fallback, and `AWS_CONFIG_FILE` / `AWS_SHARED_CREDENTIALS_FILE` override
   expanded shared-file paths.
 
+- **The path copies are discoverable without the border glyph.** The pane's
+  top border no longer ends in a clipboard emoji. It cost two cells of the
+  one piece of chrome that truncates to the pane width, and it advertised a
+  mouse-only affordance while saying nothing about `p` / `P`, which work
+  with no pointer at all. The border is still a click target, the hover
+  tooltip now leads with the key and still names the click, and
+  **Copy cursor entry path** / **Copy pane path** are command-palette
+  entries on the file-manager page.
+
 - **Interaction-surface parity.** Restored configured keymap overlays at
   startup, filtered contextual palette commands by active service, clarified
   CSS ownership for shared selectors and tabs, and aligned the canonical
@@ -165,6 +174,82 @@ section; the current tree must not be tagged as v0.8.0.
 
 ### Fixed
 
+- **A half-delivered paste can no longer make the app permanently deaf
+  (upstream Textual defect).** Textual 8.2.8's terminal parser
+  (`textual/_xterm_parser.py`, `XTermParser.parse`) enters bracketed-paste
+  mode on `\x1b[200~` and leaves it only on an exact `\x1b[201~`, but its
+  escape-sequence loop abandons a partial sequence after `ESCAPE_DELAY`
+  (0.1 s) without putting the bytes it consumed back. If the terminal
+  delivers the closing marker split — the `\x1b` in one read and `[201~` in
+  the next more than 0.1 s later, which is ordinary over a laggy ssh or tmux
+  link — the parser stays in paste mode forever: the screen keeps repainting
+  while every keystroke, `q` and `Ctrl+C` included, is swallowed into the
+  paste buffer, and only killing the process from another terminal ends the
+  session. aws-tui now wraps its terminal driver in a guard that bounds how
+  long the parser may stay in paste mode and recovers by closing the paste
+  and delivering what was buffered, instead of staying deaf. The bound is on
+  input *silence*, not on how long a paste takes, so a slow paste of a large
+  file is never truncated, and the second bound — the one that covers a user
+  mashing keys at a frozen app, who is never silent — fires only once the
+  closing marker has actually been seen in the byte stream, so a paste whose
+  own content contains an escape character is delivered whole rather than
+  arriving as keystrokes. Bracketed paste itself is still requested, because
+  pasting a multi-line query into the Athena editor or the EMR log filter is
+  a real feature.
+
+- **A resize that happened on another Space is no longer painted at the old
+  size.** A terminal can report a size change two ways: the kernel's
+  `SIGWINCH` signal, or the newer in-band window-resize protocol (DEC
+  private mode 2048). Textual 8.2.8 stops listening to `SIGWINCH` the moment
+  a terminal accepts mode 2048, so the in-band report becomes the only
+  channel — and if one is missed, which is what a macOS Space switch
+  resizing a window on an inactive desktop can produce, the app keeps
+  painting the old geometry with no way back. Keys still answered; the frame
+  was simply stale, which reads as a freeze. aws-tui now starts with the
+  in-band protocol off and `SIGWINCH` back in charge. The switch is
+  Textual's own `TEXTUAL_SMOOTH_SCROLL`, which despite its name gates only
+  that one negotiation; exporting `TEXTUAL_SMOOTH_SCROLL=1` restores
+  Textual's default. Layout, colours and pane contents are untouched, but
+  two pointer niceties ride on the same negotiation and are given up with
+  it: a scrollbar drag now animates towards the pointer instead of tracking
+  it, and mouse coordinates stay whole cells rather than sub-cell pixels.
+  Both
+  are already how Textual behaves on Terminal.app and iTerm2, which never
+  negotiate mode 2048, and on Windows, whose driver has no in-band resize
+  path; only Ghostty, WezTerm, kitty and their kin are affected either way.
+  A related trap is closed at the same time: a terminal left with mode 2048
+  set by some earlier app used to put the input parser into pixel-coordinate
+  mode that was never actually negotiated, which collapsed every click
+  towards the top-left corner after the first resize. See
+  [Platforms](docs/platforms.md#31-window-resize).
+- **Switching away no longer leaves the pointer's leftovers on screen.** When
+  the terminal loses focus — changing macOS Spaces, switching tabs, or
+  clicking into another window — a tooltip that was open stayed painted over
+  the pane for as long as the app was away, and a scrollbar drag interrupted
+  by the switch kept the mouse captured, so the first click after coming back
+  was swallowed. Both are released as the app loses focus now.
+- **A modal can no longer be wedged shut, and no UI state is unquittable.**
+  Each service page hands focus to its default widget through a deferred
+  callback. When an overlay opened before that callback ran, the callback
+  wrote a widget from the page *behind* the overlay into the overlay's own
+  focus, and key presses then went to the hidden page: `Esc` stopped closing
+  the help, theme, confirm, Quick Look, palette, and clone overlays. The
+  projection is now abandoned if the page is no longer the screen the user is
+  looking at. As a second line of defence, `q` and `Ctrl+C` are honoured from
+  any modal state, so no overlay can leave the app with no way out; overlays
+  that are working normally still swallow both keys exactly as before.
+- **Copy tells the truth about where the text went.** Copying a path or a Glue
+  table reference used to announce `Copied …` unconditionally. The only write
+  it made was OSC 52, which macOS Terminal.app ignores outright and iTerm2
+  ignores unless the user opted in, and which no terminal acknowledges — so on
+  those terminals the confirmation was simply wrong and the clipboard still
+  held whatever it held before. Every copy now also goes through a real
+  clipboard helper (`pbcopy`, `clip`, `wl-copy`, `xclip`, `xsel`) and reports
+  what actually happened: copied, the helper failed, or there was no helper and
+  only the terminal was written. An unconfirmable OSC-52-only delivery is never
+  called a copy. The helper runs in a worker on every path, so a wedged
+  `xclip` or a hung pasteboard server can no longer make the app deaf to
+  keystrokes — `ctrl+q` included — while it times out.
 - **Glue pagination is reachable.** Databases, tables, partitions, jobs, runs,
   and crawlers reported `more available` but no keyboard, palette, or mouse
   path called the view models' load-more methods, so a filtered runs list

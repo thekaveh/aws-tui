@@ -95,6 +95,78 @@ def test_set_selected_idempotent() -> None:
     vm.dispose()
 
 
+def test_set_marked_notifies_both_the_hub_and_the_per_vm_observable() -> None:
+    """Round-3 §9.bis.11 / PR #103: BOTH channels, never either.
+
+    The per-VM Observable is what ``EntryRow`` binds to, and the hub send is
+    the published contract other subscribers may still rely on. Dropping
+    either half is a silent regression: without the subject a listing stops
+    repainting, and without the hub send anything filtering the hub for this
+    entry goes deaf.
+    """
+    hub = _hub()
+    hub_props: list[str] = []
+    hub.messages.subscribe(
+        on_next=lambda m: hub_props.append(getattr(m, "property_name", "")) if m else None
+    )
+    vm = EntryVM(entry=_file_entry(), hub=hub, dispatcher=NULL_DISPATCHER)
+    vm.construct()
+    bound: list[str] = []
+    vm.on_property_changed.subscribe(on_next=bound.append)
+    try:
+        vm.set_marked(True)
+        assert bound == ["is_marked"]
+        assert "is_marked" in hub_props
+
+        # The early return governs BOTH channels. It is what keeps a cursor
+        # move O(1): ``PaneVM._sync_cursor_selection`` writes every entry, so
+        # a subject that fired unconditionally would wake every bound row.
+        vm.set_marked(True)
+        assert bound == ["is_marked"]
+    finally:
+        vm.dispose()
+
+
+def test_set_selected_reaches_the_bound_observer() -> None:
+    """The other half of the row binding — the cursor bar."""
+    vm = EntryVM(entry=_file_entry(), hub=_hub(), dispatcher=NULL_DISPATCHER)
+    vm.construct()
+    bound: list[str] = []
+    vm.on_property_changed.subscribe(on_next=bound.append)
+    try:
+        vm.set_selected(True)
+        vm.set_selected(False)
+        assert bound == ["is_selected", "is_selected"]
+    finally:
+        vm.dispose()
+
+
+def test_dispose_completes_the_per_vm_observable_and_is_idempotent() -> None:
+    """A disposed entry must end its stream, once.
+
+    Textual removes children asynchronously, so a row can still be mounted
+    and subscribed when ``PaneVM._replace_entries`` disposes the entry it is
+    bound to. Completing the subject tells it the stream ended instead of
+    leaving it holding a live observer on a disposed view model.
+    """
+    vm = EntryVM(entry=_file_entry(), hub=_hub(), dispatcher=NULL_DISPATCHER)
+    vm.construct()
+    completions: list[bool] = []
+    vm.on_property_changed.subscribe(
+        on_next=lambda _prop: None, on_completed=lambda: completions.append(True)
+    )
+    vm.set_marked(True)
+    assert completions == []
+
+    vm.dispose()
+    assert completions == [True]
+    assert vm.status == ConstructionStatus.DISPOSED
+
+    # Idempotent: a second dispose neither completes again nor raises.
+    vm.dispose()
+    assert completions == [True]
+
+
 def test_directory_kind_round_trip() -> None:
     vm = EntryVM(
         entry=_file_entry("docs", EntryKind.DIRECTORY),

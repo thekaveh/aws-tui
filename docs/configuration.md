@@ -34,6 +34,7 @@ preserved when present.
 | `XDG_CONFIG_HOME` | per-OS default | Linux: used by `platformdirs` when no legacy `~/.config/aws-tui` directory already exists. macOS and Windows use the platform-native location regardless. |
 | `XDG_CACHE_HOME` | per-OS default | Linux: used by `platformdirs` when no legacy `~/.cache/aws-tui` directory already exists. macOS and Windows use the platform-native location regardless. |
 | `AWS_TUI_TRANSFER_LINGER` | `3.0` | Seconds a finished transfer's row stays visible in the transfers overlay before it fades. Test-only knob — short values make `pytest` runs faster. |
+| `TEXTUAL_SMOOTH_SCROLL` | `0` — aws-tui sets it at launch unless you already have | Textual's switch for the in-band window-resize protocol (DEC private mode 2048). aws-tui defaults it off so the `SIGWINCH` resize fallback stays live. The cost is that scrollbar drags animate instead of tracking the pointer and mouse coordinates stay whole cells — both already true on Terminal.app and iTerm2. Set it to `1` for Textual's own default. See [Window resize](platforms.md#31-window-resize). |
 
 aws-tui does not launch AWS CLI SSO setup; run `aws sso login --profile
 <name>` in a terminal when prompted. The app does not read `$PAGER` or

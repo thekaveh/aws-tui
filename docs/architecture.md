@@ -142,12 +142,16 @@ every layer. `composition.py` builds the dependency graph; `app.py`
 is the Textual `App` subclass that mounts widgets and wires action
 handlers.
 
-`composition.py` also constructs the app-lifetime `TableClipboardVM`. `app.py` owns the
-best-effort OS clipboard copy after it receives the typed request; the VM
-remains the authoritative in-app clipboard. `ActionRegistry` is also rooted in
-`app.py`: `Shift+Q`, `Shift+V`, command-palette entries, and the Iceberg arrow
-button dispatch the same registered Glue actions before the Glue VMs publish a
-single typed Athena request path.
+`composition.py` also constructs the app-lifetime `TableClipboardVM` and the
+`infra` clipboard port. `app.py` owns the single clipboard writer that every
+copy goes through, including the one that follows the typed request: it writes
+OSC 52 and asks the port, then reports the port's result — the OS clipboard
+took it, a helper was there and failed, or there was no helper and only the
+terminal was written. The VM remains the authoritative in-app clipboard.
+`ActionRegistry` is also rooted in `app.py`: `Shift+Q`, `Shift+V`,
+command-palette entries, and the Iceberg arrow button dispatch the same
+registered Glue actions before the Glue VMs publish a single typed Athena
+request path.
 
 `AwsTuiApp` remains a large composition-root adapter that coordinates navigation,
 cross-service rollback, action routing, and shutdown. Extracting those transaction
@@ -236,7 +240,8 @@ reloads an execution and publishes only when it succeeded, belongs to the
 active context, and has a valid `s3://` output location. Missing, malformed,
 ambiguous, or stale identities stop at an advisory; VMs never import UI code.
 `CopyTableReferenceRequest` carries one exact `TableRef` to the composition
-root, which updates `TableClipboardVM` and attempts the OS clipboard copy.
+root, which updates `TableClipboardVM` and hands the identifier to the app's
+clipboard writer, whose toast states which channel actually accepted it.
 Palette eligibility is VM-owned state: the palette projects global commands
 and only commands whose declared service IDs include the active service.
 

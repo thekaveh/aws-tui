@@ -43,6 +43,34 @@ def test_builtin_theme_defines_core_tokens(name: str) -> None:
 
 
 @pytest.mark.parametrize("name", ALL_THEMES)
+def test_builtin_theme_defines_zebra_token(name: str) -> None:
+    """Every theme defines ``$bg-alt``, the zebra stripe surface.
+
+    Token parity across the ten themes was asserted only in prose
+    (``docs/theming.md`` §4) until this test; a theme that forgot the token
+    would not fail to parse — Textual leaves the unresolved ``$bg-alt``
+    reference in ``Pane .entry-row.-alt`` as an error on that one rule and
+    the listing simply renders unstriped in that theme alone.
+
+    The assertion goes through ``_theme_tokens`` rather than a substring
+    check on purpose: that parser accepts ONLY a lowercase-or-uppercase
+    6-digit hex literal terminated by a semicolon on its own line, so a
+    3-digit value, a missing semicolon or a ``$bg-alt: $bg-elev;`` alias
+    fails here instead of silently passing a ``"$bg-alt:" in content``
+    check. The lowercase spelling is pinned separately below.
+    """
+    tokens = _theme_tokens(ThemeStore().load(name))
+
+    assert "$bg-alt" in tokens, f"theme {name} missing token $bg-alt"
+    value = tokens["$bg-alt"]
+    assert value == value.lower(), f"theme {name}: $bg-alt must be lowercase hex, got {value}"
+    # A stripe equal to the flat background is an invisible no-op; a stripe
+    # equal to the cursor bar makes every other row look like the cursor.
+    assert value != tokens["$bg"], f"theme {name}: $bg-alt duplicates $bg — no visible stripe"
+    assert value != tokens["$bg-sel"], f"theme {name}: $bg-alt duplicates $bg-sel"
+
+
+@pytest.mark.parametrize("name", ALL_THEMES)
 def test_builtin_theme_styles_widgets(name: str) -> None:
     """Every theme references the common production widget class names."""
     content = ThemeStore().load(name)
@@ -107,6 +135,42 @@ def test_settings_navrow_has_no_specificity_clobber_on_selected_bg(name: str) ->
         )
 
 
+@pytest.mark.parametrize("name", ALL_THEMES)
+def test_zebra_rule_precedes_the_selected_rule(name: str) -> None:
+    """Source order is the ONLY thing keeping the cursor row off the stripe.
+
+    ``Pane .entry-row.-alt`` and ``Pane .entry-row.-selected`` score the
+    identical specificity ``(0, 2, 1)`` — a type selector plus two class
+    components either way. ``Stylesheet.apply`` walks ``reversed(self.rules)``
+    and resolves each property with ``max(..., key=itemgetter(0))``; Python's
+    ``max`` returns the FIRST maximal element, and reversal means that is the
+    rule declared LATER in the source. So on this exact tie the later rule
+    wins, and moving the zebra block below ``.-selected`` would paint every
+    odd cursor row with the stripe instead of the cursor bar — with no parse
+    error, no warning, and nothing but a snapshot diff to show for it.
+
+    This mirrors ``test_settings_navrow_has_no_specificity_clobber_on_selected_bg``:
+    a structural guard on a CSS relationship that cannot defend itself.
+    Comments are stripped first so a prose mention of either selector cannot
+    satisfy the ordering.
+    """
+    content = re.sub(r"/\*.*?\*/", "", ThemeStore().load(name), flags=re.DOTALL)
+
+    assert "Pane .entry-row.-alt" in content, f"theme {name} has no zebra rule"
+    assert content.index("Pane .entry-row.-alt") < content.index("Pane .entry-row.-selected"), (
+        f"theme {name}: the zebra rule is declared AFTER `Pane .entry-row.-selected`. "
+        "Both selectors score (0, 2, 1), so the later rule wins the tie and the "
+        "cursor row will render as a stripe."
+    )
+    # Constraint 12: the rule stays scoped to Pane. `NavRow` merges the
+    # literal `entry-row` class (ui/widgets/nav_row.py) and is mounted with
+    # no `Pane` ancestor, so a bare `.entry-row.-alt` would stripe the
+    # services rail as well as the listing.
+    assert re.search(r"^\s*\.entry-row\.-alt\b", content, re.MULTILINE) is None, (
+        f"theme {name}: unscoped `.entry-row.-alt` selector would stripe the NavMenu rail"
+    )
+
+
 def _theme_tokens(content: str) -> dict[str, str]:
     tokens: dict[str, str] = {}
     for line in content.splitlines():
@@ -161,9 +225,15 @@ def test_selected_state_tokens_have_readable_contrast(name: str) -> None:
 
 @pytest.mark.parametrize("name", ALL_THEMES)
 def test_muted_text_is_readable_on_both_content_backgrounds(name: str) -> None:
+    """``$bg-alt`` joined the pair when zebra striping landed.
+
+    The stripe is a third surface that body text sits on — half of every
+    listing renders on it — so it is held to the same 4.5:1 floor as the
+    flat background and the elevated chrome.
+    """
     tokens = _theme_tokens(ThemeStore().load(name))
 
-    for background_token in ("$bg", "$bg-elev"):
+    for background_token in ("$bg", "$bg-alt", "$bg-elev"):
         ratio = _contrast_ratio(tokens["$text-muted"], tokens[background_token])
         assert ratio >= 4.5, (
             f"theme {name}: $text-muted on {background_token} contrast is {ratio:.2f}:1"
