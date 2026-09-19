@@ -128,6 +128,31 @@ class DualPane(Widget):
             self._focus_coordinator.project_focused_slot(slot)
 
     def _apply_visual_focus(self, slot: FocusSlot) -> None:
+        """Paint the ``-focused`` ring on whichever child owns the cursor.
+
+        A deliberate, recorded exemption from "the child binds instead". The
+        MVVM audit flagged this as the last parent-pushes-into-child in this
+        pair once ``EntryRow.sync_state`` and ``Pane._sync_marks`` were
+        retired, and it is being kept for three reasons that all point the
+        same way:
+
+        * Which pane has focus is a property of the *pair*, not of either
+          pane -- exactly one may hold it -- so it belongs to
+          :class:`DualPaneVM` and there is no ``PaneVM`` property for a
+          child to bind to. Inventing one would put a two-pane invariant
+          into two independently-mutable flags.
+        * ``Pane.set_focused`` only adds/removes a CSS class. No VM state is
+          written and nothing is derived from it, which is the "parent calls
+          a child's view-only method" carve-out rather than the
+          ``child.set_selected(...)`` smell.
+        * ``NavMenu._sync_selection`` -> ``NavRow.set_selected`` is the same
+          shape and is untouched, so converting only this one would make the
+          codebase less uniform, not more.
+
+        If a ``PaneVM.is_focused`` is ever wanted, both pairs should move
+        together and the ``FocusSlot`` -> pane mapping should move into
+        ``DualPaneVM.set_focused`` with it.
+        """
         if self._left_widget is None or self._right_widget is None:
             return
         self._left_widget.set_focused(slot is FocusSlot.S3_LEFT)
