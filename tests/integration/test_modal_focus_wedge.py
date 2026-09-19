@@ -36,6 +36,9 @@ from aws_tui.ui.widgets.emr_serverless.page import EmrServerlessPage
 from aws_tui.ui.widgets.glue.page import GluePage
 from aws_tui.ui.widgets.help_modal import HelpModal
 from aws_tui.vm.chrome.focus_coordinator_vm import FocusSlot
+from tests.helpers import drain_workers
+
+SERVICE_SETUP_TIMEOUT_SECONDS = 30.0
 
 _PAGES: tuple[tuple[str, str, type[Widget], FocusSlot], ...] = (
     ("glue", "#content-glue-page", GluePage, FocusSlot.GLUE_PRIMARY),
@@ -50,15 +53,26 @@ _PAGES: tuple[tuple[str, str, type[Widget], FocusSlot], ...] = (
 
 
 async def _open_service(ctx: AppContext, pilot, service_id: str) -> None:  # type: ignore[no-untyped-def]
-    """Swap the content host to ``service_id`` and settle its mount."""
+    """Swap the content host to ``service_id`` and settle its mount.
+
+    The mount worker spawns further workers, so the wait has to cover the
+    descendants too: ``wait_for_complete(list(app.workers._workers))``
+    snapshots the set once and lets them escape (Constraint 27). The
+    bounded-and-diagnostic ``drain_workers`` is the repo's replacement, and
+    the shape here mirrors ``test_glue_athena_navigation._wait_for_service_setup``.
+    """
     app = pilot.app
-    await app.workers.wait_for_complete(list(app.workers._workers))
+    await drain_workers(app, timeout=SERVICE_SETUP_TIMEOUT_SECONDS)
     await pilot.pause()
     ctx.root_vm.services_menu.switch_service_command.execute(service_id)
-    await app.workers.wait_for_complete(list(app.workers._workers))
+    # The hub subscriber runs synchronously, so the lifecycle worker is already
+    # registered here and the drain below cannot return on an empty set.
+    await drain_workers(app, timeout=SERVICE_SETUP_TIMEOUT_SECONDS)
     setup_task = ctx.root_vm.content_host._setup_task
     if setup_task is not None and not setup_task.done():
-        await setup_task
+        # Bounded so a stuck setup fails saying so rather than as an opaque
+        # 60-second pytest-timeout with no attribution.
+        await asyncio.wait_for(setup_task, timeout=SERVICE_SETUP_TIMEOUT_SECONDS)
     await pilot.pause()
 
 
