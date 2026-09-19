@@ -776,11 +776,13 @@ class PaneVM:
         rather than filtered indices, which is why this takes entries and not
         positions like :meth:`mark_at`.
 
-        The ``_notify`` is the whole point: ``EntryVM.set_marked`` publishes a
-        per-entry ``PropertyChangedMessage`` that nothing subscribes to any
-        more — the pane repaints its rows off the pane-level ``"viewmodel"``
-        notify (``Pane._sync_marks``). Calling ``entry.set_marked`` directly
-        from outside the VM therefore mutates the model and paints nothing.
+        The ``_notify`` is what republishes the *pane-level* view model: the
+        footer summary counts marked entries (``_summary_text``), and nothing
+        else would recompute it. The rows themselves need no help — each one
+        binds to its own ``EntryVM.on_property_changed`` — but calling
+        ``entry.set_marked`` directly from outside this VM still leaves the
+        footer stating the wrong count, which is why the flash goes through
+        here rather than through the entries.
 
         Deliberately does NOT enter multi-select mode: this is a transient
         visual flash owned by a worker, not a user selection, and flipping

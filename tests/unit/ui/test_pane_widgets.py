@@ -673,9 +673,12 @@ async def test_hub_observer_count_is_independent_of_row_count() -> None:
     subscription on top of the pane's six, making the observer count
     ``6 + 2N`` exactly — 16 at 5 rows, 406 at 200. Because ``MessageHub``
     fans every message out to every observer, that made each keystroke
-    O(N) in observer callbacks and the pane O(N²) overall. With the rows
-    driven imperatively by their owning ``Pane`` the only subscriber is the
-    pane itself, so the count no longer moves with the listing size.
+    O(N) in observer callbacks and the pane O(N²) overall. The rows still
+    bind — to ``EntryVM.on_property_changed``, one subject per entry — so
+    the fix is not "the View stopped listening" but "the View stopped
+    listening to a stream that was never about it". The hub's own
+    subscriber count is therefore the pane's alone and no longer moves
+    with the listing size.
     """
     counts: dict[int, int] = {}
     for row_count in (5, 200):
@@ -704,6 +707,147 @@ async def test_hub_observer_count_is_independent_of_row_count() -> None:
 
     assert counts[5] > 0, "the pane itself must still subscribe to the hub"
     assert counts[5] == counts[200], f"hub fan-out scales with row count: {counts}"
+
+
+@pytest.mark.asyncio
+async def test_a_row_repaints_from_its_own_view_model_with_no_help_from_the_pane(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The row BINDS. Nothing pushes state into it.
+
+    This is the MVVM contract stated as a test rather than as a comment: the
+    entry's own view model is mutated directly, so ``PaneVM`` publishes
+    nothing and the owning ``Pane`` is handed no property change at all —
+    ``Pane._on_vm_property_changed`` is recorded and asserted empty. The row
+    still flips ``-marked`` and repaints the ``*`` glyph, which is only
+    possible if the repaint came from its own subscription to
+    ``EntryVM.on_property_changed``.
+
+    Discriminating by construction: under a design where the ``Pane`` drives
+    its children (``EntryRow.sync_state`` and ``Pane._sync_marks``, both
+    removed) this row would keep its stale paint forever, because the one
+    thing that would have repainted it — the pane-level notify — provably
+    never happens here.
+
+    It deliberately bypasses ``PaneVM``, which V5 forbids in production code
+    (``PaneVM.set_marked_entries`` exists for exactly that reason, and the
+    transfer-flash test below exercises it). Bypassing it is what isolates
+    the binding: it is the only remaining path to the paint.
+    """
+    hub: MessageHub[Message] = MessageHub()
+    dispatcher = RxDispatcher.immediate()
+    vm = PaneVM(provider=await _seed(), hub=hub, dispatcher=dispatcher, id_prefix="pane.test")
+    vm.construct()
+    await vm.setup()
+    try:
+        app = _single_pane_app(vm, hub)
+        async with app.run_test(size=(120, 30)) as pilot:
+            await pilot.pause()
+            await pilot.pause()
+            rows = list(app.query(EntryRow))
+            # Named precondition: the row under test is the one bound to the
+            # view model the assertions below mutate.
+            assert len(rows) == len(vm.filtered_entries) == 5
+            target = vm.filtered_entries[3]
+            assert rows[3].entry_vm is target
+            assert "-marked" not in rows[3].classes
+
+            pane_notifications: list[str] = []
+            original_handler = Pane._on_vm_property_changed
+
+            def _recording_handler(self: Pane, property_name: str) -> None:
+                pane_notifications.append(property_name)
+                original_handler(self, property_name)
+
+            monkeypatch.setattr(Pane, "_on_vm_property_changed", _recording_handler)
+
+            target.set_marked(True)
+            await pilot.pause()
+            await pilot.pause()
+
+            assert pane_notifications == [], (
+                f"the Pane was told about this change and may have driven the row: {pane_notifications}"
+            )
+            assert "-marked" in rows[3].classes
+            assert "*" in rows[3].render_line(0).text
+
+            target.set_marked(False)
+            await pilot.pause()
+            await pilot.pause()
+
+            assert pane_notifications == []
+            assert "-marked" not in rows[3].classes
+            assert "*" not in rows[3].render_line(0).text
+    finally:
+        vm.dispose()
+        hub.dispose()
+
+
+@pytest.mark.asyncio
+async def test_a_row_releases_its_binding_when_it_unmounts(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``on_unmount`` must dispose the subscription ``on_mount`` opened.
+
+    A binding that is never released is the failure mode that made the hub
+    subscription expensive in the first place, just relocated: every
+    ``_render_body`` would leave one live observer per row attached to a view
+    model the DOM no longer shows, and a listing navigated through N times
+    would repaint N detached widgets on every keystroke.
+
+    Asserted behaviourally rather than by counting observers on a private
+    subject: the removed row must not repaint when its entry changes, while a
+    row that is still mounted must — the positive control is what stops this
+    passing because the binding broke everywhere.
+    """
+    hub: MessageHub[Message] = MessageHub()
+    dispatcher = RxDispatcher.immediate()
+    vm = PaneVM(provider=await _seed(), hub=hub, dispatcher=dispatcher, id_prefix="pane.test")
+    vm.construct()
+    await vm.setup()
+
+    repainted: list[str] = []
+    original_refresh = EntryRow.refresh
+
+    def _counting_refresh(self: EntryRow, *args: Any, **kwargs: Any) -> Any:
+        repainted.append(self.entry_vm.name)
+        return original_refresh(self, *args, **kwargs)
+
+    monkeypatch.setattr(EntryRow, "refresh", _counting_refresh)
+    try:
+        app = _single_pane_app(vm, hub)
+        async with app.run_test(size=(120, 30)) as pilot:
+            await pilot.pause()
+            await pilot.pause()
+            rows = list(app.query(EntryRow))
+            assert len(rows) == len(vm.filtered_entries) == 5
+            detached = vm.filtered_entries[2]
+            still_mounted = vm.filtered_entries[4]
+            assert rows[2].entry_vm is detached
+
+            await rows[2].remove()
+            await pilot.pause()
+            await pilot.pause()
+            assert len(app.query(EntryRow)) == 4
+            repainted.clear()
+
+            detached.set_marked(True)
+            await pilot.pause()
+            await pilot.pause()
+            assert repainted == [], (
+                f"an unmounted row is still bound to its view model: {repainted}"
+            )
+
+            # Positive control: the mechanism still works for rows that are
+            # actually on screen, so the silence above is a released
+            # subscription and not a broken one.
+            still_mounted.set_marked(True)
+            await pilot.pause()
+            await pilot.pause()
+            assert repainted == [still_mounted.name]
+    finally:
+        vm.dispose()
+        hub.dispose()
 
 
 @pytest.mark.asyncio
@@ -802,19 +946,18 @@ async def test_cursor_move_repaints_only_the_two_affected_rows(
 
     This is the O(1)-per-keystroke claim stated as a count rather than as a
     duration (Constraint 24 forbids wall-clock assertions). ``EntryRow.refresh``
-    is the repaint: :meth:`EntryRow.sync_state` calls it exactly once per row
-    whose flags actually moved, and returns early otherwise. Sixty rows are
-    mounted so that a full-body repaint would be unmistakable (60, not 2).
+    is the repaint, and every one of them now arrives through the row's own
+    binding to ``EntryVM.on_property_changed``. Sixty rows are mounted so that
+    a full-body repaint would be unmistakable (60, not 2).
 
-    What this pins is the *invariant*, held jointly by ``Pane._apply_cursor``
-    (which touches the two affected rows) and ``Pane._sync_marks`` (which walks
-    every row but early-returns on all the unchanged ones). It therefore
-    catches either of them regressing into a repaint storm — the realistic
-    failure — but it cannot attribute the two repaints to one or the other,
-    because ``PaneVM`` emits ``"viewmodel"`` immediately after ``"cursor_index"``
-    on every cursor move (``pane_vm.py`` ``_move_cursor``/``move_cursor_to``) and
-    both handlers run before the pause returns. The behaviour that *is*
-    exclusive to ``_apply_cursor`` is pinned by the scroll test below.
+    Nothing walks the body any more, so the count is attributable to exactly
+    one mechanism: ``PaneVM._sync_cursor_selection`` writes ``is_selected`` on
+    all sixty entries, ``EntryVM.set_selected`` early-returns on the
+    fifty-eight that did not change, and only the remaining two reach a
+    subscriber. Delete that early return and this test reports 60. The
+    ``"viewmodel"`` notify that follows every cursor move touches the chrome
+    only — the behaviour exclusive to ``Pane._apply_cursor`` is pinned by the
+    scroll test below.
     """
     hub: MessageHub[Message] = MessageHub()
     dispatcher = RxDispatcher.immediate()
@@ -861,12 +1004,13 @@ async def test_cursor_move_repaints_only_the_two_affected_rows(
 async def test_cursor_move_keeps_the_cursor_row_scrolled_into_view() -> None:
     """The cursor must not walk off the bottom of a listing taller than the pane.
 
-    This is the whole surviving purpose of the deleted ``_scroll_to_cursor``:
-    ``Pane._apply_cursor`` ends in ``scroll_to_widget`` behind a bare
-    ``except Exception: return``, so nothing else in the widget keeps the
-    cursor row on screen. Stub ``_apply_cursor`` to a no-op and this test is
-    the one that fails — every other pane test stays green, because the
-    ``"viewmodel"`` notify makes ``_sync_marks`` cover the repaint.
+    Scrolling is the only thing ``Pane._apply_cursor`` still does, and it is
+    the one cursor concern a row cannot serve itself: it is a property of the
+    container, not of the row. The call sits behind ``suppress(Exception)``,
+    so nothing else in the widget keeps the cursor row on screen. Stub
+    ``_apply_cursor`` to a no-op and this test is the one that fails — every
+    other pane test stays green, because the rows repaint themselves off
+    their own view models.
 
     Sixty rows at 30 terminal lines overflows the body by roughly 2x;
     ``max_scroll_y`` is asserted as a named precondition so a future layout
@@ -916,12 +1060,13 @@ async def test_cursor_fallback_mark_repaints_the_row_during_a_transfer() -> None
 
     ``app.py``'s ``_run_copy``/``_run_delete`` flash the cursor row as marked
     for the duration of the transfer, so the user can see which row the
-    operation is acting on. The rows no longer subscribe to the hub, so the
-    only thing that repaints them is the pane-level ``"viewmodel"`` notify
-    that ``PaneVM.set_marked_entries`` emits — a bare
-    ``EntryVM.set_marked(True)`` from the worker mutates the model and paints
-    nothing. Asserted on ``render_line`` (the painted strip) as well as the
-    class, because the ``*`` glyph comes from ``render()``.
+    operation is acting on. It goes through ``PaneVM.set_marked_entries``
+    rather than through the entries themselves because the owning view model
+    is what republishes the footer summary's marked count; the row itself
+    repaints off its own ``EntryVM`` binding. This is the end-to-end proof
+    that the binding survives the whole chain, worker included. Asserted on
+    ``render_line`` (the painted strip) as well as the class, because the
+    ``*`` glyph comes from ``render()``.
     """
     hub: MessageHub[Message] = MessageHub()
     dispatcher = RxDispatcher.immediate()
@@ -962,9 +1107,9 @@ async def test_cursor_fallback_mark_repaints_the_row_during_a_transfer() -> None
 async def test_rerendering_the_body_keeps_the_row_list_mirroring_the_dom() -> None:
     """``Pane._rows`` must mirror the mounted rows after EVERY render.
 
-    ``_apply_cursor``, ``_sync_marks`` and ``_reflow_columns`` all index
-    ``self._rows`` instead of querying the DOM, so that list *is* the pane's
-    model of its own body. Every other test in this module renders the body
+    ``_apply_cursor`` and ``_reflow_columns`` both index ``self._rows``
+    instead of querying the DOM, so that list *is* the pane's handle on its
+    own body (a view-only targeting aid — it holds no view-model state). Every other test in this module renders the body
     once, at mount; this one navigates into a directory and back out, so
     ``_render_body`` runs three times over three different listings.
 
@@ -1154,11 +1299,12 @@ async def test_every_other_row_carries_the_zebra_class() -> None:
     it would hand back the exact quadratic the batched mount removed.
 
     The second half of this test is the part that rots silently:
-    ``_apply_state_classes`` and ``sync_state`` own ``-selected``,
-    ``-marked`` and ``-dir``, and must never touch ``-alt``. A
-    ``set_classes``-style rewrite there would strip the stripe off whichever
-    row the cursor most recently visited, leaving a listing that de-stripes
-    itself as you arrow through it.
+    ``EntryRow._apply_state_classes`` — the initial paint and every
+    subsequent binding callback — owns ``-selected``, ``-marked`` and
+    ``-dir``, and must never touch ``-alt``. A ``set_classes``-style rewrite
+    there would strip the stripe off whichever row the cursor most recently
+    visited, leaving a listing that de-stripes itself as you arrow through
+    it.
     """
     hub: MessageHub[Message] = MessageHub()
     dispatcher = RxDispatcher.immediate()
