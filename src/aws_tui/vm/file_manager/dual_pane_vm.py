@@ -20,6 +20,7 @@ import logging
 from enum import StrEnum
 from typing import TYPE_CHECKING
 
+import reactivex as rx
 from vmx import ComponentVM, Message, MessageHub, PropertyChangedMessage, RelayCommand
 from vmx.lifecycle.status import ConstructionStatus
 from vmx.services.dispatcher import Dispatcher
@@ -27,7 +28,7 @@ from vmx.services.dispatcher import Dispatcher
 from aws_tui.domain.cross_fs import ConflictResolution, CrossFsCopy, CrossFsMove
 from aws_tui.domain.filesystem import ProviderError, TransferProgress
 from aws_tui.domain.transfer_journal import TransferJournal
-from aws_tui.vm._observable import send_value_free
+from aws_tui.vm._observable import ObserverSafeSubject, send_value_free
 from aws_tui.vm.file_manager.entry_vm import EntryVM
 from aws_tui.vm.file_manager.pane_vm import PaneVM
 from aws_tui.vm.messages import (
@@ -113,6 +114,16 @@ class DualPaneVM:
         self._cancel_sub: DisposableBase | None = None
         self._refresh_tasks: set[asyncio.Task[None]] = set()
         self._shutdown_started = False
+        self._disposed = False
+
+        # Per-VM Observable (round-3 §9.bis.11 / PR #103 retirement path):
+        # fires the name of the property that just changed, scoped to THIS
+        # facade. :class:`aws_tui.ui.widgets.dual_pane.DualPane` binds here
+        # instead of filtering the shared ``MessageHub`` by
+        # ``sender_object`` -- the hub has no sender-keyed routing, so that
+        # filter woke the widget for every message in the app to learn about
+        # one boolean.
+        self._on_property_changed: ObserverSafeSubject[str] = ObserverSafeSubject[str]()
 
         self._inner: ComponentVM = (
             ComponentVM.builder().name("dual_pane").services(hub, dispatcher).build()
@@ -158,6 +169,16 @@ class DualPaneVM:
     @property
     def focused(self) -> FocusedPane:
         return self._focused
+
+    @property
+    def on_property_changed(self) -> rx.Observable[str]:
+        """Per-VM-instance Observable scoped to THIS facade.
+
+        The binding surface for :class:`~aws_tui.ui.widgets.dual_pane.DualPane`.
+        Round-3 / PR #103 retirement path: a subscriber here hears only this
+        facade's own property changes.
+        """
+        return self._on_property_changed
 
     @property
     def focused_pane(self) -> PaneVM:
@@ -224,6 +245,9 @@ class DualPaneVM:
         self._inner.destruct()
 
     def dispose(self) -> None:
+        if self._disposed:
+            return
+        self._disposed = True
         self._shutdown_started = True
         self._cancel_detached_refreshes()
         if self._cancel_sub is not None:
@@ -235,6 +259,12 @@ class DualPaneVM:
         self._delete_in_focused_command.dispose()
         self._right.dispose()
         self._left.dispose()
+        # Complete and tear the subject down BEFORE the inner VM, matching
+        # ``PaneVM.dispose`` / ``EntryVM.dispose``: a bound widget that is
+        # still mounted must be told the stream ended rather than left
+        # holding a live observer on a disposed view model.
+        self._on_property_changed.on_completed()
+        self._on_property_changed.dispose()
         self._inner.dispose()
 
     async def shutdown(self) -> None:
@@ -328,7 +358,7 @@ class DualPaneVM:
         if self._focused is pane:
             return
         self._focused = pane
-        send_value_free(self._hub, PropertyChangedMessage.create(self, self._inner.name, "focused"))
+        self._notify("focused")
 
     # ── Async cross-pane operations ────────────────────────────────────────
 
@@ -783,19 +813,29 @@ class DualPaneVM:
         self.set_focused(target)
 
     def _signal_copy_requested(self) -> None:
-        send_value_free(
-            self._hub, PropertyChangedMessage.create(self, self._inner.name, "copy_requested")
-        )
+        self._notify("copy_requested")
 
     def _signal_move_requested(self) -> None:
-        send_value_free(
-            self._hub, PropertyChangedMessage.create(self, self._inner.name, "move_requested")
-        )
+        self._notify("move_requested")
 
     def _signal_delete_requested(self) -> None:
-        send_value_free(
-            self._hub, PropertyChangedMessage.create(self, self._inner.name, "delete_requested")
-        )
+        self._notify("delete_requested")
+
+    def _notify(self, prop: str) -> None:
+        """Emit on BOTH the shared hub and this facade's own Observable.
+
+        Never either/or: the hub send is the published contract
+        (``tests/unit/vm/file_manager/test_dual_pane_vm.py`` asserts the
+        ``"focused"`` message, and the three ``*_requested`` signals are a
+        hub-only surface), while the subject is what the bound
+        :class:`~aws_tui.ui.widgets.dual_pane.DualPane` listens to. The guard
+        stops a late caller from publishing a property change for a disposed
+        view model, matching ``PaneVM._notify`` and ``EntryVM._notify``.
+        """
+        if self._disposed:
+            return
+        send_value_free(self._hub, PropertyChangedMessage.create(self, self._inner.name, prop))
+        self._on_property_changed.on_next(prop)
 
 
 __all__ = ["DualPaneVM", "FocusedPane"]

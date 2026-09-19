@@ -11,8 +11,10 @@ Async-aware operations:
 - ``refresh()`` re-runs under the current path.
 
 State transitions (LOADING → IDLE / error) happen synchronously around
-the async ``provider.list()`` call. Subscribers observe via
-``PropertyChangedMessage`` on the hub.
+the async ``provider.list()`` call. Every change is published twice: on
+this VM's own ``on_property_changed`` Observable, which is what the pane
+view binds to, and as a ``PropertyChangedMessage`` on the shared hub,
+which is what the app-level cross-pane subscribers still read.
 """
 
 from __future__ import annotations
@@ -22,6 +24,7 @@ from collections.abc import Iterable
 from dataclasses import dataclass
 from enum import StrEnum
 
+import reactivex as rx
 from vmx import (
     ComponentVMOf,
     CompositeVM,
@@ -48,7 +51,7 @@ from aws_tui.domain.filesystem import (
     ProviderUnreachableError,
 )
 from aws_tui.infra.redaction import redact_text
-from aws_tui.vm._observable import send_value_free
+from aws_tui.vm._observable import ObserverSafeSubject, send_value_free
 from aws_tui.vm.file_manager.entry_vm import EntryState, EntryVM
 from aws_tui.vm.service_diagnostics import report_unexpected_service_error
 
@@ -248,6 +251,17 @@ class PaneVM:
         self._error_text: str | None = None
         self._reload_generation: int = 0
         self._is_multiselect_mode: bool = False
+        self._disposed: bool = False
+
+        # Per-VM Observable (round-3 §9.bis.11 / PR #103 retirement path):
+        # fires the name of the property that just changed, scoped to THIS
+        # pane. :class:`aws_tui.ui.widgets.pane.Pane` binds here instead of
+        # filtering the shared ``MessageHub`` by ``sender_object``. The hub
+        # has no sender-keyed routing, so a hub filter costs one observer per
+        # watched property on a stream carrying every message in the app --
+        # and it cannot tell two panes apart until the message has already
+        # been fanned out to both of them.
+        self._on_property_changed: ObserverSafeSubject[str] = ObserverSafeSubject[str]()
 
         self._inner: CompositeVM[ComponentVMOf[EntryState]] = (
             CompositeVM[ComponentVMOf[EntryState]]
@@ -363,6 +377,17 @@ class PaneVM:
     @property
     def is_multiselect_mode(self) -> bool:
         return self._is_multiselect_mode
+
+    @property
+    def on_property_changed(self) -> rx.Observable[str]:
+        """Per-VM-instance Observable scoped to THIS pane.
+
+        The binding surface for the pane view. Round-3 / PR #103 retirement
+        path: a subscriber here hears only this pane's own property changes,
+        so it never pays for the other pane, the entries, or any other view
+        model publishing on the shared hub.
+        """
+        return self._on_property_changed
 
     @property
     def cursor_index(self) -> int:
@@ -623,6 +648,9 @@ class PaneVM:
         self._inner.destruct()
 
     def dispose(self) -> None:
+        if self._disposed:
+            return
+        self._disposed = True
         self._reload_generation += 1
         self._open_command.dispose()
         self._ascend_command.dispose()
@@ -645,6 +673,12 @@ class PaneVM:
             child.dispose()
         self._filtered = ()
         self._entries.clear()
+        # Complete and tear the subject down BEFORE the inner VM, matching
+        # ``EntryVM.dispose``: a bound pane view that is still mounted
+        # (Textual removes children asynchronously) must be told the stream
+        # ended rather than left holding a live observer on a disposed VM.
+        self._on_property_changed.on_completed()
+        self._on_property_changed.dispose()
         self._inner.dispose()
 
     # ── Async operations ────────────────────────────────────────────────────
@@ -1081,15 +1115,28 @@ class PaneVM:
     # ── Helpers ─────────────────────────────────────────────────────────────
 
     def _notify(self, prop: str) -> None:
-        """Publish a ``PropertyChangedMessage`` for ``prop`` on the hub.
+        """Emit on BOTH the shared hub and this pane's own Observable.
 
-        Thin convenience over the repeated three-argument call so the
-        24 notify sites in this file (which would otherwise be
-        ``self._hub.send(PropertyChangedMessage.create(self, self._inner.name, "prop"))``
-        each) stay readable. Single seam for future coalescing /
-        instrumentation.
+        Never either/or. The hub send is a published contract two app-level
+        subscribers still depend on -- ``AwsTuiApp._on_hub_message_pane_state``
+        routes ``"state"`` into the connection-reachability set and
+        ``_on_hub_message_cursor`` recomputes the Commands chips off
+        ``"cursor_index"``/``"viewmodel"``/``"entries"``, both filtering by
+        ``isinstance(sender_object, PaneVM)`` across every pane in the app.
+        The subject is what the bound :class:`~aws_tui.ui.widgets.pane.Pane`
+        listens to.
+
+        Also the single seam for the 24 notify sites in this file (which
+        would otherwise each be
+        ``self._hub.send(PropertyChangedMessage.create(self, self._inner.name, "prop"))``)
+        and for future coalescing / instrumentation. The guard stops a late
+        caller from publishing a property change for a disposed view model,
+        matching ``EntryVM._notify`` and ``JobRunDetailVM._notify``.
         """
+        if self._disposed:
+            return
         send_value_free(self._hub, PropertyChangedMessage.create(self, self._inner.name, prop))
+        self._on_property_changed.on_next(prop)
 
     # ── Cursor / selection / filter ─────────────────────────────────────────
 

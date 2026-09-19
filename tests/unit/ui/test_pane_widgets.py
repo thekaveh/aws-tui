@@ -21,6 +21,7 @@ from aws_tui.domain.transfer_journal import TransferJournal
 from aws_tui.infra.theme_store import ThemeStore
 from aws_tui.ui.widgets.dual_pane import DualPane
 from aws_tui.ui.widgets.pane import _BODY_REFRESH_PROPS, EntryRow, Pane
+from aws_tui.vm._observable import ObserverSafeSubject
 from aws_tui.vm.file_manager.dual_pane_vm import DualPaneVM, FocusedPane
 from aws_tui.vm.file_manager.pane_vm import PaneVM
 
@@ -649,6 +650,19 @@ async def _seed_n(count: int) -> InMemoryFS:
     return fs
 
 
+def _bound_observers(subject: ObserverSafeSubject[str]) -> int:
+    """How many live subscriptions a per-VM Observable is carrying.
+
+    Two private layers deep on purpose, and the same reach the hub-side
+    assertion has always made with ``hub._subject.observers``: an observer
+    count is not a public surface on either side, and exposing one on the
+    view models purely so a test could read it would put test scaffolding in
+    production code. ``ObserverSafeSubject`` wraps a plain ``rx.Subject``;
+    its observer list is the binding, counted.
+    """
+    return len(subject._subject.observers)
+
+
 def _single_pane_app(vm: PaneVM, hub: MessageHub[Message]) -> App[None]:
     """One-pane host app. A factory rather than a class defined in the caller's
     loop body so the closure binds the arguments, not the loop variables."""
@@ -661,26 +675,32 @@ def _single_pane_app(vm: PaneVM, hub: MessageHub[Message]) -> App[None]:
 
 
 @pytest.mark.asyncio
-async def test_hub_observer_count_is_independent_of_row_count() -> None:
-    """The pane's hub fan-out must not scale with the number of rows.
+async def test_the_view_layer_binds_per_view_model_and_never_to_the_hub() -> None:
+    """The pane's hub fan-out must not scale with the number of rows — and,
+    now that the pane binds too, must not exist at all.
 
     Constraint 24 forbids asserting wall-clock time, so the invariant is
-    asserted structurally instead: the number of observers attached to the
-    hub's subject with 5 rows mounted must equal the number with 200 rows
-    mounted.
+    asserted structurally instead: the observers attached to the hub's
+    subject with 5 rows mounted must equal those with 200 rows mounted.
 
-    Before this fix each ``EntryRow`` carried its own two-property hub
+    Before this branch each ``EntryRow`` carried its own two-property hub
     subscription on top of the pane's six, making the observer count
     ``6 + 2N`` exactly — 16 at 5 rows, 406 at 200. Because ``MessageHub``
     fans every message out to every observer, that made each keystroke
-    O(N) in observer callbacks and the pane O(N²) overall. The rows still
-    bind — to ``EntryVM.on_property_changed``, one subject per entry — so
-    the fix is not "the View stopped listening" but "the View stopped
-    listening to a stream that was never about it". The hub's own
-    subscriber count is therefore the pane's alone and no longer moves
-    with the listing size.
+    O(N) in observer callbacks and the pane O(N²) overall.
+
+    Flatness alone would now be satisfied by a view layer that listens to
+    nothing, so it is not asserted alone. The positive control is the
+    binding itself, counted on the per-VM subjects: the ``Pane`` holds
+    exactly one observer on ``PaneVM.on_property_changed`` and each
+    ``EntryRow`` exactly one on its own ``EntryVM``'s. That total DOES
+    scale with the listing, which is the point — N subjects with one
+    observer each deliver one callback per change, where one stream with
+    N observers delivered N.
     """
-    counts: dict[int, int] = {}
+    hub_counts: dict[int, int] = {}
+    pane_observers: dict[int, int] = {}
+    entry_observers: dict[int, int] = {}
     for row_count in (5, 200):
         hub: MessageHub[Message] = MessageHub()
         dispatcher = RxDispatcher.immediate()
@@ -700,13 +720,25 @@ async def test_hub_observer_count_is_independent_of_row_count() -> None:
                 # Named precondition: the invariance below is meaningless
                 # unless the rows are actually mounted at both sizes.
                 assert len(app.query(EntryRow)) == row_count
-                counts[row_count] = len(hub._subject.observers)
+                hub_counts[row_count] = len(hub._subject.observers)
+                pane_observers[row_count] = _bound_observers(vm._on_property_changed)
+                entry_observers[row_count] = sum(
+                    _bound_observers(entry._on_property_changed) for entry in vm.filtered_entries
+                )
         finally:
             vm.dispose()
             hub.dispose()
 
-    assert counts[5] > 0, "the pane itself must still subscribe to the hub"
-    assert counts[5] == counts[200], f"hub fan-out scales with row count: {counts}"
+    assert hub_counts[5] == hub_counts[200], f"hub fan-out scales with row count: {hub_counts}"
+    assert hub_counts[5] == 0, (
+        f"a widget is still filtering the shared hub instead of binding: {hub_counts}"
+    )
+    assert pane_observers == {5: 1, 200: 1}, (
+        f"the Pane is not bound to its own view model exactly once: {pane_observers}"
+    )
+    assert entry_observers == {5: 5, 200: 200}, (
+        f"one observer per row on its own EntryVM is the binding: {entry_observers}"
+    )
 
 
 @pytest.mark.asyncio
@@ -845,6 +877,81 @@ async def test_a_row_releases_its_binding_when_it_unmounts(
             await pilot.pause()
             await pilot.pause()
             assert repainted == [still_mounted.name]
+    finally:
+        vm.dispose()
+        hub.dispose()
+
+
+@pytest.mark.asyncio
+async def test_the_pane_releases_its_binding_when_it_unmounts() -> None:
+    """``on_unmount`` must dispose the subscription ``on_mount`` opened.
+
+    ``Pane`` used to inherit ``HubSubscriberMixin``, which deliberately
+    installs no ``on_unmount`` of its own and relies on each consumer calling
+    ``unsubscribe_from_vm()`` (Constraint 22). Replacing the mixin with a
+    direct binding does not retire that obligation, it inherits it: Textual
+    offers a widget no other teardown hook, so a pane that forgets to release
+    the subject keeps rebuilding a body that is no longer in the DOM, once
+    per navigation, for the life of the view model.
+
+    Both halves are asserted. The subject's observer count proves the
+    subscription is gone; the render log proves the consequence — the
+    detached pane does not react to a real ``navigate_to``. The positive
+    control runs first, on the same pane, so a binding that was broken from
+    the start could not produce this result.
+    """
+    hub: MessageHub[Message] = MessageHub()
+    dispatcher = RxDispatcher.immediate()
+    fs = await _seed()
+    await fs.write_stream(PathRef(("data", "one.txt")), _astream(b"1"))
+    vm = PaneVM(provider=fs, hub=hub, dispatcher=dispatcher, id_prefix="pane.test")
+    vm.construct()
+    await vm.setup()
+    try:
+
+        class _App(App[None]):
+            def compose(self) -> ComposeResult:
+                yield _CountingPane(vm, hub=hub, id="pane")
+
+        app = _App()
+        async with app.run_test(size=(120, 30)) as pilot:
+            await pilot.pause()
+            await pilot.pause()
+            pane = app.query_one(_CountingPane)
+            assert _bound_observers(vm._on_property_changed) == 1, (
+                "the pane never bound to its view model"
+            )
+            pane.render_log.clear()
+            pane.body_notifies = 0
+
+            # Positive control: while mounted, a navigation reaches it.
+            await vm.navigate_to(PathRef(("data",)))
+            await pilot.pause()
+            await pilot.pause()
+            assert pane.body_notifies > 0
+            assert pane.render_log
+
+            await pane.remove()
+            await pilot.pause()
+            await pilot.pause()
+            # Named precondition: the pane really left the DOM.
+            assert len(app.query(Pane)) == 0
+            assert _bound_observers(vm._on_property_changed) == 0, (
+                "the unmounted pane is still bound to its view model"
+            )
+
+            pane.render_log.clear()
+            pane.body_notifies = 0
+            await vm.navigate_to(PathRef(()))
+            await pilot.pause()
+            await pilot.pause()
+
+            assert pane.body_notifies == 0, (
+                f"a detached pane is still being told about VM changes: {pane.body_notifies}"
+            )
+            assert pane.render_log == [], (
+                f"a detached pane is still rebuilding its body: {pane.render_log}"
+            )
     finally:
         vm.dispose()
         hub.dispose()

@@ -14,6 +14,12 @@ count constant instead of growing by two per entry: the row listens to
 one subject scoped to one entry rather than filtering a shared stream
 carrying every message in the app. The Pane only re-renders the body
 when ``entries`` or ``state`` change.
+
+The Pane binds the same way, to :attr:`PaneVM.on_property_changed`. No
+widget in this module subscribes to the ``MessageHub`` any more: the hub
+send stays on the VM side because app-level subscribers read it across
+every pane at once, which is the one job a shared stream is actually
+right for.
 """
 
 from __future__ import annotations
@@ -31,7 +37,6 @@ from textual.widget import Widget
 from textual.widgets import Static
 from vmx import Message, MessageHub
 
-from aws_tui.ui.widgets._subscriber import HubSubscriberMixin
 from aws_tui.vm.file_manager.entry_vm import EntryVM
 from aws_tui.vm.file_manager.pane_vm import PaneVM
 
@@ -298,8 +303,16 @@ _CHROME_REFRESH_PROPS: frozenset[str] = frozenset({"viewmodel"})
 _SCROLL_TRACK_PROPS: frozenset[str] = frozenset({"cursor_index"})
 
 
-class Pane(HubSubscriberMixin, Widget):
-    """Single file-manager pane."""
+class Pane(Widget):
+    """Single file-manager pane.
+
+    Binds to :attr:`PaneVM.on_property_changed`, not to the shared hub. The
+    hub carries every message in the app and has no sender-keyed routing, so
+    a hub filter here woke this widget for the other pane's listing, for each
+    of its own entries, and for every unrelated view model -- and it could
+    only tell them apart after the message had already been fanned out. The
+    per-VM subject carries this pane's changes and nothing else.
+    """
 
     # Theme tokens ($text-dim etc) live in the theme .tcss files, not in
     # DEFAULT_CSS — the latter parses before the theme overlay loads.
@@ -321,7 +334,12 @@ class Pane(HubSubscriberMixin, Widget):
     ) -> None:
         super().__init__(id=id, classes=classes)
         self._vm: PaneVM = vm
+        # Retained, not subscribed to: the pane binds to the VM's own
+        # Observable (see the class docstring). The hub stays on the
+        # construction signature because it is the transport the VM layer
+        # publishes on and every call site already threads it through.
         self._hub: MessageHub[Message] = hub
+        self._vm_sub: DisposableBase | None = None
         # Recomputed on every Resize. EntryRow.render reads this directly
         # so wider terminals get wider NAME columns automatically.
         self._name_column_width: int = _DEFAULT_NAME_WIDTH
@@ -379,20 +397,21 @@ class Pane(HubSubscriberMixin, Widget):
         # ``_render_body`` caller in this class uses
         # (``_on_vm_property_changed`` always goes through
         # ``call_after_refresh``).
-        self.subscribe_to_vm(
-            hub=self._hub,
-            vm=self._vm,
-            property_names=(
-                *_BODY_REFRESH_PROPS,
-                *_CHROME_REFRESH_PROPS,
-                *_SCROLL_TRACK_PROPS,
-            ),
-            on_property_changed=self._on_vm_property_changed,
-        )
+        # Round-3 §9.bis.11 / PR #103 retirement: bind to this pane's own
+        # Observable rather than filtering the shared hub. The property
+        # names that used to be the hub filter's argument are now the
+        # ``_on_vm_property_changed`` routing table -- the subject carries
+        # only this VM's changes, so membership is the only test left.
+        self._vm_sub = self._vm.on_property_changed.subscribe(on_next=self._on_vm_property_changed)
         self.call_after_refresh(self._refresh_all)
 
     def on_unmount(self) -> None:
-        self.unsubscribe_from_vm()
+        # The binding must be released here and nowhere else: Textual gives a
+        # widget no other teardown hook, and a pane left subscribed to a live
+        # view model keeps re-rendering a body that is no longer in the DOM.
+        if self._vm_sub is not None:
+            self._vm_sub.dispose()
+            self._vm_sub = None
 
     def on_resize(self, event: Resize) -> None:
         """Recompute NAME column width on resize and reflow the visible
