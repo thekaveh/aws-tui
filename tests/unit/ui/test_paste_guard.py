@@ -9,6 +9,7 @@ guard can be retired.
 
 from __future__ import annotations
 
+import sys
 import time
 from collections.abc import Iterable
 
@@ -20,9 +21,7 @@ from textual._xterm_parser import (
     XTermParser,
 )
 from textual.driver import Driver
-from textual.drivers import linux_driver
 from textual.drivers.headless_driver import HeadlessDriver
-from textual.drivers.linux_driver import LinuxDriver
 from textual.message import Message
 
 from aws_tui.ui.paste_guard import (
@@ -31,6 +30,22 @@ from aws_tui.ui.paste_guard import (
     guarded_driver_class,
     install_guarded_parser,
 )
+
+_POSIX_ONLY = pytest.mark.skipif(
+    sys.platform == "win32",
+    reason="textual.drivers.linux_driver imports the POSIX-only `termios`, so it cannot even be imported on Windows. The guard itself is platform-neutral and stays covered there by the tests above.",
+)
+
+if sys.platform != "win32":
+    from textual.drivers import linux_driver
+    from textual.drivers.linux_driver import LinuxDriver
+
+# The guard wraps whatever driver the app resolves, so the HeadlessDriver case
+# is the one that matters on every platform; LinuxDriver is added only where it
+# can be imported.
+_GUARD_BASES: list[type[Driver]] = [HeadlessDriver]
+if sys.platform != "win32":
+    _GUARD_BASES.insert(0, LinuxDriver)
 
 # Larger than ``constants.ESCAPE_DELAY`` so the parser's inner loop really
 # does raise ``ParseTimeout`` on the lone ESC, which is the whole defect.
@@ -345,13 +360,14 @@ def test_guard_sees_a_start_marker_split_across_two_chunks() -> None:
     assert guard.paste_open is True
 
 
-@pytest.mark.parametrize("base", [LinuxDriver, HeadlessDriver])
+@pytest.mark.parametrize("base", _GUARD_BASES)
 def test_guarded_driver_class_is_a_subclass_and_is_cached(base: type[Driver]) -> None:
     guarded = guarded_driver_class(base)
     assert issubclass(guarded, base)
     assert guarded is guarded_driver_class(base), "a new class per call breaks identity"
 
 
+@_POSIX_ONLY
 def test_the_parser_swap_still_reaches_the_linux_driver() -> None:
     """Pin the seam the guard rides on.
 
@@ -390,6 +406,7 @@ class _StubDriver(Driver):
     def stop_application_mode(self) -> None: ...
 
 
+@_POSIX_ONLY
 def test_input_thread_guard_swaps_the_parser_only_for_the_thread_body() -> None:
     class _WithInputThread(_StubDriver):
         def run_input_thread(self) -> None:
@@ -405,6 +422,7 @@ def test_input_thread_guard_swaps_the_parser_only_for_the_thread_body() -> None:
     assert linux_driver.XTermParser is XTermParser, "the swap outlived the thread"
 
 
+@_POSIX_ONLY
 def test_application_mode_guard_spans_start_to_stop() -> None:
     """``WindowsDriver`` builds its parser on a thread started by
     ``start_application_mode``, so the swap has to survive that method's

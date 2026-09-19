@@ -27,7 +27,6 @@ import textual
 from textual import app as textual_app
 from textual import constants, events, scrollbar
 from textual._xterm_parser import XTermParser
-from textual.drivers import linux_driver
 from textual.messages import InBandWindowResize
 
 from aws_tui.ui.terminal_protocol import (
@@ -35,6 +34,15 @@ from aws_tui.ui.terminal_protocol import (
     CellMouseXTermParser,
     prefer_sigwinch_resize,
 )
+
+_POSIX_ONLY = pytest.mark.skipif(
+    sys.platform == "win32",
+    reason="textual.drivers.linux_driver imports the POSIX-only `termios`, so it cannot even be imported on Windows. The guard itself is platform-neutral and stays covered there by the tests above.",
+)
+
+if sys.platform != "win32":
+    from textual.drivers import linux_driver
+
 
 # DECRPM reply for "mode 2048 is supported but currently reset" — what a
 # Ghostty / WezTerm / kitty class terminal answers to ``ESC [ ? 2048 $ p``.
@@ -259,6 +267,7 @@ def test_the_parser_the_drivers_actually_build_carries_the_guard() -> None:
     assert issubclass(GuardedXTermParser, CellMouseXTermParser)
 
 
+@_POSIX_ONLY
 def test_the_sigwinch_handler_is_still_gated_on_the_in_band_flag() -> None:
     """Tripwire: this gate is the reason the default is worth having."""
     source = inspect.getsource(linux_driver)
@@ -307,6 +316,7 @@ def test_smooth_scroll_has_exactly_one_use_site_in_the_installed_package() -> No
     assert hits == {"constants.py": 3, "_xterm_parser.py": 1}
 
 
+@_POSIX_ONLY
 def test_the_gated_branch_still_drives_smooth_scrolling_and_pixel_mouse() -> None:
     """Tripwire: the two things refusing mode 2048 actually costs.
 
