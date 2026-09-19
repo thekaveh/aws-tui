@@ -197,6 +197,22 @@ section; the current tree must not be tagged as v0.8.0.
   pasting a multi-line query into the Athena editor or the EMR log filter is
   a real feature.
 
+- **A resize that happened on another Space is no longer painted at the old
+  size.** A terminal can report a size change two ways: the kernel's
+  `SIGWINCH` signal, or the newer in-band window-resize protocol (DEC
+  private mode 2048). Textual 8.2.8 stops listening to `SIGWINCH` the moment
+  a terminal accepts mode 2048, so the in-band report becomes the only
+  channel — and if one is missed, which is what a macOS Space switch
+  resizing a window on an inactive desktop can produce, the app keeps
+  painting the old geometry with no way back. Keys still answered; the frame
+  was simply stale, which reads as a freeze. aws-tui now starts with the
+  in-band protocol off and `SIGWINCH` back in charge. The switch is
+  Textual's own `TEXTUAL_SMOOTH_SCROLL`, which gates nothing but that one
+  negotiation in 8.2.8 despite its name, so no rendering behaviour changes;
+  exporting `TEXTUAL_SMOOTH_SCROLL=1` restores Textual's default. This is a
+  no-op on Terminal.app and iTerm2, which never negotiate mode 2048, and on
+  Windows, whose driver has no in-band resize path. See
+  [Platforms](docs/platforms.md#31-window-resize).
 - **Switching away no longer leaves the pointer's leftovers on screen.** When
   the terminal loses focus — changing macOS Spaces, switching tabs, or
   clicking into another window — a tooltip that was open stayed painted over

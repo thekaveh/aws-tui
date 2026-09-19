@@ -86,6 +86,35 @@ Any modern terminal works: Terminal.app, iTerm2, Warp, kitty, Alacritty.
 The default SF Mono font has the full box-drawing range; Fira Code or
 JetBrains Mono are popular alternatives.
 
+### 3.1. Window resize
+
+A terminal has two ways to tell a full-screen app its window changed size:
+the kernel's `SIGWINCH` signal, and the newer in-band window-resize
+protocol (DEC private mode 2048). Textual 8.2.8 stops listening to
+`SIGWINCH` altogether the moment a terminal accepts mode 2048, leaving the
+in-band report as the only channel. If one report is missed — a macOS Space
+switch that resizes a window on an inactive desktop is the case this was
+reported against — the app keeps painting the old geometry. Text runs past
+the edge or the layout sits in a corner; keys still work, but nothing you
+can do inside the app repairs it.
+
+aws-tui therefore starts with the in-band protocol off and `SIGWINCH` back
+in charge. The switch is Textual's own `TEXTUAL_SMOOTH_SCROLL` variable,
+which gates nothing but that one negotiation in Textual 8.2.8 — despite the
+name it drives no scrolling — so nothing about rendering changes.
+
+| You set | Result |
+|---|---|
+| nothing | In-band resize off, `SIGWINCH` resize on. This is the default. |
+| `TEXTUAL_SMOOTH_SCROLL=1` | Textual's own default back: in-band resize on, `SIGWINCH` ignored. |
+| `TEXTUAL_SMOOTH_SCROLL=0` | Identical to the default; set it explicitly if you want it pinned. |
+
+The default is a no-op on Terminal.app and iTerm2, which never negotiate
+mode 2048 in the first place — Textual skips iTerm2 deliberately — and on
+Windows, whose driver has no in-band resize path at all. It only changes
+anything on a terminal that does advertise the mode, such as Ghostty,
+WezTerm, or kitty.
+
 ## 4. Linux
 
 Any modern terminal emulator with truecolor support: GNOME Terminal,

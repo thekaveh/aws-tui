@@ -54,6 +54,7 @@ from aws_tui.ui import notifications
 from aws_tui.ui.actions import ActionRegistry
 from aws_tui.ui.bindings import BindingResolver
 from aws_tui.ui.paste_guard import guarded_driver_class
+from aws_tui.ui.terminal_protocol import prefer_sigwinch_resize
 from aws_tui.ui.widgets._worker import DeferredWorkerMixin
 from aws_tui.ui.widgets.athena.page import AthenaPage
 from aws_tui.ui.widgets.brand_banner import BrandBanner
@@ -5435,6 +5436,11 @@ def main() -> None:
             file=sys.stderr,
         )
         raise SystemExit(1) from None
+
+    # Must precede `run()`: the driver and its input parser are built there,
+    # and the in-band resize protocol is negotiated during driver start-up.
+    prefer_sigwinch_resize()
+
     try:
         app.run()
     except BaseException as exc:
