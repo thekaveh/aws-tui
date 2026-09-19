@@ -174,6 +174,12 @@ section; the current tree must not be tagged as v0.8.0.
 
 ### Fixed
 
+- **Switching away no longer leaves the pointer's leftovers on screen.** When
+  the terminal loses focus — changing macOS Spaces, switching tabs, or
+  clicking into another window — a tooltip that was open stayed painted over
+  the pane for as long as the app was away, and a scrollbar drag interrupted
+  by the switch kept the mouse captured, so the first click after coming back
+  was swallowed. Both are released as the app loses focus now.
 - **A modal can no longer be wedged shut, and no UI state is unquittable.**
   Each service page hands focus to its default widget through a deferred
   callback. When an overlay opened before that callback ran, the callback

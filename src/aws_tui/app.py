@@ -4591,6 +4591,66 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
         if self._athena_page() is not None or self._glue_page() is not None:
             self._recompute_hint_disables()
 
+    def on_app_blur(self, _event: events.AppBlur) -> None:
+        """Tear down pointer-driven state the app can no longer observe.
+
+        Switching macOS Spaces or terminal tabs sends ``AppBlur``, and Textual
+        8.2.8 tears down only *focus* on that path (``App._watch_app_focus``,
+        ``textual/app.py:4418-4448``, blur branch ``:4443-4448``). Two pieces
+        of interaction state survive it, both reported by a user doing exactly
+        that gesture:
+
+        1. **The tooltip.** Nothing clears it on blur, so a tooltip opened by
+           resting the pointer on a row stays painted over the pane for as
+           long as the app is away. ``Screen._clear_tooltip`` is the routine
+           Textual itself uses for this, from ``_on_screen_suspend``
+           (``textual/screen.py:1502-1508``); blur is simply a case it does
+           not cover.
+        2. **The mouse capture.** A scrollbar drag interrupted by a blur
+           leaves ``App.mouse_captured`` pointing at the scrollbar. Every
+           other Textual teardown of interaction state calls
+           ``capture_mouse(None)`` (``textual/app.py:2868``, ``:2941``,
+           ``:3017``); the blur path is the odd one out.
+
+        The capture orphan is *measurably harmless today* — 0 B/s of output,
+        0.0% CPU, and it self-heals on the next click, which costs the user
+        exactly one swallowed click. It is fixed here because of what sits
+        under it: ``ScrollBar._on_mouse_capture``
+        (``textual/scrollbar.py:363``) calls ``App._realtime_animation_begin``,
+        which calls ``gc.disable()`` when ``PAUSE_GC_ON_SCROLL`` is true, and
+        the matching ``_realtime_animation_complete`` runs only on
+        ``MouseRelease``. Textual's class default is ``False``
+        (``textual/app.py:526``) and this app does not override it — that, and
+        only that, is why the orphan is benign. Set that flag with the blur
+        path unfixed and the same orphan leaves ``gc.disable()`` in force for
+        the rest of the process, degrading into precisely the progressive "the
+        app got unusably slow after I switched away and back" the user
+        reported. ``capture_mouse(None)`` posts the ``MouseRelease`` that
+        balances the begin.
+
+        Defensive throughout: this runs on a path where the screen stack may
+        be in any state (mid-push, mid-pop, or empty during shutdown), and a
+        raise here would reach ``App._handle_exception`` and kill the app over
+        a cosmetic cleanup. Nothing in here is allowed to propagate.
+        """
+        # Two suppressions, not one: the outer covers reading the stack at all
+        # (``screen_stack`` raises before the mode is set up and during
+        # shutdown), the inner keeps one uncooperative screen from skipping
+        # the rest of them.
+        with contextlib.suppress(Exception):
+            # Clear across the whole stack, not just the top: a tooltip that
+            # was showing on a screen a modal has since covered is still a
+            # painted artefact when the modal pops. ``_clear_tooltip``
+            # early-returns when a screen has no ``Tooltip`` child, so this is
+            # free for every screen that was never hovered.
+            for screen in self.screen_stack:
+                with contextlib.suppress(Exception):
+                    screen._clear_tooltip()
+        with contextlib.suppress(Exception):
+            # No-ops when nothing is captured: ``App.capture_mouse`` returns
+            # immediately when the new widget equals ``mouse_captured``.
+            self.capture_mouse(None)
+
     def _on_nav_selection_changed(self, msg: object) -> None:
         """Hub subscriber: route NavMenuVM selected_id changes to the content host.
 
