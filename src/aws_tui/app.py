@@ -166,8 +166,31 @@ _TRANSFER_DELETE_GROUP = "transfer-delete"
 _TRANSFER_WORKER_GROUPS = (_TRANSFER_COPY_GROUP, _TRANSFER_DELETE_GROUP)
 _EMR_SERVICE_IDS = frozenset({"emr-serverless"})
 
+# Action ids that :meth:`AwsTuiApp.action_dispatch` still honours while a
+# screen sits on the stack (or the coordinator reports modal precedence).
+# Everything else is deliberately inert behind a modal so a stray shortcut
+# cannot mutate the page the user cannot currently see.
+#
+# ``app.quit`` is in here as an ESCAPE HATCH, not as a routed pane action.
+# Without it, any modal that cannot be dismissed — e.g. one wedged by a
+# deferred focus projection landing in its ``focused`` (see
+# ``ui/widgets/_focus_guard``) — also made the whole app unquittable:
+# ``q`` and ``ctrl+c`` both dispatch ``app.quit`` and both returned None.
+# Quitting is never destructive to remote state and always runs the full
+# ``_aws_tui_shutdown``, so it must work from every UI state.
+#
+# This does NOT make ``q`` / ``ctrl+c`` live inside a well-formed modal.
+# ``app.quit`` is in ``ui/bindings.py`` ``_NON_PRIORITY_ACTIONS``, so both of
+# its keys bind non-priority, and Textual's ``Screen._modal_binding_chain``
+# truncates the chain at the first modal node — the App namespace is never
+# consulted while a ``ModalScreen`` owns focus. The hatch fires only when the
+# chain holds no modal at all: the wedged state, and a coordinator stuck in
+# ``is_modal`` with nothing on the screen stack. Pinned both ways by
+# ``tests/integration/test_modal_key_containment.py`` and
+# ``tests/integration/test_keybinding_wiring.py``.
 _MODAL_ROUTED_ACTIONS = frozenset(
     {
+        "app.quit",
         "pane.switch_focus",
         "pane.switch_focus_back",
         "pane.move_up",
@@ -946,7 +969,22 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
             # (``_UnfocusedMixin``); deferred via ``call_after_refresh`` so
             # it runs AFTER Textual's first focus pass instead of being
             # silently undone by it.
-            self.call_after_refresh(lambda: self.set_focus(None))
+            self.call_after_refresh(partial(self._drop_initial_focus, self.screen))
+
+    def _drop_initial_focus(self, boot_screen: object) -> None:
+        """Clear Textual's automatic first-focus pass — but only if the
+        boot screen is still the active one.
+
+        ``App.set_focus`` always writes into ``App.screen``, the TOP screen,
+        so if anything pushed a modal between ``on_mount`` and this deferred
+        callback this would blank the MODAL's focus instead of the main
+        screen's. Same class of defect as the page-level projections guarded
+        by ``ui/widgets/_focus_guard.is_on_active_screen``.
+        """
+        with contextlib.suppress(Exception):
+            if self.screen is not boot_screen:
+                return
+            self.set_focus(None)
 
     async def on_unmount(self) -> None:
         await self._aws_tui_shutdown()

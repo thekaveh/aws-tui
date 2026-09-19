@@ -15,7 +15,7 @@ import pytest
 from vmx import NULL_DISPATCHER, MessageHub
 from vmx.messages.protocols import Message
 
-from aws_tui.app import AwsTuiApp
+from aws_tui.app import _MODAL_ROUTED_ACTIONS, AwsTuiApp
 from aws_tui.composition import build_app_context
 from aws_tui.domain.data_catalog import TableFormat
 from aws_tui.ui.widgets.help_modal import HelpModal
@@ -184,6 +184,60 @@ async def test_quit_keys_dispatch_through_action_registry(
         await pilot.pause()
 
         assert calls == ["quit"]
+
+
+@pytest.mark.asyncio
+async def test_quit_is_the_one_action_that_survives_a_modal(app_context_factory) -> None:  # type: ignore[no-untyped-def]
+    """No modal state may be unquittable.
+
+    ``action_dispatch`` deliberately drops every action while a screen sits
+    on the stack, so the page behind the overlay cannot be mutated by a
+    stray shortcut. ``app.quit`` is the ESCAPE HATCH exception: a modal that
+    cannot be dismissed — e.g. one wedged by a deferred focus projection
+    landing in its ``focused`` — used to take the whole app down with it,
+    because ``q`` and ``ctrl+c`` both dispatch ``app.quit`` and both
+    returned ``None``. Every other action must stay gated exactly as before.
+    """
+    app = AwsTuiApp(app_context_factory())
+    quit_calls: list[str] = []
+    gated_calls: list[str] = []
+    app._actions.register("app.quit", lambda: quit_calls.append("quit"))
+    app._actions.register("app.themes", lambda: gated_calls.append("themes"))
+
+    async with app.run_test(size=(100, 30)) as pilot:
+        await pilot.press("question_mark")
+        await pilot.pause()
+        assert isinstance(app.screen, HelpModal)
+        assert len(app.screen_stack) > 1
+
+        app.action_dispatch("app.themes")
+        app.action_dispatch("app.quit")
+        await pilot.pause()
+
+        assert gated_calls == []
+        assert quit_calls == ["quit"]
+
+
+def test_modal_routed_actions_are_the_pane_ring_plus_quit() -> None:
+    """Pin the gate's membership.
+
+    Widening this set is a UX decision, not an implementation detail: every
+    id here stays live while a modal is open. The pane ring is here because
+    the App hand-forwards those keys into the modal
+    (``docs/keybindings.md`` §4); ``app.quit`` is here as the escape hatch.
+    """
+    expected = {
+        "app.quit",
+        "pane.switch_focus",
+        "pane.switch_focus_back",
+        "pane.move_up",
+        "pane.move_down",
+        "pane.descend",
+        "pane.ascend",
+        "pane.modal_left",
+        "pane.modal_right",
+    }
+    assert set(_MODAL_ROUTED_ACTIONS) == expected
 
 
 @pytest.mark.asyncio

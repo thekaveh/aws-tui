@@ -174,6 +174,16 @@ section; the current tree must not be tagged as v0.8.0.
 
 ### Fixed
 
+- **A modal can no longer be wedged shut, and no UI state is unquittable.**
+  Each service page hands focus to its default widget through a deferred
+  callback. When an overlay opened before that callback ran, the callback
+  wrote a widget from the page *behind* the overlay into the overlay's own
+  focus, and key presses then went to the hidden page: `Esc` stopped closing
+  the help, theme, confirm, Quick Look, palette, and clone overlays. The
+  projection is now abandoned if the page is no longer the screen the user is
+  looking at. As a second line of defence, `q` and `Ctrl+C` are honoured from
+  any modal state, so no overlay can leave the app with no way out; overlays
+  that are working normally still swallow both keys exactly as before.
 - **Copy tells the truth about where the text went.** Copying a path or a Glue
   table reference used to announce `Copied …` unconditionally. The only write
   it made was OSC 52, which macOS Terminal.app ignores outright and iTerm2
