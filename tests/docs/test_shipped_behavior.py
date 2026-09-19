@@ -153,5 +153,14 @@ def test_current_contract_ledger_discloses_exact_pinned_private_adapters() -> No
     ledger = _text("docs/contract-ledger.md")
 
     assert "Textual compatibility adapter uses exact-version private hooks" in ledger
-    for private_name in ("`_bindings`", "`_pre_process`", "`_handle_exception`"):
+    for private_name in (
+        "`_bindings`",
+        "`_pre_process`",
+        "`_handle_exception`",
+        "`Screen._clear_tooltip`",
+        # The bracketed-paste guard subclasses Textual's private input parser
+        # and rebinds the name each driver builds it from; a private surface
+        # that the exact 8.2.8 pin is what makes safe.
+        "`_xterm_parser.XTermParser`",
+    ):
         assert private_name in ledger

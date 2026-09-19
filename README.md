@@ -62,7 +62,9 @@ profile or S3 endpoint.
   profile and region; `Shift+S` still cycles in resolver order. Jobs and
   Crawlers expose bordered state selectors through `Shift+F` and `Shift+G`.
   On a selected Catalog table, `y` copies the fully quoted table reference
-  into the VMx-backed app clipboard and best-effort OS clipboard.
+  into the VMx-backed app clipboard, then to the OS clipboard through the
+  single app-level writer whose toast names the channel that actually
+  accepted it.
   From a selected Catalog table, the command palette can open its exact
   location in S3. Press `Shift+Q` to open that table in Athena and prefill the
   quoted `SELECT * ... LIMIT 5` statement. Iceberg tables add bounded,

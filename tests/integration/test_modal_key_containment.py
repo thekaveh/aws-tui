@@ -115,6 +115,43 @@ async def test_arrows_behind_confirm_modal_do_not_move_pane_cursor(app_context_f
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("key", ["q", "ctrl+c"])
+async def test_quit_keys_behind_a_confirm_modal_do_not_abandon_it(
+    app_context_factory,  # type: ignore[no-untyped-def]
+    key: str,
+) -> None:
+    """``app.quit`` is modal-routed as an ESCAPE HATCH, not as a live key.
+
+    ``app.quit`` was added to ``_MODAL_ROUTED_ACTIONS`` so a modal that
+    cannot be dismissed can never make the whole app unquittable. This pins
+    the other half of that change: a *well-formed* modal must still swallow
+    the quit keys. ``ConfirmModal`` is the sharp case — unlike ``HelpModal``
+    and ``ThemePickerModal`` it binds neither ``q`` nor ``ctrl+c``, so a leak
+    would abandon a destructive confirmation on a stray keystroke.
+
+    It cannot leak because ``Screen._modal_binding_chain``
+    (``textual/screen.py:449-455``) truncates the chain at the first modal
+    node, so the App namespace is never consulted while the modal owns
+    focus. The hatch only fires from a WEDGED state, where ``focused``
+    points at a base-screen widget and the chain contains no modal at all.
+    """
+    app = AwsTuiApp(app_context_factory(fs=await _seed()))
+    quit_calls: list[str] = []
+    app._actions.register("app.quit", lambda: quit_calls.append("quit"))
+
+    async with app.run_test(size=(120, 40)) as pilot:
+        await _await_cursor(app, pilot)
+        await pilot.press("d")
+        await _await_screen(app, pilot, ConfirmModal)
+
+        await pilot.press(key)
+        await pilot.pause()
+
+        assert quit_calls == []
+        assert isinstance(app.screen, ConfirmModal)
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("size", [(120, 40), (100, 24)])
 async def test_help_body_scrolls_with_arrow_keys(
     app_context_factory,  # type: ignore[no-untyped-def]

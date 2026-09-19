@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 from collections.abc import AsyncIterator
 from typing import cast
 
@@ -677,6 +678,34 @@ async def test_marks_are_inert_while_the_pane_is_loading() -> None:
 
 
 @pytest.mark.asyncio
+async def test_the_copy_tooltip_advice_is_owned_by_the_view_model() -> None:
+    """Both tooltip sentences, including the keys they name, live here.
+
+    They used to be f-string literals inside ``EntryRow._sync_tooltip`` and
+    ``Pane.on_mouse_move``, which made the widget decide what a label reads
+    -- and made the two of them free to drift apart from the placeholder
+    text two properties away, which has always named its keys here
+    (``"press a to sign in"``, ``"press r to retry"``).
+
+    The two hints must stay distinguishable, because they describe
+    different affordances: a row is not a click target (clicking one moves
+    the cursor), the border is.
+    """
+    pane = await _make_pane(await _seed_fs())
+    try:
+        assert "press p" in pane.entry_tooltip_hint
+        assert "cursor entry" in pane.entry_tooltip_hint
+        assert "click" not in pane.entry_tooltip_hint, (
+            "a row is not a copy click target, so its tooltip must not offer one"
+        )
+
+        assert "press P" in pane.path_tooltip_hint
+        assert "click here" in pane.path_tooltip_hint
+    finally:
+        pane.dispose()
+
+
+@pytest.mark.asyncio
 async def test_copy_payloads_are_owned_by_the_view_model() -> None:
     """The view copies prepared values, it does not reassemble paths.
 
@@ -768,5 +797,246 @@ async def test_summary_count_excludes_the_synthetic_parent_link() -> None:
 
         summary = pane.viewmodel.summary
         assert summary.startswith(f"{len(real)} obj"), summary
+    finally:
+        pane.dispose()
+
+
+@pytest.mark.asyncio
+async def test_set_marked_entries_marks_notifies_once_and_skips_the_parent_link() -> None:
+    """``set_marked_entries`` is the only supported way to mark from outside.
+
+    ``app.py``'s copy/delete workers flash the cursor-fallback target as
+    marked for the duration of a transfer. They used to call
+    ``EntryVM.set_marked`` directly. The rows would survive that — each one
+    binds to its own ``EntryVM.on_property_changed`` and repaints itself —
+    but the footer summary's marked count is derived at the pane level and
+    is recomputed by nothing except this batch API's single ``"viewmodel"``
+    notify, so the bypass left the count stating the pre-transfer listing
+    while the row lit up. This pins the three properties the pane depends
+    on: the synthetic ``..`` row stays unmarkable, a batch costs exactly one
+    notify, and a no-op batch costs none (so the ``finally`` clear on a
+    transfer that never marked anything cannot start a repaint).
+    """
+    fs = await _seed_fs()
+    hub = _hub()
+    notified: list[str] = []
+    hub.messages.subscribe(
+        on_next=lambda m: notified.append(getattr(m, "property_name", "")) if m else None
+    )
+    pane = await _make_pane(fs, hub=hub)
+    try:
+        await pane.navigate_to(PathRef(("b",)))
+        entries = pane.filtered_entries
+        parent = entries[0]
+        assert parent.is_parent_link, "expected a parent link first in this listing"
+        targets = [entry for entry in entries if not entry.is_parent_link]
+        assert targets, "expected at least one real entry to mark"
+
+        notified.clear()
+        pane.set_marked_entries(entries, marked=True)
+
+        assert parent.is_marked is False, "the .. row must stay unmarkable"
+        assert all(entry.is_marked for entry in targets)
+        assert notified.count("viewmodel") == 1, notified
+
+        notified.clear()
+        pane.set_marked_entries(entries, marked=True)
+        assert notified.count("viewmodel") == 0, "re-marking must be a silent no-op"
+
+        notified.clear()
+        pane.set_marked_entries(entries, marked=False)
+        assert all(not entry.is_marked for entry in targets)
+        assert notified.count("viewmodel") == 1, notified
+    finally:
+        pane.dispose()
+
+
+@pytest.mark.asyncio
+async def test_replace_entries_publishes_one_collection_event_per_listing() -> None:
+    """A listing rebuild must cost ONE collection event, not 2N.
+
+    ``_replace_entries`` removes every old child and appends every new one.
+    Unbatched that is ``2N`` ``CollectionChangedEvent``s, and the
+    ``FilteredCompositeVM`` fed by this composite subscribes with
+    ``lambda _: self._recompute()`` — so every one of them re-derived the
+    whole visible list, making a plain directory listing quadratic in the row
+    count. ``CompositeVM.batch_update()`` coalesces the burst into a single
+    ``action="reset"``, which costs exactly one recompute.
+
+    The count must be invariant in the number of entries; that invariance,
+    not the absolute number, is what proves the batch is open across both
+    loops rather than around one of them.
+    """
+
+    async def _events_for(count: int) -> tuple[int, str | None, int]:
+        fs = InMemoryFS()
+        for index in range(count):
+            await fs.write_stream(PathRef((f"f{index:03d}.txt",)), _astream(b"x"))
+        pane = await _make_pane(fs)
+        try:
+            events: list[object] = []
+            sub = pane._inner.on_collection_changed.subscribe(on_next=events.append)
+            try:
+                await pane.refresh()
+            finally:
+                sub.dispose()
+            first_action = getattr(events[0], "action", None) if events else None
+            return len(events), first_action, len(pane.filtered_entries)
+        finally:
+            pane.dispose()
+
+    small = await _events_for(4)
+    large = await _events_for(40)
+
+    # Named preconditions: the listings really did differ in size, so the
+    # equal event counts below are not two empty rebuilds agreeing.
+    assert small[2] == 4
+    assert large[2] == 40
+
+    assert small[0] == 1, f"expected one coalesced event, got {small[0]}"
+    assert small[0] == large[0], f"event count scaled with row count: {small[0]} vs {large[0]}"
+    assert small[1] == "reset"
+    assert large[1] == "reset"
+
+
+def test_replace_entries_writes_the_cursor_only_after_a_filter_recompute() -> None:
+    """Structural guard for Constraint 20: the ordering in ``_replace_entries``.
+
+    This one is deliberately a source-shape assertion, in the spirit of
+    ``tests/docs/test_snapshot_harness.py``. The invariant cannot be pinned
+    by behaviour through the public surface: leaving the batch already emits
+    one coalesced ``CollectionChangedEvent(action="reset")``, which runs
+    ``FilteredCompositeVM._recompute()`` → ``_sync_filtered_from_composite()``
+    and re-derives ``_filtered`` from the NEW ``_entries``; and
+    ``set_predicate`` calls ``_recompute()`` directly rather than through
+    ``on_collection_changed``, so even a ``_recompute_filtered()`` moved
+    inside the batch would still refresh it. Both regressions therefore run
+    green end-to-end (verified by mutation), while still destroying the
+    margin that keeps the cursor write off a stale ``_filtered`` — the
+    failure mode pinned by
+    ``test_a_stale_filtered_list_makes_the_cursor_write_raise``.
+    """
+    lines = inspect.getsource(PaneVM._replace_entries).splitlines()
+
+    def _sole_index(statement: str) -> int:
+        matches = [i for i, line in enumerate(lines) if line.strip() == statement]
+        assert len(matches) == 1, f"expected exactly one {statement!r}, found {len(matches)}"
+        return matches[0]
+
+    def _indent(index: int) -> int:
+        return len(lines[index]) - len(lines[index].lstrip())
+
+    batch_at = _sole_index("with self._inner.batch_update():")
+    recompute_at = _sole_index("self._recompute_filtered()")
+    cursor_at = _sole_index("self._cursor_index = 0")
+
+    for label, index in (("_recompute_filtered()", recompute_at), ("_cursor_index = 0", cursor_at)):
+        assert index > batch_at, f"{label} must follow the batch block, not precede it"
+        assert _indent(index) == _indent(batch_at), (
+            f"{label} is nested inside `with self._inner.batch_update():` — "
+            "Constraint 20 keeps that sequence outside the batch"
+        )
+    assert recompute_at < cursor_at, (
+        "_recompute_filtered() must run BEFORE the cursor write; the setter "
+        "dereferences self._entries[self._filtered[...]]"
+    )
+
+
+@pytest.mark.asyncio
+async def test_a_stale_filtered_list_makes_the_cursor_write_raise() -> None:
+    """Pin the mechanism the ordering above defends against.
+
+    The cursor setter maps a filtered position to an entry inner through
+    ``self._filtered``, which holds indices into ``self._entries``. Drive the
+    exact window a cursor write inside the batch would sit in — ``_entries``
+    already swapped for a shorter listing, ``_filtered`` not yet re-derived —
+    and the setter indexes past the end. This is what makes the ordering
+    load-bearing rather than decorative.
+    """
+    fs = InMemoryFS()
+    for index in range(10):
+        await fs.write_stream(PathRef((f"row{index}.txt",)), _astream(b"x"))
+    pane = await _make_pane(fs)
+    original = pane._entries
+    try:
+        pane.set_filter_command.execute("row7")
+        assert pane._filtered == (7,), "precondition: the filter narrowed to the 8th entry"
+
+        pane._entries = original[:2]
+        with pytest.raises(IndexError):
+            pane._cursor_index = 0
+    finally:
+        pane._entries = original
+        pane.dispose()
+
+
+@pytest.mark.asyncio
+async def test_a_filtered_listing_survives_a_shrinking_refresh() -> None:
+    """A filter that outlives its listing: refresh must not raise, and must
+    re-derive the filtered view from the NEW entries.
+
+    The filter narrows a 10-entry listing to one row, then the re-list
+    returns 2 rows that the filter no longer matches. The filtered view must
+    come back empty rather than still pointing at a row index that no longer
+    exists. (The ordering inside ``_replace_entries`` is pinned structurally
+    by ``test_replace_entries_writes_the_cursor_only_after_a_filter_recompute``;
+    this test covers the end-to-end outcome, not the statement order.)
+    """
+    fs = InMemoryFS()
+    for index in range(10):
+        await fs.write_stream(PathRef((f"row{index}.txt",)), _astream(b"x"))
+    pane = await _make_pane(fs)
+    try:
+        pane.set_filter_command.execute("row7")
+        assert [entry.name for entry in pane.filtered_entries] == ["row7.txt"]
+        assert pane.cursor_index == 0
+
+        # Shrink the backing store under the pane, then re-list.
+        for index in range(10):
+            if index not in (0, 1):
+                await fs.delete(PathRef((f"row{index}.txt",)))
+        await pane.refresh()
+
+        # No IndexError, and the filtered view is re-derived from the NEW
+        # list: "row7" matches nothing in it, so it is empty rather than
+        # stale.
+        assert [entry.name for entry in pane.entries] == ["row0.txt", "row1.txt"]
+        assert pane.filtered_entries == ()
+        assert pane._filtered == ()
+        assert pane.selected_entry is None
+    finally:
+        pane.dispose()
+
+
+@pytest.mark.asyncio
+async def test_a_shrinking_refresh_rederives_the_filter_from_the_new_listing() -> None:
+    """The companion case where the filter still matches after the shrink.
+
+    Here the cursor write really does dereference ``_entries`` (the previous
+    test's filter matches nothing, so the setter takes its ``if not
+    self._filtered`` early return). The surviving row sits at index 8 of the
+    old listing and index 2 of the new one, so a filtered list carried over
+    from before the refresh would either raise or select the wrong row.
+    """
+    fs = InMemoryFS()
+    for index in range(10):
+        await fs.write_stream(PathRef((f"row{index}.txt",)), _astream(b"x"))
+    pane = await _make_pane(fs)
+    try:
+        pane.set_filter_command.execute("row8")
+        assert pane._filtered == (8,)
+
+        for index in range(10):
+            if index not in (0, 1, 8):
+                await fs.delete(PathRef((f"row{index}.txt",)))
+        await pane.refresh()
+
+        assert [entry.name for entry in pane.entries] == ["row0.txt", "row1.txt", "row8.txt"]
+        assert pane._filtered == (2,), "the filtered index was re-derived against the new listing"
+        assert [entry.name for entry in pane.filtered_entries] == ["row8.txt"]
+        assert pane.cursor_index == 0
+        selected = pane.selected_entry
+        assert selected is not None
+        assert selected.name == "row8.txt"
     finally:
         pane.dispose()

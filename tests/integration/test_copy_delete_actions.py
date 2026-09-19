@@ -12,6 +12,7 @@ import asyncio
 from collections.abc import AsyncIterator
 
 import pytest
+from textual.widgets import Static
 
 from aws_tui.app import AwsTuiApp
 from aws_tui.demo.in_memory_fs import InMemoryFS
@@ -269,3 +270,86 @@ async def test_delete_worker_does_not_cancel_an_in_flight_copy(
         app.run_worker(_long("copy-2"), exclusive=True, group=_TRANSFER_COPY_GROUP)
         await asyncio.sleep(0.05)
         assert cancelled == ["copy"]
+
+
+@pytest.mark.asyncio
+async def test_cursor_fallback_copy_marks_the_row_it_is_acting_on(
+    app_context_factory: AppContextBuilder,
+) -> None:
+    """A copy with nothing marked must show which row it is transferring.
+
+    With no multi-selection the copy falls back to the cursor row, and the
+    worker marks that row for the duration of the transfer — the only
+    on-screen confirmation of what is moving. Two consequences are asserted,
+    and only together do they pin the route the flash has to take:
+
+    * The row repaints. It does that off its own
+      ``EntryVM.on_property_changed`` binding, so a direct
+      ``entry.set_marked`` from ``app.py`` would satisfy this half on its
+      own. Asserted on the mounted widget's classes and glyph, not on
+      ``entry_vm.is_marked``: the model flag stayed correct throughout the
+      regression this pins, while the screen showed nothing.
+    * The pane's footer Static repaints with the marked count. Nothing
+      refreshes that widget except ``Pane._refresh_chrome``, and nothing
+      calls it except the pane-level ``"viewmodel"`` notify — which only
+      ``PaneVM.set_marked_entries`` emits. A bypass straight to
+      ``EntryVM.set_marked`` repaints the row and leaves the footer on
+      screen stating the wrong count, which is exactly the failure
+      ``PaneVM.set_marked_entries``'s own docstring describes. Asserted on
+      the rendered Static and NOT on ``pane.viewmodel.summary``: that
+      property is derived on every read, so it reports the new count
+      whether or not anything was ever notified.
+
+    ``_BlockingReadFS`` holds the transfer open so the flash can be observed
+    mid-flight; the app is torn down with the worker still running, exactly
+    as ``test_switching_to_settings_cancels_active_copy_worker`` does.
+    """
+    fs = _BlockingReadFS()
+    await fs.write_stream(PathRef(("alpha.txt",)), _stream(b"alpha-content"))
+    ctx = app_context_factory(fs=fs)
+    _use_injected_s3_connection(ctx)
+    app = AwsTuiApp(ctx)
+    async with app.run_test(size=(120, 40)) as pilot:
+        await pilot.pause()
+        await pilot.pause()
+
+        rows = await _wait_until_entry_rows(app)
+        target = next(row for row in rows if row.entry_vm.name == "alpha.txt")
+        assert "-marked" not in target.classes, "precondition: nothing is marked yet"
+
+        dual = ctx.root_vm.content_host.current
+        assert isinstance(dual, DualPaneVM)
+        src_pane = dual.focused_pane
+        src_widget = next(pane for pane in app.query(Pane) if pane.vm is src_pane)
+        footer = src_widget.query_one(".pane-footer", Static)
+        footer_before = str(footer.render_line(0).text)
+        assert "marked" not in footer_before, "precondition: the footer counts no marks"
+
+        await pilot.press("c")
+        await pilot.pause()
+        await pilot.press("enter")
+        await asyncio.wait_for(fs.read_started.wait(), timeout=2.0)
+        await pilot.pause()
+        await pilot.pause()
+
+        assert "-marked" in target.classes, (
+            "the cursor-fallback row is not painted as the copy's target"
+        )
+        assert "*" in target.render_line(0).text
+        # The half only the owning view model can satisfy. ``set_marked_entries``
+        # emits the pane-level ``"viewmodel"`` notify that drives
+        # ``Pane._refresh_chrome``; the rows' own bindings do not, so a bypass
+        # to ``EntryVM.set_marked`` paints the row above and leaves this
+        # Static showing the pre-transfer line.
+        footer_during = str(footer.render_line(0).text)
+        assert footer_during != footer_before
+        assert "1 marked" in footer_during, footer_during
+
+        # Cancel the in-flight worker so teardown is not racing it.
+        await pilot.press("comma")
+        await pilot.pause()
+        await asyncio.wait_for(fs.read_cancelled.wait(), timeout=2.0)
+
+        assert app._crash_report is None, (  # type: ignore[attr-defined]
+            f"the mark flash crashed the app: {app._crash_report}"  # type: ignore[attr-defined]
+        )

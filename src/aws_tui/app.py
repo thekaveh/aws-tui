@@ -35,6 +35,7 @@ from textual.binding import BindingsMap, BindingType
 from textual.containers import Container, Horizontal
 from textual.css.errors import StylesheetError
 from textual.css.tokenizer import TokenError
+from textual.driver import Driver
 from textual.widget import Widget
 from textual.widgets import Input, Static, TextArea
 
@@ -50,6 +51,8 @@ from aws_tui.infra.theme_store import ThemeNotFound, ThemeStore
 from aws_tui.ui import notifications
 from aws_tui.ui.actions import ActionRegistry
 from aws_tui.ui.bindings import BindingResolver
+from aws_tui.ui.paste_guard import guarded_driver_class
+from aws_tui.ui.terminal_protocol import prefer_sigwinch_resize
 from aws_tui.ui.widgets._worker import DeferredWorkerMixin
 from aws_tui.ui.widgets.athena.page import AthenaPage
 from aws_tui.ui.widgets.brand_banner import BrandBanner
@@ -81,6 +84,7 @@ from aws_tui.vm.chrome.crash_vm import CrashChoice, CrashReport, CrashVM
 from aws_tui.vm.chrome.focus_coordinator_vm import FocusSlot
 from aws_tui.vm.chrome.quick_look_vm import QuickLookContent
 from aws_tui.vm.chrome.theme_picker_vm import ThemePickerVM
+from aws_tui.vm.clipboard_vm import ClipboardChannel
 from aws_tui.vm.file_manager.dual_pane_vm import DualPaneVM, FocusedPane
 from aws_tui.vm.file_manager.pane_vm import PaneState
 from aws_tui.vm.glue.iceberg_vm import IcebergView
@@ -146,6 +150,12 @@ class _ThemeApplyFailure:
 _SOURCE_SERVICE_IDS = frozenset({"s3", "emr-serverless", "glue", "athena"})
 _GLUE_SERVICE_IDS = frozenset({"glue"})
 _ATHENA_SERVICE_IDS = frozenset({"athena"})
+# The dual-pane file manager, and therefore every ``pane.*`` action that
+# resolves through ``_focused_file_pane()``. Only ``S3Service`` builds a
+# ``DualPaneVM`` (``services/s3/service.py``); EMR, Glue and Athena host page
+# view models, so ``_dual_pane()`` returns None there and the pane copy
+# actions would be inert palette rows under any wider scope.
+_PANE_SERVICE_IDS = frozenset({"s3"})
 
 # Copy and delete run in SEPARATE exclusive groups. Sharing one group meant
 # ``exclusive=True`` made a confirmed delete cancel an in-flight copy: the copy
@@ -158,8 +168,31 @@ _TRANSFER_DELETE_GROUP = "transfer-delete"
 _TRANSFER_WORKER_GROUPS = (_TRANSFER_COPY_GROUP, _TRANSFER_DELETE_GROUP)
 _EMR_SERVICE_IDS = frozenset({"emr-serverless"})
 
+# Action ids that :meth:`AwsTuiApp.action_dispatch` still honours while a
+# screen sits on the stack (or the coordinator reports modal precedence).
+# Everything else is deliberately inert behind a modal so a stray shortcut
+# cannot mutate the page the user cannot currently see.
+#
+# ``app.quit`` is in here as an ESCAPE HATCH, not as a routed pane action.
+# Without it, any modal that cannot be dismissed — e.g. one wedged by a
+# deferred focus projection landing in its ``focused`` (see
+# ``ui/widgets/_focus_guard``) — also made the whole app unquittable:
+# ``q`` and ``ctrl+c`` both dispatch ``app.quit`` and both returned None.
+# Quitting is never destructive to remote state and always runs the full
+# ``_aws_tui_shutdown``, so it must work from every UI state.
+#
+# This does NOT make ``q`` / ``ctrl+c`` live inside a well-formed modal.
+# ``app.quit`` is in ``ui/bindings.py`` ``_NON_PRIORITY_ACTIONS``, so both of
+# its keys bind non-priority, and Textual's ``Screen._modal_binding_chain``
+# truncates the chain at the first modal node — the App namespace is never
+# consulted while a ``ModalScreen`` owns focus. The hatch fires only when the
+# chain holds no modal at all: the wedged state, and a coordinator stuck in
+# ``is_modal`` with nothing on the screen stack. Pinned both ways by
+# ``tests/integration/test_modal_key_containment.py`` and
+# ``tests/integration/test_keybinding_wiring.py``.
 _MODAL_ROUTED_ACTIONS = frozenset(
     {
+        "app.quit",
         "pane.switch_focus",
         "pane.switch_focus_back",
         "pane.move_up",
@@ -179,6 +212,24 @@ _PALETTE_COMMANDS: tuple[PaletteEntry, ...] = (
         "Switch source",
         "source",
         service_ids=_SOURCE_SERVICE_IDS,
+    ),
+    # The two path copies are keyed (``p`` / ``P``), footer-labelled and in
+    # the help overlay, but they were reachable only by already knowing the
+    # key -- the border glyph that used to hint at them is gone and the
+    # Commands legend has no room (adding chips would take s3 from six to
+    # eight and change ``_fit_actions`` eviction at 120 cols). The palette is
+    # the discoverability surface that costs no chrome.
+    PaletteEntry(
+        "pane.copy_entry_path",
+        "Copy cursor entry path",
+        "pane",
+        service_ids=_PANE_SERVICE_IDS,
+    ),
+    PaletteEntry(
+        "pane.copy_path",
+        "Copy pane path",
+        "pane",
+        service_ids=_PANE_SERVICE_IDS,
     ),
     PaletteEntry(
         "emr.next_application",
@@ -508,6 +559,45 @@ def _mutation_log_context(dual: object) -> dict[str, str]:
     return context
 
 
+def _flash_cursor_fallback_marks(
+    src_pane: object,
+    targets: list[object],
+    *,
+    marked: bool,
+) -> None:
+    """Mark the rows a cursor-fallback copy/delete is acting on.
+
+    NOT cosmetic, despite the name, and do not "simplify" it away.
+    ``DualPaneVM.copy_across`` and ``PaneVM.delete_marked`` re-derive their
+    own targets from ``src_pane.marked_entries`` and this app takes no
+    target argument when it invokes them, so with nothing multi-selected
+    these marks ARE the channel that tells the transfer which entry to move.
+    Drop the call and a cursor-fallback copy or delete becomes a silent
+    no-op. (That overloading is a known design debt — the operation's
+    targets should be their own VM concept rather than a borrowed
+    user-facing bit — but it is the contract today.)
+
+    Routed through ``PaneVM.set_marked_entries`` rather than
+    ``EntryVM.set_marked`` because the pane VM owns the collection and the
+    notification. The rows themselves need no help: each one binds to its
+    own ``EntryVM.on_property_changed`` and would repaint either way. What
+    only ``set_marked_entries`` does is emit the pane-level ``"viewmodel"``
+    notify, and that is the one thing that recomputes the footer summary's
+    marked count — bypass it and the row lights up while the footer keeps
+    reporting the pre-transfer line.
+
+    ``src_pane`` is the pane captured when the action fired, not
+    ``dual.focused_pane`` re-read here — focus can move while the confirm
+    modal is open, and the flash must land on the pane the targets came
+    from. ``getattr`` because the worker's collaborators are duck-typed
+    (same convention as ``copy_across``/``delete_in_focused`` above).
+    """
+    setter = getattr(src_pane, "set_marked_entries", None)
+    if setter is None:
+        return
+    setter(targets, marked=marked)
+
+
 class AwsTuiApp(DeferredWorkerMixin, App[None]):
     """The aws-tui Textual application.
 
@@ -766,6 +856,20 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
     def app_ctx(self) -> AppContext:
         return self._app_ctx
 
+    def get_driver_class(self) -> type[Driver]:
+        """Wrap the platform driver in the bracketed-paste guard.
+
+        Textual 8.2.8's ``XTermParser`` can be stranded permanently inside a
+        bracketed paste when the closing ``\\x1b[201~`` is split by more than
+        ``ESCAPE_DELAY`` — the app keeps repainting while every key, ``q`` and
+        ``Ctrl+C`` included, is swallowed into the paste buffer. See
+        ``ui/paste_guard.py`` for the mechanism. Wrapping whatever driver the
+        platform (or ``TEXTUAL_DRIVER``) chose keeps the guard on every real
+        terminal path without refusing bracketed paste, which the Athena
+        editor and the EMR log filter genuinely need.
+        """
+        return guarded_driver_class(super().get_driver_class())
+
     def compose(self) -> ComposeResult:
         # Profile/region/auth identity lives in the left pane's border:
         # the title shows the live path and the subtitle shows the connection.
@@ -894,7 +998,22 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
             # (``_UnfocusedMixin``); deferred via ``call_after_refresh`` so
             # it runs AFTER Textual's first focus pass instead of being
             # silently undone by it.
-            self.call_after_refresh(lambda: self.set_focus(None))
+            self.call_after_refresh(partial(self._drop_initial_focus, self.screen))
+
+    def _drop_initial_focus(self, boot_screen: object) -> None:
+        """Clear Textual's automatic first-focus pass — but only if the
+        boot screen is still the active one.
+
+        ``App.set_focus`` always writes into ``App.screen``, the TOP screen,
+        so if anything pushed a modal between ``on_mount`` and this deferred
+        callback this would blank the MODAL's focus instead of the main
+        screen's. Same class of defect as the page-level projections guarded
+        by ``ui/widgets/_focus_guard.is_on_active_screen``.
+        """
+        with contextlib.suppress(Exception):
+            if self.screen is not boot_screen:
+                return
+            self.set_focus(None)
 
     async def on_unmount(self) -> None:
         await self._aws_tui_shutdown()
@@ -2221,18 +2340,134 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
         if pane is not None:
             await pane.refresh()
 
-    def _put_on_clipboard(self, value: str, label: str) -> None:
-        """Copy ``value`` and confirm it, so the keystroke is not silent."""
-        with contextlib.suppress(Exception):
-            self.copy_to_clipboard(value)
-        self.notify(f"Copied {label}", timeout=3)
+    async def _put_on_clipboard(self, value: str, label: str) -> None:
+        """Copy ``value`` on both channels and report what actually happened.
 
-    def action_copy_entry_path(self) -> None:
+        Two channels, only one of which can be checked. ``copy_to_clipboard``
+        emits OSC 52, and OSC 52 has no acknowledgement: macOS Terminal.app
+        ignores it outright and iTerm2 does unless the user opted in, and
+        neither says so. Reporting "Copied" off that write is a guess dressed
+        as a fact, so the report is driven by
+        :class:`~aws_tui.vm.clipboard_vm.ClipboardVM` -- which owns the port
+        that spawns the platform helper and returns whether the write landed
+        -- and by nothing else.
+
+        The split is deliberate. The OSC 52 leg stays here because it is
+        Textual's own ``App.copy_to_clipboard`` and ``vm/`` may not import
+        textual; the port, the thread offload and the four-way classification
+        are the view model's, so this method never sees a
+        :class:`~aws_tui.infra.clipboard.ClipboardResult` or compares a
+        mechanism string. What is left is the mapping from an outcome to a
+        toast and a log line, which is where every other multi-outcome report
+        in this app already lives -- no view model in this repo raises a toast.
+        """
+        # The OSC 52 write stays guarded. Textual base64s
+        # ``text.encode("utf-8")``, and a POSIX name that is not valid UTF-8
+        # arrives here carrying lone surrogates (``domain/local_fs.py``
+        # decodes with ``surrogateescape``), so this genuinely can raise --
+        # and an escape would both skip the native write below and, inside a
+        # worker, take the app down with it. Log the exception's class name
+        # and never the payload: a copied path may be a credential.
+        terminal_written = True
+        try:
+            self.copy_to_clipboard(value)
+        except Exception as exc:
+            terminal_written = False
+            self._app_ctx.log_sink.warning(
+                "clipboard.osc52_write_failed",
+                error_type=type(exc).__name__,
+            )
+        # Two offloads stand between a wedged ``xclip`` and a frozen app, and
+        # neither substitutes for the other: the VM's ``run_sync`` keeps the
+        # blocking call off the event loop, and every caller reaches this
+        # coroutine through :meth:`copy_value`'s worker, which keeps it off
+        # the App's own message pump. Awaiting it inline from an action
+        # handler would leave the loop spinning and the pump still blocked --
+        # and the pump is where the next keypress, ``ctrl+q`` included, is
+        # dequeued.
+        write = await self._app_ctx.clipboard_vm.write_async(
+            value, terminal_written=terminal_written
+        )
+        stack = self._app_ctx.root_vm.chrome.toast_stack
+        slug = label.replace(" ", "-")
+        if write.channel is ClipboardChannel.NATIVE:
+            notifications.success(
+                stack,
+                subject="Source",
+                message=f"copied {label}",
+                toast_id=f"clipboard-{slug}",
+            )
+            return
+        if write.channel is ClipboardChannel.HELPER_FAILED:
+            # A helper was there and refused the payload. That is a fault
+            # worth a durable record; the toast carries which helper failed
+            # so the user can reproduce it from a shell.
+            self._app_ctx.log_sink.warning(
+                "clipboard.native_write_failed",
+                mechanism=write.mechanism,
+                error_type=write.error_type,
+            )
+            notifications.advise(
+                stack,
+                subject="Source",
+                message=f"could not copy {label} to the system clipboard",
+                action=f"{write.mechanism} failed; the terminal was sent OSC 52 instead",
+                toast_id=f"clipboard-failed-{slug}",
+            )
+            return
+        if write.channel is ClipboardChannel.TERMINAL_ONLY:
+            # No helper is not a fault -- ssh, tmux, a headless CI shell --
+            # so no log line. The toast names the one channel that was used
+            # and refuses to call an unacknowledged write a success.
+            notifications.advise(
+                stack,
+                subject="Source",
+                message=f"sent {label} to the terminal via OSC 52",
+                action="no native clipboard helper; your terminal may ignore it",
+                toast_id=f"clipboard-osc52-{slug}",
+            )
+            return
+        notifications.advise(
+            stack,
+            subject="Source",
+            message=f"could not copy {label}",
+            action="no native clipboard helper, and the terminal refused OSC 52",
+            toast_id=f"clipboard-unavailable-{slug}",
+        )
+
+    def copy_value(self, value: str, label: str) -> None:
+        """Put ``value`` on the clipboard without blocking the caller.
+
+        The one seam every copy goes through: widgets that hold a value but
+        have no route to the toast stack reach it by duck typing (``Pane``),
+        and the keyboard actions call it rather than awaiting the writer, so
+        no copy path can stall the App's message pump on a wedged helper.
+        ``exclusive`` in the ``clipboard`` group means a second copy
+        supersedes a first that is still waiting, which is what the user
+        meant.
+        """
+        self._run_lifecycle_worker(
+            partial(self._put_on_clipboard, value, label),
+            group="clipboard",
+        )
+
+    async def action_copy_entry_path(self) -> None:
         """Copy the focused pane's cursor entry path.
 
         The pane's view model owns the formatting, so this reads the prepared
         payload rather than reassembling a path from chrome that the border may
-        have truncated for display.
+        have truncated for display. It owns the *availability* too:
+        ``copy_selected_path`` is ``None`` exactly when there is nothing a
+        user could mean (an empty listing, or the cursor on the ``..`` parent
+        link), and this is now the only place in the app that reads that
+        answer -- ``Pane.copy_selected_path`` used to make the same test and
+        return silently, so the keyboard and the widget gave the user two
+        different answers to one question.
+
+        The write itself goes through :meth:`copy_value` rather than being
+        awaited here: this handler runs on the App's message pump, and
+        awaiting the ~2 s port timeout on it would make the app deaf to every
+        later keystroke, ``ctrl+q`` included.
         """
         self.record_action("pane.copy_entry_path")
         pane = self._focused_file_pane()
@@ -2240,17 +2475,29 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
             return
         target = pane.viewmodel.copy_selected_path
         if target is None:
-            self.notify("Nothing selected to copy", severity="warning", timeout=3)
+            # Through the toast stack, never ``self.notify``: Textual's own
+            # notifier wrecks the footer (see ``_raise_theme_changed_toast``).
+            notifications.advise(
+                self._app_ctx.root_vm.chrome.toast_stack,
+                subject="Source",
+                message="nothing selected to copy",
+                toast_id="clipboard-nothing-selected",
+            )
             return
-        self._put_on_clipboard(target, "file path")
+        self.copy_value(target, "file path")
 
-    def action_copy_path(self) -> None:
-        """Copy the focused pane's current location."""
+    async def action_copy_path(self) -> None:
+        """Copy the focused pane's current location.
+
+        Through :meth:`copy_value`, for the same reason as
+        :meth:`action_copy_entry_path`: the port call belongs in a worker, not
+        on the pump that dequeues the next key.
+        """
         self.record_action("pane.copy_path")
         pane = self._focused_file_pane()
         if pane is None:
             return
-        self._put_on_clipboard(pane.viewmodel.copy_path, "path")
+        self.copy_value(pane.viewmodel.copy_path, "path")
 
     async def action_help(self) -> None:
         """Show the help overlay with the active configurable keymap."""
@@ -2316,13 +2563,14 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
             return
         self._confirmation_pending = True
         self.run_worker(
-            self._confirm_copy(dual, list(targets), used_cursor_fallback, request),
+            self._confirm_copy(dual, src_pane, list(targets), used_cursor_fallback, request),
             group="confirmation",
         )
 
     async def _confirm_copy(
         self,
         dual: object,
+        src_pane: object,
         targets: list[object],
         used_cursor_fallback: bool,
         request: ConfirmRequest,
@@ -2333,7 +2581,7 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
             if not await ctx.confirm_vm.ask(request, dialog_service=dialogs):
                 return
             self._run_lifecycle_worker(
-                partial(self._run_copy, dual, targets, used_cursor_fallback),
+                partial(self._run_copy, dual, src_pane, targets, used_cursor_fallback),
                 group=_TRANSFER_COPY_GROUP,
             )
         finally:
@@ -2342,6 +2590,7 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
     async def _run_copy(
         self,
         dual: object,
+        src_pane: object,
         targets: list[object],
         used_cursor_fallback: bool,
     ) -> None:
@@ -2352,8 +2601,7 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
         if copy_across is None:
             return
         if used_cursor_fallback:
-            for entry in targets:
-                entry.set_marked(True)  # type: ignore[attr-defined]
+            _flash_cursor_fallback_marks(src_pane, targets, marked=True)
         try:
             await copy_across()
         except Exception as exc:
@@ -2382,8 +2630,7 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
             )
         finally:
             if used_cursor_fallback:
-                for entry in targets:
-                    entry.set_marked(False)  # type: ignore[attr-defined]
+                _flash_cursor_fallback_marks(src_pane, targets, marked=False)
 
     async def action_delete(self) -> None:
         """Delete the focused pane's marked entries (or the cursor row if
@@ -2425,13 +2672,14 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
             return
         self._confirmation_pending = True
         self.run_worker(
-            self._confirm_delete(dual, list(targets), used_cursor_fallback, request),
+            self._confirm_delete(dual, src_pane, list(targets), used_cursor_fallback, request),
             group="confirmation",
         )
 
     async def _confirm_delete(
         self,
         dual: object,
+        src_pane: object,
         targets: list[object],
         used_cursor_fallback: bool,
         request: ConfirmRequest,
@@ -2442,7 +2690,7 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
             if not await ctx.confirm_vm.ask(request, dialog_service=dialogs):
                 return
             self._run_lifecycle_worker(
-                partial(self._run_delete, dual, targets, used_cursor_fallback),
+                partial(self._run_delete, dual, src_pane, targets, used_cursor_fallback),
                 group=_TRANSFER_DELETE_GROUP,
             )
         finally:
@@ -2451,6 +2699,7 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
     async def _run_delete(
         self,
         dual: object,
+        src_pane: object,
         targets: list[object],
         used_cursor_fallback: bool,
     ) -> None:
@@ -2460,8 +2709,7 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
         if delete_in_focused is None:
             return
         if used_cursor_fallback:
-            for entry in targets:
-                entry.set_marked(True)  # type: ignore[attr-defined]
+            _flash_cursor_fallback_marks(src_pane, targets, marked=True)
         try:
             await delete_in_focused()
         except Exception as exc:
@@ -2482,8 +2730,7 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
             )
         finally:
             if used_cursor_fallback:
-                for entry in targets:
-                    entry.set_marked(False)  # type: ignore[attr-defined]
+                _flash_cursor_fallback_marks(src_pane, targets, marked=False)
 
     def action_cycle_theme(self) -> None:
         """Cycle to the next theme without opening the picker modal —
@@ -3506,19 +3753,11 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
         copied = clipboard.copied_table
         if copied is None:
             return
-        try:
-            self.copy_to_clipboard(copied.sql_identifier)
-        except Exception as exc:
-            self._app_ctx.log_sink.warning(
-                "table_clipboard.system_copy_unavailable",
-                error_type=type(exc).__name__,
-            )
-        notifications.success(
-            self._app_ctx.root_vm.chrome.toast_stack,
-            subject="Source",
-            message="copied table reference",
-            toast_id="glue-table-reference-copied",
-        )
+        # The typed in-app clipboard above is authoritative and already
+        # holds the reference; this is the OS-clipboard leg, and it goes
+        # through the same honest writer as every other copy. It used to
+        # raise a success toast whether or not the write reached anything.
+        self.copy_value(copied.sql_identifier, "table reference")
 
     def _advance_service_navigation(
         self,
@@ -4393,6 +4632,66 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
         if self._athena_page() is not None or self._glue_page() is not None:
             self._recompute_hint_disables()
 
+    def on_app_blur(self, _event: events.AppBlur) -> None:
+        """Tear down pointer-driven state the app can no longer observe.
+
+        Switching macOS Spaces or terminal tabs sends ``AppBlur``, and Textual
+        8.2.8 tears down only *focus* on that path (``App._watch_app_focus``,
+        ``textual/app.py:4418-4448``, blur branch ``:4443-4448``). Two pieces
+        of interaction state survive it, both reported by a user doing exactly
+        that gesture:
+
+        1. **The tooltip.** Nothing clears it on blur, so a tooltip opened by
+           resting the pointer on a row stays painted over the pane for as
+           long as the app is away. ``Screen._clear_tooltip`` is the routine
+           Textual itself uses for this, from ``_on_screen_suspend``
+           (``textual/screen.py:1502-1508``); blur is simply a case it does
+           not cover.
+        2. **The mouse capture.** A scrollbar drag interrupted by a blur
+           leaves ``App.mouse_captured`` pointing at the scrollbar. Every
+           other Textual teardown of interaction state calls
+           ``capture_mouse(None)`` (``textual/app.py:2868``, ``:2941``,
+           ``:3017``); the blur path is the odd one out.
+
+        The capture orphan is *measurably harmless today* — 0 B/s of output,
+        0.0% CPU, and it self-heals on the next click, which costs the user
+        exactly one swallowed click. It is fixed here because of what sits
+        under it: ``ScrollBar._on_mouse_capture``
+        (``textual/scrollbar.py:363``) calls ``App._realtime_animation_begin``,
+        which calls ``gc.disable()`` when ``PAUSE_GC_ON_SCROLL`` is true, and
+        the matching ``_realtime_animation_complete`` runs only on
+        ``MouseRelease``. Textual's class default is ``False``
+        (``textual/app.py:526``) and this app does not override it — that, and
+        only that, is why the orphan is benign. Set that flag with the blur
+        path unfixed and the same orphan leaves ``gc.disable()`` in force for
+        the rest of the process, degrading into precisely the progressive "the
+        app got unusably slow after I switched away and back" the user
+        reported. ``capture_mouse(None)`` posts the ``MouseRelease`` that
+        balances the begin.
+
+        Defensive throughout: this runs on a path where the screen stack may
+        be in any state (mid-push, mid-pop, or empty during shutdown), and a
+        raise here would reach ``App._handle_exception`` and kill the app over
+        a cosmetic cleanup. Nothing in here is allowed to propagate.
+        """
+        # Two suppressions, not one: the outer covers reading the stack at all
+        # (``screen_stack`` raises before the mode is set up and during
+        # shutdown), the inner keeps one uncooperative screen from skipping
+        # the rest of them.
+        with contextlib.suppress(Exception):
+            # Clear across the whole stack, not just the top: a tooltip that
+            # was showing on a screen a modal has since covered is still a
+            # painted artefact when the modal pops. ``_clear_tooltip``
+            # early-returns when a screen has no ``Tooltip`` child, so this is
+            # free for every screen that was never hovered.
+            for screen in self.screen_stack:
+                with contextlib.suppress(Exception):
+                    screen._clear_tooltip()
+        with contextlib.suppress(Exception):
+            # No-ops when nothing is captured: ``App.capture_mouse`` returns
+            # immediately when the new widget equals ``mouse_captured``.
+            self.capture_mouse(None)
+
     def _on_nav_selection_changed(self, msg: object) -> None:
         """Hub subscriber: route NavMenuVM selected_id changes to the content host.
 
@@ -5084,6 +5383,7 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
             ("confirm_vm.dispose", ctx.confirm_vm),
             ("transfers_vm.dispose", ctx.transfers_vm),
             ("table_clipboard_vm.dispose", ctx.table_clipboard_vm),
+            ("clipboard_vm.dispose", ctx.clipboard_vm),
             ("root_vm.dispose", ctx.root_vm),
             ("focus_coordinator.dispose", ctx.focus_coordinator),
         ):
@@ -5161,6 +5461,11 @@ def main() -> None:
             file=sys.stderr,
         )
         raise SystemExit(1) from None
+
+    # Must precede `run()`: the driver and its input parser are built there,
+    # and the in-band resize protocol is negotiated during driver start-up.
+    prefer_sigwinch_resize()
+
     try:
         app.run()
     except BaseException as exc:

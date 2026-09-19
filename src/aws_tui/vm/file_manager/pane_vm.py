@@ -11,8 +11,10 @@ Async-aware operations:
 - ``refresh()`` re-runs under the current path.
 
 State transitions (LOADING → IDLE / error) happen synchronously around
-the async ``provider.list()`` call. Subscribers observe via
-``PropertyChangedMessage`` on the hub.
+the async ``provider.list()`` call. Every change is published twice: on
+this VM's own ``on_property_changed`` Observable, which is what the pane
+view binds to, and as a ``PropertyChangedMessage`` on the shared hub,
+which is what the app-level cross-pane subscribers still read.
 """
 
 from __future__ import annotations
@@ -22,6 +24,7 @@ from collections.abc import Iterable
 from dataclasses import dataclass
 from enum import StrEnum
 
+import reactivex as rx
 from vmx import (
     ComponentVMOf,
     CompositeVM,
@@ -48,7 +51,7 @@ from aws_tui.domain.filesystem import (
     ProviderUnreachableError,
 )
 from aws_tui.infra.redaction import redact_text
-from aws_tui.vm._observable import send_value_free
+from aws_tui.vm._observable import ObserverSafeSubject, send_value_free
 from aws_tui.vm.file_manager.entry_vm import EntryState, EntryVM
 from aws_tui.vm.service_diagnostics import report_unexpected_service_error
 
@@ -154,6 +157,24 @@ _PLACEHOLDER_FOR_STATE: dict[PaneState, tuple[str, str]] = {
 
 _COLUMN_HEADER_TEXT: str = f"   {'NAME':<40} {'SIZE':>12}  {'MODIFIED':<18}"
 
+# Tooltip advice. Both sentences name a keystroke, which makes them the same
+# kind of string as the AUTH_REQUIRED / UNREACHABLE placeholders above
+# ("press a to sign in", "press r to retry") -- decided here rather than in
+# the widget that draws them. ``vm/chrome/hint_legend_vm._tooltip_for`` is
+# the wider precedent: keybinding advice is composed VM-side and the view
+# binds to it.
+#
+# The entry hint names the CURSOR entry, not the hovered row: ``p``
+# (``pane.copy_entry_path``) copies whatever the cursor is on, and the
+# pointer can rest on a row the cursor has not reached. It offers no click,
+# because clicking a row moves the cursor instead of copying.
+_ENTRY_TOOLTIP_HINT: str = "press p to copy the cursor entry's path"
+# The border hint leads with the key -- ``P`` works with no pointer and is
+# what the footer, the help overlay and the command palette all name -- and
+# still mentions the click, because the border carries no glyph any more and
+# nothing else advertises that it is a target at all.
+_PATH_TOOLTIP_HINT: str = "press P to copy, or click here"
+
 
 def _require_single_segment(name: str) -> None:
     """Reject a name that would silently become a path.
@@ -248,6 +269,17 @@ class PaneVM:
         self._error_text: str | None = None
         self._reload_generation: int = 0
         self._is_multiselect_mode: bool = False
+        self._disposed: bool = False
+
+        # Per-VM Observable (round-3 §9.bis.11 / PR #103 retirement path):
+        # fires the name of the property that just changed, scoped to THIS
+        # pane. :class:`aws_tui.ui.widgets.pane.Pane` binds here instead of
+        # filtering the shared ``MessageHub`` by ``sender_object``. The hub
+        # has no sender-keyed routing, so a hub filter costs one observer per
+        # watched property on a stream carrying every message in the app --
+        # and it cannot tell two panes apart until the message has already
+        # been fanned out to both of them.
+        self._on_property_changed: ObserverSafeSubject[str] = ObserverSafeSubject[str]()
 
         self._inner: CompositeVM[ComponentVMOf[EntryState]] = (
             CompositeVM[ComponentVMOf[EntryState]]
@@ -363,6 +395,17 @@ class PaneVM:
     @property
     def is_multiselect_mode(self) -> bool:
         return self._is_multiselect_mode
+
+    @property
+    def on_property_changed(self) -> rx.Observable[str]:
+        """Per-VM-instance Observable scoped to THIS pane.
+
+        The binding surface for the pane view. Round-3 / PR #103 retirement
+        path: a subscriber here hears only this pane's own property changes,
+        so it never pays for the other pane, the entries, or any other view
+        model publishing on the shared hub.
+        """
+        return self._on_property_changed
 
     @property
     def cursor_index(self) -> int:
@@ -483,6 +526,29 @@ class PaneVM:
             return ()
         snapshot = self.filtered_entries
         return tuple(e for e in snapshot if e.is_marked and not e.is_parent_link)
+
+    @property
+    def entry_tooltip_hint(self) -> str:
+        """Advice appended to a truncated entry name's tooltip.
+
+        A plain property rather than a :class:`PaneViewModel` field because
+        ``EntryRow.render`` is the only reader and it runs per row per
+        frame: building a ``PaneViewModel`` there would re-derive the whole
+        listing's marked set and byte totals to read one constant string.
+        The view still owns *whether* a tooltip appears -- that depends on
+        whether the NAME column actually cut the name off, which only the
+        rendered surface knows -- but not what it says.
+        """
+        return _ENTRY_TOOLTIP_HINT
+
+    @property
+    def path_tooltip_hint(self) -> str:
+        """Advice appended to the pane path's border tooltip.
+
+        Same split as :attr:`entry_tooltip_hint`: the view decides that the
+        pointer is on the border row, the view model decides the sentence.
+        """
+        return _PATH_TOOLTIP_HINT
 
     @property
     def viewmodel(self) -> PaneViewModel:
@@ -623,6 +689,9 @@ class PaneVM:
         self._inner.destruct()
 
     def dispose(self) -> None:
+        if self._disposed:
+            return
+        self._disposed = True
         self._reload_generation += 1
         self._open_command.dispose()
         self._ascend_command.dispose()
@@ -645,6 +714,12 @@ class PaneVM:
             child.dispose()
         self._filtered = ()
         self._entries.clear()
+        # Complete and tear the subject down BEFORE the inner VM, matching
+        # ``EntryVM.dispose``: a bound pane view that is still mounted
+        # (Textual removes children asynchronously) must be told the stream
+        # ended rather than left holding a live observer on a disposed VM.
+        self._on_property_changed.on_completed()
+        self._on_property_changed.dispose()
         self._inner.dispose()
 
     # ── Async operations ────────────────────────────────────────────────────
@@ -766,6 +841,37 @@ class PaneVM:
             self._set_multiselect(True)
         entry_vm.set_marked(marked)
         self._notify("viewmodel")
+
+    def set_marked_entries(self, entries: Iterable[EntryVM], *, marked: bool) -> None:
+        """Set the mark flag on specific entries and republish the viewmodel.
+
+        The app-level copy/delete workers flash the cursor-fallback target as
+        marked for the duration of the transfer, so the user can see which row
+        the operation is acting on. They hold the ``EntryVM`` objects directly
+        rather than filtered indices, which is why this takes entries and not
+        positions like :meth:`mark_at`.
+
+        The ``_notify`` is what republishes the *pane-level* view model: the
+        footer summary counts marked entries (``_summary_text``), and nothing
+        else would recompute it. The rows themselves need no help — each one
+        binds to its own ``EntryVM.on_property_changed`` — but calling
+        ``entry.set_marked`` directly from outside this VM still leaves the
+        footer stating the wrong count, which is why the flash goes through
+        here rather than through the entries.
+
+        Deliberately does NOT enter multi-select mode: this is a transient
+        visual flash owned by a worker, not a user selection, and flipping
+        ``is_multiselect_mode`` would rewrite the footer summary for the
+        duration of the transfer.
+        """
+        changed = False
+        for entry in entries:
+            if entry.is_parent_link or entry.is_marked == marked:
+                continue
+            entry.set_marked(marked)
+            changed = True
+        if changed:
+            self._notify("viewmodel")
 
     def move_cursor_to(self, target_index: int) -> None:
         """Place the cursor directly at ``target_index`` (clamped). Used by
@@ -988,24 +1094,52 @@ class PaneVM:
         )
 
     def _replace_entries(self, new_entries: list[EntryVM]) -> None:
-        for child in self._entries:
-            if child.inner in self._inner:
-                self._inner.remove(child.inner)
-            child.dispose()
-        self._entries = new_entries
-        for child in self._entries:
-            if self._inner.is_constructed:
-                child.construct()
-            self._inner.append(child.inner)
+        # ONE batch around both loops: ``CompositeVM.batch_update()`` is
+        # ref-counted and suppresses the per-mutation events, emitting a
+        # single ``CollectionChangedEvent(action="reset")`` on exit. Without
+        # it a listing of N entries publishes 2N events, and the
+        # ``FilteredCompositeVM`` this composite feeds recomputes its whole
+        # visible list on every one of them — quadratic in the row count.
+        # Its subscription is ``lambda _: self._recompute()``, so the
+        # coalesced "reset" action costs exactly one recompute; no consumer
+        # in this repo reads the event's ``action`` field.
+        #
+        # The batch stops at the loops on purpose — see the ordering note
+        # below, which must run with the composite fully published.
+        # Pinned structurally by
+        # ``test_replace_entries_writes_the_cursor_only_after_a_filter_recompute``.
+        with self._inner.batch_update():
+            for child in self._entries:
+                if child.inner in self._inner:
+                    self._inner.remove(child.inner)
+                child.dispose()
+            self._entries = new_entries
+            for child in self._entries:
+                if self._inner.is_constructed:
+                    child.construct()
+                self._inner.append(child.inner)
         # ORDER MATTERS: ``_recompute_filtered()`` MUST run before
         # ``self._cursor_index = 0`` because the setter reads
         # ``self._filtered`` to map filtered-position → entry inner.
-        # ``self._filtered`` still holds indices into the OLD
-        # entries list at this point; if the new ``_entries`` is
-        # shorter than ``max(_filtered) + 1`` the setter dereferences
-        # past the end and raises IndexError. (E.g. filter narrows
-        # to row 5 of 10, then refresh returns 3 entries.) Sibling
-        # call site ``_set_filter_text`` already has this ordering.
+        # A ``_filtered`` still holding indices into the OLD entries
+        # list makes the setter dereference past the end of a shorter
+        # new one and raise IndexError (filter narrows to row 5 of 10,
+        # refresh returns 3). ``test_a_stale_filtered_list_makes_the
+        # _cursor_write_raise`` pins that mechanism directly.
+        #
+        # Defence in depth, not the only defence: leaving the batch
+        # above already emits the coalesced ``action="reset"``, which
+        # ``FilteredCompositeVM`` turns into a ``_recompute()`` and so
+        # into ``_sync_filtered_from_composite()`` — ``_filtered`` is
+        # therefore fresh by the time this line is reached, and a
+        # ``set_predicate`` moved inside the batch would not be
+        # suppressed either (it calls ``_recompute()`` directly rather
+        # than through ``on_collection_changed``). Both regressions run
+        # green end-to-end; keeping the sequence here and in this order
+        # is what stops a later edit from landing the cursor write in
+        # the one window — inside the batch, before any recompute —
+        # where the IndexError is real. Sibling call site
+        # ``_set_filter_text`` already has this ordering.
         self._recompute_filtered()
         self._cursor_index = 0
         self._sync_cursor_selection()
@@ -1022,15 +1156,28 @@ class PaneVM:
     # ── Helpers ─────────────────────────────────────────────────────────────
 
     def _notify(self, prop: str) -> None:
-        """Publish a ``PropertyChangedMessage`` for ``prop`` on the hub.
+        """Emit on BOTH the shared hub and this pane's own Observable.
 
-        Thin convenience over the repeated three-argument call so the
-        24 notify sites in this file (which would otherwise be
-        ``self._hub.send(PropertyChangedMessage.create(self, self._inner.name, "prop"))``
-        each) stay readable. Single seam for future coalescing /
-        instrumentation.
+        Never either/or. The hub send is a published contract two app-level
+        subscribers still depend on -- ``AwsTuiApp._on_hub_message_pane_state``
+        routes ``"state"`` into the connection-reachability set and
+        ``_on_hub_message_cursor`` recomputes the Commands chips off
+        ``"cursor_index"``/``"viewmodel"``/``"entries"``, both filtering by
+        ``isinstance(sender_object, PaneVM)`` across every pane in the app.
+        The subject is what the bound :class:`~aws_tui.ui.widgets.pane.Pane`
+        listens to.
+
+        Also the single seam for the 24 notify sites in this file (which
+        would otherwise each be
+        ``self._hub.send(PropertyChangedMessage.create(self, self._inner.name, "prop"))``)
+        and for future coalescing / instrumentation. The guard stops a late
+        caller from publishing a property change for a disposed view model,
+        matching ``EntryVM._notify`` and ``JobRunDetailVM._notify``.
         """
+        if self._disposed:
+            return
         send_value_free(self._hub, PropertyChangedMessage.create(self, self._inner.name, prop))
+        self._on_property_changed.on_next(prop)
 
     # ── Cursor / selection / filter ─────────────────────────────────────────
 

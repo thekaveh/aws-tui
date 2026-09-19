@@ -86,6 +86,49 @@ Any modern terminal works: Terminal.app, iTerm2, Warp, kitty, Alacritty.
 The default SF Mono font has the full box-drawing range; Fira Code or
 JetBrains Mono are popular alternatives.
 
+### 3.1. Window resize
+
+A terminal has two ways to tell a full-screen app its window changed size:
+the kernel's `SIGWINCH` signal, and the newer in-band window-resize
+protocol (DEC private mode 2048). Textual 8.2.8 stops listening to
+`SIGWINCH` altogether the moment a terminal accepts mode 2048, leaving the
+in-band report as the only channel. If one report is missed — a macOS Space
+switch that resizes a window on an inactive desktop is the case this was
+reported against — the app keeps painting the old geometry. Text runs past
+the edge or the layout sits in a corner; keys still work, but nothing you
+can do inside the app repairs it.
+
+aws-tui therefore starts with the in-band protocol off and `SIGWINCH` back
+in charge. The switch is Textual's own `TEXTUAL_SMOOTH_SCROLL` variable,
+which despite its name gates exactly one thing in Textual 8.2.8: whether
+mode 2048 is negotiated at all.
+
+| You set | Result |
+|---|---|
+| nothing | In-band resize off, `SIGWINCH` resize on. This is the default. |
+| `TEXTUAL_SMOOTH_SCROLL=1` | Textual's own default back: in-band resize on, `SIGWINCH` ignored. |
+| `TEXTUAL_SMOOTH_SCROLL=0` | Identical to the default; set it explicitly if you want it pinned. |
+
+**What the default gives up.** Two pointer niceties ride on that same
+negotiation, and turning it off loses both:
+
+- A **scrollbar drag animates towards the pointer instead of tracking it.**
+  Textual only sets `App.supports_smooth_scrolling` when the in-band report
+  arrives, and the scrollbar asks for an animated scroll whenever it is
+  false.
+- **Mouse coordinates stay whole cells rather than sub-cell pixels.**
+  Textual requests pixel-precision mouse reporting (DEC mode 1016) only from
+  the same branch, so it is never requested here.
+
+Neither touches layout, colours, or what the panes contain, and neither is
+new if you use Terminal.app or iTerm2: they never negotiate mode 2048 —
+Textual skips iTerm2 deliberately — so both have always behaved this way
+there, as has Windows, whose driver has no in-band resize path at all. The
+default only changes anything on a terminal that does advertise the mode,
+such as Ghostty, WezTerm, or kitty, and there it trades a smoother drag for a
+window size the app can always recover. Set `TEXTUAL_SMOOTH_SCROLL=1` if you
+would rather have it the other way round.
+
 ## 4. Linux
 
 Any modern terminal emulator with truecolor support: GNOME Terminal,

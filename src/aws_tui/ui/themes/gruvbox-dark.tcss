@@ -4,6 +4,7 @@
  */
 
 $bg:           #282828;
+$bg-alt:       #32302f;
 $bg-elev:      #3c3836;
 $bg-sel:       #504945;
 $text:         #ebdbb2;
@@ -61,6 +62,14 @@ Pane .column-header {
 Pane .entry-row {
     color: $text;
     height: 1;
+}
+
+/* Zebra striping. Background-only and declared BEFORE the -selected
+   rule: both selectors score specificity (0,2,1), so Textual breaks the
+   tie by source order and the LATER rule wins. Moving this below
+   `.-selected` silently makes the cursor row render as a stripe. */
+Pane .entry-row.-alt {
+    background: $bg-alt;
 }
 
 Pane .entry-row.-selected {

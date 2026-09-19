@@ -47,8 +47,8 @@ as the universal escape hatch.
 | New folder | `pane.new` action — *(deferred)* | No handler wired in v0.8.x |
 | Rename in place | `pane.move` action — *(deferred)* | Bundled into the move handler; not wired |
 | Refresh pane | `r` | |
-| Copy cursor entry path | `p` | Copies the full path of the entry under the cursor |
-| Copy pane path | `P` (`shift+p`) | Copies the pane's current directory path; the pane's top border is also a click target |
+| Copy cursor entry path | `p` | Copies the full path of the entry under the cursor. Also listed in the command palette as **Copy cursor entry path**. |
+| Copy pane path | `P` (`shift+p`) | Copies the pane's current directory path; the pane's top border is also a click target. Also listed in the command palette as **Copy pane path**. |
 
 ### 1.4. Overlays
 
@@ -148,7 +148,7 @@ same size.
 | Refresh active view | `r` | Reloads only the selected Catalog, Jobs, or Crawlers view. |
 | Load more rows in the focused list | `l`, or `:` / `Ctrl+K`, then **Load more Glue rows** | Runs `glue.load_more`. Fetches the next page for the focused Glue list (databases, tables, partitions, jobs, runs, crawlers, or the focused Iceberg metadata tab); clicking a list footer that reads `more available` does the same. Disabled when the list has no further page or hit its 1,000-item safety limit. |
 | Switch AWS source | `Shift+S` | Runs `app.swap_source` and rebuilds Glue under the next resolver-ordered supported AWS profile and region. The bordered **Source** selector can instead choose an exact source. |
-| Copy selected table reference | `y` | Runs `glue.copy_table_ref`. The canonical, fully quoted identifier and its source identity are retained in the authoritative typed in-app clipboard; OS clipboard delivery is best effort. |
+| Copy selected table reference | `y` | Runs `glue.copy_table_ref`. The canonical, fully quoted identifier and its source identity are retained in the authoritative typed in-app clipboard; the OS clipboard write then goes through the single app-level writer, whose toast names the channel that actually accepted the text and never reports an unacknowledged OSC 52 write as a copy. |
 | Open selected table location in S3 | `:` / `Ctrl+K`, then **Open table location in S3** | `glue.open_s3_location` is palette-only and absent from `KeymapStore.DEFAULT_BINDINGS`. It preserves the exact Glue connection name and region; malformed or missing locations do not navigate. |
 | Query selected table in Athena | `Shift+Q` (`Q`) or `:` / `Ctrl+K`, then **Query table in Athena** | Runs `glue.query_in_athena` for a visible selected Glue table. It opens Athena, resolves the exact catalog/database request context, and prefills the quoted `SELECT * FROM "database"."table" LIMIT 5`; it does not execute the query. |
 | Query selected Iceberg snapshot in Athena | `Shift+V` (`V`), `:` / `Ctrl+K`, then **Query Iceberg snapshot in Athena**, or the Iceberg time-travel button | Runs `glue.time_travel_in_athena` only for a visible selected snapshot on the Snapshots tab. It opens Athena with the same exact source and bounded SQL plus `FOR VERSION AS OF <snapshot-id>` before `LIMIT 5`; it does not execute the query. |
@@ -290,8 +290,8 @@ unbound until a handler ships.
 | `pane.delete` | `d` | yes | Delete marked entries (confirms) |
 | `pane.new` | `n` | *(deferred)* | New folder / bucket |
 | `pane.refresh` | `r` | yes | Re-run `provider.list()` |
-| `pane.copy_entry_path` | `p` | yes | Copy the cursor entry's full path to the clipboard |
-| `pane.copy_path` | `P` (`shift+p`) | yes | Copy the pane's current path to the clipboard |
+| `pane.copy_entry_path` | `p` | yes | Copy the cursor entry's full path to the clipboard; keyed and palette-visible (**Copy cursor entry path**, file manager only) |
+| `pane.copy_path` | `P` (`shift+p`) | yes | Copy the pane's current path to the clipboard; keyed and palette-visible (**Copy pane path**, file manager only) |
 | `auth.authenticate` | `a` (when auth toast active) | *(deferred)* | Reserved for a future auth helper; currently run `aws sso login --profile <name>` yourself |
 | `emr.next_application` | `A` (`shift+a`) | yes | Cycle to the next EMR application |
 | `emr.clone` | `c` (when EMR page mounted) | yes | Open the EMR clone-job-run modal pre-filled from the focused run. |

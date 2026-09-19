@@ -19,6 +19,7 @@ from textual.widgets import OptionList, Static
 from textual.widgets.option_list import Option
 
 from aws_tui.domain.emr_serverless import ApplicationState
+from aws_tui.ui.widgets._focus_guard import is_on_active_screen
 from aws_tui.ui.widgets.overlay_option_list import (
     OverlayOptionList,
     PickerFocusIntent,
@@ -382,6 +383,11 @@ class ApplicationPicker(Widget, can_focus=True):
             or not self.is_attached
             or opts is None
             or not opts.is_attached
+            # ``App.set_focus`` writes into the TOP screen regardless of
+            # which screen ``opts`` lives on, so a deferred focus that
+            # lands after a modal push would wedge that modal. See
+            # ``ui/widgets/_focus_guard``.
+            or not is_on_active_screen(self)
         ):
             return
         self.app.set_focus(opts)

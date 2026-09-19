@@ -8,6 +8,7 @@ snapshot under Carbon to keep CI fast and goldens manageable.
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 import pytest
@@ -102,3 +103,63 @@ def test_pane_unreachable_carbon_renders_unreachable_label() -> None:
 
 def test_pane_error_carbon_renders_error_label() -> None:
     _assert_snapshot_has("test_pane_error_carbon", ["error"])
+
+
+# ── Zebra / border-glyph guards ─────────────────────────────────────────────
+#
+# The 2026-09-18 pass re-recorded 44 goldens at once (zebra striping plus the
+# removal of the U+1F4CB border glyph). A diff that large can hide a genuine
+# regression, so these guards assert the two properties directly off disk
+# rather than trusting a parity match.
+
+_THEME_DIR = Path(__file__).parents[2] / "src" / "aws_tui" / "ui" / "themes"
+_DEMO_DIR = Path(__file__).parent / "__snapshots__" / "test_demo_mode"
+
+
+def _zebra_token(theme: str) -> str:
+    """The theme's own ``$bg-alt``, read from its stylesheet."""
+    text = (_THEME_DIR / f"{theme}.tcss").read_text()
+    match = re.search(r"^\s*\$bg-alt:\s*(#[0-9a-f]{6});", text, re.M)
+    assert match, f"{theme}.tcss defines no $bg-alt"
+    return match.group(1)
+
+
+@pytest.mark.parametrize("theme", THEMES)
+def test_rowless_pane_states_carry_no_zebra_stripe(theme: str) -> None:
+    """A state with no rows must never paint the stripe.
+
+    The stripe is scoped ``Pane .entry-row.-alt``. If it ever leaks onto a
+    placeholder ``Static`` or a widget outside ``Pane``, it shows up here as
+    the theme's own ``$bg-alt`` appearing in a golden that renders no rows.
+    """
+    stripe = _zebra_token(theme)
+    for stem in (f"test_pane_empty[{theme}]", f"test_pane_auth_required[{theme}]"):
+        svg = (_SNAPSHOT_DIR / f"{stem}.raw").read_text()
+        assert stripe.lower() not in svg.lower(), (
+            f"{stem} renders no rows yet contains the zebra colour {stripe}; "
+            f"the `Pane .entry-row.-alt` rule has leaked."
+        )
+
+
+@pytest.mark.parametrize("theme", THEMES)
+def test_demo_listing_actually_paints_the_zebra_stripe(theme: str) -> None:
+    """The positive half: where rows exist, the stripe must be visible.
+
+    Without this, deleting the rule entirely would still leave the negative
+    guard above passing.
+    """
+    stripe = _zebra_token(theme)
+    svg = (_DEMO_DIR / f"test_demo_mode_snapshot[{theme}].raw").read_text()
+    assert stripe.lower() in svg.lower(), (
+        f"the demo listing for {theme} paints no {stripe} stripe; either the "
+        f"rows failed to render or the zebra rule was dropped."
+    )
+
+
+@pytest.mark.parametrize("theme", THEMES)
+def test_pane_border_carries_no_clipboard_glyph(theme: str) -> None:
+    """The border title is plain text; the copy affordance is a key and a
+    palette command, not an emoji wedged into box-drawing chrome."""
+    for stem in (f"test_pane_empty[{theme}]", f"test_pane_auth_required[{theme}]"):
+        svg = (_SNAPSHOT_DIR / f"{stem}.raw").read_text()
+        assert "\U0001f4cb" not in svg, f"{stem} still renders the clipboard glyph"

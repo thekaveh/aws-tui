@@ -30,6 +30,7 @@ from vmx.services.dispatcher import Dispatcher
 
 from aws_tui.domain.transfer_journal import TransferJournal
 from aws_tui.infra.aws_session import AwsSession
+from aws_tui.infra.clipboard import ClipboardPort, NativeClipboard
 from aws_tui.infra.config_store import ConfigStore
 from aws_tui.infra.connection_resolver import Connection, ConnectionResolver
 from aws_tui.infra.keychain import KeychainBackend, Keyring
@@ -50,6 +51,7 @@ from aws_tui.vm.chrome.command_palette_vm import CommandPaletteVM
 from aws_tui.vm.chrome.confirm_vm import ConfirmationVM
 from aws_tui.vm.chrome.focus_coordinator_vm import FocusCoordinatorVM
 from aws_tui.vm.chrome.quick_look_vm import QuickLookVM
+from aws_tui.vm.clipboard_vm import ClipboardVM
 from aws_tui.vm.file_manager.transfers_vm import TransfersVM
 from aws_tui.vm.root_vm import RootVM
 from aws_tui.vm.service_source_vm import ServiceSelectionStore
@@ -65,6 +67,8 @@ class AppContext:
 
     __slots__ = (
         "aws_session",
+        "clipboard",
+        "clipboard_vm",
         "command_palette_vm",
         "config_store",
         "confirm_vm",
@@ -112,6 +116,8 @@ class AppContext:
         s3_connections_vm: S3ConnectionsVM,
         focus_coordinator: FocusCoordinatorVM | None = None,
         table_clipboard_vm: TableClipboardVM | None = None,
+        clipboard: ClipboardPort | None = None,
+        clipboard_vm: ClipboardVM | None = None,
         demo: bool = False,
         demo_emrs: dict[str, InMemoryEmr] | None = None,
         unreachable_connections: set[tuple[str, str]] | None = None,
@@ -151,6 +157,20 @@ class AppContext:
         )
         if table_clipboard_vm is None:
             self.table_clipboard_vm.construct()
+        # Same "keep pre-existing harnesses working" default as above. The
+        # port itself is a plain infra object, not a VMx disposable: it owns
+        # no resources, so it is deliberately absent from
+        # ``close_unstarted`` and from ``AwsTuiApp._aws_tui_shutdown``. It is
+        # held here because it is what the VM below is built around -- the
+        # App reads ``clipboard_vm``, never the port.
+        self.clipboard: ClipboardPort = clipboard if clipboard is not None else NativeClipboard()
+        self.clipboard_vm: ClipboardVM = (
+            clipboard_vm
+            if clipboard_vm is not None
+            else ClipboardVM(clipboard=self.clipboard, hub=hub, dispatcher=dispatcher)
+        )
+        if clipboard_vm is None:
+            self.clipboard_vm.construct()
         self.demo = demo
         # Populated lazily in demo mode; each AWS source owns a separate
         # provider so profile switches cannot share clone mutations or data.
@@ -173,6 +193,7 @@ class AppContext:
             self.confirm_vm,
             self.transfers_vm,
             self.table_clipboard_vm,
+            self.clipboard_vm,
             self.root_vm,
             self.focus_coordinator,
         ):
@@ -192,6 +213,7 @@ def build_app_context(
     config_dir: Path | None = None,
     cache_dir: Path | None = None,
     demo: bool = False,
+    clipboard: ClipboardPort | None = None,
 ) -> AppContext:
     """Build the full ``AppContext`` for a fresh aws-tui session.
 
@@ -206,6 +228,13 @@ def build_app_context(
     cache_dir:
         Override for the platform-native cache directory. Defaults to
         :func:`aws_tui.infra.paths.cache_home`.
+    clipboard:
+        Override for the OS clipboard port (used by tests). Defaults to
+        :class:`~aws_tui.infra.clipboard.NativeClipboard`. A parameter and
+        not a post-build attribute assignment: ``ClipboardVM`` is built
+        around the port here, so replacing ``AppContext.clipboard``
+        afterwards would leave the view model still holding — and still
+        spawning — the real platform helper.
     """
     # ── Infra ──────────────────────────────────────────────────────────────
     if config_dir is None:
@@ -220,6 +249,7 @@ def build_app_context(
             cache_dir=cache_dir,
             demo=demo,
             log_sink=log_sink,
+            clipboard=clipboard,
         )
     except BaseException:
         log_sink.close()
@@ -232,6 +262,7 @@ def _build_app_context(
     cache_dir: Path,
     demo: bool,
     log_sink: LogSink,
+    clipboard: ClipboardPort | None = None,
 ) -> AppContext:
     # read_only=demo: in demo mode all write methods on ConfigStore are
     # silent no-ops so the user's real config.toml is never mutated.
@@ -428,6 +459,7 @@ def _build_app_context(
             s3_connections_vm=s3_connections_vm,
             focus_coordinator=focus_coordinator,
             table_clipboard_vm=table_clipboard_vm,
+            clipboard=clipboard,
             demo=demo,
             demo_emrs=demo_emrs_ref,
             unreachable_connections=set(),

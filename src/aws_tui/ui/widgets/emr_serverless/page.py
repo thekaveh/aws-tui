@@ -27,6 +27,7 @@ from vmx import Message, MessageHub
 
 from aws_tui.infra.keymap_store import KeymapStore
 from aws_tui.ui import notifications
+from aws_tui.ui.widgets._focus_guard import is_on_active_screen
 from aws_tui.ui.widgets._worker import DeferredWorkerMixin
 from aws_tui.ui.widgets.context_picker import ContextPicker
 from aws_tui.ui.widgets.emr_serverless.application_picker import ApplicationPicker
@@ -638,6 +639,13 @@ class EmrServerlessPage(DeferredWorkerMixin, Widget):
     def _project_focus_slot(self, slot: FocusSlot) -> None:
         target = dict(self._focus_targets()).get(slot)
         if target is None:
+            return
+        # ``App.set_focus`` writes into ``App.screen`` — the TOP screen —
+        # without checking that ``target`` belongs to it. A deferred
+        # projection that lands after a modal push would therefore park a
+        # base-screen widget in the modal's ``focused`` and the modal could
+        # never be escaped. See ``ui/widgets/_focus_guard``.
+        if not is_on_active_screen(self):
             return
         if self._focus_coordinator is not None:
             self._focus_coordinator.project_focused_slot(slot)

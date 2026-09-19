@@ -15,14 +15,18 @@ from textual.containers import Horizontal
 from textual.widget import Widget
 from vmx import Message, MessageHub
 
-from aws_tui.ui.widgets._subscriber import HubSubscriberMixin
 from aws_tui.ui.widgets.pane import Pane
 from aws_tui.vm.chrome.focus_coordinator_vm import FocusCoordinatorVM, FocusSlot
 from aws_tui.vm.file_manager.dual_pane_vm import DualPaneVM, FocusedPane
 
 
-class DualPane(HubSubscriberMixin, Widget):
-    """Two-pane file manager."""
+class DualPane(Widget):
+    """Two-pane file manager.
+
+    Binds to :attr:`DualPaneVM.on_property_changed`, not to the shared hub:
+    the one property it watches is a single enum, and filtering the hub for
+    it meant an observer on a stream carrying every message in the app.
+    """
 
     DEFAULT_CSS = """
     DualPane {
@@ -56,6 +60,7 @@ class DualPane(HubSubscriberMixin, Widget):
         self._hub: MessageHub[Message] = hub
         self._focus_coordinator: FocusCoordinatorVM | None = focus_coordinator
         self._coord_sub: DisposableBase | None = None
+        self._vm_sub: DisposableBase | None = None
         self._left_widget: Pane | None = None
         self._right_widget: Pane | None = None
 
@@ -79,18 +84,17 @@ class DualPane(HubSubscriberMixin, Widget):
             self._apply_visual_focus(FocusSlot.NAV_MENU)
         else:
             self._sync_focus()
-        self.subscribe_to_vm(
-            hub=self._hub,
-            vm=self._vm,
-            property_names=("focused",),
-            on_property_changed=self._on_vm_property_changed,
-        )
+        # Round-3 §9.bis.11 / PR #103 retirement: bind to this VM's own
+        # Observable rather than filtering the shared hub.
+        self._vm_sub = self._vm.on_property_changed.subscribe(on_next=self._on_vm_property_changed)
 
     def on_unmount(self) -> None:
         if self._coord_sub is not None:
             self._coord_sub.dispose()
             self._coord_sub = None
-        self.unsubscribe_from_vm()
+        if self._vm_sub is not None:
+            self._vm_sub.dispose()
+            self._vm_sub = None
 
     # ── Internal ────────────────────────────────────────────────────────────
 
@@ -124,6 +128,31 @@ class DualPane(HubSubscriberMixin, Widget):
             self._focus_coordinator.project_focused_slot(slot)
 
     def _apply_visual_focus(self, slot: FocusSlot) -> None:
+        """Paint the ``-focused`` ring on whichever child owns the cursor.
+
+        A deliberate, recorded exemption from "the child binds instead". The
+        MVVM audit flagged this as the last parent-pushes-into-child in this
+        pair once ``EntryRow.sync_state`` and ``Pane._sync_marks`` were
+        retired, and it is being kept for three reasons that all point the
+        same way:
+
+        * Which pane has focus is a property of the *pair*, not of either
+          pane -- exactly one may hold it -- so it belongs to
+          :class:`DualPaneVM` and there is no ``PaneVM`` property for a
+          child to bind to. Inventing one would put a two-pane invariant
+          into two independently-mutable flags.
+        * ``Pane.set_focused`` only adds/removes a CSS class. No VM state is
+          written and nothing is derived from it, which is the "parent calls
+          a child's view-only method" carve-out rather than the
+          ``child.set_selected(...)`` smell.
+        * ``NavMenu._sync_selection`` -> ``NavRow.set_selected`` is the same
+          shape and is untouched, so converting only this one would make the
+          codebase less uniform, not more.
+
+        If a ``PaneVM.is_focused`` is ever wanted, both pairs should move
+        together and the ``FocusSlot`` -> pane mapping should move into
+        ``DualPaneVM.set_focused`` with it.
+        """
         if self._left_widget is None or self._right_widget is None:
             return
         self._left_widget.set_focused(slot is FocusSlot.S3_LEFT)
