@@ -650,7 +650,7 @@ async def test_border_click_never_writes_the_clipboard_from_the_pane() -> None:
         hub.dispose()
 
 
-# ── Hub fan-out and imperative row state ──────────────────────────────────
+# ── Per-VM binding and hub fan-out ────────────────────────────────────────
 
 
 async def _seed_n(count: int) -> InMemoryFS:

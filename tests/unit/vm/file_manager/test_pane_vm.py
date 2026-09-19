@@ -807,12 +807,15 @@ async def test_set_marked_entries_marks_notifies_once_and_skips_the_parent_link(
 
     ``app.py``'s copy/delete workers flash the cursor-fallback target as
     marked for the duration of a transfer. They used to call
-    ``EntryVM.set_marked`` directly, which mutates the model and emits a
-    per-entry message that nothing subscribes to any more — the rows repaint
-    off the pane-level ``"viewmodel"`` notify. This pins the three properties
-    the pane depends on: the synthetic ``..`` row stays unmarkable, a batch
-    costs exactly one notify, and a no-op batch costs none (so the ``finally``
-    clear on a transfer that never marked anything cannot start a repaint).
+    ``EntryVM.set_marked`` directly. The rows would survive that — each one
+    binds to its own ``EntryVM.on_property_changed`` and repaints itself —
+    but the footer summary's marked count is derived at the pane level and
+    is recomputed by nothing except this batch API's single ``"viewmodel"``
+    notify, so the bypass left the count stating the pre-transfer listing
+    while the row lit up. This pins the three properties the pane depends
+    on: the synthetic ``..`` row stays unmarkable, a batch costs exactly one
+    notify, and a no-op batch costs none (so the ``finally`` clear on a
+    transfer that never marked anything cannot start a repaint).
     """
     fs = await _seed_fs()
     hub = _hub()

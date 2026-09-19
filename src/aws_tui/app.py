@@ -565,13 +565,26 @@ def _flash_cursor_fallback_marks(
     *,
     marked: bool,
 ) -> None:
-    """Show which row a cursor-fallback copy/delete is acting on.
+    """Mark the rows a cursor-fallback copy/delete is acting on.
+
+    NOT cosmetic, despite the name, and do not "simplify" it away.
+    ``DualPaneVM.copy_across`` and ``PaneVM.delete_marked`` re-derive their
+    own targets from ``src_pane.marked_entries`` and this app takes no
+    target argument when it invokes them, so with nothing multi-selected
+    these marks ARE the channel that tells the transfer which entry to move.
+    Drop the call and a cursor-fallback copy or delete becomes a silent
+    no-op. (That overloading is a known design debt — the operation's
+    targets should be their own VM concept rather than a borrowed
+    user-facing bit — but it is the contract today.)
 
     Routed through ``PaneVM.set_marked_entries`` rather than
-    ``EntryVM.set_marked``: the rows no longer subscribe to the hub
-    themselves, so only the pane-level ``"viewmodel"`` notify that
-    ``set_marked_entries`` emits repaints them. A direct ``set_marked``
-    here mutates the model and paints nothing.
+    ``EntryVM.set_marked`` because the pane VM owns the collection and the
+    notification. The rows themselves need no help: each one binds to its
+    own ``EntryVM.on_property_changed`` and would repaint either way. What
+    only ``set_marked_entries`` does is emit the pane-level ``"viewmodel"``
+    notify, and that is the one thing that recomputes the footer summary's
+    marked count — bypass it and the row lights up while the footer keeps
+    reporting the pre-transfer line.
 
     ``src_pane`` is the pane captured when the action fired, not
     ``dual.focused_pane`` re-read here — focus can move while the confirm
