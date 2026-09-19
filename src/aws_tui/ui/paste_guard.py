@@ -62,22 +62,48 @@ Two bounds end a paste that is not going to close. Both are evaluated in
    closes is silent as soon as the user stops typing. Bounding total paste
    duration instead would truncate exactly the legitimate case.
 
-2. **Abandoned-sequence bound** (``DEFAULT_ABANDON_GRACE``). A ``Key`` token
-   emerged while a paste was open. Reading ``parse`` line by line, every key
-   emission inside paste mode comes from the inner loop giving up on an escape
-   sequence — ``ParseTimeout`` (``:243``), ESC-follows-ESC (``:250``),
-   ``ParseEOF`` (``:246``), or the 32-character threshold (``:256``) — and each
-   of those consumes bytes without returning them to ``paste_buffer``. That is
-   the wedge signature itself, so a short grace is enough. This bound is what
-   rescues the user who is *mashing* keys, whose keystrokes would otherwise
-   keep resetting the idle bound forever.
+2. **Abandoned-sequence bound** (``DEFAULT_ABANDON_GRACE``). Two independent
+   facts have to hold at once.
 
-A false positive is harmless. If the guard injects ``\\x1b[201~`` into a
-parser that is *not* in paste mode, the outer loop reads the ESC (not appended
-— ``bracketed_paste`` is ``False``), the inner loop matches
-``BRACKETED_PASTE_END`` in ``SPECIAL_SEQUENCES``, sets an already-``False``
-flag and breaks; ``paste_buffer`` is empty so nothing is flushed and no key
-event is produced. The injection is a complete no-op.
+   *The closing marker is on the wire.* ``note_input`` scans the carry-joined
+   window for ``\\x1b[201~`` as well as for the start marker. In the wedge it
+   is always there — split across a read boundary that the five-character
+   carry rejoins — and the parser simply failed to act on it. A paste that is
+   merely still arriving has not delivered its close yet, so it can never
+   satisfy this half.
+
+   *A ``Key`` token emerged from a parser the guard already believed was
+   pasting.* Reading ``parse`` line by line, a key emitted inside paste mode
+   always comes from the inner loop giving up on an escape sequence —
+   ``ParseTimeout`` (``:243``), ``ParseEOF`` (``:246``), ESC-follows-ESC
+   (``:250``), or the 32-character threshold (``:256``) — and each of those
+   consumes bytes without returning them to ``paste_buffer``. On its own that
+   is *not* proof of the wedge, which is why the first fact is required:
+   ``:250`` and ``:256`` sit outside ``parse``'s ``if not bracketed_paste:``
+   guard and fire for a perfectly healthy paste whose *content* happens to
+   contain an ESC (a colour-coded log excerpt). The ``paste_was_open``
+   argument covers the other direction: a keystroke the terminal coalesced
+   into the same read as ``\\x1b[200~`` is parsed from bytes that preceded the
+   marker and says nothing about the parser's state inside the paste.
+
+   This bound is what rescues the user who is *mashing* keys, whose
+   keystrokes would otherwise keep resetting the idle bound forever. The idle
+   bound stays the backstop for a close that genuinely never arrives.
+
+A false positive costs very differently on each side of paste mode, and that
+asymmetry is why both bounds are deliberately reluctant.
+
+Injecting ``\\x1b[201~`` into a parser that is *not* in paste mode is a
+complete no-op: the outer loop reads the ESC (not appended — ``bracketed_paste``
+is ``False``), the inner loop matches ``BRACKETED_PASTE_END`` in
+``SPECIAL_SEQUENCES``, sets an already-``False`` flag and breaks;
+``paste_buffer`` is empty so nothing is flushed and no key event is produced.
+
+Injecting it into a parser that *is* legitimately pasting is the opposite of
+harmless: the buffer is flushed as a truncated ``Paste`` and every byte the
+terminal has not delivered yet arrives as an individual key press, through the
+binding system — the hazard ``DEFAULT_IDLE_TIMEOUT`` below is sized to avoid.
+No bound may fire on evidence that a healthy paste can also produce.
 """
 
 from __future__ import annotations
@@ -128,8 +154,10 @@ deafness. No terminal that is still delivering a paste goes silent this long.
 DEFAULT_ABANDON_GRACE: Final[float] = 0.5
 """Seconds allowed after the parser abandons an escape sequence mid-paste.
 
-The grace exists so a well-formed close that is merely late still wins; past
-it, the sequence the parser threw away is treated as the lost closing marker.
+Counted only once the closing marker has also been seen in the byte stream,
+so the grace is the window in which a well-formed close that is merely late
+still wins; past it, the sequence the parser threw away is treated as the lost
+closing marker.
 """
 
 # The longest marker is six characters, so five characters of the previous
@@ -151,6 +179,7 @@ class BracketedPasteGuard:
     __slots__ = (
         "_abandoned_at",
         "_carry",
+        "_end_seen",
         "_last_input",
         "_open",
         "abandon_grace",
@@ -171,6 +200,7 @@ class BracketedPasteGuard:
         self._carry = ""
         self._last_input = 0.0
         self._abandoned_at: float | None = None
+        self._end_seen = False
 
     @property
     def paste_open(self) -> bool:
@@ -180,19 +210,35 @@ class BracketedPasteGuard:
     def note_input(self, data: str, now: float) -> None:
         """Record a chunk of raw terminal input."""
         self._last_input = now
-        # Prepend the carry so a start marker split across two reads is still
-        # seen. A marker that was complete in an earlier window cannot recur
-        # here: the carry is one character shorter than the shortest marker.
+        # Prepend the carry so a marker split across two reads is still seen.
+        # A marker that was complete in an earlier window cannot recur here:
+        # the carry is one character shorter than the shortest marker.
         window = self._carry + data
         self._carry = window[-_CARRY_LENGTH:]
+        if self._open and BRACKETED_PASTE_END in window:
+            # The close really is on the wire. That is what separates the
+            # wedge -- where the parser read these very bytes and failed to
+            # act on them -- from a healthy paste that is merely still
+            # arriving and whose close is simply not here yet.
+            self._end_seen = True
         if BRACKETED_PASTE_START in window:
             # A start inside an already-open paste is a no-op upstream too
-            # (the flag is simply set again), so re-arming is faithful.
+            # (the flag is simply set again), so re-arming is faithful. Any
+            # evidence gathered so far belongs to the paste that just ended,
+            # never to this one, so it goes with the rest of the state.
             self._open = True
             self._abandoned_at = None
+            self._end_seen = False
 
-    def note_token(self, token: Message, now: float) -> None:
-        """Record a token the parser produced."""
+    def note_token(self, token: Message, now: float, *, paste_was_open: bool = True) -> None:
+        """Record a token the parser produced.
+
+        ``paste_was_open`` says whether the guard already believed a paste was
+        open *before* the read this token was parsed from. Terminals coalesce,
+        so the read carrying ``\\x1b[200~`` can carry the keystroke that
+        preceded it; such a ``Key`` comes from bytes parsed outside paste mode
+        and is no evidence about the parser's state inside it.
+        """
         if not self._open:
             return
         if isinstance(token, events.Paste):
@@ -203,9 +249,11 @@ class BracketedPasteGuard:
             # second paste. That needs two pastes inside one 4 KiB read, and
             # its only cost is falling back to upstream behaviour.
             self._settle()
-        elif isinstance(token, events.Key) and self._abandoned_at is None:
-            # A key event cannot escape paste mode except from the inner
-            # loop abandoning a partial escape sequence -- the wedge itself.
+        elif paste_was_open and isinstance(token, events.Key) and self._abandoned_at is None:
+            # The inner loop abandoned a partial escape sequence mid-paste.
+            # Necessary for the wedge but not sufficient -- a healthy paste
+            # carrying an ESC does this too -- so ``due`` also demands the
+            # closing marker.
             self._abandoned_at = now
 
     def due(self, now: float) -> bool:
@@ -214,7 +262,9 @@ class BracketedPasteGuard:
             return False
         if now - self._last_input >= self.idle_timeout:
             return True
-        return self._abandoned_at is not None and now - self._abandoned_at >= self.abandon_grace
+        if self._abandoned_at is None or not self._end_seen:
+            return False
+        return now - self._abandoned_at >= self.abandon_grace
 
     def note_recovery(self, now: float) -> None:
         """Record that a synthetic closing marker was injected."""
@@ -225,6 +275,7 @@ class BracketedPasteGuard:
     def _settle(self) -> None:
         self._open = False
         self._abandoned_at = None
+        self._end_seen = False
 
 
 class GuardedXTermParser(XTermParser):
@@ -250,13 +301,19 @@ class GuardedXTermParser(XTermParser):
 
     def feed(self, data: str) -> Iterable[Message]:
         now = self._clock()
+        # Read before ``note_input``: this chunk may hold the start marker
+        # itself, and anything parsed from the bytes ahead of that marker was
+        # parsed outside paste mode.
+        was_open = self.guard.paste_open
         self.guard.note_input(data, now)
         for token in super().feed(data):
-            self.guard.note_token(token, now)
+            self.guard.note_token(token, now, paste_was_open=was_open)
             yield token
 
     def tick(self) -> Iterable[Message]:
         for token in super().tick():
+            # No bytes arrive in ``tick``, so a paste the guard sees open here
+            # was already open when the token's bytes were read.
             self.guard.note_token(token, self._clock())
             yield token
         if self.is_eof:

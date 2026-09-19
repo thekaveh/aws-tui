@@ -189,7 +189,11 @@ section; the current tree must not be tagged as v0.8.0.
   long the parser may stay in paste mode and recovers by closing the paste
   and delivering what was buffered, instead of staying deaf. The bound is on
   input *silence*, not on how long a paste takes, so a slow paste of a large
-  file is never truncated; bracketed paste itself is still requested, because
+  file is never truncated, and the second bound — the one that covers a user
+  mashing keys at a frozen app, who is never silent — fires only once the
+  closing marker has actually been seen in the byte stream, so a paste whose
+  own content contains an escape character is delivered whole rather than
+  arriving as keystrokes. Bracketed paste itself is still requested, because
   pasting a multi-line query into the Athena editor or the EMR log filter is
   a real feature.
 
