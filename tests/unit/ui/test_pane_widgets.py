@@ -409,6 +409,11 @@ async def test_truncated_names_get_a_tooltip_and_short_ones_do_not() -> None:
     ``Tooltip`` is a ``Static`` and cannot host an interactive child, and
     ``Screen._maybe_clear_tooltip`` dismisses it the moment the pointer stops
     being over this row -- so a button drawn inside it could never be reached.
+
+    What the row decides is *whether* a tooltip appears, which depends on
+    whether the NAME column actually cut the name off and is therefore a
+    rendered-surface measurement. What it says comes from the pane view
+    model.
     """
     hub: MessageHub[Message] = MessageHub()
     dispatcher = RxDispatcher.immediate()
@@ -433,10 +438,15 @@ async def test_truncated_names_get_a_tooltip_and_short_ones_do_not() -> None:
 
             assert tips[long_name] is not None, "a cut-off name must be readable somehow"
             assert long_name in str(tips[long_name])
-            # The key leads, and it names the CURSOR entry: ``p`` copies
-            # whatever the cursor is on, which is not necessarily the row
-            # the pointer happens to be resting on.
-            assert "press p to copy the cursor entry's path" in str(tips[long_name])
+            # Asserted against the view model's own string, not a literal
+            # repeated here: the sentence -- including which key it names --
+            # is ``PaneVM.entry_tooltip_hint``'s to decide, and a duplicated
+            # literal would let the widget start composing its own again
+            # without this test noticing.
+            assert vm.entry_tooltip_hint in str(tips[long_name])
+            # It names the CURSOR entry: ``p`` copies whatever the cursor is
+            # on, which is not necessarily the row the pointer rests on.
+            assert "cursor entry" in vm.entry_tooltip_hint
             # A row is not a copy click target -- clicking it moves the
             # cursor (see ``test_clicking_a_row_selects_it_rather_than_copying``),
             # so the tooltip must not offer a click the way the border's does.
@@ -494,11 +504,12 @@ async def test_border_row_hover_offers_the_path_and_click_copies_it() -> None:
             await pilot.pause()
             assert pane.tooltip is not None
             assert vm.viewmodel.copy_path in str(pane.tooltip)
-            # The key leads -- it is the affordance that works with no
-            # pointer -- but the click survives in words, because with the
-            # glyph gone nothing else advertises that the border is a
-            # target at all.
-            assert "press P to copy, or click here" in str(pane.tooltip)
+            # Again the view model's string rather than a copy of it. The
+            # key leads -- it is the affordance that works with no pointer --
+            # but the click survives in words, because with the glyph gone
+            # nothing else advertises that the border is a target at all.
+            assert vm.path_tooltip_hint in str(pane.tooltip)
+            assert "click here" in vm.path_tooltip_hint
 
             await pilot.click(Pane, offset=(4, 0))
             await pilot.pause()

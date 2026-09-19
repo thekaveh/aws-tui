@@ -137,25 +137,28 @@ class EntryRow(Widget):
     def entry_vm(self) -> EntryVM:
         return self._entry_vm
 
-    def _sync_tooltip(self, full_name: str | None) -> None:
-        """Attach the untruncated name, with the key that copies its path.
+    def _sync_tooltip(self, full_name: str | None, hint: str | None) -> None:
+        """Attach the untruncated name, with the advice the pane VM supplies.
 
         A copy affordance *inside* the tooltip is not achievable: Textual's
         ``Tooltip`` is a ``Static`` and cannot host an interactive child, and
         ``Screen._maybe_clear_tooltip`` dismisses it as soon as the widget
         under the pointer stops being this row -- so moving the mouse toward a
         button drawn in it would destroy it first. Naming the keybinding is the
-        honest alternative to drawing a control that cannot be clicked.
+        honest alternative to drawing a control that cannot be clicked, and
+        which keystroke that is, and how it reads, is
+        :attr:`PaneVM.entry_tooltip_hint`'s decision, not this widget's.
 
-        It names the *cursor* entry rather than this row: ``p``
-        (``pane.copy_entry_path``) copies whatever the cursor is on, and the
-        pointer can rest on a row the cursor has not reached. The earlier
-        "its path" implied the hovered row and was wrong whenever those two
-        differed.
+        ``hint`` is ``None`` only when this row is mounted outside a
+        :class:`Pane` and there is therefore no pane view model to ask; the
+        tooltip is then the bare name rather than a sentence invented here.
         """
-        text = (
-            None if full_name is None else f"{full_name}\n\npress p to copy the cursor entry's path"
-        )
+        if full_name is None:
+            text = None
+        elif hint is None:
+            text = full_name
+        else:
+            text = f"{full_name}\n\n{hint}"
         if text == self._tooltip_text:
             return
         self._tooltip_text = text
@@ -171,7 +174,10 @@ class EntryRow(Widget):
         shown = _truncate(vm.display_name, name_width)
         # Only offer a tooltip when the column actually hid something; a
         # tooltip repeating a fully visible name is noise on every row.
-        self._sync_tooltip(vm.display_name if shown != vm.display_name else None)
+        self._sync_tooltip(
+            vm.display_name if shown != vm.display_name else None,
+            host.vm.entry_tooltip_hint if host is not None else None,
+        )
         name_str = f"{shown:<{name_width}}"
         size_str = f"{vm.size_display:>{_SIZE_COL_WIDTH}}"
         modified_str = f"{vm.modified_display:<{_MODIFIED_COL_WIDTH}}"
@@ -468,18 +474,6 @@ class Pane(Widget):
         """Copy this pane's location. Bound to the border affordance and a key."""
         self._hand_to_app(self._vm.viewmodel.copy_path, "path")
 
-    def copy_selected_path(self) -> None:
-        """Copy the cursor entry's full location, if there is one.
-
-        Silent on the parent link and on an empty listing: the pane cannot
-        raise a toast, and the keyboard path for this
-        (``AwsTuiApp.action_copy_entry_path``) advises there instead.
-        """
-        target = self._vm.viewmodel.copy_selected_path
-        if target is None:
-            return
-        self._hand_to_app(target, "file path")
-
     def on_mouse_move(self, event: object) -> None:
         """Offer the full path while the pointer is on the top border row.
 
@@ -489,17 +483,15 @@ class Pane(Widget):
         pointer enters and leaves row 0 -- otherwise it would appear anywhere
         over the pane, which is worse than not having it.
 
-        The key leads and the click follows: ``P`` works from the keyboard
-        with no pointer and no hunting for the one row that is a target,
-        and it is the affordance the footer, the help overlay and the
-        command palette all name. The click is still mentioned because the
-        border carries no glyph any more -- drop the word and the surviving
-        click target becomes undiscoverable.
+        Which row counts as the border is a view-side measurement, so it is
+        decided here; the sentence attached to it is
+        :attr:`PaneVM.path_tooltip_hint` and is decided there, alongside the
+        keystroke names the pane's placeholder text already owns.
         """
         offset = getattr(event, "offset", None)
         on_border = offset is not None and offset.y == 0
         vm = self._vm.viewmodel
-        text = f"{vm.copy_path}\n\npress P to copy, or click here" if on_border else None
+        text = f"{vm.copy_path}\n\n{self._vm.path_tooltip_hint}" if on_border else None
         if text != self._path_tooltip_text:
             self._path_tooltip_text = text
             self.tooltip = text

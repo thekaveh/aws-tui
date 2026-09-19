@@ -157,6 +157,24 @@ _PLACEHOLDER_FOR_STATE: dict[PaneState, tuple[str, str]] = {
 
 _COLUMN_HEADER_TEXT: str = f"   {'NAME':<40} {'SIZE':>12}  {'MODIFIED':<18}"
 
+# Tooltip advice. Both sentences name a keystroke, which makes them the same
+# kind of string as the AUTH_REQUIRED / UNREACHABLE placeholders above
+# ("press a to sign in", "press r to retry") -- decided here rather than in
+# the widget that draws them. ``vm/chrome/hint_legend_vm._tooltip_for`` is
+# the wider precedent: keybinding advice is composed VM-side and the view
+# binds to it.
+#
+# The entry hint names the CURSOR entry, not the hovered row: ``p``
+# (``pane.copy_entry_path``) copies whatever the cursor is on, and the
+# pointer can rest on a row the cursor has not reached. It offers no click,
+# because clicking a row moves the cursor instead of copying.
+_ENTRY_TOOLTIP_HINT: str = "press p to copy the cursor entry's path"
+# The border hint leads with the key -- ``P`` works with no pointer and is
+# what the footer, the help overlay and the command palette all name -- and
+# still mentions the click, because the border carries no glyph any more and
+# nothing else advertises that it is a target at all.
+_PATH_TOOLTIP_HINT: str = "press P to copy, or click here"
+
 
 def _require_single_segment(name: str) -> None:
     """Reject a name that would silently become a path.
@@ -508,6 +526,29 @@ class PaneVM:
             return ()
         snapshot = self.filtered_entries
         return tuple(e for e in snapshot if e.is_marked and not e.is_parent_link)
+
+    @property
+    def entry_tooltip_hint(self) -> str:
+        """Advice appended to a truncated entry name's tooltip.
+
+        A plain property rather than a :class:`PaneViewModel` field because
+        ``EntryRow.render`` is the only reader and it runs per row per
+        frame: building a ``PaneViewModel`` there would re-derive the whole
+        listing's marked set and byte totals to read one constant string.
+        The view still owns *whether* a tooltip appears -- that depends on
+        whether the NAME column actually cut the name off, which only the
+        rendered surface knows -- but not what it says.
+        """
+        return _ENTRY_TOOLTIP_HINT
+
+    @property
+    def path_tooltip_hint(self) -> str:
+        """Advice appended to the pane path's border tooltip.
+
+        Same split as :attr:`entry_tooltip_hint`: the view decides that the
+        pointer is on the border row, the view model decides the sentence.
+        """
+        return _PATH_TOOLTIP_HINT
 
     @property
     def viewmodel(self) -> PaneViewModel:

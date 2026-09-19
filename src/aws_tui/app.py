@@ -2443,10 +2443,18 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
 
         The pane's view model owns the formatting, so this reads the prepared
         payload rather than reassembling a path from chrome that the border may
-        have truncated for display. The write itself goes through
-        :meth:`copy_value` rather than being awaited here: this handler runs on
-        the App's message pump, and awaiting the ~2 s port timeout on it would
-        make the app deaf to every later keystroke, ``ctrl+q`` included.
+        have truncated for display. It owns the *availability* too:
+        ``copy_selected_path`` is ``None`` exactly when there is nothing a
+        user could mean (an empty listing, or the cursor on the ``..`` parent
+        link), and this is now the only place in the app that reads that
+        answer -- ``Pane.copy_selected_path`` used to make the same test and
+        return silently, so the keyboard and the widget gave the user two
+        different answers to one question.
+
+        The write itself goes through :meth:`copy_value` rather than being
+        awaited here: this handler runs on the App's message pump, and
+        awaiting the ~2 s port timeout on it would make the app deaf to every
+        later keystroke, ``ctrl+q`` included.
         """
         self.record_action("pane.copy_entry_path")
         pane = self._focused_file_pane()

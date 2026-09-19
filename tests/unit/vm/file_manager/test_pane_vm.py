@@ -678,6 +678,34 @@ async def test_marks_are_inert_while_the_pane_is_loading() -> None:
 
 
 @pytest.mark.asyncio
+async def test_the_copy_tooltip_advice_is_owned_by_the_view_model() -> None:
+    """Both tooltip sentences, including the keys they name, live here.
+
+    They used to be f-string literals inside ``EntryRow._sync_tooltip`` and
+    ``Pane.on_mouse_move``, which made the widget decide what a label reads
+    -- and made the two of them free to drift apart from the placeholder
+    text two properties away, which has always named its keys here
+    (``"press a to sign in"``, ``"press r to retry"``).
+
+    The two hints must stay distinguishable, because they describe
+    different affordances: a row is not a click target (clicking one moves
+    the cursor), the border is.
+    """
+    pane = await _make_pane(await _seed_fs())
+    try:
+        assert "press p" in pane.entry_tooltip_hint
+        assert "cursor entry" in pane.entry_tooltip_hint
+        assert "click" not in pane.entry_tooltip_hint, (
+            "a row is not a copy click target, so its tooltip must not offer one"
+        )
+
+        assert "press P" in pane.path_tooltip_hint
+        assert "click here" in pane.path_tooltip_hint
+    finally:
+        pane.dispose()
+
+
+@pytest.mark.asyncio
 async def test_copy_payloads_are_owned_by_the_view_model() -> None:
     """The view copies prepared values, it does not reassemble paths.
 
