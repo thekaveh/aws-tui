@@ -103,7 +103,7 @@ The Carbon palette tokens (full spec table in §5.5):
 | Token | Hex | Use |
 |---|---|---|
 | `bg` | `#0d0e10` | Frame background |
-| `bg-alt` | `#101215` | Zebra stripe on odd listing rows |
+| `bg-alt` | `#17191e` | Zebra stripe on odd listing rows |
 | `bg-elev` | `#14161a` | Elevated chrome (breadcrumb, footer, modals) |
 | `bg-sel` | `#1c303b` | Selected row tint |
 | `rule-dim` | `#2a2d33` | Thin dividers |

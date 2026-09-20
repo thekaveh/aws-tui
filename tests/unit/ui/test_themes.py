@@ -213,6 +213,61 @@ def _contrast_ratio(foreground: str, background: str) -> float:
     return (lighter + 0.05) / (darker + 0.05)
 
 
+def _cielab_lightness(hex_color: str) -> float:
+    """CIELAB ``L*`` of an sRGB hex colour under the D65 white point.
+
+    Written out here rather than pulled in from a colour-science library:
+    the suite has no such dependency and ``L*`` is a dozen lines. It is a
+    function of the CIE ``Y`` tristimulus alone, so only the ``Y`` row of
+    the sRGB-to-XYZ matrix is needed; that row is normalised so ``Y == 1``
+    for ``#ffffff``, which puts ``L*`` at exactly 0 for black and 100 for
+    white.
+
+    ``L*`` and not the WCAG relative luminance above, because the question
+    the zebra stripe raises is "can a person see the difference between two
+    large flat blocks of near-identical colour" -- a perceptual-uniformity
+    question. The WCAG ratio answers a different one (is text legible on
+    this background) and compresses to uselessness in the near-black region
+    where six of the ten themes live: carbon's stripe moved from a 1.03:1
+    to a 1.10:1 background ratio in the fix below -- indistinguishable from
+    noise -- while its ``L*`` delta went 1.44 -> 4.80.
+    """
+    raw = hex_color.removeprefix("#")
+    channels = [int(raw[i : i + 2], 16) / 255 for i in (0, 2, 4)]
+
+    def linear(value: float) -> float:
+        if value <= 0.04045:
+            return value / 12.92
+        return ((value + 0.055) / 1.055) ** 2.4
+
+    red, green, blue = [linear(value) for value in channels]
+    y = 0.2126729 * red + 0.7151522 * green + 0.0721750 * blue
+    epsilon = 216 / 24389
+    kappa = 24389 / 27
+    f_y = y ** (1 / 3) if y > epsilon else (kappa * y + 16) / 116
+    return 116 * f_y - 16
+
+
+def _lightness_delta(first: str, second: str) -> float:
+    return abs(_cielab_lightness(first) - _cielab_lightness(second))
+
+
+def test_cielab_lightness_conversion_matches_reference_values() -> None:
+    """Pin the hand-rolled conversion the zebra guard below depends on.
+
+    A silently wrong ``L*`` would make that guard assert nothing useful,
+    so anchor it on values that do not depend on this implementation:
+    ``L*`` is 0 at black and 100 at white by definition, and mid-grey
+    ``#777777`` is the textbook "L* 50 sits near 18% reflectance, not at
+    50% of the 8-bit range" example.
+    """
+    assert _cielab_lightness("#000000") == pytest.approx(0.0)
+    assert _cielab_lightness("#ffffff") == pytest.approx(100.0)
+    assert _cielab_lightness("#777777") == pytest.approx(50.03, abs=0.01)
+    assert _cielab_lightness("#808080") == pytest.approx(53.59, abs=0.01)
+    assert _lightness_delta("#000000", "#ffffff") == pytest.approx(100.0)
+
+
 @pytest.mark.parametrize("name", ALL_THEMES)
 def test_selected_state_tokens_have_readable_contrast(name: str) -> None:
     content = ThemeStore().load(name)
@@ -238,6 +293,61 @@ def test_muted_text_is_readable_on_both_content_backgrounds(name: str) -> None:
         assert ratio >= 4.5, (
             f"theme {name}: $text-muted on {background_token} contrast is {ratio:.2f}:1"
         )
+
+
+ZEBRA_MIN_LIGHTNESS_DELTA = 3.5
+ZEBRA_MAX_SHARE_OF_SELECTION = 0.55
+
+
+@pytest.mark.parametrize("name", ALL_THEMES)
+def test_zebra_stripe_is_visible_but_subordinate(name: str) -> None:
+    """The stripe has to be SEEN, and still lose to the cursor row.
+
+    The zebra striping shipped in #227 derived every ``$bg-alt`` as the
+    midpoint between that theme's ``$bg`` and ``$bg-elev``. That construction
+    guarantees the second half -- a midpoint can never out-shout ``$bg-sel``
+    -- and says nothing at all about the first. It shipped, and the user
+    rejected it: "the zebra pattern is way too subtle. I tried all supported
+    themes and the alternate line background are just barely visible."
+
+    They were right, and every test in this module passed anyway. Measured
+    in CIELAB the ten stripes came out at ``L*`` deltas of 1.18 to 3.92
+    (mean 2.22); a delta of ~1 is at or under the just-noticeable threshold
+    for two large flat adjacent areas, so four themes were effectively
+    invisible and none was comfortable. The user's own reference rendering
+    measures 3.40, which is why the floor below sits just above it at 3.5
+    rather than at some rounder number: it is calibrated against a stripe a
+    human actually called visible.
+
+    The ceiling is the other half of the constraint, and the half the old
+    midpoint rule got right by accident. ``Pane .entry-row.-alt`` and
+    ``Pane .entry-row.-selected`` are adjacent surfaces in the same listing;
+    a stripe that approaches the cursor bar destroys the cursor as a cue.
+    Holding it to 55% of the theme's own selection delta keeps the ordering
+    unambiguous in every palette without hard-coding a lightness per theme,
+    which would just re-encode the values this test exists to police.
+
+    Both bounds are relative to the theme's own tokens, so a future palette
+    change retunes the assertion instead of breaking it.
+    """
+    tokens = _theme_tokens(ThemeStore().load(name))
+
+    stripe_delta = _lightness_delta(tokens["$bg"], tokens["$bg-alt"])
+    selection_delta = _lightness_delta(tokens["$bg"], tokens["$bg-sel"])
+
+    assert stripe_delta >= ZEBRA_MIN_LIGHTNESS_DELTA, (
+        f"theme {name}: $bg-alt is only L* {stripe_delta:.2f} from $bg "
+        f"({tokens['$bg-alt']} on {tokens['$bg']}) -- at or below the "
+        "just-noticeable difference for large flat areas, which is exactly "
+        "the invisible striping the user rejected."
+    )
+    ceiling = ZEBRA_MAX_SHARE_OF_SELECTION * selection_delta
+    assert stripe_delta <= ceiling, (
+        f"theme {name}: $bg-alt is L* {stripe_delta:.2f} from $bg, "
+        f"{stripe_delta / selection_delta:.0%} of the {selection_delta:.2f} "
+        "that $bg-sel travels -- the stripe rivals the cursor row and stops "
+        "reading as background."
+    )
 
 
 @pytest.mark.parametrize("name", ALL_THEMES)

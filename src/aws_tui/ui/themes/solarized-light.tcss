@@ -4,7 +4,16 @@
  */
 
 $bg:           #fdf6e3;
-$bg-alt:       #f6efdc;
+/* Zebra stripe surface. Derived as ΔL* = min(5.0, 0.45 x this theme's own
+   $bg -> $bg-sel ΔL*), walked along the theme's own $bg -> $bg-elev direction
+   so the background tint survives instead of washing out toward neutral grey.
+   It replaces a plain $bg/$bg-elev midpoint, which guaranteed the stripe would
+   lose to the cursor row but never checked it was VISIBLE: across the ten
+   themes that rule measured ΔL* 1.18-3.92 (mean 2.22) and the user reported
+   the striping as "barely visible". The 0.45 factor and the 5.0 cap keep the
+   stripe clearly subordinate to $bg-sel. Held to ΔL* >= 3.5 and <= 55% of the
+   selection delta by test_zebra_stripe_is_visible_but_subordinate. */
+$bg-alt:       #f0ead6;
 $bg-elev:      #eee8d5;
 $bg-sel:       #e9d9aa;
 $text:         #3f555c;
