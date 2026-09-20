@@ -174,6 +174,24 @@ section; the current tree must not be tagged as v0.8.0.
 
 ### Fixed
 
+- **Zebra striping is now actually visible in all ten themes.** The striping
+  shipped in #227 derived every theme's `$bg-alt` as the midpoint between its
+  `$bg` and `$bg-elev`. That construction guarantees the stripe stays weaker
+  than the cursor row but never checks that anyone can see it, and nothing in
+  the suite measured it: the ten stripes came out at CIELAB `L*` deltas of
+  1.18-3.92 (mean 2.22) against their own backgrounds, at or below the
+  just-noticeable difference for two large flat adjacent areas. The user
+  reported them as "just barely visible" in every theme. Each `$bg-alt` is
+  re-derived to `L* = min(5.0, 0.45 x that theme's own $bg -> $bg-sel delta)`,
+  walked along the theme's own `$bg -> $bg-elev` direction so the palette's
+  tint survives rather than washing out toward neutral grey; the cap keeps the
+  stripe clearly subordinate to the cursor bar. Stripes now measure `L*`
+  4.17-5.00. `one-light` stops at 4.17 rather than 4.87 because the full
+  target puts `$text-muted` at 4.43:1 on the stripe, under the 4.5:1 floor
+  every content surface is held to. A new guard,
+  `test_zebra_stripe_is_visible_but_subordinate`, measures both bounds per
+  theme against that theme's own tokens -- the old values passed every
+  existing test.
 - **A half-delivered paste can no longer make the app permanently deaf
   (upstream Textual defect).** Textual 8.2.8's terminal parser
   (`textual/_xterm_parser.py`, `XTermParser.parse`) enters bracketed-paste
