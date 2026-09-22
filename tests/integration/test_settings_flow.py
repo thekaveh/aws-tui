@@ -15,7 +15,7 @@ from aws_tui.infra.aws_session import TokenState
 from aws_tui.infra.config_store import ConfigStore
 from aws_tui.infra.keychain import InMemoryKeychain, app_keychain_service
 from aws_tui.ui.widgets.confirm_modal import ConfirmModal
-from tests.helpers import drain_workers, wait_until
+from tests.helpers import DEFAULT_DRAIN_TIMEOUT_SECONDS, drain_workers, wait_until
 
 _MINIO_LOCAL_TOML = (
     "[connections.minio-local]\n"
@@ -300,6 +300,15 @@ async def test_add_inline_form_persists_to_toml(
                     "minio-test" in ConfigStore(path=config_dir / "config.toml").load().connections
                 ),
                 what="the added connection landed in config.toml",
+                # The integration tier keeps the 30s budget this wait had
+                # before #235 consolidated it onto the shared helper, whose
+                # 15s default is sized for in-process UI-tier waits. Halving
+                # it here was an unintended regression: this path writes
+                # `config.toml` through a worker thread on a loaded
+                # windows-latest runner, and it is the suite's most frequent
+                # flake (#274). Only one wait runs in this test, so 30s stays
+                # inside pytest's own 60s per-test kill.
+                timeout=DEFAULT_DRAIN_TIMEOUT_SECONDS,
             )
     finally:
         _dispose(ctx)
@@ -540,6 +549,7 @@ async def test_delete_via_confirm_removes_from_toml(tmp_path: Path) -> None:
                     not in ConfigStore(path=config_dir / "config.toml").load().connections
                 ),
                 what="the deleted connection left config.toml",
+                timeout=DEFAULT_DRAIN_TIMEOUT_SECONDS,  # see the add path above
             )
     finally:
         _dispose(ctx)
