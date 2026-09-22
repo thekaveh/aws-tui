@@ -20,7 +20,7 @@ from aws_tui.ui.widgets.glue.iceberg_view import GlueIcebergView
 from aws_tui.ui.widgets.glue.page import GluePage
 from aws_tui.vm.chrome.focus_coordinator_vm import FocusCoordinatorVM, FocusSlot
 from aws_tui.vm.glue.page_vm import GluePageVM
-from tests.helpers import focus_and_settle
+from tests.helpers import focus_and_settle, wait_until
 from tests.unit.vm.glue._fake_glue import InMemoryGlue
 from tests.unit.vm.glue.test_iceberg_vm import RecordingInspector
 
@@ -50,19 +50,6 @@ def _build_vm(*, iceberg: bool = True) -> tuple[GluePageVM, RecordingInspector]:
     )
     vm.construct()
     return vm, inspector
-
-
-async def _wait_until(predicate: Callable[[], bool]) -> None:
-    """Wait for ``predicate``, sized for the slowest runner in the matrix.
-
-    Five seconds was enough locally but not on windows-latest under a loaded
-    three-Python matrix, where this raised ``TimeoutError`` while the same
-    commit passed everywhere else. ``tests/helpers.DEFAULT_DRAIN_TIMEOUT_SECONDS``
-    already uses 30s for the same reason; a real hang still fails, just later.
-    """
-    async with asyncio.timeout(30):
-        while not predicate():
-            await asyncio.sleep(0.01)
 
 
 async def _wait_for_paint(pilot: object, predicate: Callable[[], bool], *, what: str) -> None:
@@ -191,7 +178,21 @@ async def test_selecting_snapshot_tab_loads_rows_and_enables_time_travel() -> No
         assert table.row_count == 3
 
         table.focus()
+        await wait_until(
+            lambda: (
+                vm.catalog.iceberg.active_view == "snapshots"
+                and len(vm.catalog.iceberg.snapshots) > 1
+            ),
+            what="the view model holds the snapshot rows",
+        )
         table.move_cursor(row=0)
+        # Row 0 is already the default selection here, so a stale read would
+        # pass for the wrong reason. Wait for the cursor and assert the
+        # selection the highlight produced.
+        await wait_until(
+            lambda: table.cursor_row == 0,
+            what="the cursor settled on row 0",
+        )
         await pilot.pause()
 
         assert vm.catalog.iceberg.selected_snapshot_id == 43
@@ -311,7 +312,10 @@ async def test_replaced_time_travel_async_dispatch_cancels_only_the_superseded_w
         await asyncio.wait_for(second_started.wait(), timeout=2)
 
         release_second.set()
-        await _wait_until(lambda: completed == ["glue.time_travel_in_athena"])
+        await wait_until(
+            lambda: completed == ["glue.time_travel_in_athena"],
+            what="the second handoff completed",
+        )
         await pilot.pause()
 
         assert pilot.app.action_ids == [
@@ -402,7 +406,10 @@ async def test_enter_and_space_activate_focused_iceberg_tab(key: str) -> None:
         tab = pilot.app.query_one("#glue-iceberg-tab-history")
         await focus_and_settle(tab)
         await pilot.press(key)
-        await _wait_until(lambda: len(inspector.calls) == 1)
+        await wait_until(
+            lambda: len(inspector.calls) == 1,
+            what="the history tab issued its inspector call",
+        )
         await pilot.pause()
 
         assert vm.catalog.iceberg.active_view == "history"
@@ -420,7 +427,10 @@ async def test_enter_and_space_press_all_enabled_iceberg_buttons(key: str) -> No
         snapshot_tab = pilot.app.query_one("#glue-iceberg-tab-snapshots")
         await focus_and_settle(snapshot_tab)
         await pilot.press(key)
-        await _wait_until(lambda: vm.catalog.iceberg.error_text is not None)
+        await wait_until(
+            lambda: vm.catalog.iceberg.error_text is not None,
+            what="the denied snapshot load surfaced an error",
+        )
         await pilot.pause()
 
         inspector.errors.pop("snapshots")
@@ -428,7 +438,10 @@ async def test_enter_and_space_press_all_enabled_iceberg_buttons(key: str) -> No
         assert not retry.disabled
         await focus_and_settle(retry)
         await pilot.press(key)
-        await _wait_until(lambda: len(vm.catalog.iceberg.snapshots) == 1)
+        await wait_until(
+            lambda: len(vm.catalog.iceberg.snapshots) == 1,
+            what="the retry loaded the first snapshot page",
+        )
         await pilot.pause()
         assert len(vm.catalog.iceberg.snapshots) == 1
 
@@ -436,7 +449,10 @@ async def test_enter_and_space_press_all_enabled_iceberg_buttons(key: str) -> No
         assert not more.disabled
         await focus_and_settle(more)
         await pilot.press(key)
-        await _wait_until(lambda: len(vm.catalog.iceberg.snapshots) == 2)
+        await wait_until(
+            lambda: len(vm.catalog.iceberg.snapshots) == 2,
+            what="the pager loaded the second snapshot page",
+        )
         await pilot.pause()
         assert len(vm.catalog.iceberg.snapshots) == 2
 
@@ -501,8 +517,30 @@ async def test_older_snapshot_selection_survives_refresh_and_drives_time_travel(
         iceberg = pilot.app.query_one(GlueIcebergView)
         table = iceberg.query_one("#glue-iceberg-table", DataTable)
 
+        # `on_data_table_row_highlighted` DROPS the event when
+        # `vm.active_view != "snapshots"` or `cursor_row >= len(vm.snapshots)`
+        # (iceberg_view.py:226-234), and the snapshots load through a lifecycle
+        # worker started by the tab click. So moving the cursor before the view
+        # model holds the rows fires a highlight that is silently discarded --
+        # the selection then never changes, no matter how long anything waits.
+        # That is what failed on windows-latest as `assert 43 == 42`, and what
+        # made a 15s wait for the selection time out rather than settle.
+        await wait_until(
+            lambda: (
+                vm.catalog.iceberg.active_view == "snapshots"
+                and len(vm.catalog.iceberg.snapshots) > 1
+            ),
+            what="the view model holds the snapshot rows",
+        )
+
         table.move_cursor(row=1)
-        await pilot.pause()
+        # The cursor moves synchronously; the view model is updated from the
+        # `RowHighlighted` event, so the selection still reads the row-0
+        # snapshot (43) on the line after the move.
+        await wait_until(
+            lambda: vm.catalog.iceberg.selected_snapshot_id == 42,
+            what="the row-1 highlight reached the view model",
+        )
         assert vm.catalog.iceberg.selected_snapshot_id == 42
         selection_notifications = notifications.count("selected_snapshot_id")
 
@@ -537,8 +575,30 @@ async def test_snapshot_pagination_preserves_selection_and_removed_row_falls_bac
         await pilot.click("#glue-iceberg-more")
         await pilot.pause()
         table = pilot.app.query_one("#glue-iceberg-table", DataTable)
+        # `on_data_table_row_highlighted` DROPS the event when
+        # `vm.active_view != "snapshots"` or `cursor_row >= len(vm.snapshots)`
+        # (iceberg_view.py:226-234), and the snapshots load through a lifecycle
+        # worker started by the tab click. So moving the cursor before the view
+        # model holds the rows fires a highlight that is silently discarded --
+        # the selection then never changes, no matter how long anything waits.
+        # That is what failed on windows-latest as `assert 43 == 42`, and what
+        # made a 15s wait for the selection time out rather than settle.
+        await wait_until(
+            lambda: (
+                vm.catalog.iceberg.active_view == "snapshots"
+                and len(vm.catalog.iceberg.snapshots) > 1
+            ),
+            what="the view model holds the snapshot rows",
+        )
+
         table.move_cursor(row=1)
-        await pilot.pause()
+        # The cursor moves synchronously; the view model is updated from the
+        # `RowHighlighted` event, so the selection still reads the row-0
+        # snapshot (43) on the line after the move.
+        await wait_until(
+            lambda: vm.catalog.iceberg.selected_snapshot_id == 42,
+            what="the row-1 highlight reached the view model",
+        )
         assert vm.catalog.iceberg.selected_snapshot_id == 42
 
         inspector.snapshots = tuple(row for row in inspector.snapshots if row.snapshot_id != 42)

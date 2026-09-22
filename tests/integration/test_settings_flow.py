@@ -5,7 +5,6 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import hashlib
-from collections.abc import Callable
 from pathlib import Path
 
 import pytest
@@ -16,6 +15,7 @@ from aws_tui.infra.aws_session import TokenState
 from aws_tui.infra.config_store import ConfigStore
 from aws_tui.infra.keychain import InMemoryKeychain, app_keychain_service
 from aws_tui.ui.widgets.confirm_modal import ConfirmModal
+from tests.helpers import DEFAULT_DRAIN_TIMEOUT_SECONDS, drain_workers, wait_until
 
 _MINIO_LOCAL_TOML = (
     "[connections.minio-local]\n"
@@ -73,25 +73,15 @@ async def _await_boot(pilot: object, app: object) -> None:
     await pilot.pause()  # type: ignore[attr-defined]
 
 
-async def _wait_until(predicate: Callable[[], bool], *, timeout: float = 30.0) -> None:
-    """Wait for ``predicate``, sized for the slowest runner in the matrix.
-
-    Five seconds was enough locally but not on windows-latest under a loaded
-    three-Python matrix. ``tests/helpers.DEFAULT_DRAIN_TIMEOUT_SECONDS`` and
-    ``tests/unit/ui/glue/test_iceberg_view._wait_until`` already use 30s for the
-    same reason; a real hang still fails, just later.
-    """
-    async with asyncio.timeout(timeout):
-        while not predicate():
-            await asyncio.sleep(0.01)
-
-
 async def _await_content_mount(app: AwsTuiApp, expected_id: str) -> None:
     await app.workers.wait_for_complete(list(app.workers._workers))
     setup_task = app.app_ctx.root_vm.content_host._setup_task
     if setup_task is not None and not setup_task.done():
         await setup_task
-    await _wait_until(lambda: app.app_ctx.root_vm.content_host.current_id == expected_id)
+    await wait_until(
+        lambda: app.app_ctx.root_vm.content_host.current_id == expected_id,
+        what=f"the content host mounted {expected_id!r}",
+    )
 
 
 def _dispose(ctx: object) -> None:
@@ -302,10 +292,23 @@ async def test_add_inline_form_persists_to_toml(
             form.post_message(
                 ConnectionFormSubmitted(form=form_obj, mode="add", original_name=None)
             )
-            await _wait_until(
+            # Same worker-thread persistence as the delete path below, so the
+            # same completion contract: drain, then confirm.
+            await drain_workers(app)
+            await wait_until(
                 lambda: (
                     "minio-test" in ConfigStore(path=config_dir / "config.toml").load().connections
-                )
+                ),
+                what="the added connection landed in config.toml",
+                # The integration tier keeps the 30s budget this wait had
+                # before #235 consolidated it onto the shared helper, whose
+                # 15s default is sized for in-process UI-tier waits. Halving
+                # it here was an unintended regression: this path writes
+                # `config.toml` through a worker thread on a loaded
+                # windows-latest runner, and it is the suite's most frequent
+                # flake (#274). Only one wait runs in this test, so 30s stays
+                # inside pytest's own 60s per-test kill.
+                timeout=DEFAULT_DRAIN_TIMEOUT_SECONDS,
             )
     finally:
         _dispose(ctx)
@@ -374,12 +377,19 @@ async def test_open_connection_form_owns_tab_traversal(
             # the traversal then reads one slot off and the first assertion
             # fails comparing _AddButton to an Input, as seen on
             # windows-latest. Establish the starting slot before stepping.
+            #
+            # A bounded count of `pilot.pause()` calls is NOT sufficient here,
+            # and a 50-round version of exactly that still failed one run in six
+            # on windows-latest/py3.11 (#235 stress harness). A pause yields one
+            # scheduler cycle; it does not advance the clock, so fifty of them
+            # can retire in microseconds while the deferred focus is waiting on
+            # real time. `wait_until` polls against a wall-clock deadline, which
+            # is the thing this actually needs.
             first_field = app.query_one("#form-name", Input)
-            for _ in range(50):
-                if app.focused is first_field:
-                    break
-                await pilot.pause()
-            assert app.focused is first_field, "form did not take focus on open"
+            await wait_until(
+                lambda: app.focused is first_field,
+                what="the connection form took focus on open",
+            )
 
             expected_ids = (
                 "form-endpoint_url",
@@ -430,7 +440,10 @@ async def test_settings_add_and_inline_form_are_keyboard_accessible(tmp_path: Pa
 
             initial_focus = settings._section_focus_target()
             assert initial_focus is not None
-            await _wait_until(lambda: app.focused is initial_focus)
+            await wait_until(
+                lambda: app.focused is initial_focus,
+                what="focus returned to the widget that had it before the modal",
+            )
 
             await pilot.press("tab")
             assert app._last_action_id == "pane.switch_focus"
@@ -521,15 +534,22 @@ async def test_delete_via_confirm_removes_from_toml(tmp_path: Path) -> None:
             await pilot.press("enter")
             # ``S3ConnectionsPanel._do_delete`` awaits ``remove_async``, whose
             # persistence step runs in a worker thread -- the keyring reach and
-            # the ``config.toml`` OS file lock must not block the event loop. A
-            # fixed pause can return before that lands, which is how this
-            # asserted the connection was still present on windows py3.11 while
-            # the same commit passed every other job.
-            await _wait_until(
+            # the ``config.toml`` OS file lock must not block the event loop.
+            #
+            # Drain that worker rather than polling the file on a timer. The
+            # worker IS the completion contract, and polling for it timed out
+            # on a loaded windows-latest/py3.11 runner (`TimeoutError`, CI run
+            # 35677788659) while every other job in the same matrix passed. The
+            # `wait_until` that follows is then only confirming the write the
+            # drained worker already made.
+            await drain_workers(app)
+            await wait_until(
                 lambda: (
                     "minio-local"
                     not in ConfigStore(path=config_dir / "config.toml").load().connections
-                )
+                ),
+                what="the deleted connection left config.toml",
+                timeout=DEFAULT_DRAIN_TIMEOUT_SECONDS,  # see the add path above
             )
     finally:
         _dispose(ctx)
@@ -1007,7 +1027,10 @@ async def test_service_mount_failure_leaves_error_surface(
                 host,
                 replacement,
             )
-            await _wait_until(lambda: len(app.query("#content-host #content-mount-error")) == 1)
+            await wait_until(
+                lambda: len(app.query("#content-host #content-mount-error")) == 1,
+                what="the content host rendered its mount-error panel",
+            )
 
             assert result is None
             recovered_host = app.query_one("#content-host")
@@ -1055,7 +1078,10 @@ async def test_initial_service_lifecycle_failure_uses_recovery_boundary(
             )
 
             assert await app._mount_initial_service_view() is True
-            await _wait_until(lambda: len(app.query("#content-mount-error")) == 1)
+            await wait_until(
+                lambda: len(app.query("#content-mount-error")) == 1,
+                what="the mount-error panel appeared",
+            )
 
             assert [child.id for child in app.query_one("#content-host").children] == [
                 "content-mount-error"

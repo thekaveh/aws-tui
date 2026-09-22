@@ -14,7 +14,7 @@ from textual.widgets import OptionList
 from vmx import Message, MessageHub
 
 from aws_tui.infra.keymap_store import KeymapStore
-from aws_tui.ui.widgets._focus_guard import is_on_active_screen
+from aws_tui.ui.widgets._focus_guard import focus_rests_within, is_on_active_screen
 from aws_tui.ui.widgets._subscriber import HubSubscriberMixin
 from aws_tui.ui.widgets._worker import DeferredWorkerMixin
 from aws_tui.ui.widgets.context_picker import ContextOption, ContextPicker
@@ -469,9 +469,8 @@ class GluePage(DeferredWorkerMixin, HubSubscriberMixin, Widget):
     def _sync_focused_widget(self, focused: Widget) -> None:
         if self._focus_coordinator is None or not self._focus_projection_available():
             return
-        ancestors = set(focused.ancestors_with_self)
         for slot, target in self._focus_targets():
-            if target in ancestors:
+            if focus_rests_within(target, focused):
                 self._focus_coordinator.project_focused_slot(slot)
                 return
 
@@ -495,6 +494,20 @@ class GluePage(DeferredWorkerMixin, HubSubscriberMixin, Widget):
             return
         if self._focus_coordinator is not None:
             self._focus_coordinator.project_focused_slot(slot)
+        # A slot whose target already contains the focus is satisfied. Focusing
+        # the target anyway would blur an open descendant -- and a picker's
+        # overlay reads its own blur as a dismissal, so the projection would
+        # close the picker. See ``ui/widgets/_focus_guard`` and #235.
+        #
+        # ``self.screen.focused``, NOT ``self.app.focused``: the latter returns
+        # None when the focused widget is ``loading``
+        # (textual/app.py:1299-1302), and a None here opens the guard and fires
+        # the very ``set_focus`` this branch exists to suppress.
+        # ``is_on_active_screen`` above has already established that this page's
+        # screen is the active one, so the two agree except for that
+        # short-circuit.
+        if focus_rests_within(target, self.screen.focused):
+            return
         self.app.set_focus(target)
 
     def move_focused(self, delta: int) -> None:
@@ -543,7 +556,7 @@ class GluePage(DeferredWorkerMixin, HubSubscriberMixin, Widget):
         picker.open()
 
     def _contains_focus(self, focused: Widget | None) -> bool:
-        return focused is not None and (focused is self or self in focused.ancestors_with_self)
+        return focus_rests_within(self, focused)
 
     def _on_active_view_changed(self, _property_name: str) -> None:
         self.call_after_refresh(self._sync_view)

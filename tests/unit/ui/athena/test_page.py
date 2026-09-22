@@ -25,7 +25,7 @@ from aws_tui.vm.athena.page_vm import AthenaPageVM
 from aws_tui.vm.chrome.focus_coordinator_vm import FocusCoordinatorVM, FocusSlot
 from aws_tui.vm.nav_menu_vm import NavMenuVM
 from aws_tui.vm.services_protocol import ServiceRegistry
-from tests.helpers import focus_and_settle, seed_athena_sql
+from tests.helpers import focus_and_settle, seed_athena_sql, wait_until
 from tests.unit.vm.athena.test_page_vm import PageClient, make_page_vm
 
 
@@ -613,6 +613,52 @@ async def test_same_turn_context_opens_keep_only_newest_picker_focused(
         assert newest.is_open
         assert not first.is_open
         assert app.focused is newest.query_one(OptionList)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("action_name", "picker_id", "slot"),
+    [
+        ("action_choose_workgroup", "athena-workgroup", FocusSlot.ATHENA_WORKGROUP),
+        ("action_choose_catalog", "athena-catalog", FocusSlot.ATHENA_CATALOG),
+        ("action_choose_database", "athena-database", FocusSlot.ATHENA_DATABASE),
+    ],
+)
+async def test_reprojecting_an_open_pickers_slot_leaves_it_open(
+    action_name: str,
+    picker_id: str,
+    slot: FocusSlot,
+) -> None:
+    """A slot whose picker is already open must survive being re-projected.
+
+    These pickers are focus-slot *targets* that host their own overlay, so
+    focusing the target moves focus up out of the overlay and the overlay
+    reports that blur as a dismissal. Athena queues slot projections through
+    ``call_after_refresh`` exactly as Glue does, so a projection landing after
+    the picker opened would close it -- the #235 defect, pinned here for the
+    page where it was never reproduced rather than left latent.
+    """
+    vm, _client = _build_vm()
+    await vm.setup()
+    app = _AthenaApp(vm)
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        page = app.query_one(AthenaPage)
+        getattr(page, action_name)()
+        picker = app.query_one(f"#{picker_id}", ContextPicker)
+        overlay = picker.query_one(OptionList)
+        await wait_until(
+            lambda: app.focused is overlay,
+            what=f"{picker_id}'s overlay took focus",
+        )
+
+        page.project_focus_slot(slot)
+        await pilot.pause()
+
+        assert picker.is_open
+        assert app.focused is overlay
+        assert app.focus_coordinator.focused_slot is slot
 
 
 @pytest.mark.asyncio
