@@ -639,16 +639,23 @@ class AthenaPage(DeferredWorkerMixin, HubSubscriberMixin, Widget):
         # the target anyway would blur an open descendant -- and a picker's
         # overlay reads its own blur as a dismissal, so the projection would
         # close the picker. See ``ui/widgets/_focus_guard`` and #235.
-        if focus_rests_within(target, self.app.focused):
+        #
+        # ``self.screen.focused``, NOT ``self.app.focused``: the latter returns
+        # None when the focused widget is ``loading``
+        # (textual/app.py:1299-1302), and a None here opens the guard and fires
+        # the very ``set_focus`` this branch exists to suppress.
+        # ``is_on_active_screen`` above has already established that this page's
+        # screen is the active one, so the two agree except for that
+        # short-circuit.
+        if focus_rests_within(target, self.screen.focused):
             return
         self.app.set_focus(target)
 
     def _sync_focused_widget(self, focused: Widget) -> None:
         if self._focus_coordinator is None:
             return
-        ancestors = set(focused.ancestors_with_self)
         for slot, target in self._focus_targets():
-            if target in ancestors:
+            if focus_rests_within(target, focused):
                 self._focus_coordinator.project_focused_slot(slot)
                 return
 
@@ -699,7 +706,7 @@ class AthenaPage(DeferredWorkerMixin, HubSubscriberMixin, Widget):
         return False
 
     def _contains_focus(self, focused: Widget | None) -> bool:
-        return focused is not None and (focused is self or self in focused.ancestors_with_self)
+        return focus_rests_within(self, focused)
 
     def _focused_ids(self) -> set[str]:
         focused = self.app.focused

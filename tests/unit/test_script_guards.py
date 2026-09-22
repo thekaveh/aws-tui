@@ -125,16 +125,38 @@ exit 0
     ]
 
 
+def _bootstrap_in(checkout: Path, *, path: str) -> subprocess.CompletedProcess[str]:
+    """Run a copy of `bootstrap.sh` from inside `checkout`.
+
+    The script resolves its own directory rather than trusting the working
+    directory, so the copy has to live at `<checkout>/scripts/`.
+    """
+    (checkout / "scripts").mkdir(parents=True, exist_ok=True)
+    script = checkout / "scripts" / "bootstrap.sh"
+    script.write_text(
+        (REPO_ROOT / "scripts" / "bootstrap.sh").read_text(encoding="utf-8"),
+        encoding="utf-8",
+    )
+    return subprocess.run(
+        ["/bin/bash", str(script)],
+        cwd=checkout,
+        env={**os.environ, "PATH": path},
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+
 def test_bootstrap_installs_hooks_from_a_linked_worktree(tmp_path: Path) -> None:
-    """A `.git` FILE is still a git checkout.
+    """A linked worktree is a git checkout, and its `.git` is a FILE.
 
     `git worktree` and `git submodule` both write `.git` as a regular file
     holding a `gitdir:` pointer instead of creating a directory, so the
-    `-d .git` test bootstrap used to run reported "not a git checkout" and
+    `[ -d .git ]` test bootstrap used to run reported "not a git checkout" and
     silently skipped `pre-commit install` for every contributor developing in
-    one. The script resolves its own directory rather than trusting the
-    working directory, so this drives a copy whose sibling `.git` is such a
-    file -- the shape `ls -l .git` shows inside `.worktrees/`.
+    one. Built as a real worktree of a real repository rather than a
+    hand-written pointer, so the fixture cannot drift from the shape git
+    actually produces.
     """
     calls = tmp_path / "uv-calls.txt"
     _fake_uv(
@@ -144,26 +166,83 @@ def test_bootstrap_installs_hooks_from_a_linked_worktree(tmp_path: Path) -> None
 exit 0
 """,
     )
-    checkout = tmp_path / "checkout"
-    (checkout / "scripts").mkdir(parents=True)
-    (checkout / "scripts" / "bootstrap.sh").write_text(
-        (REPO_ROOT / "scripts" / "bootstrap.sh").read_text(encoding="utf-8"),
-        encoding="utf-8",
-    )
-    (checkout / ".git").write_text("gitdir: /nowhere/.git/worktrees/wt\n", encoding="utf-8")
-
-    result = subprocess.run(
-        ["/bin/bash", str(checkout / "scripts" / "bootstrap.sh")],
-        cwd=checkout,
-        env={**os.environ, "PATH": f"{tmp_path}:{BASE_PATH}"},
-        text=True,
+    origin = tmp_path / "origin"
+    origin.mkdir()
+    git = ["git", "-c", "user.email=t@example.com", "-c", "user.name=t"]
+    subprocess.run([*git, "init", "-q", str(origin)], check=True, capture_output=True)
+    (origin / "seed.txt").write_text("seed\n", encoding="utf-8")
+    subprocess.run([*git, "-C", str(origin), "add", "seed.txt"], check=True, capture_output=True)
+    subprocess.run(
+        [*git, "-C", str(origin), "commit", "-q", "-m", "seed"],
+        check=True,
         capture_output=True,
-        check=False,
     )
+    checkout = tmp_path / "linked"
+    subprocess.run(
+        [*git, "-C", str(origin), "worktree", "add", "-q", str(checkout)],
+        check=True,
+        capture_output=True,
+    )
+    assert (checkout / ".git").is_file(), "fixture is not the worktree shape this test is about"
+
+    result = _bootstrap_in(checkout, path=f"{tmp_path}:{BASE_PATH}")
 
     assert result.returncode == 0, result.stderr
     assert "run pre-commit install" in calls.read_text(encoding="utf-8").splitlines()
     assert "skipping pre-commit hooks" not in result.stdout
+
+
+def test_bootstrap_skips_hooks_without_a_git_checkout(tmp_path: Path) -> None:
+    """The case the skip branch exists for: a downloaded tarball or zip.
+
+    `pre-commit install` exits non-zero with no git dir, which under
+    `set -euo pipefail` aborted bootstrap after a successful sync. Untested
+    before this ticket, in either direction.
+    """
+    calls = tmp_path / "uv-calls.txt"
+    _fake_uv(
+        tmp_path,
+        version="0.11.19",
+        body=f"""printf "%s\\n" "$*" >> {calls}
+exit 0
+""",
+    )
+
+    result = _bootstrap_in(tmp_path / "tarball", path=f"{tmp_path}:{BASE_PATH}")
+
+    assert result.returncode == 0, result.stderr
+    assert "skipping pre-commit hooks" in result.stdout
+    assert "run pre-commit install" not in calls.read_text(encoding="utf-8").splitlines()
+
+
+def test_bootstrap_skips_hooks_when_the_git_pointer_dangles(tmp_path: Path) -> None:
+    """A `.git` file can exist and still resolve to nothing.
+
+    An orphaned or moved worktree leaves the pointer behind. `[ -e .git ]`
+    would accept it and then abort bootstrap on the failing hook install, which
+    is why the condition asks `git rev-parse --git-dir` instead of testing for
+    the path.
+    """
+    calls = tmp_path / "uv-calls.txt"
+    _fake_uv(
+        tmp_path,
+        version="0.11.19",
+        body=f"""printf "%s\\n" "$*" >> {calls}
+exit 0
+""",
+    )
+    checkout = tmp_path / "orphaned"
+    checkout.mkdir()
+    (checkout / ".git").write_text(
+        f"gitdir: {tmp_path / 'gone' / '.git' / 'worktrees' / 'orphaned'}\n",
+        encoding="utf-8",
+    )
+
+    result = _bootstrap_in(checkout, path=f"{tmp_path}:{BASE_PATH}")
+
+    assert result.returncode == 0, result.stderr
+    assert "skipping pre-commit hooks" in result.stdout
+    assert "run pre-commit install" not in calls.read_text(encoding="utf-8").splitlines()
 
 
 def test_dev_tooling_declares_textual_cli_dependency() -> None:

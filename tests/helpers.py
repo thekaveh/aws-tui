@@ -67,23 +67,33 @@ async def drain_workers(
     )
 
 
+WAIT_UNTIL_TIMEOUT_SECONDS = 15.0
+"""Default bound for :func:`wait_until`.
+
+Five seconds was enough locally but not on windows-latest under a loaded
+three-Python matrix. 15s is three times that, and -- unlike the 30s
+:data:`DEFAULT_DRAIN_TIMEOUT_SECONDS` used for worker drains -- two sequential
+waits still fit inside pytest's own 60s per-test kill (``timeout = 60`` in
+pyproject), so this helper's named diagnostic wins the race instead of losing
+it to a bare ``Failed: Timeout``.
+"""
+
+
 async def wait_until(
     predicate: Callable[[], bool],
     *,
     what: str,
-    timeout: float = DEFAULT_DRAIN_TIMEOUT_SECONDS,
+    timeout: float = WAIT_UNTIL_TIMEOUT_SECONDS,
 ) -> None:
     """Poll ``predicate`` until it holds, then return.
 
-    Sized for the slowest runner in the matrix. Five seconds was enough
-    locally but not on windows-latest under a loaded three-Python matrix,
-    where it raised ``TimeoutError`` while the same commit passed everywhere
-    else, so the bound is :data:`DEFAULT_DRAIN_TIMEOUT_SECONDS` -- the same
-    30s, for the same reason, rather than a second hand-typed number. A real
-    hang still fails, just later.
-
     ``what`` names the condition in the failure, so a test that never settles
     says which thing never settled instead of pointing at a bare timeout.
+
+    A predicate that is already true returns without awaiting. That is correct
+    for a genuine post-condition check, but it makes a MISTAKEN predicate a
+    silent no-op rather than a failure -- so when the point of the call is to
+    wait for something in flight, assert the pending state just before it.
     """
     deadline = asyncio.get_running_loop().time() + timeout
     while not predicate():

@@ -72,13 +72,22 @@ uv python install 3.11
 echo "==> uv sync --locked --all-groups"
 uv sync --locked --all-groups
 
-# `-e`, not `-d`: a linked worktree and a submodule both carry `.git` as a
-# regular FILE holding a `gitdir:` pointer, so `-d` silently skipped the hook
-# install in exactly the checkouts a contributor is most likely to develop in.
-# A downloaded tarball or zip has no `.git` at all, which is the case the
-# branch exists for -- `pre-commit install` needs a git dir and exits non-zero
-# without one, which under `set -e` aborted bootstrap after a successful sync.
-if [ -e .git ]; then
+# Ask git, rather than testing for a `.git` directory.
+#
+# `pre-commit install` needs a resolvable git dir and exits non-zero without
+# one, which under `set -e` aborted bootstrap after a successful sync -- that
+# is why this branch exists. But the condition used to be `[ -d .git ]`, and a
+# linked worktree and a submodule both carry `.git` as a regular FILE holding a
+# `gitdir:` pointer, so the hook install was silently skipped in exactly the
+# checkouts a contributor is most likely to be developing in.
+#
+# `[ -e .git ]` would accept both shapes but also accepts a `.git` file whose
+# pointer DANGLES (an orphaned or moved worktree), where `pre-commit install`
+# still fails and bootstrap would still abort. `git rev-parse --git-dir`
+# answers the question that actually matters -- can a git dir be resolved from
+# here -- and is false for a tarball, a dangling pointer, and a missing git
+# binary alike.
+if git rev-parse --git-dir >/dev/null 2>&1; then
   echo "==> installing pre-commit hooks"
   uv run pre-commit install
 else
