@@ -125,6 +125,47 @@ exit 0
     ]
 
 
+def test_bootstrap_installs_hooks_from_a_linked_worktree(tmp_path: Path) -> None:
+    """A `.git` FILE is still a git checkout.
+
+    `git worktree` and `git submodule` both write `.git` as a regular file
+    holding a `gitdir:` pointer instead of creating a directory, so the
+    `-d .git` test bootstrap used to run reported "not a git checkout" and
+    silently skipped `pre-commit install` for every contributor developing in
+    one. The script resolves its own directory rather than trusting the
+    working directory, so this drives a copy whose sibling `.git` is such a
+    file -- the shape `ls -l .git` shows inside `.worktrees/`.
+    """
+    calls = tmp_path / "uv-calls.txt"
+    _fake_uv(
+        tmp_path,
+        version="0.11.19",
+        body=f"""printf "%s\\n" "$*" >> {calls}
+exit 0
+""",
+    )
+    checkout = tmp_path / "checkout"
+    (checkout / "scripts").mkdir(parents=True)
+    (checkout / "scripts" / "bootstrap.sh").write_text(
+        (REPO_ROOT / "scripts" / "bootstrap.sh").read_text(encoding="utf-8"),
+        encoding="utf-8",
+    )
+    (checkout / ".git").write_text("gitdir: /nowhere/.git/worktrees/wt\n", encoding="utf-8")
+
+    result = subprocess.run(
+        ["/bin/bash", str(checkout / "scripts" / "bootstrap.sh")],
+        cwd=checkout,
+        env={**os.environ, "PATH": f"{tmp_path}:{BASE_PATH}"},
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "run pre-commit install" in calls.read_text(encoding="utf-8").splitlines()
+    assert "skipping pre-commit hooks" not in result.stdout
+
+
 def test_dev_tooling_declares_textual_cli_dependency() -> None:
     import tomllib
 

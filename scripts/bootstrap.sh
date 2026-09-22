@@ -72,13 +72,16 @@ uv python install 3.11
 echo "==> uv sync --locked --all-groups"
 uv sync --locked --all-groups
 
-if [ -d .git ]; then
+# `-e`, not `-d`: a linked worktree and a submodule both carry `.git` as a
+# regular FILE holding a `gitdir:` pointer, so `-d` silently skipped the hook
+# install in exactly the checkouts a contributor is most likely to develop in.
+# A downloaded tarball or zip has no `.git` at all, which is the case the
+# branch exists for -- `pre-commit install` needs a git dir and exits non-zero
+# without one, which under `set -e` aborted bootstrap after a successful sync.
+if [ -e .git ]; then
   echo "==> installing pre-commit hooks"
   uv run pre-commit install
 else
-  # `pre-commit install` needs a git dir and exits non-zero without one, which
-  # under `set -e` aborted bootstrap after a successful sync for anyone working
-  # from a downloaded tarball or zip.
   echo "==> skipping pre-commit hooks (not a git checkout)"
 fi
 
