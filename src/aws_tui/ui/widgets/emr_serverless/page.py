@@ -27,7 +27,7 @@ from vmx import Message, MessageHub
 
 from aws_tui.infra.keymap_store import KeymapStore
 from aws_tui.ui import notifications
-from aws_tui.ui.widgets._focus_guard import is_on_active_screen
+from aws_tui.ui.widgets._focus_guard import focus_rests_within, is_on_active_screen
 from aws_tui.ui.widgets._worker import DeferredWorkerMixin
 from aws_tui.ui.widgets.context_picker import ContextPicker
 from aws_tui.ui.widgets.emr_serverless.application_picker import ApplicationPicker
@@ -649,6 +649,20 @@ class EmrServerlessPage(DeferredWorkerMixin, Widget):
             return
         if self._focus_coordinator is not None:
             self._focus_coordinator.project_focused_slot(slot)
+        # A slot whose target already contains the focus is satisfied. Focusing
+        # the target anyway would blur an open descendant -- and a picker's
+        # overlay reads its own blur as a dismissal, so the projection would
+        # close the picker. See ``ui/widgets/_focus_guard`` and #235.
+        #
+        # ``self.screen.focused``, NOT ``self.app.focused``: the latter returns
+        # None when the focused widget is ``loading``
+        # (textual/app.py:1299-1302), and a None here opens the guard and fires
+        # the very ``set_focus`` this branch exists to suppress.
+        # ``is_on_active_screen`` above has already established that this page's
+        # screen is the active one, so the two agree except for that
+        # short-circuit.
+        if focus_rests_within(target, self.screen.focused):
+            return
         self.app.set_focus(target)
 
     def project_focus_slot(self, slot: FocusSlot) -> None:
@@ -658,9 +672,8 @@ class EmrServerlessPage(DeferredWorkerMixin, Widget):
     def _sync_focused_widget(self, focused: Widget) -> None:
         if self._focus_coordinator is None:
             return
-        ancestors = set(focused.ancestors_with_self)
         for slot, target in self._focus_targets():
-            if target in ancestors:
+            if focus_rests_within(target, focused):
                 self._focus_coordinator.project_focused_slot(slot)
                 return
 
@@ -678,11 +691,11 @@ class EmrServerlessPage(DeferredWorkerMixin, Widget):
             self.app._focus_active_nav_list(nav)  # type: ignore[attr-defined]
 
     def _contains_focus(self, focused: Widget) -> bool:
-        return focused is self or self in focused.ancestors_with_self
+        return focus_rests_within(self, focused)
 
     @staticmethod
     def _is_within(focused: Widget, parent: Widget) -> bool:
-        return focused is parent or parent in focused.ancestors_with_self
+        return focus_rests_within(parent, focused)
 
     # ── Message routing ─────────────────────────────────────────────────────
 

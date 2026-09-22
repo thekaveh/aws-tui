@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from dataclasses import replace
 
 import pytest
@@ -22,14 +23,16 @@ from aws_tui.ui.widgets.glue.detail_rows import DetailRows, ResourceListPane
 from aws_tui.ui.widgets.glue.jobs_view import GlueJobsView
 from aws_tui.ui.widgets.glue.page import GluePage
 from aws_tui.ui.widgets.nav_menu import NavMenu
+from aws_tui.ui.widgets.overlay_option_list import OverlayOptionList
 from aws_tui.ui.widgets.service_source_header import ServiceSourceHeader
 from aws_tui.ui.widgets.service_tab_strip import ServiceTabStrip
 from aws_tui.vm.chrome.focus_coordinator_vm import FocusCoordinatorVM, FocusSlot
 from aws_tui.vm.file_manager.pane_vm import PaneState
 from aws_tui.vm.glue.page_vm import GluePageVM
 from aws_tui.vm.nav_menu_vm import NavMenuVM
+from aws_tui.vm.service_source_vm import ServiceSourceContext
 from aws_tui.vm.services_protocol import ServiceRegistry
-from tests.helpers import drain_workers
+from tests.helpers import drain_workers, focus_and_settle, wait_until
 from tests.unit.vm.glue._fake_glue import InMemoryGlue, seeded_glue
 from tests.unit.vm.glue.test_iceberg_vm import RecordingInspector
 
@@ -60,10 +63,18 @@ class _GlueApp(App[None]):
     #nav-menu { width: 1; min-width: 1; }
     """
 
-    def __init__(self, vm: GluePageVM, *, keymap: KeymapStore | None = None) -> None:
+    def __init__(
+        self,
+        vm: GluePageVM,
+        *,
+        keymap: KeymapStore | None = None,
+        source_candidates: tuple[ServiceSourceContext, ...] = (),
+    ) -> None:
         super().__init__()
         self._vm = vm
         self._keymap = keymap
+        self._source_candidates = source_candidates
+        self.source_selections: list[tuple[str, str]] = []
         self.focus_coordinator = FocusCoordinatorVM(
             hub=vm.hub,
             dispatcher=NULL_DISPATCHER,
@@ -82,6 +93,7 @@ class _GlueApp(App[None]):
                 self._vm,
                 hub=self._vm.hub,
                 focus_coordinator=self.focus_coordinator,
+                source_candidates=self._source_candidates,
             )
         else:
             yield GluePage(
@@ -89,6 +101,7 @@ class _GlueApp(App[None]):
                 hub=self._vm.hub,
                 keymap=self._keymap,
                 focus_coordinator=self.focus_coordinator,
+                source_candidates=self._source_candidates,
             )
         yield NavMenu(
             vm=self.nav_vm,
@@ -96,6 +109,19 @@ class _GlueApp(App[None]):
             focus_coordinator=self.focus_coordinator,
             id="nav-menu",
         )
+
+    def on_service_source_header_source_selected(
+        self,
+        event: ServiceSourceHeader.SourceSelected,
+    ) -> None:
+        """Stand in for the real app's page swap.
+
+        ``AwsTuiApp`` rebuilds the service page on a committed source change.
+        Recording the identity here is enough for the picker-ownership tests:
+        what they assert is that the *old* page's deferred work cannot reopen
+        a picker after the change, and that needs the page to stay mounted.
+        """
+        self.source_selections.append((event.connection_name, event.region))
 
     def on_unmount(self) -> None:
         self.focus_coordinator.dispose()
@@ -268,7 +294,20 @@ async def test_glue_view_switch_reprojects_focus_before_action_returns() -> None
         await pilot.pause()
         runs = app.query_one("#glue-runs-pane-options", OptionList)
         runs.focus()
-        await pilot.pause()
+        # `action_select_view` reads `focus_coordinator.focused_slot` into its
+        # `reference` BEFORE awaiting the VM, and carries that reference all the
+        # way into `_project_focus_slot`. `Widget.focus()` sets
+        # `screen.focused` synchronously but only POSTS the Focus event, so
+        # until that event is handled the coordinator still holds the startup
+        # NAV_MENU -- and NAV_MENU is itself a valid focus target here, so the
+        # action faithfully preserves it and this test's GLUE_DETAIL assertion
+        # fails. A single `pilot.pause()` was enough on macOS and ubuntu but
+        # not on a loaded windows-latest/py3.11 runner, where it failed 1 run
+        # in 10 (#235 stress harness). Wait for the precondition itself.
+        await wait_until(
+            lambda: app.focus_coordinator.focused_slot is FocusSlot.GLUE_SECONDARY,
+            what="the runs pane's focus reached the coordinator",
+        )
         page = app.query_one(GluePage)
 
         await page.action_select_view("crawlers")
@@ -440,6 +479,27 @@ async def test_named_filter_action_focuses_and_opens_picker(
         assert app.focus_coordinator.focused_slot is FocusSlot.GLUE_FILTER
 
 
+def _open_picker_ids(page: GluePage) -> tuple[str, ...]:
+    return tuple(picker.id or "" for picker in page.query(ContextPicker) if picker.is_open)
+
+
+async def _settle_named_filter(app: _GlueApp, picker_id: str) -> ContextPicker:
+    """Wait for the named-filter action on ``picker_id`` to finish, and return it.
+
+    The action's last deferred step is ``ContextPicker._focus_options`` handing
+    focus to the freshly opened overlay, so that focus landing is the switch's
+    completion signal. Waiting on ``is_open`` instead would be circular with the
+    assertions every caller then makes about which filters are open.
+    """
+    picker = app.query_one(f"#{picker_id}", ContextPicker)
+    overlay = picker.query_one(OverlayOptionList)
+    await wait_until(
+        lambda: app.focused is overlay,
+        what=f"{picker_id}'s overlay took focus",
+    )
+    return picker
+
+
 @pytest.mark.asyncio
 async def test_named_filter_action_closes_hidden_filter_from_previous_view() -> None:
     vm, _fake = _build_vm()
@@ -451,15 +511,480 @@ async def test_named_filter_action_closes_hidden_filter_from_previous_view() -> 
         page = app.query_one(GluePage)
 
         await page.action_choose_run_state()
-        await pilot.pause()
-        run_filter = app.query_one("#glue-run-state-filter", ContextPicker)
+        run_filter = await _settle_named_filter(app, "glue-run-state-filter")
         assert run_filter.is_open
 
         await page.action_choose_crawler_state()
-        await pilot.pause(0.05)
-        crawler_filter = app.query_one("#glue-crawler-state-filter", ContextPicker)
+        crawler_filter = await _settle_named_filter(app, "glue-crawler-state-filter")
+
         assert not run_filter.is_open
         assert crawler_filter.is_open
+        assert app.focus_coordinator.focused_slot is FocusSlot.GLUE_FILTER
+
+
+@pytest.mark.asyncio
+async def test_open_named_filter_survives_a_later_child_vm_notification() -> None:
+    """A background VM update must not close the filter the user just opened.
+
+    ``GluePage._on_child_vm_changed`` re-projects ``GLUE_FILTER`` after every
+    ``vm.crawlers`` / ``vm.jobs`` notification. Before #235 that projection
+    focused the picker *trigger*, blurring the open overlay, which
+    ``OverlayOptionList.on_blur`` posts as ``Dismissed(lost_focus=True)`` and
+    the picker closes.
+
+    Opening a named filter loads that view inline, and the load notifies eight
+    properties, so eight such projections are already queued on the page's pump
+    when the picker opens on the *picker's* pump. Whichever pump wins decides
+    whether the filter survives -- which is why
+    ``test_named_filter_action_closes_hidden_filter_from_previous_view`` failed
+    only on a loaded windows-latest runner. Driving one notification explicitly
+    after the picker has settled reproduces it with no scheduler dependence at
+    all.
+    """
+    vm, _fake = _build_vm()
+    await vm.setup()
+    app = _GlueApp(vm)
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        page = app.query_one(GluePage)
+
+        await page.action_choose_crawler_state()
+        crawler_filter = await _settle_named_filter(app, "glue-crawler-state-filter")
+        overlay = crawler_filter.query_one(OverlayOptionList)
+        assert crawler_filter.is_open
+
+        names = tuple(crawler.name for crawler in vm.crawlers.crawlers)
+        assert len(names) > 1
+        await vm.crawlers.select_crawler(names[-1])
+        await pilot.pause()
+        await pilot.pause()
+
+        assert crawler_filter.is_open
+        assert app.focused is overlay
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("action_name", "picker_id"),
+    [
+        ("action_choose_run_state", "glue-run-state-filter"),
+        ("action_choose_crawler_state", "glue-crawler-state-filter"),
+    ],
+)
+async def test_reprojecting_the_filter_slot_leaves_its_picker_open(
+    action_name: str,
+    picker_id: str,
+) -> None:
+    """The app-level entry point onto the slot must be idempotent too.
+
+    ``AwsTuiApp`` projects a coordinated slot onto the page through the public
+    ``project_focus_slot``; ``_maybe_focus_active`` reaches the same code from
+    the page's own deferred callbacks. Neither may disturb a slot that already
+    holds the focus.
+    """
+    vm, _fake = _build_vm()
+    await vm.setup()
+    app = _GlueApp(vm)
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        page = app.query_one(GluePage)
+        await getattr(page, action_name)()
+        picker = await _settle_named_filter(app, picker_id)
+        overlay = picker.query_one(OverlayOptionList)
+
+        page.project_focus_slot(FocusSlot.GLUE_FILTER)
+        await pilot.pause()
+
+        assert picker.is_open
+        assert app.focused is overlay
+        assert app.focus_coordinator.focused_slot is FocusSlot.GLUE_FILTER
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("first_action", "second_action", "open_id", "closed_id", "view"),
+    [
+        (
+            "action_choose_run_state",
+            "action_choose_crawler_state",
+            "glue-crawler-state-filter",
+            "glue-run-state-filter",
+            "crawlers",
+        ),
+        (
+            "action_choose_crawler_state",
+            "action_choose_run_state",
+            "glue-run-state-filter",
+            "glue-crawler-state-filter",
+            "jobs",
+        ),
+    ],
+)
+async def test_named_filter_switching_settles_on_one_open_filter(
+    first_action: str,
+    second_action: str,
+    open_id: str,
+    closed_id: str,
+    view: str,
+) -> None:
+    vm, _fake = _build_vm()
+    await vm.setup()
+    app = _GlueApp(vm)
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        page = app.query_one(GluePage)
+
+        await getattr(page, first_action)()
+        await _settle_named_filter(app, closed_id)
+        await getattr(page, second_action)()
+        opened = await _settle_named_filter(app, open_id)
+
+        assert _open_picker_ids(page) == (open_id,)
+        assert vm.active_view == view
+        assert app.focus_coordinator.focused_slot is FocusSlot.GLUE_FILTER
+        assert app.focused is opened.query_one(OverlayOptionList)
+
+
+@pytest.mark.asyncio
+async def test_switching_named_filters_never_shows_two_open_at_once() -> None:
+    """Exclusivity is a synchronous contract, not an eventual one.
+
+    ``PickerOpenIntent.observe`` closes the previously desired picker inside
+    ``ContextPicker.open`` with no await in between, so no task can ever
+    observe two open. Sampling after every scheduler tick of three round trips
+    pins that, so a future change cannot quietly demote it to something the
+    deferred ``_reconcile_open_pickers`` sweep merely cleans up later.
+    """
+    vm, _fake = _build_vm()
+    await vm.setup()
+    app = _GlueApp(vm)
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        page = app.query_one(GluePage)
+        samples: list[tuple[str, ...]] = [_open_picker_ids(page)]
+
+        for _round in range(3):
+            for action in ("action_choose_run_state", "action_choose_crawler_state"):
+                await getattr(page, action)()
+                samples.append(_open_picker_ids(page))
+                for _ in range(20):
+                    await asyncio.sleep(0)
+                    samples.append(_open_picker_ids(page))
+                await pilot.pause()
+                samples.append(_open_picker_ids(page))
+
+        worst = max(samples, key=len)
+        assert len(worst) <= 1, f"two filters open at once: {worst}"
+        # Not vacuous: both filters must actually have been observed open, so a
+        # regression that simply stops opening them cannot satisfy the bound.
+        assert set(samples) == {
+            (),
+            ("glue-run-state-filter",),
+            ("glue-crawler-state-filter",),
+        }
+
+
+@pytest.mark.asyncio
+async def test_rapid_named_filter_switches_settle_on_the_last_request() -> None:
+    vm, _fake = _build_vm()
+    await vm.setup()
+    app = _GlueApp(vm)
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        page = app.query_one(GluePage)
+
+        # No pause between switches: every deferred projection and
+        # reconciliation from the earlier switches is still in flight when the
+        # last one runs.
+        for _ in range(6):
+            await page.action_choose_run_state()
+            await page.action_choose_crawler_state()
+
+        crawler_filter = await _settle_named_filter(app, "glue-crawler-state-filter")
+
+        assert _open_picker_ids(page) == ("glue-crawler-state-filter",)
+        assert vm.active_view == "crawlers"
+        assert app.focus_coordinator.focused_slot is FocusSlot.GLUE_FILTER
+        assert app.focused is crawler_filter.query_one(OverlayOptionList)
+
+
+@pytest.mark.asyncio
+async def test_escape_closes_the_open_filter_and_nothing_reopens_it() -> None:
+    vm, _fake = _build_vm()
+    await vm.setup()
+    app = _GlueApp(vm)
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        page = app.query_one(GluePage)
+
+        await page.action_choose_crawler_state()
+        crawler_filter = await _settle_named_filter(app, "glue-crawler-state-filter")
+
+        await pilot.press("escape")
+        await wait_until(
+            lambda: not _open_picker_ids(page),
+            what="escape closed the crawler-state filter",
+        )
+
+        # The projections queued by the view load are still draining; none of
+        # them may bring the picker back.
+        for _ in range(20):
+            await pilot.pause()
+            assert _open_picker_ids(page) == ()
+        assert page._picker_open_intent.desired is None
+        # Focus must come back to the visible trigger, not strand on the
+        # overlay the close just hid: the slot guard skips a projection whose
+        # target already holds the focus, so a stranded focus would stay
+        # stranded.
+        assert app.focused is crawler_filter
+        assert app.focus_coordinator.focused_slot is FocusSlot.GLUE_FILTER
+
+
+@pytest.mark.asyncio
+async def test_opening_the_source_picker_closes_an_open_named_filter() -> None:
+    vm, _fake = _build_vm()
+    await vm.setup()
+    app = _GlueApp(vm)
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        page = app.query_one(GluePage)
+
+        await page.action_choose_crawler_state()
+        crawler_filter = await _settle_named_filter(app, "glue-crawler-state-filter")
+
+        source = page.query_one("#glue-source-header-picker", ContextPicker)
+        source.open()
+
+        # Exclusivity is synchronous, so the filter is already gone here.
+        assert not crawler_filter.is_open
+        await wait_until(
+            lambda: app.focused is source.query_one(OverlayOptionList),
+            what="the source picker's overlay took focus",
+        )
+
+        for _ in range(20):
+            await pilot.pause()
+            assert _open_picker_ids(page) == ("glue-source-header-picker",)
+        assert page._picker_open_intent.desired is source
+
+
+@pytest.mark.asyncio
+async def test_committing_a_source_change_does_not_reopen_a_stale_filter() -> None:
+    """AC4's source-change leg, driven as a real source change.
+
+    ``test_opening_the_source_picker_closes_an_open_named_filter`` covers only
+    the first half -- the source picker *opening*. This one commits the change:
+    it drives the header's picker with the keyboard until
+    ``ServiceSourceHeader.SourceSelected`` actually fires, which is what the
+    real app reacts to by rebuilding the page. The named filter must be gone
+    and must stay gone while the old page's deferred projections drain.
+    """
+    vm, _fake = _build_vm()
+    await vm.setup()
+    other = ServiceSourceContext("analytics-prod", "analytics-prod", "us-west-2")
+    app = _GlueApp(vm, source_candidates=(vm.source, other))
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        page = app.query_one(GluePage)
+
+        await page.action_choose_crawler_state()
+        crawler_filter = await _settle_named_filter(app, "glue-crawler-state-filter")
+        assert crawler_filter.is_open
+
+        source_picker = page.query_one("#glue-source-header-picker", ContextPicker)
+        await focus_and_settle(source_picker)
+        await pilot.press("enter", "down", "enter")
+        await wait_until(
+            lambda: bool(app.source_selections),
+            what="the source header committed a new source",
+        )
+
+        assert app.source_selections == [("analytics-prod", "us-west-2")]
+        # Every projection and reconciliation queued by the filter switch and
+        # by the source change is still draining; none may reopen the filter.
+        for _ in range(20):
+            await pilot.pause()
+            assert not crawler_filter.is_open
+        assert page._picker_open_intent.desired is None
+
+
+@pytest.mark.asyncio
+async def test_a_satisfied_slot_projection_does_not_pull_focus_out_of_its_target() -> None:
+    """The guard is deliberately wider than the picker case that motivated it.
+
+    ``focus_rests_within`` skips the projection for *any* slot target that
+    already contains the focus, not just an open ``ContextPicker``. That
+    breadth is the point: a slot target that is a container -- the two
+    ``ServiceSourceHeader`` cases, and any ``ContextPicker`` whose overlay
+    holds the focus -- would otherwise have focus yanked from its focused
+    descendant up to the container itself, which is a focus regression on its
+    own terms, picker or no picker. Pinned here with the picker CLOSED, so
+    nothing about dismissal is involved.
+
+    (The detail ``VerticalScroll`` targets contain no focusable descendants in
+    any Glue view today, so they are not a live case -- only a shape the guard
+    would cover if one gained a focusable child.)
+    """
+    vm, _fake = _build_vm()
+    await vm.setup()
+    app = _GlueApp(vm)
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        page = app.query_one(GluePage)
+        header = page.query_one("#glue-source-header", ServiceSourceHeader)
+        inner = page.query_one("#glue-source-header-picker", ContextPicker)
+
+        await focus_and_settle(inner)
+        assert not inner.is_open
+        assert app.focused is inner
+
+        page.project_focus_slot(FocusSlot.GLUE_SOURCE)
+        await pilot.pause()
+
+        assert app.focused is inner, "projection pulled focus up to the container"
+        assert app.focused is not header
+        # The slot is still recorded as current -- it is satisfied, not absent.
+        assert app.focus_coordinator.focused_slot is FocusSlot.GLUE_SOURCE
+
+
+@pytest.mark.asyncio
+async def test_a_loading_overlay_still_counts_as_holding_the_focus() -> None:
+    """Why the guard reads `screen.focused`, not `app.focused`.
+
+    `App.focused` returns None when the focused widget is `loading`
+    (textual/app.py:1299-1302). Reading it there would hand the guard a None,
+    the guard would report "focus is elsewhere", and the projection would fire
+    the very `set_focus` it exists to suppress -- closing the picker and
+    reintroducing #235 the moment anything sets `loading` on a focused widget.
+    `is_on_active_screen` has already established this page's screen is the
+    active one, so `screen.focused` is both available and exact.
+    """
+    vm, _fake = _build_vm()
+    await vm.setup()
+    app = _GlueApp(vm)
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        page = app.query_one(GluePage)
+
+        await page.action_choose_crawler_state()
+        picker = await _settle_named_filter(app, "glue-crawler-state-filter")
+        overlay = picker.query_one(OverlayOptionList)
+
+        overlay.loading = True
+        await pilot.pause()
+        assert app.screen.focused is overlay
+        assert app.focused is None, "textual is expected to mask a loading widget here"
+
+        page.project_focus_slot(FocusSlot.GLUE_FILTER)
+        await pilot.pause()
+
+        assert picker.is_open
+        assert app.screen.focused is overlay
+
+
+@pytest.mark.asyncio
+async def test_the_reconcile_sweep_closes_a_picker_that_is_open_but_not_desired() -> None:
+    """The deferred sweep's own contract, which nothing else pinned.
+
+    Mutation testing found `_reconcile_open_pickers` to be the one guard in
+    this area that no test needed: disabling it left all 78 tests green, and
+    instrumenting the full unit+integration+e2e run showed it executes 152
+    times and closes nothing. `PickerOpenIntent.observe` closes the previously
+    desired picker SYNCHRONOUSLY inside `open()`, and every picker on this page
+    is constructed with that intent, so the sweep always arrives with no work.
+
+    Be precise about what this test therefore is: it pins the sweep's
+    CONTRACT, not a product-reachable path. It reaches the open-but-not-desired
+    state through the intent directly, because no user action produces it. The
+    sweep looks vestigial -- it predates the synchronous exclusive close that
+    superseded it -- and removing it belongs in its own change, not in a race
+    fix. Until then this keeps it from being a silent mutation survivor, which
+    is what let its redundancy go unnoticed.
+    """
+    vm, _fake = _build_vm()
+    await vm.setup()
+    app = _GlueApp(vm)
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        page = app.query_one(GluePage)
+
+        await page.action_choose_crawler_state()
+        picker = await _settle_named_filter(app, "glue-crawler-state-filter")
+        assert picker.is_open
+
+        epoch = page._picker_open_intent.observe(picker, False)
+        assert page._picker_open_intent.desired is None
+        assert picker.is_open, "the intent drop must not have closed the widget itself"
+
+        page._reconcile_open_pickers(epoch)
+
+        assert not picker.is_open
+        assert _open_picker_ids(page) == ()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("view", ["catalog", "jobs", "crawlers"])
+async def test_no_focus_slot_target_is_an_ancestor_of_another(view: str) -> None:
+    """The precondition that makes the guard's "skip" lossless.
+
+    `_project_focus_slot` records the slot on the coordinator and then skips
+    the `set_focus` when focus already rests inside the target. That split is
+    only safe while no slot's target is an ancestor of another slot's target:
+    if slot A's target contained slot B's target, projecting A while focus sat
+    on B would record A in the view model, skip the focus move, and leave focus
+    physically in B -- with no `DescendantFocus` to correct it, because focus
+    never moved. `focused_slot` would then be a durable lie.
+
+    The shape is one edit away, since `FocusSlot` already pairs container slots
+    with inner controls, so it is asserted rather than assumed.
+    """
+    vm, _fake = _build_vm()
+    await vm.setup()
+    await vm.select_view(view)
+    app = _GlueApp(vm)
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        page = app.query_one(GluePage)
+        targets = page._focus_targets()
+        assert len(targets) > 1
+
+        for slot_a, target_a in targets:
+            for slot_b, target_b in targets:
+                if target_a is target_b:
+                    continue
+                assert target_a not in target_b.ancestors_with_self, (
+                    f"{slot_a} target is an ancestor of {slot_b} target in view {view!r}; "
+                    "the skip in _project_focus_slot would strand focus"
+                )
+
+
+@pytest.mark.asyncio
+async def test_teardown_with_an_open_filter_clears_the_picker_intent() -> None:
+    vm, _fake = _build_vm()
+    await vm.setup()
+    app = _GlueApp(vm)
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        page = app.query_one(GluePage)
+        await page.action_choose_crawler_state()
+        await _settle_named_filter(app, "glue-crawler-state-filter")
+        epoch_before = page._picker_open_intent.epoch
+
+    assert page._picker_open_intent.desired is None
+    assert page._picker_open_intent.epoch > epoch_before
 
 
 @pytest.mark.asyncio
@@ -518,7 +1043,7 @@ async def test_focused_tab_activates_with_keyboard(key: str) -> None:
         await pilot.pause()
         page = app.query_one(GluePage)
         page._maybe_focus_active()  # type: ignore[attr-defined]
-        await pilot.pause(0.05)
+        await pilot.pause()
         tab = app.query_one("#glue-view-tabs", ServiceTabStrip)
         tab.focus()
         await pilot.pause()

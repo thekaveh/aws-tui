@@ -10,6 +10,8 @@ import asyncio
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
     from textual.app import App
     from textual.widget import Widget
     from textual.widgets import TextArea
@@ -63,6 +65,41 @@ async def drain_workers(
         f"workers still pending after {_MAX_DRAIN_ROUNDS} drain rounds: "
         f"{sorted(worker.name for worker in workers._workers)}"
     )
+
+
+WAIT_UNTIL_TIMEOUT_SECONDS = 15.0
+"""Default bound for :func:`wait_until`.
+
+Five seconds was enough locally but not on windows-latest under a loaded
+three-Python matrix. 15s is three times that, and -- unlike the 30s
+:data:`DEFAULT_DRAIN_TIMEOUT_SECONDS` used for worker drains -- two sequential
+waits still fit inside pytest's own 60s per-test kill (``timeout = 60`` in
+pyproject), so this helper's named diagnostic wins the race instead of losing
+it to a bare ``Failed: Timeout``.
+"""
+
+
+async def wait_until(
+    predicate: Callable[[], bool],
+    *,
+    what: str,
+    timeout: float = WAIT_UNTIL_TIMEOUT_SECONDS,
+) -> None:
+    """Poll ``predicate`` until it holds, then return.
+
+    ``what`` names the condition in the failure, so a test that never settles
+    says which thing never settled instead of pointing at a bare timeout.
+
+    A predicate that is already true returns without awaiting. That is correct
+    for a genuine post-condition check, but it makes a MISTAKEN predicate a
+    silent no-op rather than a failure -- so when the point of the call is to
+    wait for something in flight, assert the pending state just before it.
+    """
+    deadline = asyncio.get_running_loop().time() + timeout
+    while not predicate():
+        if asyncio.get_running_loop().time() >= deadline:
+            raise AssertionError(f"never settled within {timeout}s: {what}")
+        await asyncio.sleep(0.01)
 
 
 async def focus_and_settle(

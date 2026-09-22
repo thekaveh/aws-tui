@@ -13,6 +13,8 @@ from aws_tui.ui.widgets.emr_serverless.job_run_detail_pane import JobRunDetailPa
 from aws_tui.ui.widgets.emr_serverless.job_runs_pane import JobRunsPane
 from aws_tui.ui.widgets.emr_serverless.page import EmrServerlessPage
 from aws_tui.ui.widgets.service_source_header import ServiceSourceHeader
+from aws_tui.vm.chrome.focus_coordinator_vm import FocusSlot
+from tests.helpers import wait_until
 from tests.snapshot.apps.emr import EmrPageApp, EmrPageOpenSourcePickerApp
 
 
@@ -82,6 +84,59 @@ async def test_tab_cycle_closes_departed_application_picker(
 
         assert not picker.has_class("-open")
         assert app.query_one("#emr-runs-pane").has_focus
+
+
+@pytest.mark.asyncio
+async def test_reprojecting_the_application_slot_leaves_its_picker_open(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``EMR_APPLICATION`` is a slot whose target hosts its own overlay.
+
+    Focusing the target while the overlay holds the focus moves focus up out of
+    the overlay, and ``OverlayOptionList.on_blur`` posts that as a dismissal --
+    so a deferred projection landing after the picker opened would close it.
+    That is the #235 defect; EMR shares the projection shape, so it is pinned
+    here rather than left latent.
+    """
+    app = EmrPageApp(theme="carbon")
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        page = app.query_one(EmrServerlessPage)
+        picker = app.query_one(ApplicationPicker)
+        focus_complete = _track_picker_focus(picker, monkeypatch)
+        picker.toggle_open()
+        await _wait_for_completions(focus_complete)
+        overlay = picker.query_one(OptionList)
+        assert picker.is_open
+        assert app.focused is overlay
+
+        page.project_focus_slot(FocusSlot.EMR_APPLICATION)
+        await pilot.pause()
+
+        assert picker.is_open
+        assert app.focused is overlay
+
+
+@pytest.mark.asyncio
+async def test_reprojecting_the_source_slot_leaves_its_picker_open() -> None:
+    app = EmrPageOpenSourcePickerApp(theme="carbon")
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        page = app.query_one(EmrServerlessPage)
+        source_picker = await _opened_source_picker(pilot, app)
+        overlay = source_picker.query_one(OptionList)
+        await wait_until(
+            lambda: app.focused is overlay,
+            what="the EMR source picker's overlay took focus",
+        )
+
+        page.project_focus_slot(FocusSlot.EMR_SOURCE)
+        await pilot.pause()
+
+        assert source_picker.is_open
+        assert app.focused is overlay
 
 
 @pytest.mark.asyncio
