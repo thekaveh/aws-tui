@@ -368,12 +368,19 @@ async def test_open_connection_form_owns_tab_traversal(
             # the traversal then reads one slot off and the first assertion
             # fails comparing _AddButton to an Input, as seen on
             # windows-latest. Establish the starting slot before stepping.
+            #
+            # A bounded count of `pilot.pause()` calls is NOT sufficient here,
+            # and a 50-round version of exactly that still failed one run in six
+            # on windows-latest/py3.11 (#235 stress harness). A pause yields one
+            # scheduler cycle; it does not advance the clock, so fifty of them
+            # can retire in microseconds while the deferred focus is waiting on
+            # real time. `wait_until` polls against a wall-clock deadline, which
+            # is the thing this actually needs.
             first_field = app.query_one("#form-name", Input)
-            for _ in range(50):
-                if app.focused is first_field:
-                    break
-                await pilot.pause()
-            assert app.focused is first_field, "form did not take focus on open"
+            await wait_until(
+                lambda: app.focused is first_field,
+                what="the connection form took focus on open",
+            )
 
             expected_ids = (
                 "form-endpoint_url",
