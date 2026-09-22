@@ -179,6 +179,13 @@ async def test_selecting_snapshot_tab_loads_rows_and_enables_time_travel() -> No
 
         table.focus()
         table.move_cursor(row=0)
+        # Row 0 is already the default selection here, so a stale read would
+        # pass for the wrong reason. Wait for the cursor and assert the
+        # selection the highlight produced.
+        await wait_until(
+            lambda: table.cursor_row == 0,
+            what="the cursor settled on row 0",
+        )
         await pilot.pause()
 
         assert vm.catalog.iceberg.selected_snapshot_id == 43
@@ -504,7 +511,16 @@ async def test_older_snapshot_selection_survives_refresh_and_drives_time_travel(
         table = iceberg.query_one("#glue-iceberg-table", DataTable)
 
         table.move_cursor(row=1)
-        await pilot.pause()
+        # `move_cursor` moves the cursor synchronously but the view model is
+        # updated from the `RowHighlighted` event, so the selection still reads
+        # the row-0 snapshot (43) on the line after the move. One `pilot.pause()`
+        # covered that on macOS and ubuntu but not on a loaded
+        # windows-latest/py3.11 runner, where this asserted `43 == 42` once in 10
+        # stress repetitions (#235). Wait for the selection itself.
+        await wait_until(
+            lambda: vm.catalog.iceberg.selected_snapshot_id == 42,
+            what="the row-1 highlight reached the view model",
+        )
         assert vm.catalog.iceberg.selected_snapshot_id == 42
         selection_notifications = notifications.count("selected_snapshot_id")
 
@@ -540,7 +556,16 @@ async def test_snapshot_pagination_preserves_selection_and_removed_row_falls_bac
         await pilot.pause()
         table = pilot.app.query_one("#glue-iceberg-table", DataTable)
         table.move_cursor(row=1)
-        await pilot.pause()
+        # `move_cursor` moves the cursor synchronously but the view model is
+        # updated from the `RowHighlighted` event, so the selection still reads
+        # the row-0 snapshot (43) on the line after the move. One `pilot.pause()`
+        # covered that on macOS and ubuntu but not on a loaded
+        # windows-latest/py3.11 runner, where this asserted `43 == 42` once in 10
+        # stress repetitions (#235). Wait for the selection itself.
+        await wait_until(
+            lambda: vm.catalog.iceberg.selected_snapshot_id == 42,
+            what="the row-1 highlight reached the view model",
+        )
         assert vm.catalog.iceberg.selected_snapshot_id == 42
 
         inspector.snapshots = tuple(row for row in inspector.snapshots if row.snapshot_id != 42)
