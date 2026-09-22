@@ -10,6 +10,8 @@ import asyncio
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
     from textual.app import App
     from textual.widget import Widget
     from textual.widgets import TextArea
@@ -63,6 +65,31 @@ async def drain_workers(
         f"workers still pending after {_MAX_DRAIN_ROUNDS} drain rounds: "
         f"{sorted(worker.name for worker in workers._workers)}"
     )
+
+
+async def wait_until(
+    predicate: Callable[[], bool],
+    *,
+    what: str,
+    timeout: float = DEFAULT_DRAIN_TIMEOUT_SECONDS,
+) -> None:
+    """Poll ``predicate`` until it holds, then return.
+
+    Sized for the slowest runner in the matrix. Five seconds was enough
+    locally but not on windows-latest under a loaded three-Python matrix,
+    where it raised ``TimeoutError`` while the same commit passed everywhere
+    else, so the bound is :data:`DEFAULT_DRAIN_TIMEOUT_SECONDS` -- the same
+    30s, for the same reason, rather than a second hand-typed number. A real
+    hang still fails, just later.
+
+    ``what`` names the condition in the failure, so a test that never settles
+    says which thing never settled instead of pointing at a bare timeout.
+    """
+    deadline = asyncio.get_running_loop().time() + timeout
+    while not predicate():
+        if asyncio.get_running_loop().time() >= deadline:
+            raise AssertionError(f"never settled within {timeout}s: {what}")
+        await asyncio.sleep(0.01)
 
 
 async def focus_and_settle(

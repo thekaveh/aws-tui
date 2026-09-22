@@ -13,7 +13,7 @@ from textual.widgets import Button, DataTable, OptionList, TextArea
 from vmx import Message, MessageHub
 
 from aws_tui.infra.keymap_store import KeymapStore
-from aws_tui.ui.widgets._focus_guard import is_on_active_screen
+from aws_tui.ui.widgets._focus_guard import focus_rests_within, is_on_active_screen
 from aws_tui.ui.widgets._subscriber import HubSubscriberMixin
 from aws_tui.ui.widgets._worker import DeferredWorkerMixin
 from aws_tui.ui.widgets.athena.history_view import AthenaHistoryView
@@ -635,6 +635,12 @@ class AthenaPage(DeferredWorkerMixin, HubSubscriberMixin, Widget):
             return
         if self._focus_coordinator is not None:
             self._focus_coordinator.project_focused_slot(slot)
+        # A slot whose target already contains the focus is satisfied. Focusing
+        # the target anyway would blur an open descendant -- and a picker's
+        # overlay reads its own blur as a dismissal, so the projection would
+        # close the picker. See ``ui/widgets/_focus_guard`` and #235.
+        if focus_rests_within(target, self.app.focused):
+            return
         self.app.set_focus(target)
 
     def _sync_focused_widget(self, focused: Widget) -> None:

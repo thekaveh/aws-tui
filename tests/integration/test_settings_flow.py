@@ -77,9 +77,9 @@ async def _wait_until(predicate: Callable[[], bool], *, timeout: float = 30.0) -
     """Wait for ``predicate``, sized for the slowest runner in the matrix.
 
     Five seconds was enough locally but not on windows-latest under a loaded
-    three-Python matrix. ``tests/helpers.DEFAULT_DRAIN_TIMEOUT_SECONDS`` and
-    ``tests/unit/ui/glue/test_iceberg_view._wait_until`` already use 30s for the
-    same reason; a real hang still fails, just later.
+    three-Python matrix. ``tests/helpers.wait_until`` -- which this duplicates
+    and which the UI tiers now share -- uses 30s for the same reason; a real
+    hang still fails, just later.
     """
     async with asyncio.timeout(timeout):
         while not predicate():

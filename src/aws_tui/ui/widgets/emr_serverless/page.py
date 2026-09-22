@@ -27,7 +27,7 @@ from vmx import Message, MessageHub
 
 from aws_tui.infra.keymap_store import KeymapStore
 from aws_tui.ui import notifications
-from aws_tui.ui.widgets._focus_guard import is_on_active_screen
+from aws_tui.ui.widgets._focus_guard import focus_rests_within, is_on_active_screen
 from aws_tui.ui.widgets._worker import DeferredWorkerMixin
 from aws_tui.ui.widgets.context_picker import ContextPicker
 from aws_tui.ui.widgets.emr_serverless.application_picker import ApplicationPicker
@@ -649,6 +649,12 @@ class EmrServerlessPage(DeferredWorkerMixin, Widget):
             return
         if self._focus_coordinator is not None:
             self._focus_coordinator.project_focused_slot(slot)
+        # A slot whose target already contains the focus is satisfied. Focusing
+        # the target anyway would blur an open descendant -- and a picker's
+        # overlay reads its own blur as a dismissal, so the projection would
+        # close the picker. See ``ui/widgets/_focus_guard`` and #235.
+        if focus_rests_within(target, self.app.focused):
+            return
         self.app.set_focus(target)
 
     def project_focus_slot(self, slot: FocusSlot) -> None:

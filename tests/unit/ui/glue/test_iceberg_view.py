@@ -20,7 +20,7 @@ from aws_tui.ui.widgets.glue.iceberg_view import GlueIcebergView
 from aws_tui.ui.widgets.glue.page import GluePage
 from aws_tui.vm.chrome.focus_coordinator_vm import FocusCoordinatorVM, FocusSlot
 from aws_tui.vm.glue.page_vm import GluePageVM
-from tests.helpers import focus_and_settle
+from tests.helpers import focus_and_settle, wait_until
 from tests.unit.vm.glue._fake_glue import InMemoryGlue
 from tests.unit.vm.glue.test_iceberg_vm import RecordingInspector
 
@@ -50,19 +50,6 @@ def _build_vm(*, iceberg: bool = True) -> tuple[GluePageVM, RecordingInspector]:
     )
     vm.construct()
     return vm, inspector
-
-
-async def _wait_until(predicate: Callable[[], bool]) -> None:
-    """Wait for ``predicate``, sized for the slowest runner in the matrix.
-
-    Five seconds was enough locally but not on windows-latest under a loaded
-    three-Python matrix, where this raised ``TimeoutError`` while the same
-    commit passed everywhere else. ``tests/helpers.DEFAULT_DRAIN_TIMEOUT_SECONDS``
-    already uses 30s for the same reason; a real hang still fails, just later.
-    """
-    async with asyncio.timeout(30):
-        while not predicate():
-            await asyncio.sleep(0.01)
 
 
 async def _wait_for_paint(pilot: object, predicate: Callable[[], bool], *, what: str) -> None:
@@ -311,7 +298,10 @@ async def test_replaced_time_travel_async_dispatch_cancels_only_the_superseded_w
         await asyncio.wait_for(second_started.wait(), timeout=2)
 
         release_second.set()
-        await _wait_until(lambda: completed == ["glue.time_travel_in_athena"])
+        await wait_until(
+            lambda: completed == ["glue.time_travel_in_athena"],
+            what="the second handoff completed",
+        )
         await pilot.pause()
 
         assert pilot.app.action_ids == [
@@ -402,7 +392,10 @@ async def test_enter_and_space_activate_focused_iceberg_tab(key: str) -> None:
         tab = pilot.app.query_one("#glue-iceberg-tab-history")
         await focus_and_settle(tab)
         await pilot.press(key)
-        await _wait_until(lambda: len(inspector.calls) == 1)
+        await wait_until(
+            lambda: len(inspector.calls) == 1,
+            what="the history tab issued its inspector call",
+        )
         await pilot.pause()
 
         assert vm.catalog.iceberg.active_view == "history"
@@ -420,7 +413,10 @@ async def test_enter_and_space_press_all_enabled_iceberg_buttons(key: str) -> No
         snapshot_tab = pilot.app.query_one("#glue-iceberg-tab-snapshots")
         await focus_and_settle(snapshot_tab)
         await pilot.press(key)
-        await _wait_until(lambda: vm.catalog.iceberg.error_text is not None)
+        await wait_until(
+            lambda: vm.catalog.iceberg.error_text is not None,
+            what="the denied snapshot load surfaced an error",
+        )
         await pilot.pause()
 
         inspector.errors.pop("snapshots")
@@ -428,7 +424,10 @@ async def test_enter_and_space_press_all_enabled_iceberg_buttons(key: str) -> No
         assert not retry.disabled
         await focus_and_settle(retry)
         await pilot.press(key)
-        await _wait_until(lambda: len(vm.catalog.iceberg.snapshots) == 1)
+        await wait_until(
+            lambda: len(vm.catalog.iceberg.snapshots) == 1,
+            what="the retry loaded the first snapshot page",
+        )
         await pilot.pause()
         assert len(vm.catalog.iceberg.snapshots) == 1
 
@@ -436,7 +435,10 @@ async def test_enter_and_space_press_all_enabled_iceberg_buttons(key: str) -> No
         assert not more.disabled
         await focus_and_settle(more)
         await pilot.press(key)
-        await _wait_until(lambda: len(vm.catalog.iceberg.snapshots) == 2)
+        await wait_until(
+            lambda: len(vm.catalog.iceberg.snapshots) == 2,
+            what="the pager loaded the second snapshot page",
+        )
         await pilot.pause()
         assert len(vm.catalog.iceberg.snapshots) == 2
 
