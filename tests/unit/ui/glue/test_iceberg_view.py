@@ -178,6 +178,13 @@ async def test_selecting_snapshot_tab_loads_rows_and_enables_time_travel() -> No
         assert table.row_count == 3
 
         table.focus()
+        await wait_until(
+            lambda: (
+                vm.catalog.iceberg.active_view == "snapshots"
+                and len(vm.catalog.iceberg.snapshots) > 1
+            ),
+            what="the view model holds the snapshot rows",
+        )
         table.move_cursor(row=0)
         # Row 0 is already the default selection here, so a stale read would
         # pass for the wrong reason. Wait for the cursor and assert the
@@ -510,13 +517,26 @@ async def test_older_snapshot_selection_survives_refresh_and_drives_time_travel(
         iceberg = pilot.app.query_one(GlueIcebergView)
         table = iceberg.query_one("#glue-iceberg-table", DataTable)
 
+        # `on_data_table_row_highlighted` DROPS the event when
+        # `vm.active_view != "snapshots"` or `cursor_row >= len(vm.snapshots)`
+        # (iceberg_view.py:226-234), and the snapshots load through a lifecycle
+        # worker started by the tab click. So moving the cursor before the view
+        # model holds the rows fires a highlight that is silently discarded --
+        # the selection then never changes, no matter how long anything waits.
+        # That is what failed on windows-latest as `assert 43 == 42`, and what
+        # made a 15s wait for the selection time out rather than settle.
+        await wait_until(
+            lambda: (
+                vm.catalog.iceberg.active_view == "snapshots"
+                and len(vm.catalog.iceberg.snapshots) > 1
+            ),
+            what="the view model holds the snapshot rows",
+        )
+
         table.move_cursor(row=1)
-        # `move_cursor` moves the cursor synchronously but the view model is
-        # updated from the `RowHighlighted` event, so the selection still reads
-        # the row-0 snapshot (43) on the line after the move. One `pilot.pause()`
-        # covered that on macOS and ubuntu but not on a loaded
-        # windows-latest/py3.11 runner, where this asserted `43 == 42` once in 10
-        # stress repetitions (#235). Wait for the selection itself.
+        # The cursor moves synchronously; the view model is updated from the
+        # `RowHighlighted` event, so the selection still reads the row-0
+        # snapshot (43) on the line after the move.
         await wait_until(
             lambda: vm.catalog.iceberg.selected_snapshot_id == 42,
             what="the row-1 highlight reached the view model",
@@ -555,13 +575,26 @@ async def test_snapshot_pagination_preserves_selection_and_removed_row_falls_bac
         await pilot.click("#glue-iceberg-more")
         await pilot.pause()
         table = pilot.app.query_one("#glue-iceberg-table", DataTable)
+        # `on_data_table_row_highlighted` DROPS the event when
+        # `vm.active_view != "snapshots"` or `cursor_row >= len(vm.snapshots)`
+        # (iceberg_view.py:226-234), and the snapshots load through a lifecycle
+        # worker started by the tab click. So moving the cursor before the view
+        # model holds the rows fires a highlight that is silently discarded --
+        # the selection then never changes, no matter how long anything waits.
+        # That is what failed on windows-latest as `assert 43 == 42`, and what
+        # made a 15s wait for the selection time out rather than settle.
+        await wait_until(
+            lambda: (
+                vm.catalog.iceberg.active_view == "snapshots"
+                and len(vm.catalog.iceberg.snapshots) > 1
+            ),
+            what="the view model holds the snapshot rows",
+        )
+
         table.move_cursor(row=1)
-        # `move_cursor` moves the cursor synchronously but the view model is
-        # updated from the `RowHighlighted` event, so the selection still reads
-        # the row-0 snapshot (43) on the line after the move. One `pilot.pause()`
-        # covered that on macOS and ubuntu but not on a loaded
-        # windows-latest/py3.11 runner, where this asserted `43 == 42` once in 10
-        # stress repetitions (#235). Wait for the selection itself.
+        # The cursor moves synchronously; the view model is updated from the
+        # `RowHighlighted` event, so the selection still reads the row-0
+        # snapshot (43) on the line after the move.
         await wait_until(
             lambda: vm.catalog.iceberg.selected_snapshot_id == 42,
             what="the row-1 highlight reached the view model",
