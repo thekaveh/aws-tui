@@ -25,7 +25,7 @@ from aws_tui.vm.file_manager.pane_vm import PaneState
 from aws_tui.vm.glue.page_vm import GluePageVM
 from tests.helpers import focus_and_settle, wait_until
 from tests.unit.vm.glue._fake_glue import InMemoryGlue
-from tests.unit.vm.glue.test_iceberg_vm import RecordingInspector
+from tests.unit.vm.glue.test_iceberg_vm import ICEBERG_REF, OTHER_REF, RecordingInspector
 
 
 def _build_vm(
@@ -677,14 +677,17 @@ async def test_peek_tab_is_present_for_an_iceberg_table() -> None:
     async with _GlueIcebergApp(vm).run_test(size=(100, 30)) as pilot:
         await pilot.pause()
 
-        assert pilot.app.query("#glue-iceberg-tab-preview")
+        tab = pilot.app.query_one("#glue-iceberg-tab-preview")
+        assert tab.display is True
 
 
 @pytest.mark.asyncio
-async def test_peek_tab_is_absent_without_an_aws_profile() -> None:
+async def test_peek_tab_is_hidden_without_an_aws_profile() -> None:
     # The table itself is Iceberg-formatted (the metadata tabs stay visible);
     # only the profile is missing. Visibility must be honest: the Peek tab is
-    # absent entirely, not present and broken.
+    # hidden, not present and broken. The tab is still *composed* -- always,
+    # like its six siblings -- so that availability changing after mount (see
+    # below) has something to turn visible.
     vm, _ = _build_vm(profile=None)
     await vm.setup()
 
@@ -693,7 +696,81 @@ async def test_peek_tab_is_absent_without_an_aws_profile() -> None:
 
         assert vm.catalog.iceberg.available
         assert not vm.catalog.iceberg.preview.available
-        assert not pilot.app.query("#glue-iceberg-tab-preview")
+        tab = pilot.app.query_one("#glue-iceberg-tab-preview")
+        assert tab.display is False
+
+
+@pytest.mark.asyncio
+async def test_peek_tab_appears_after_navigating_to_an_iceberg_table() -> None:
+    """Presence is decided at compose time; availability changes after mount.
+
+    Landing on a non-Iceberg table first is the common case, so a tab that is
+    only created when `available` happens to be true at mount is a feature the
+    user can never reach.
+    """
+    vm, _ = _build_vm(iceberg=False)
+    await vm.setup()
+    app = _GlueIcebergApp(vm)
+    async with app.run_test(size=(100, 30)) as pilot:
+        await pilot.pause()
+        iceberg = vm.catalog.iceberg
+        assert iceberg.preview.available is False
+
+        await iceberg.bind_table(ICEBERG_REF, table_format=TableFormat.ICEBERG, location="s3://b/t")
+        await wait_until(
+            lambda: iceberg.preview.available,
+            what="the preview became available after selecting an Iceberg table",
+        )
+        await pilot.pause()
+
+        tab = app.query_one("#glue-iceberg-tab-preview")
+        assert tab.display is True
+
+
+@pytest.mark.asyncio
+async def test_peek_falls_back_to_the_first_tab_when_it_stops_being_available() -> None:
+    port = InMemoryDuckDb(columns=("id",), rows=(("1",),))
+    vm, _ = _build_vm(duckdb_port=port)
+    await vm.setup()
+
+    async with _GlueIcebergApp(vm).run_test(size=(100, 30)) as pilot:
+        # Establish a non-default active metadata view first, so landing on
+        # "snapshots" below proves the fallback goes to the *first* tab, not
+        # merely back to whatever was active before Peek.
+        await pilot.click("#glue-iceberg-tab-refs")
+        await pilot.pause()
+        await pilot.click("#glue-iceberg-tab-preview")
+        await wait_until(
+            lambda: vm.catalog.iceberg.preview.state is PaneState.IDLE,
+            what="the preview pane finished loading",
+        )
+        await pilot.pause()
+
+        # Navigate to a different Iceberg table with no usable S3 location:
+        # the pane stays visible (still Iceberg-formatted), but Peek stops
+        # being available.
+        await vm.catalog.iceberg.bind_table(
+            OTHER_REF, table_format=TableFormat.ICEBERG, location="not-s3"
+        )
+        await wait_until(
+            lambda: not vm.catalog.iceberg.preview.available,
+            what="the preview became unavailable on the new table",
+        )
+        await wait_until(
+            lambda: vm.catalog.iceberg.active_view == "snapshots",
+            what="the active view fell back to the first tab",
+        )
+        await pilot.pause()
+
+        snapshots_tab = pilot.app.query_one("#glue-iceberg-tab-snapshots")
+        refs_tab = pilot.app.query_one("#glue-iceberg-tab-refs")
+        preview_tab = pilot.app.query_one("#glue-iceberg-tab-preview")
+        assert snapshots_tab.has_class("-active")
+        assert not refs_tab.has_class("-active")
+        assert not preview_tab.has_class("-active")
+        assert preview_tab.display is False
+        footer = pilot.app.query_one("#glue-iceberg-footer", Static)
+        assert "limit" not in str(footer.render())
 
 
 @pytest.mark.asyncio

@@ -36,6 +36,11 @@ from aws_tui.vm.glue.iceberg_vm import GlueIcebergVM, IcebergRow, IcebergView
 # (``IcebergPreviewVM``) that the metadata VM has no notion of selecting.
 _TabView: TypeAlias = IcebergView | Literal["preview"]
 
+# ``_VIEW_ORDER[0]`` typed narrowly, for the "Peek became unavailable" fallback
+# in ``_refresh`` -- ``select_view`` only accepts ``IcebergView``, not the
+# wider ``_TabView`` indexing ``_VIEW_ORDER`` would otherwise produce.
+_FIRST_METADATA_VIEW: IcebergView = "snapshots"
+
 _VIEW_ORDER: tuple[_TabView, ...] = (
     "snapshots",
     "history",
@@ -155,14 +160,15 @@ class GlueIcebergView(DeferredWorkerMixin, Widget):
 
     def compose(self) -> ComposeResult:
         with Horizontal(id="glue-iceberg-tabs"):
+            # Composed unconditionally, like its six siblings: ``compose()``
+            # runs once at mount, but ``preview.available`` can become True
+            # *after* mount (the common case -- landing on a Hive table
+            # first, then navigating to an Iceberg one). A tab only created
+            # when ``available`` happens to be true at mount time is a
+            # feature some users could never reach. Visibility is instead
+            # driven live, in ``_refresh``, exactly like ``self.display =
+            # self._vm.available`` already drives the whole widget.
             for view in _VIEW_ORDER:
-                # Visibility is honest: with no usable AWS profile / S3
-                # location, the Peek tab is entirely absent, not present
-                # and broken. A ``None`` profile (e.g. a non-AWS source)
-                # already makes this False; a missing DuckDB engine is a
-                # separate, later-surfaced state (see ``_refresh``).
-                if view == "preview" and not self._vm.preview.available:
-                    continue
                 yield _IcebergTab(view)
         yield Static("", id="glue-iceberg-status", markup=False)
         yield DataTable(
@@ -336,9 +342,22 @@ class GlueIcebergView(DeferredWorkerMixin, Widget):
         self.display = self._vm.available
         if not self._vm.available:
             return
+        if self._preview_active and not self._vm.preview.available:
+            # Peek was active and just stopped being available (e.g. the
+            # user navigated to a different Iceberg table with no usable S3
+            # location). Never leave the pane sitting on a tab that is about
+            # to be hidden -- fall back to the first tab, exactly like the
+            # widget would show on first mount.
+            self._preview_active = False
+            self._run_lifecycle_worker(
+                partial(self._vm.select_view, _FIRST_METADATA_VIEW),
+                group="glue-iceberg-select-view",
+            )
         active = self._current_view()
         for tab in self.query(_IcebergTab):
             tab.set_class(tab.view == active, "-active")
+            if tab.view == "preview":
+                tab.display = self._vm.preview.available
         selected_snapshot_id = self._vm.selected_snapshot_id
         self._suppress_highlight = True
         try:
