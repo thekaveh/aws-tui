@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import pytest
 from vmx import NULL_DISPATCHER, MessageHub
+from vmx.messages import ConstructionStatusChangedMessage
 from vmx.messages.protocols import Message
 
 from aws_tui.infra.duckdb import DuckDbOutcome, InMemoryDuckDb
@@ -160,3 +161,34 @@ async def test_publishes_property_changes_on_its_own_subject() -> None:
     subscription.dispose()
     assert "state" in seen
     assert "rows" in seen
+
+
+@pytest.mark.asyncio
+async def test_no_state_change_is_published_through_the_shared_hub() -> None:
+    """MVVM: this VM publishes only through its own subject.
+
+    Sibling VMs in this package deliberately dual-publish to the shared hub;
+    this one must not, so a view can never be tempted to filter the hub instead
+    of binding to `on_property_changed`. Without this test the guarantee rests
+    on the implementation happening to be written correctly, and a future edit
+    reintroducing a hub publish would pass the whole suite.
+    """
+    hub: MessageHub[Message] = MessageHub()
+    port = InMemoryDuckDb(columns=("a",), rows=(("1",),))
+    vm = IcebergPreviewVM(port=port, hub=hub, dispatcher=NULL_DISPATCHER)
+    vm.construct()
+    seen: list[object] = []
+    hub.messages.subscribe(on_next=seen.append)
+
+    vm.bind("s3://b/t", profile="analytics", region="us-east-1")
+    await vm.load()
+    await vm.load_more()
+    await vm.cancel()
+    vm.dispose()
+
+    # Filter out infrastructure lifecycle messages from the inner ComponentVM.
+    # Data state changes (state, rows, columns, etc.) must never be published.
+    data_state_messages = [
+        msg for msg in seen if not isinstance(msg, ConstructionStatusChangedMessage)
+    ]
+    assert data_state_messages == [], f"VM state leaked to the shared hub: {data_state_messages}"
