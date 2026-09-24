@@ -41,6 +41,17 @@ def test_rejects_a_limit_that_is_not_a_declared_step(limit: int) -> None:
         iceberg_preview_sql("s3://b/t", limit=limit)
 
 
+@pytest.mark.parametrize("limit", [100.0, True, "100"])
+def test_rejects_a_limit_that_is_not_an_int(limit: object) -> None:
+    """`100.0 == 100`, so a membership test alone renders `LIMIT 100.0`.
+
+    `snapshot_id` already guards bool-before-int; `limit` reaches the SQL text
+    the same way and needs the same guard.
+    """
+    with pytest.raises(ValueError, match="row limit"):
+        iceberg_preview_sql("s3://b/t", limit=limit)  # type: ignore[arg-type]
+
+
 @pytest.mark.parametrize("snapshot_id", [-1, True])
 def test_rejects_an_invalid_snapshot_id(snapshot_id: object) -> None:
     # `True` is an int subclass and must not pass as a snapshot id, matching

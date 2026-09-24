@@ -46,12 +46,12 @@ def iceberg_preview_sql(
     ``location`` is the table's physical S3 root, not a metadata file: the
     exact ``metadata_location`` pointer is unavailable because
     ``TableDetail.__post_init__`` redacts every table parameter
-    (``src/aws_tui/domain/data_catalog.py:145-151``). The caller therefore
+    (``src/aws_tui/domain/data_catalog.py:145-154``). The caller therefore
     enables version guessing so DuckDB finds the newest metadata itself.
     """
     if not location.strip() or not location.startswith("s3://"):
         raise ValueError("preview requires an s3:// location")
-    if limit not in ROW_LIMIT_STEPS:
+    if isinstance(limit, bool) or not isinstance(limit, int) or limit not in ROW_LIMIT_STEPS:
         raise ValueError(f"row limit must be one of {ROW_LIMIT_STEPS}")
     scan_args = _quote_literal(location)
     if snapshot_id is not None:
