@@ -1055,8 +1055,9 @@ Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>"
 ### Task 5: Thread the table location to the Iceberg view model
 
 **Files:**
-- Modify: `src/aws_tui/vm/glue/iceberg_vm.py:298` (`bind_table`)
-- Modify: `src/aws_tui/vm/glue/catalog_vm.py` (the `bind_table` call site)
+- Modify: `src/aws_tui/vm/glue/iceberg_vm.py:298` (`bind_table`) and its `__init__`
+- Modify: `src/aws_tui/vm/glue/catalog_vm.py` (`__init__` and the `bind_table` call site)
+- Modify: `src/aws_tui/vm/glue/page_vm.py:36` (pass the profile down)
 - Test: `tests/unit/vm/glue/test_iceberg_vm.py`
 
 **Interfaces:**
@@ -1067,21 +1068,35 @@ Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>"
 
 Append to `tests/unit/vm/glue/test_iceberg_vm.py`:
 
+The module's real helpers are `make_vm()` (`tests/unit/vm/glue/test_iceberg_vm.py:144`,
+returning `(vm, inspector, hub)`) and `ICEBERG_REF` (`:32`). Extend `make_vm` with an
+`aws_profile: str | None = "analytics"` keyword that it forwards to `GlueIcebergVM`.
+
 ```python
 @pytest.mark.asyncio
 async def test_bind_table_passes_the_location_to_the_preview() -> None:
-    vm = _build_iceberg_vm()  # use this module's existing builder
+    vm, _inspector, _hub = make_vm()
 
-    vm.bind_table(_TABLE_REF, table_format=TableFormat.ICEBERG, location="s3://b/t")
+    vm.bind_table(ICEBERG_REF, table_format=TableFormat.ICEBERG, location="s3://b/t")
 
     assert vm.preview.available is True
 
 
 @pytest.mark.asyncio
 async def test_preview_is_unavailable_for_a_non_iceberg_table() -> None:
-    vm = _build_iceberg_vm()
+    vm, _inspector, _hub = make_vm()
 
-    vm.bind_table(_TABLE_REF, table_format=TableFormat.HIVE, location="s3://b/t")
+    vm.bind_table(ICEBERG_REF, table_format=TableFormat.HIVE, location="s3://b/t")
+
+    assert vm.preview.available is False
+
+
+@pytest.mark.asyncio
+async def test_preview_is_unavailable_without_an_aws_profile() -> None:
+    # s3-compatible connections carry no profile; the pane must stay hidden.
+    vm, _inspector, _hub = make_vm(aws_profile=None)
+
+    vm.bind_table(ICEBERG_REF, table_format=TableFormat.ICEBERG, location="s3://b/t")
 
     assert vm.preview.available is False
 ```
@@ -1096,7 +1111,13 @@ Expected: FAIL with `TypeError: bind_table() got an unexpected keyword argument 
 In `src/aws_tui/vm/glue/iceberg_vm.py`:
 1. Add `location: str | None = None` as a keyword parameter to `bind_table`.
 2. Construct an `IcebergPreviewVM` in `__init__` and expose it as a read-only `preview` property.
-3. In `bind_table`, after the existing format check, call `self._preview.bind(location if bound else None, profile=self._profile, region=self._region)`. The profile and region come from the same connection identity the VM already holds; if it does not hold them, add them as `__init__` keywords supplied by the service.
+3. Add `aws_profile: str | None = None` as an `__init__` keyword on `GlueIcebergVM`. In `bind_table`, after the existing format check, call
+   `self._preview.bind(location if bound else None, profile=self._aws_profile, region=table_ref.region)`.
+   The region comes from the `TableRef`; **the profile does not** — `TableRef` has no such field (`src/aws_tui/domain/data_catalog.py`, fields are catalog/database/table/connection_name/region). Thread it down instead:
+   - `GluePageVM` already holds the `Connection` (`src/aws_tui/vm/glue/page_vm.py:7`). At its `GlueCatalogVM(...)` call (`page_vm.py:36`) pass
+     `aws_profile=connection.profile if connection.kind == "aws" else None`.
+   - `GlueCatalogVM.__init__` accepts `aws_profile: str | None = None` and forwards it to `GlueIcebergVM` at `catalog_vm.py:101`.
+   Passing `None` for non-AWS connections is how the s3-compatible non-goal is enforced: `preview.available` is then `False` and the tab never appears.
 4. Extend the four drain methods at `:326`, `:345`, `:360` and `:369` to also cancel the preview: call `await self._preview.cancel()` in the async ones and set the preview to `EMPTY` in `begin_shutdown`.
 
 In `src/aws_tui/vm/glue/catalog_vm.py`, find the existing `bind_table(...)` call and pass `location=detail.storage.location` where `detail` is the `TableDetail` already read at `catalog_vm.py:659`.
@@ -1104,12 +1125,12 @@ In `src/aws_tui/vm/glue/catalog_vm.py`, find the existing `bind_table(...)` call
 - [ ] **Step 4: Run the tests to verify they pass**
 
 Run: `uv run pytest tests/unit/vm/glue/ -v`
-Expected: PASS. The whole Glue VM suite must stay green, not just the two new tests.
+Expected: PASS. The whole Glue VM suite must stay green, not just the three new tests.
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add src/aws_tui/vm/glue/iceberg_vm.py src/aws_tui/vm/glue/catalog_vm.py tests/unit/vm/glue/test_iceberg_vm.py
+git add src/aws_tui/vm/glue/iceberg_vm.py src/aws_tui/vm/glue/catalog_vm.py src/aws_tui/vm/glue/page_vm.py tests/unit/vm/glue/test_iceberg_vm.py
 git commit -m "feat(vm): give the Iceberg VM the table location and a preview child
 
 Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>"
