@@ -33,6 +33,7 @@ from aws_tui.infra.aws_session import AwsSession
 from aws_tui.infra.clipboard import ClipboardPort, NativeClipboard
 from aws_tui.infra.config_store import ConfigStore
 from aws_tui.infra.connection_resolver import Connection, ConnectionResolver
+from aws_tui.infra.duckdb import DuckDbPort, NativeDuckDb
 from aws_tui.infra.keychain import KeychainBackend, Keyring
 from aws_tui.infra.keymap_store import (
     InvalidKeybinding,
@@ -76,6 +77,7 @@ class AppContext:
         "demo",
         "demo_emrs",
         "dispatcher",
+        "duckdb",
         "focus_coordinator",
         "hub",
         "initial_theme",
@@ -118,6 +120,7 @@ class AppContext:
         table_clipboard_vm: TableClipboardVM | None = None,
         clipboard: ClipboardPort | None = None,
         clipboard_vm: ClipboardVM | None = None,
+        duckdb_port: DuckDbPort | None = None,
         demo: bool = False,
         demo_emrs: dict[str, InMemoryEmr] | None = None,
         unreachable_connections: set[tuple[str, str]] | None = None,
@@ -164,6 +167,10 @@ class AppContext:
         # held here because it is what the VM below is built around -- the
         # App reads ``clipboard_vm``, never the port.
         self.clipboard: ClipboardPort = clipboard if clipboard is not None else NativeClipboard()
+        # Same lifecycle note as ``clipboard`` above: the port owns no
+        # resources, so it is deliberately absent from ``close_unstarted``
+        # and ``AwsTuiApp._aws_tui_shutdown``.
+        self.duckdb: DuckDbPort = duckdb_port if duckdb_port is not None else NativeDuckDb()
         self.clipboard_vm: ClipboardVM = (
             clipboard_vm
             if clipboard_vm is not None
@@ -214,6 +221,7 @@ def build_app_context(
     cache_dir: Path | None = None,
     demo: bool = False,
     clipboard: ClipboardPort | None = None,
+    duckdb_port: DuckDbPort | None = None,
 ) -> AppContext:
     """Build the full ``AppContext`` for a fresh aws-tui session.
 
@@ -235,6 +243,11 @@ def build_app_context(
         around the port here, so replacing ``AppContext.clipboard``
         afterwards would leave the view model still holding — and still
         spawning — the real platform helper.
+    duckdb_port:
+        Override for the local Iceberg-preview engine (used by tests).
+        Defaults to :class:`~aws_tui.infra.duckdb.NativeDuckDb`. Threaded
+        through :class:`~aws_tui.services.glue.service.GlueService` to
+        ``GluePageVM`` for the same reason as ``clipboard`` above.
     """
     # ── Infra ──────────────────────────────────────────────────────────────
     if config_dir is None:
@@ -250,6 +263,7 @@ def build_app_context(
             demo=demo,
             log_sink=log_sink,
             clipboard=clipboard,
+            duckdb_port=duckdb_port,
         )
     except BaseException:
         log_sink.close()
@@ -263,6 +277,7 @@ def _build_app_context(
     demo: bool,
     log_sink: LogSink,
     clipboard: ClipboardPort | None = None,
+    duckdb_port: DuckDbPort | None = None,
 ) -> AppContext:
     # read_only=demo: in demo mode all write methods on ConfigStore are
     # silent no-ops so the user's real config.toml is never mutated.
@@ -371,6 +386,13 @@ def _build_app_context(
     dispatcher = RxDispatcher.immediate()
     service_selections = ServiceSelectionStore()
 
+    # Resolved once, here, and threaded to both ``GlueService`` (needed at
+    # registry-build time, below) and ``AppContext`` (built further down):
+    # the same "one port, not two" reasoning as ``clipboard`` -- except the
+    # clipboard port isn't needed until ``AppContext.__init__`` builds
+    # ``ClipboardVM`` around it, so its default lives there instead.
+    resolved_duckdb_port: DuckDbPort = duckdb_port if duckdb_port is not None else NativeDuckDb()
+
     # ── Registry ───────────────────────────────────────────────────────────
     registry = ServiceRegistry()
     s3_service = S3Service(
@@ -397,6 +419,7 @@ def _build_app_context(
         glue_client_factory=glue_client_factory,
         athena_client_factory=athena_client_factory,
         selection_store=service_selections,
+        duckdb_port=resolved_duckdb_port,
     )
     registry.register(cast("Service", glue_service))
 
@@ -460,6 +483,7 @@ def _build_app_context(
             focus_coordinator=focus_coordinator,
             table_clipboard_vm=table_clipboard_vm,
             clipboard=clipboard,
+            duckdb_port=resolved_duckdb_port,
             demo=demo,
             demo_emrs=demo_emrs_ref,
             unreachable_connections=set(),

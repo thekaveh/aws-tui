@@ -74,6 +74,7 @@ class FocusSlot(StrEnum):
     GLUE_ICEBERG_MORE = "glue.iceberg.more"
     GLUE_ICEBERG_RETRY = "glue.iceberg.retry"
     GLUE_ICEBERG_TIME_TRAVEL = "glue.iceberg.time_travel"
+    GLUE_ICEBERG_PREVIEW = "glue.iceberg.preview"
     ATHENA_SOURCE = "athena.source"
     ATHENA_WORKGROUP = "athena.workgroup"
     ATHENA_WORKGROUP_MORE = "athena.workgroup.more"

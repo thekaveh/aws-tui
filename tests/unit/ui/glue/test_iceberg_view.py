@@ -9,23 +9,31 @@ from typing import ClassVar
 import pytest
 from textual.app import App, ComposeResult
 from textual.binding import Binding
-from textual.widgets import Button, DataTable
+from textual.coordinate import Coordinate
+from textual.widgets import Button, DataTable, Static
 from textual.worker import NoActiveWorker, Worker, get_current_worker
 from vmx import NULL_DISPATCHER, MessageHub
 from vmx.messages.protocols import Message
 
 from aws_tui.domain.data_catalog import TableFormat
 from aws_tui.infra.connection_resolver import Connection
+from aws_tui.infra.duckdb import DuckDbPort, InMemoryDuckDb
 from aws_tui.ui.widgets.glue.iceberg_view import GlueIcebergView
 from aws_tui.ui.widgets.glue.page import GluePage
 from aws_tui.vm.chrome.focus_coordinator_vm import FocusCoordinatorVM, FocusSlot
+from aws_tui.vm.file_manager.pane_vm import PaneState
 from aws_tui.vm.glue.page_vm import GluePageVM
 from tests.helpers import focus_and_settle, wait_until
 from tests.unit.vm.glue._fake_glue import InMemoryGlue
 from tests.unit.vm.glue.test_iceberg_vm import RecordingInspector
 
 
-def _build_vm(*, iceberg: bool = True) -> tuple[GluePageVM, RecordingInspector]:
+def _build_vm(
+    *,
+    iceberg: bool = True,
+    profile: str | None = "dev",
+    duckdb_port: DuckDbPort | None = None,
+) -> tuple[GluePageVM, RecordingInspector]:
     fake = InMemoryGlue()
     table = fake.add_table("analytics", "events")
     if iceberg:
@@ -43,10 +51,13 @@ def _build_vm(*, iceberg: bool = True) -> tuple[GluePageVM, RecordingInspector]:
             kind="aws",
             region="us-east-1",
             source="test",
-            profile="dev",
+            profile=profile,
         ),
         hub=hub,
         dispatcher=NULL_DISPATCHER,
+        # Never a real engine in a unit test: the widget tests that click the
+        # Peek tab inject rows through this double.
+        duckdb_port=duckdb_port or InMemoryDuckDb(),
     )
     vm.construct()
     return vm, inspector
@@ -157,7 +168,9 @@ async def test_iceberg_view_composes_compact_tabs_table_and_time_travel_control(
         iceberg = pilot.app.query_one(GlueIcebergView)
 
         assert iceberg.display
-        assert len(list(iceberg.query(".glue-iceberg-tab"))) == 6
+        # Six metadata tabs plus Peek, present because this fixture's table
+        # has an S3 location and the connection carries a profile.
+        assert len(list(iceberg.query(".glue-iceberg-tab"))) == 7
         assert iceberg.query_one("#glue-iceberg-table", DataTable)
         assert iceberg.query_one("#glue-iceberg-time-travel", Button).disabled
         assert inspector.calls == []
@@ -653,4 +666,121 @@ async def test_compact_tab_labels_are_distinct_and_untruncated_at_80_columns() -
             for tab in pilot.app.query(GlueIcebergView).first().query(".glue-iceberg-tab")
         ]
 
-        assert labels == ["Snaps", "Hist", "Mnfst", "Files", "Parts", "Refs"]
+        assert labels == ["Snaps", "Hist", "Mnfst", "Files", "Parts", "Refs", "Peek"]
+
+
+@pytest.mark.asyncio
+async def test_peek_tab_is_present_for_an_iceberg_table() -> None:
+    vm, _ = _build_vm()
+    await vm.setup()
+
+    async with _GlueIcebergApp(vm).run_test(size=(100, 30)) as pilot:
+        await pilot.pause()
+
+        assert pilot.app.query("#glue-iceberg-tab-preview")
+
+
+@pytest.mark.asyncio
+async def test_peek_tab_is_absent_without_an_aws_profile() -> None:
+    # The table itself is Iceberg-formatted (the metadata tabs stay visible);
+    # only the profile is missing. Visibility must be honest: the Peek tab is
+    # absent entirely, not present and broken.
+    vm, _ = _build_vm(profile=None)
+    await vm.setup()
+
+    async with _GlueIcebergApp(vm).run_test(size=(100, 30)) as pilot:
+        await pilot.pause()
+
+        assert vm.catalog.iceberg.available
+        assert not vm.catalog.iceberg.preview.available
+        assert not pilot.app.query("#glue-iceberg-tab-preview")
+
+
+@pytest.mark.asyncio
+async def test_peek_renders_rows_and_keeps_null_distinct() -> None:
+    port = InMemoryDuckDb(
+        columns=("id", "name"),
+        rows=(("1", "alice"), ("2", None)),
+    )
+    vm, _ = _build_vm(duckdb_port=port)
+    await vm.setup()
+
+    async with _GlueIcebergApp(vm).run_test(size=(100, 30)) as pilot:
+        await pilot.click("#glue-iceberg-tab-preview")
+        await wait_until(
+            lambda: vm.catalog.iceberg.preview.state is PaneState.IDLE,
+            what="the preview pane finished loading",
+        )
+        await pilot.pause()
+        table = pilot.app.query_one("#glue-iceberg-table", DataTable)
+
+        assert table.row_count == 2
+        real_cell = table.get_cell_at(Coordinate(0, 1))
+        assert real_cell.plain == "alice"
+        assert real_cell.style == ""
+        null_cell = table.get_cell_at(Coordinate(1, 1))
+        # A real SQL NULL renders dimmed, never as the four literal
+        # characters, so it is never confused with a column that genuinely
+        # contains the string "NULL".
+        assert null_cell.plain == "NULL"
+        assert null_cell.style == "dim italic"
+
+
+@pytest.mark.asyncio
+async def test_peek_footer_reports_rows_and_limit_without_more_available_phrasing() -> None:
+    port = InMemoryDuckDb(columns=("id",), rows=(("1",), ("2",)))
+    vm, _ = _build_vm(duckdb_port=port)
+    await vm.setup()
+
+    async with _GlueIcebergApp(vm).run_test(size=(100, 30)) as pilot:
+        await pilot.click("#glue-iceberg-tab-preview")
+        await wait_until(
+            lambda: vm.catalog.iceberg.preview.state is PaneState.IDLE,
+            what="the preview pane finished loading",
+        )
+        await pilot.pause()
+        footer = pilot.app.query_one("#glue-iceberg-footer", Static)
+
+        assert str(footer.render()) == "2 rows · limit 100"
+        assert "more available" not in str(footer.render())
+
+
+@pytest.mark.asyncio
+async def test_peek_more_button_reruns_the_query_at_the_next_row_limit() -> None:
+    # A full page of exactly the current limit: honest paging, not a widened
+    # local window -- ``has_more`` is real, and clicking the button issues a
+    # genuinely new DuckDB scan at the next row-limit step.
+    port = InMemoryDuckDb(columns=("id",), rows=tuple((str(i),) for i in range(100)))
+    vm, _ = _build_vm(duckdb_port=port)
+    await vm.setup()
+
+    async with _GlueIcebergApp(vm).run_test(size=(100, 30)) as pilot:
+        await pilot.click("#glue-iceberg-tab-preview")
+        await wait_until(
+            lambda: vm.catalog.iceberg.preview.state is PaneState.IDLE,
+            what="the preview pane finished loading",
+        )
+        await pilot.pause()
+        more = pilot.app.query_one("#glue-iceberg-more", Button)
+        assert not more.disabled
+        assert vm.catalog.iceberg.preview.limit == 100
+
+        await pilot.click("#glue-iceberg-more")
+        await wait_until(
+            lambda: vm.catalog.iceberg.preview.limit == 1000,
+            what="load-more advanced to the next row-limit step",
+        )
+        await wait_until(
+            lambda: vm.catalog.iceberg.preview.state is PaneState.IDLE,
+            what="the second preview scan finished",
+        )
+        await pilot.pause()
+
+        assert [sql.endswith("LIMIT 100") for sql, _profile, _region in port.queries] == [
+            True,
+            False,
+        ]
+        assert port.queries[1][0].endswith("LIMIT 1000")
+        # The canned double never grows past 100 rows, so the pane is
+        # honestly out of pages after the second scan.
+        assert pilot.app.query_one("#glue-iceberg-more", Button).disabled
