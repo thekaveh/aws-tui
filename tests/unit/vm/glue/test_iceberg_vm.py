@@ -22,6 +22,7 @@ from aws_tui.domain.iceberg import (
     IcebergReference,
     IcebergSnapshot,
 )
+from aws_tui.infra.duckdb import DuckDbPort, InMemoryDuckDb
 from aws_tui.vm.file_manager.pane_vm import PaneState
 from aws_tui.vm.glue.catalog_vm import GlueCatalogVM
 from aws_tui.vm.glue.iceberg_vm import GlueIcebergVM
@@ -146,6 +147,7 @@ def make_vm(
     *,
     page_size: int = 2,
     aws_profile: str | None = "analytics",
+    duckdb_port: DuckDbPort | None = None,
 ) -> tuple[GlueIcebergVM, RecordingInspector, MessageHub[Message]]:
     source = inspector or RecordingInspector()
     hub: MessageHub[Message] = MessageHub()
@@ -155,6 +157,7 @@ def make_vm(
         dispatcher=NULL_DISPATCHER,
         page_size=page_size,
         aws_profile=aws_profile,
+        duckdb_port=duckdb_port,
     )
     vm.construct()
     return vm, source, hub
@@ -1381,3 +1384,14 @@ async def test_preview_is_unavailable_without_an_aws_profile() -> None:
     await vm.bind_table(ICEBERG_REF, table_format=TableFormat.ICEBERG, location="s3://b/t")
 
     assert vm.preview.available is False
+
+
+@pytest.mark.asyncio
+async def test_an_injected_duckdb_port_reaches_the_preview() -> None:
+    port = InMemoryDuckDb(columns=("a",), rows=(("1",),))
+    vm, _inspector, _hub = make_vm(duckdb_port=port)
+
+    await vm.bind_table(ICEBERG_REF, table_format=TableFormat.ICEBERG, location="s3://b/t")
+    await vm.preview.load()
+
+    assert port.queries, "the injected port was not used"

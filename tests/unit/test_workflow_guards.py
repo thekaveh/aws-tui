@@ -381,7 +381,7 @@ def test_release_checks_declared_minimum_s3_dependency_models_before_publish() -
         workflow, "lowest-supported-dependencies", "install declared minimum dependencies"
     )["run"]
     assert "uv pip install --resolution lowest-direct" in install
-    assert '--python "$PY" .' in install
+    assert '--python "$PY" ".[duckdb]"' in install
     assert "aioboto3==" not in install
     assert "botocore==" not in install
     assert '"pytest-timeout>=2.4"' in install

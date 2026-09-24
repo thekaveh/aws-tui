@@ -8,6 +8,7 @@ from vmx.services.dispatcher import Dispatcher
 
 from aws_tui.domain.data_catalog import TableRef
 from aws_tui.infra.connection_resolver import Connection
+from aws_tui.infra.duckdb import DuckDbPort
 from aws_tui.vm._observable import send_value_free
 from aws_tui.vm.file_manager.pane_vm import PaneState
 from aws_tui.vm.glue._lifecycle import GlueOperationOwner
@@ -36,6 +37,7 @@ class GluePageVM:
         hub: MessageHub[Message],
         dispatcher: Dispatcher,
         selection_store: ServiceSelectionStore | None = None,
+        duckdb_port: DuckDbPort | None = None,
     ) -> None:
         self._client = client
         self._connection = connection
@@ -67,6 +69,7 @@ class GluePageVM:
             hub=hub,
             dispatcher=dispatcher,
             aws_profile=connection.profile if connection.kind == "aws" else None,
+            duckdb_port=duckdb_port,
             _operations=self._operations,
         )
         self.jobs = GlueJobsVM(

@@ -30,7 +30,7 @@ from aws_tui.domain.iceberg import (
     IcebergReference,
     IcebergSnapshot,
 )
-from aws_tui.infra.duckdb import NativeDuckDb
+from aws_tui.infra.duckdb import DuckDbPort, NativeDuckDb
 from aws_tui.vm._observable import ObserverSafeSubject, send_value_free
 from aws_tui.vm.file_manager.pane_vm import PaneState
 from aws_tui.vm.glue.iceberg_preview_vm import IcebergPreviewVM
@@ -162,6 +162,7 @@ class GlueIcebergVM:
         dispatcher: Dispatcher,
         page_size: int = 50,
         aws_profile: str | None = None,
+        duckdb_port: DuckDbPort | None = None,
     ) -> None:
         if type(page_size) is not int or page_size <= 0:
             raise ValueError("Iceberg metadata page size must be positive")
@@ -191,7 +192,7 @@ class GlueIcebergVM:
             .build()
         )
         self._preview: IcebergPreviewVM = IcebergPreviewVM(
-            port=NativeDuckDb(),
+            port=duckdb_port or NativeDuckDb(),
             hub=hub,
             dispatcher=dispatcher,
         )
