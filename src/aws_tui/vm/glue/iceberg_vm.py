@@ -348,6 +348,7 @@ class GlueIcebergVM:
         self._binding_mutation_epoch += 1
         self._invalidate_binding()
         self._cancel_metadata_tasks()
+        self._preview.bind(None, profile=self._aws_profile, region="")
 
     async def clear_table_and_drain(self) -> None:
         """Invalidate metadata and durably drain provider work."""

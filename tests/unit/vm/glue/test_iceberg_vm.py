@@ -1395,3 +1395,59 @@ async def test_an_injected_duckdb_port_reaches_the_preview() -> None:
     await vm.preview.load()
 
     assert port.queries, "the injected port was not used"
+
+
+@pytest.mark.asyncio
+async def test_clear_table_unbinds_the_preview() -> None:
+    """`clear_table()` is the only deselect path production calls."""
+    vm, _inspector, _hub = make_vm()
+    await vm.bind_table(ICEBERG_REF, table_format=TableFormat.ICEBERG, location="s3://b/t")
+    assert vm.preview.available is True
+
+    vm.clear_table()
+
+    assert vm.preview.available is False
+
+
+@pytest.mark.asyncio
+async def test_clear_table_and_drain_interrupts_the_preview() -> None:
+    port = InMemoryDuckDb()
+    vm, _inspector, _hub = make_vm(duckdb_port=port)
+    await vm.bind_table(ICEBERG_REF, table_format=TableFormat.ICEBERG, location="s3://b/t")
+
+    await vm.clear_table_and_drain()
+
+    assert port.interrupts >= 1
+
+
+@pytest.mark.asyncio
+async def test_cancel_metadata_loads_and_drain_silently_interrupts_the_preview() -> None:
+    port = InMemoryDuckDb()
+    vm, _inspector, _hub = make_vm(duckdb_port=port)
+    await vm.bind_table(ICEBERG_REF, table_format=TableFormat.ICEBERG, location="s3://b/t")
+
+    await vm.cancel_metadata_loads_and_drain_silently()
+
+    assert port.interrupts >= 1
+
+
+@pytest.mark.asyncio
+async def test_shutdown_interrupts_the_preview() -> None:
+    port = InMemoryDuckDb()
+    vm, _inspector, _hub = make_vm(duckdb_port=port)
+    await vm.bind_table(ICEBERG_REF, table_format=TableFormat.ICEBERG, location="s3://b/t")
+
+    await vm.shutdown()
+
+    assert port.interrupts >= 1
+
+
+@pytest.mark.asyncio
+async def test_begin_shutdown_unbinds_the_preview() -> None:
+    vm, _inspector, _hub = make_vm()
+    await vm.bind_table(ICEBERG_REF, table_format=TableFormat.ICEBERG, location="s3://b/t")
+    assert vm.preview.available is True
+
+    vm.begin_shutdown()
+
+    assert vm.preview.available is False
