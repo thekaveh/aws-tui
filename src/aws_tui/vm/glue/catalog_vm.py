@@ -79,6 +79,7 @@ class GlueCatalogVM:
         iceberg_inspector: IcebergInspectorProtocol | None = None,
         hub: MessageHub[Message],
         dispatcher: Dispatcher,
+        aws_profile: str | None = None,
         _operations: GlueOperationOwner | None = None,
     ) -> None:
         self._client = client
@@ -102,6 +103,7 @@ class GlueCatalogVM:
             inspector=iceberg_inspector or UnavailableIcebergInspector(),
             hub=hub,
             dispatcher=dispatcher,
+            aws_profile=aws_profile,
         )
 
         self._database_generation = 0
@@ -488,6 +490,7 @@ class GlueCatalogVM:
                 await self.iceberg.bind_table(
                     detail.summary.ref,
                     table_format=detail.table_format,
+                    location=detail.storage.location,
                 )
                 if not self._is_catalog_operation_current(operation):
                     return

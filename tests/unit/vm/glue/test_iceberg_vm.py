@@ -145,6 +145,7 @@ def make_vm(
     inspector: RecordingInspector | None = None,
     *,
     page_size: int = 2,
+    aws_profile: str | None = "analytics",
 ) -> tuple[GlueIcebergVM, RecordingInspector, MessageHub[Message]]:
     source = inspector or RecordingInspector()
     hub: MessageHub[Message] = MessageHub()
@@ -153,6 +154,7 @@ def make_vm(
         hub=hub,
         dispatcher=NULL_DISPATCHER,
         page_size=page_size,
+        aws_profile=aws_profile,
     )
     vm.construct()
     return vm, source, hub
@@ -1351,3 +1353,31 @@ async def test_provider_error_with_hostile_string_is_contained_and_value_free(
     assert vm.state is PaneState.ERROR
     assert vm.error_text == "Iceberg metadata request failed"
     assert marker not in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_bind_table_passes_the_location_to_the_preview() -> None:
+    vm, _inspector, _hub = make_vm()
+
+    await vm.bind_table(ICEBERG_REF, table_format=TableFormat.ICEBERG, location="s3://b/t")
+
+    assert vm.preview.available is True
+
+
+@pytest.mark.asyncio
+async def test_preview_is_unavailable_for_a_non_iceberg_table() -> None:
+    vm, _inspector, _hub = make_vm()
+
+    await vm.bind_table(ICEBERG_REF, table_format=TableFormat.HIVE, location="s3://b/t")
+
+    assert vm.preview.available is False
+
+
+@pytest.mark.asyncio
+async def test_preview_is_unavailable_without_an_aws_profile() -> None:
+    # s3-compatible connections carry no profile; the pane must stay hidden.
+    vm, _inspector, _hub = make_vm(aws_profile=None)
+
+    await vm.bind_table(ICEBERG_REF, table_format=TableFormat.ICEBERG, location="s3://b/t")
+
+    assert vm.preview.available is False

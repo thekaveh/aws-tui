@@ -66,6 +66,7 @@ class GluePageVM:
             iceberg_inspector=iceberg_inspector,
             hub=hub,
             dispatcher=dispatcher,
+            aws_profile=connection.profile if connection.kind == "aws" else None,
             _operations=self._operations,
         )
         self.jobs = GlueJobsVM(
