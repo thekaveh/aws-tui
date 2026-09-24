@@ -129,11 +129,7 @@ class NativeDuckDb:
         except Exception as exc:
             return DuckDbResult(outcome=DuckDbOutcome.FAILED, error_type=type(exc).__name__)
         finally:
-            # Deliberately NOT cleared to None here: interrupt() must still be
-            # able to reach this connection after query() returns (the test
-            # calls interrupt() only after the query has completed), and
-            # interrupt() already treats a closed/interrupted connection as
-            # best-effort -- see its own broad except below.
+            self._connection = None
             _close_quietly(connection)
         return DuckDbResult(outcome=DuckDbOutcome.OK, columns=columns, rows=rows)
 

@@ -162,14 +162,38 @@ def test_reports_engine_missing_when_the_import_fails() -> None:
     assert result.rows == ()
 
 
-def test_interrupt_reaches_the_live_connection() -> None:
+def test_interrupt_during_a_query_reaches_the_live_connection() -> None:
+    """`interrupt()` fires from another thread while the scan is running.
+
+    That is the only moment it can do anything: `query()` closes the connection
+    on its way out, so interrupting afterwards is meaningless by construction.
+    """
+    connection = _connection_with([(1,)], ["a"])
+    port = NativeDuckDb(connect=lambda: connection)
+    original_execute = connection.execute
+
+    def _execute_and_interrupt(sql: str) -> object:
+        # Stands in for the event-loop thread interrupting the worker mid-scan.
+        if sql.lstrip().upper().startswith("SELECT"):
+            port.interrupt()
+        return original_execute(sql)
+
+    connection.execute = _execute_and_interrupt  # type: ignore[method-assign]
+
+    port.query("SELECT 1", profile="p", region="r")
+
+    assert connection.interrupts == 1
+
+
+def test_interrupt_after_the_query_returns_is_a_no_op() -> None:
+    """The connection is closed and released once `query()` returns."""
     connection = _connection_with([(1,)], ["a"])
     port = NativeDuckDb(connect=lambda: connection)
     port.query("SELECT 1", profile="p", region="r")
 
     port.interrupt()
 
-    assert connection.interrupts == 1
+    assert connection.interrupts == 0
 
 
 def test_in_memory_fake_records_queries_and_replays_a_result() -> None:
