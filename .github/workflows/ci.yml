@@ -39,7 +39,7 @@ jobs:
       - name: install Python ${{ matrix.python }}
         run: uv python install ${{ matrix.python }}
       - name: sync
-        run: uv sync --locked --python ${{ matrix.python }} --extra duckdb
+        run: uv sync --locked --python ${{ matrix.python }}
       # Runs unit + the in-process integration files (full-app pilot,
       # modal forwarding, etc. — they intentionally lack the
       # `integration` marker per pyproject's addopts comment). The
@@ -236,7 +236,7 @@ jobs:
         run: |
           uv venv --python 3.11 lowest-supported-venv
           PY="lowest-supported-venv/bin/python"
-          uv pip install --resolution lowest-direct --python "$PY" .
+          uv pip install --resolution lowest-direct --python "$PY" ".[duckdb]"
           uv pip install --python "$PY" pytest pytest-asyncio "pytest-timeout>=2.4" "moto[server,s3]>=5"
       - name: exercise minimum dependency runtime
         run: |

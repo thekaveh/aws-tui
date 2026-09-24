@@ -81,9 +81,10 @@ async def test_textual_and_tomli_w_floors_construct_and_round_trip(tmp_path: Pat
 def test_duckdb_floor_loads_iceberg_extensions_and_supports_interrupt() -> None:
     """The declared duckdb floor must actually provide what the port uses.
 
-    Skipped in the lowest-supported-dependencies CI job, which installs the
-    project without extras. It runs in the unit matrix, where the extra is
-    installed.
+    Runs in the lowest-supported-dependencies CI job, which installs the
+    duckdb extra at the lowest resolution so this exercises the declared
+    floor itself. The importorskip keeps it green for anyone running the
+    suite without the extra.
     """
     duckdb = pytest.importorskip("duckdb")
 
