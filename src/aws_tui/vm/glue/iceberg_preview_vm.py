@@ -179,13 +179,19 @@ class IcebergPreviewVM:
         self._notify("error_text")
 
     async def load(self, snapshot_id: int | None = None) -> None:
-        """Run (or re-run) the preview scan at the current row limit."""
+        """Run (or re-run) the preview scan at the current row limit.
+
+        A call while unbound is a no-op that leaves the pane EMPTY rather than
+        raising: this runs inside a Textual worker, where an escaping exception
+        becomes an unhandled worker error instead of a state the user can see.
+        The pane guards on `available`, so reaching here unbound is a caller
+        bug, not a user-visible failure.
+        """
         location = self._location
         profile = self._profile
         if location is None or profile is None:
-            raise RuntimeError(
-                "IcebergPreviewVM.load() requires bind() with a location and profile first"
-            )
+            self._set_state(PaneState.EMPTY)
+            return
         self._snapshot_id = snapshot_id
         self._notify("snapshot_id")
         self._set_state(PaneState.LOADING)

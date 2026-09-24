@@ -135,6 +135,19 @@ async def test_cancel_interrupts_the_engine() -> None:
 
 
 @pytest.mark.asyncio
+async def test_loading_while_unbound_is_a_no_op_not_a_raise() -> None:
+    """This runs in a Textual worker; an escaping exception is invisible."""
+    port = InMemoryDuckDb(columns=("a",), rows=(("1",),))
+    vm = _build(port)
+    vm.bind(None, profile="analytics", region="us-east-1")
+
+    await vm.load()
+
+    assert vm.state is PaneState.EMPTY
+    assert port.queries == []
+
+
+@pytest.mark.asyncio
 async def test_publishes_property_changes_on_its_own_subject() -> None:
     # MVVM: the view binds to this, never to the shared hub.
     vm = _build(InMemoryDuckDb(columns=("a",), rows=(("1",),)))
