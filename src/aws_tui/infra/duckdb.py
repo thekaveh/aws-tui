@@ -111,11 +111,15 @@ class NativeDuckDb:
             connection = self._connect()
         except ImportError as exc:
             return DuckDbResult(outcome=DuckDbOutcome.ENGINE_MISSING, error_type=type(exc).__name__)
+        except Exception as exc:
+            return DuckDbResult(outcome=DuckDbOutcome.FAILED, error_type=type(exc).__name__)
         self._connection = connection
         try:
             error_types = self._error_types or _default_error_types()
         except ImportError as exc:
             return DuckDbResult(outcome=DuckDbOutcome.ENGINE_MISSING, error_type=type(exc).__name__)
+        except Exception as exc:
+            return DuckDbResult(outcome=DuckDbOutcome.FAILED, error_type=type(exc).__name__)
         try:
             self._prepare(connection, profile=profile, region=region)
             cursor = connection.execute(sql)
@@ -164,10 +168,10 @@ def _classify(exc: BaseException, error_types: tuple[type[BaseException], ...]) 
     """
     # ``error_types`` is ordered (base, http, interrupt) by both
     # ``_default_error_types`` and every test that injects it.
-    _base, _http, interrupt_type = error_types
+    _base, http_type, interrupt_type = error_types
     if isinstance(exc, interrupt_type):
         return DuckDbOutcome.CANCELLED
-    status = getattr(exc, "status_code", None)
+    status = getattr(exc, "status_code", None) if isinstance(exc, http_type) else None
     if status == 403:
         return DuckDbOutcome.FORBIDDEN
     if status == 404:

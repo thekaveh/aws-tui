@@ -84,6 +84,10 @@ def test_loads_extensions_then_creates_the_secret_then_scans() -> None:
     assert "REGION 'us-east-1'" in joined
     # Ordering: the scan runs last.
     assert connection.statements[-1] == "SELECT 1"
+    # Ordering: extensions must load before the secret is created.
+    joined_upper = " | ".join(connection.statements).upper()
+    assert joined_upper.index("LOAD AWS") < joined_upper.index("CREATE OR REPLACE SECRET")
+    assert joined_upper.index("LOAD HTTPFS") < joined_upper.index("CREATE OR REPLACE SECRET")
 
 
 def test_returns_columns_and_stringified_rows_preserving_null() -> None:
@@ -160,6 +164,31 @@ def test_reports_engine_missing_when_the_import_fails() -> None:
 
     assert result.outcome is DuckDbOutcome.ENGINE_MISSING
     assert result.rows == ()
+
+
+@pytest.mark.parametrize("failure", [RuntimeError("boom"), OSError("disk full")])
+def test_a_connect_failure_that_is_not_an_import_error_is_reported_not_raised(
+    failure: Exception,
+) -> None:
+    """`query()` must return a result for any input — see the module docstring."""
+
+    def _boom() -> Any:
+        raise failure
+
+    result = NativeDuckDb(connect=_boom).query("SELECT 1", profile="p", region="r")
+
+    assert result.outcome is DuckDbOutcome.FAILED
+    assert result.error_type == type(failure).__name__
+
+
+def test_a_quote_in_the_profile_cannot_break_out_of_the_secret_literal() -> None:
+    connection = _connection_with([(1,)], ["a"])
+    port = NativeDuckDb(connect=lambda: connection)
+
+    port.query("SELECT 1", profile="ev'il", region="us-east-1")
+
+    secret = next(s for s in connection.statements if "CREATE OR REPLACE SECRET" in s)
+    assert "PROFILE 'ev''il'" in secret
 
 
 def test_interrupt_during_a_query_reaches_the_live_connection() -> None:
