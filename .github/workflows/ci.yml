@@ -39,7 +39,7 @@ jobs:
       - name: install Python ${{ matrix.python }}
         run: uv python install ${{ matrix.python }}
       - name: sync
-        run: uv sync --locked --python ${{ matrix.python }}
+        run: uv sync --locked --python ${{ matrix.python }} --extra duckdb
       # Runs unit + the in-process integration files (full-app pilot,
       # modal forwarding, etc. — they intentionally lack the
       # `integration` marker per pyproject's addopts comment). The

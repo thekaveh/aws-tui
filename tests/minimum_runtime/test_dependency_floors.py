@@ -76,3 +76,25 @@ async def test_textual_and_tomli_w_floors_construct_and_round_trip(tmp_path: Pat
         assert app._app_ctx is ctx
     finally:
         await app._aws_tui_shutdown()
+
+
+def test_duckdb_floor_loads_iceberg_extensions_and_supports_interrupt() -> None:
+    """The declared duckdb floor must actually provide what the port uses.
+
+    Skipped in the lowest-supported-dependencies CI job, which installs the
+    project without extras. It runs in the unit matrix, where the extra is
+    installed.
+    """
+    duckdb = pytest.importorskip("duckdb")
+
+    connection = duckdb.connect()
+    try:
+        for extension in ("httpfs", "aws", "iceberg"):
+            connection.execute(f"INSTALL {extension}")
+            connection.execute(f"LOAD {extension}")
+        connection.execute("SET unsafe_enable_version_guessing = true")
+        assert hasattr(connection, "interrupt")
+        assert issubclass(duckdb.HTTPException, duckdb.Error)
+        assert issubclass(duckdb.InterruptException, duckdb.Error)
+    finally:
+        connection.close()
