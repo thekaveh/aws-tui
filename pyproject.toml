@@ -236,6 +236,10 @@ disallow_untyped_defs = false
 
 [[tool.mypy.overrides]]
 # Third-party libs without type stubs. We rely on local boundary tests +
-# layer rules to keep their usage contained.
-module = ["aioboto3", "aioboto3.*", "botocore", "botocore.*"]
+# layer rules to keep their usage contained. `duckdb` is additionally an
+# optional extra (`pyproject.toml`'s `[project.optional-dependencies]`):
+# the module may be entirely absent in an environment that never installed
+# it, e.g. the lint job's `uv sync --locked` with no `--extra`, and this
+# override must tolerate that too, not just missing stubs.
+module = ["aioboto3", "aioboto3.*", "botocore", "botocore.*", "duckdb"]
 ignore_missing_imports = true

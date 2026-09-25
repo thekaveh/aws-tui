@@ -10,7 +10,7 @@
 
 **Spec:** `docs/superpowers/specs/2026-09-24-duckdb-iceberg-preview-design.md`
 
-## Global Constraints
+## 1. Global Constraints
 
 - **MVVM is not negotiable.** UI logic lives in view models built from VMx primitives; the View only binds. Views bind to a per-VM `ObserverSafeSubject` (`vm.on_property_changed`). Never filter the shared `MessageHub`. Never push state from a parent widget into children.
 - **`scripts/check-layers.sh` forbids `infra/` importing `aws_tui.domain`.** `DuckDbPort` and `DuckDbResult` are defined inside `infra/duckdb.py` and take plain strings. No `TableRef`, no `QueryContext`.
@@ -23,7 +23,7 @@
 - Commit as `1766308+thekaveh@users.noreply.github.com` or the push is rejected.
 - Any ledgered dependency change updates `docs/contract-ledger.md` in the SAME PR or the `documentation contracts` job fails.
 
-## Resolved open questions
+## 2. Resolved open questions
 
 The spec's §9 left four open. They are settled here; do not reopen them.
 
@@ -35,7 +35,7 @@ The spec's §9 left four open. They are settled here; do not reopen them.
 
 **4. CI installs the extra in the unit job only.** `.github/workflows/ci.yml:42` gains `--extra duckdb`. The lowest-supported-dependencies job installs `.` without extras (`ci.yml:18` of that job) and runs a fixed file list, so the DuckDB floor test is guarded with `pytest.importorskip("duckdb")` and skips there. The engine-absent test forces `ImportError` and therefore runs everywhere regardless of installation.
 
-## File structure
+## 3. File structure
 
 | File | Responsibility |
 |---|---|
@@ -52,7 +52,9 @@ The spec's §9 left four open. They are settled here; do not reopen them.
 
 ---
 
-### Task 1: Packaging — the optional extra and its ledger row
+## 4. Tasks
+
+### 4.1. Task 1: Packaging — the optional extra and its ledger row
 
 **Files:**
 - Modify: `pyproject.toml`
@@ -164,7 +166,7 @@ Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>"
 
 ---
 
-### Task 2: The SQL generator
+### 4.2. Task 2: The SQL generator
 
 **Files:**
 - Create: `src/aws_tui/domain/iceberg_preview.py`
@@ -339,7 +341,7 @@ Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>"
 
 ---
 
-### Task 3: The DuckDB port
+### 4.3. Task 3: The DuckDB port
 
 **Files:**
 - Create: `src/aws_tui/infra/duckdb.py`
@@ -790,7 +792,7 @@ Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>"
 
 ---
 
-### Task 4: The preview view model
+### 4.4. Task 4: The preview view model
 
 **Files:**
 - Create: `src/aws_tui/vm/glue/iceberg_preview_vm.py`
@@ -1052,7 +1054,7 @@ Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>"
 
 ---
 
-### Task 5: Thread the table location to the Iceberg view model
+### 4.5. Task 5: Thread the table location to the Iceberg view model
 
 **Files:**
 - Modify: `src/aws_tui/vm/glue/iceberg_vm.py:298` (`bind_table`) and its `__init__`
@@ -1138,7 +1140,7 @@ Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>"
 
 ---
 
-### Task 6: The Peek pane
+### 4.6. Task 6: The Peek pane
 
 **Files:**
 - Modify: `src/aws_tui/vm/chrome/focus_coordinator_vm.py:76` (add one slot)
@@ -1240,7 +1242,7 @@ Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>"
 
 ---
 
-### Task 7: Integration, snapshots, and documentation
+### 4.7. Task 7: Integration, snapshots, and documentation
 
 **Files:**
 - Test: `tests/integration/test_glue_iceberg_preview.py` (create)
@@ -1302,7 +1304,7 @@ Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>"
 
 ---
 
-## Landing
+## 5. Landing
 
 Three PRs, each merged with a merge commit and never squashed, matching the repository's ruleset: branch to `develop`, then `develop` to `main`, then `main` back to `develop`. The back-merge is mandatory; skipping it blocks the next promotion. After promoting, verify `git diff origin/main origin/develop` is empty.
 

@@ -117,7 +117,7 @@ catalog view model as `detail.storage.location`
 (`src/aws_tui/vm/glue/catalog_vm.py:659`), already used for the S3 handoff.
 Threading it through is a small change to an existing seam.
 
-### 5.1 The generated statement
+### 5.1. The generated statement
 
 The generator is the only caller of the port. No user-entered text reaches it.
 
@@ -141,7 +141,7 @@ follow-up with its own security review. The cost of guessing is an extra S3
 listing per query and the risk of reading a slightly stale version under
 concurrent writes.
 
-### 5.2 Credentials
+### 5.2. Credentials
 
 Per query, the port issues:
 
@@ -168,7 +168,7 @@ at `src/aws_tui/vm/athena/query_vm.py:723-724`: `AwsSession.client` builds a
 fresh session per call so an expired SSO token is re-read after the user runs
 `aws sso login` in another terminal. Peek must behave the same way.
 
-### 5.3 Failure taxonomy
+### 5.3. Failure taxonomy
 
 Mapping keys off structured fields, not message text. The Athena equivalent
 sniffs casefolded strings (`src/aws_tui/domain/athena.py:204-226`) and is
