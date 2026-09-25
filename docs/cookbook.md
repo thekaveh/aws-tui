@@ -980,3 +980,40 @@ it does not create/edit/delete Glue or Athena resources; and it does not infer
 a write workflow from metadata. Large metadata tables remain bounded by the
 limits above, so the UI is an operational inspection surface rather than a
 complete metadata export tool.
+
+### 7.4. Local row preview with DuckDB (Peek)
+
+The **Peek** tab previews rows of the selected Iceberg table by querying its
+S3 location directly with a local DuckDB engine — no Athena workgroup, no
+query execution, no AWS query bill. It needs the optional `duckdb` extra
+(`pip install aws-tui[duckdb]`) and an AWS profile connection; it is not
+available on `s3-compatible` connections. Without the extra installed, the
+tab is present but disabled and states the install command instead of
+disappearing silently.
+
+1. Select **Glue**, open an Iceberg table, and switch to the **Peek** tab
+   (it sits after **Refs** in the Iceberg tab strip).
+2. aws-tui runs one `iceberg_scan(...)` statement against the table's S3
+   root, pinned to the selected snapshot when one is chosen on **Snaps**.
+   Rows, columns, and `NULL`s (dimmed, distinct from a column that genuinely
+   contains the four-character string `"NULL"`) render in the same table
+   widget the six metadata tabs use.
+3. The footer reports the exact row count and the row-limit ceiling, e.g.
+   `100 rows · limit 100`. Unlike the six metadata tabs' load-more control,
+   which only widens an already-capped local window over rows already in
+   hand, Peek's `↓` issues a genuinely new query at the next row-limit step
+   (100 → 1,000 → 10,000); it disables once the top step is reached or a
+   page comes back short of the limit.
+4. `↻` retries the current query, honoring the active snapshot pin and row
+   limit.
+
+DuckDB resolves AWS credentials itself, through a fresh `credential_chain`
+secret bound to the connection's exact profile and region on every query —
+never the ambient default credential chain, and never a cached token, so an
+`aws sso login` run in another terminal is picked up on the next `↻` the same
+way an Athena query already is. The engine runs entirely on your machine: it
+reads S3 objects directly with whatever permissions your profile already
+grants on that bucket, and it never touches Athena, a workgroup, or a
+query-result location, so it incurs none of the costs or setup in §6 and
+§7.1. Forbidden, not-found, not-Iceberg, and expired-credential failures
+surface through the same placeholder styling as the six metadata tabs.

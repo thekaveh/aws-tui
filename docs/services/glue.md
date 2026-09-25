@@ -49,6 +49,19 @@ The bounded limits and required permissions are documented in the
 [Cookbook](../cookbook.md#71-iceberg-detection-and-metadata-views). These
 queries incur ordinary Athena workgroup and result-storage behavior.
 
+A seventh tab, **Peek**, previews table rows by querying the table's S3
+location directly with a local DuckDB engine instead of Athena — no
+workgroup, no query execution, no query bill. It needs the optional `duckdb`
+extra (`pip install aws-tui[duckdb]`) and an AWS profile connection; it does
+not appear for `s3-compatible` connections, and without the extra installed
+it appears present but disabled with an install prompt rather than
+disappearing silently. Its row limit is a real ceiling, not a local-window
+widen: the load-more control reruns a genuinely new scan at the next
+row-limit step (100 → 1,000 → 10,000), unlike the same control on the six
+metadata tabs above. See the
+[Cookbook](../cookbook.md#74-local-row-preview-with-duckdb-peek) for a full
+walkthrough.
+
 ## 4. Athena handoffs
 
 `Shift+Q` opens the selected table in Athena with a quoted
