@@ -214,10 +214,13 @@ limit is a choice, changing it re-runs the query, and the footer states the
 limit as a fact.
 
 **Visibility is honest.** On a non-Iceberg table or a non-AWS connection the
-tab is absent. With DuckDB not installed the tab is present but disabled,
-carrying the install line. A silently absent feature is the failure this
-project already fixed once, when clipboard code reported "Copied" after an
-OSC 52 write that did nothing.
+tab is absent. With DuckDB not installed the tab is present and selectable;
+choosing it reports the missing engine and carries the install line (the
+implementation deliberately keeps the tab enabled rather than disabled here,
+because a disabled tab could never be clicked, and a disabled tab can never
+surface the reason it is disabled). A silently absent feature is the failure
+this project already fixed once, when clipboard code reported "Copied" after
+an OSC 52 write that did nothing.
 
 **NULL stays distinguishable** from the literal string `NULL`, reusing the
 text-plus-is-null cell pair from `src/aws_tui/vm/athena/results_vm.py:154-164`.

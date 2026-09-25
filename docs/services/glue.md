@@ -54,8 +54,9 @@ location directly with a local DuckDB engine instead of Athena — no
 workgroup, no query execution, no query bill. It needs the optional `duckdb`
 extra (`pip install aws-tui[duckdb]`) and an AWS profile connection; it does
 not appear for `s3-compatible` connections, and without the extra installed
-it appears present but disabled with an install prompt rather than
-disappearing silently. Its row limit is a real ceiling, not a local-window
+it stays present and selectable; choosing it reports the missing engine with
+an install prompt rather than disappearing silently. Its row limit is a real
+ceiling, not a local-window
 widen: the load-more control reruns a genuinely new scan at the next
 row-limit step (100 → 1,000 → 10,000), unlike the same control on the six
 metadata tabs above. See the

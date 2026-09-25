@@ -33,7 +33,7 @@ from aws_tui.infra.aws_session import AwsSession
 from aws_tui.infra.clipboard import ClipboardPort, NativeClipboard
 from aws_tui.infra.config_store import ConfigStore
 from aws_tui.infra.connection_resolver import Connection, ConnectionResolver
-from aws_tui.infra.duckdb import DuckDbPort, NativeDuckDb
+from aws_tui.infra.duckdb import DuckDbOutcome, DuckDbPort, InMemoryDuckDb, NativeDuckDb
 from aws_tui.infra.keychain import KeychainBackend, Keyring
 from aws_tui.infra.keymap_store import (
     InvalidKeybinding,
@@ -391,7 +391,34 @@ def _build_app_context(
     # the same "one port, not two" reasoning as ``clipboard`` -- except the
     # clipboard port isn't needed until ``AppContext.__init__`` builds
     # ``ClipboardVM`` around it, so its default lives there instead.
-    resolved_duckdb_port: DuckDbPort = duckdb_port if duckdb_port is not None else NativeDuckDb()
+    #
+    # In demo mode, unlike Glue/Athena/S3/EMR above, an explicit
+    # ``duckdb_port`` is still honoured -- a test that injects one wants
+    # exactly that fake, demo or not. Only the *default* differs: real
+    # DuckDB reaches the network (``INSTALL httpfs``/``aws``/``iceberg`` from
+    # extensions.duckdb.org) and resolves the demo profile's credentials,
+    # which breaks demo's no-real-AWS contract (README.md, "keeps the
+    # no-real-AWS contract obvious"; ``tests/integration/test_demo_mode.py``
+    # asserts the app never touches real AWS). ``InMemoryDuckDb`` already
+    # exists as a generic canned-result fake, so seeding one with plausible
+    # rows -- the same shape as the design spec's own worked example -- costs
+    # a few lines and keeps the Peek pane demoable, rather than resolving to
+    # an always-``ENGINE_MISSING`` stand-in that would just show an install
+    # prompt no demo user can act on.
+    if duckdb_port is not None:
+        resolved_duckdb_port: DuckDbPort = duckdb_port
+    elif demo:
+        resolved_duckdb_port = InMemoryDuckDb(
+            outcome=DuckDbOutcome.OK,
+            columns=("event_id", "event_date", "user_id", "payload"),
+            rows=(
+                ("8821", "2026-07-24", "u-4410", '{"a": 1}'),
+                ("8822", "2026-07-24", None, '{"a": 2}'),
+                ("8823", "2026-07-24", "u-4411", '{"a": 3}'),
+            ),
+        )
+    else:
+        resolved_duckdb_port = NativeDuckDb()
 
     # ── Registry ───────────────────────────────────────────────────────────
     registry = ServiceRegistry()

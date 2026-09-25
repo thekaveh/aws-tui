@@ -159,9 +159,10 @@ Glue's forward focus order is:
   visible and enabled Iceberg tab/control, and the navigation rail. The
   seventh Iceberg tab, **Peek**, previews table rows through a local DuckDB
   engine; it needs the optional `duckdb` extra and an AWS profile connection,
-  so it is present-but-disabled with an install prompt when the extra is
-  missing, and simply absent otherwise — the same Iceberg-only gating as the
-  six metadata tabs it follows.
+  so it is simply absent without an AWS profile connection, but stays present
+  and selectable — never disabled — when the extra is missing: choosing it
+  is how the install prompt is reached, the same Iceberg-only visibility
+  gating as the six metadata tabs it follows.
 - **Jobs:** Source, Run state, view tabs, jobs, runs, job detail, and the
   navigation rail.
 - **Crawlers:** Source, Crawler state, view tabs, crawlers, crawler detail, and

@@ -250,6 +250,14 @@ class GluePage(DeferredWorkerMixin, HubSubscriberMixin, Widget):
 
     def _loader(self, target: str) -> tuple[Callable[[], Awaitable[object]], bool]:
         vm = self._vm
+        preview = vm.catalog.iceberg.preview
+        # Explicitly typed so it joins cleanly with the plain bound-method
+        # entries below -- an inline ``partial(...)`` in the dict literal
+        # made mypy widen the whole literal's inferred value type to
+        # ``tuple[object, bool]``.
+        preview_load_more: Callable[[], Awaitable[object]] = partial(
+            preview.load_more, vm.catalog.iceberg.selected_snapshot_id
+        )
         return {
             "databases": (vm.catalog.load_more_databases, vm.catalog.has_more_databases),
             "tables": (vm.catalog.load_more_tables, vm.catalog.has_more_tables),
@@ -258,6 +266,11 @@ class GluePage(DeferredWorkerMixin, HubSubscriberMixin, Widget):
             "runs": (vm.jobs.load_more_runs, vm.jobs.has_more_runs),
             "crawlers": (vm.crawlers.load_more_crawlers, vm.crawlers.has_more_crawlers),
             "iceberg": (vm.catalog.iceberg.load_more, vm.catalog.iceberg.has_more),
+            # Peek's honest load-more: a real second DuckDB query at the next
+            # row-limit step, pinned to the same snapshot as the Snaps tab --
+            # never the METADATA pager's local-window widen over a HIDDEN
+            # pane's already-capped rows. See ``_load_more_target``.
+            "iceberg-preview": (preview_load_more, preview.has_more),
         }[target]
 
     def _load_more_target(self) -> str | None:
@@ -271,7 +284,13 @@ class GluePage(DeferredWorkerMixin, HubSubscriberMixin, Widget):
         # view first so an Iceberg tab/control focused there routes to its
         # own pager, not to catalog partitions.
         if "glue-iceberg-view" in focused:
-            return "iceberg"
+            # Peek and the six metadata panes share one focused container
+            # and one DataTable id, so only the widget itself knows which
+            # tab is active -- route to the preview's real query there,
+            # never the metadata pager's local-window widen over a hidden
+            # pane (see ``GlueIcebergView.preview_active``).
+            iceberg_view = self.query_one(GlueIcebergView)
+            return "iceberg-preview" if iceberg_view.preview_active else "iceberg"
         if "glue-table-detail-region" in focused:
             return "partitions"
         candidates = {

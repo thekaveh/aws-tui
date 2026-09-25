@@ -17,7 +17,7 @@ from vmx.messages.protocols import Message
 
 from aws_tui.domain.data_catalog import TableFormat
 from aws_tui.infra.connection_resolver import Connection
-from aws_tui.infra.duckdb import DuckDbPort, InMemoryDuckDb
+from aws_tui.infra.duckdb import DuckDbOutcome, DuckDbPort, InMemoryDuckDb
 from aws_tui.ui.widgets.glue.iceberg_view import GlueIcebergView
 from aws_tui.ui.widgets.glue.page import GluePage
 from aws_tui.vm.chrome.focus_coordinator_vm import FocusCoordinatorVM, FocusSlot
@@ -861,3 +861,136 @@ async def test_peek_more_button_reruns_the_query_at_the_next_row_limit() -> None
         # The canned double never grows past 100 rows, so the pane is
         # honestly out of pages after the second scan.
         assert pilot.app.query_one("#glue-iceberg-more", Button).disabled
+
+
+@pytest.mark.asyncio
+async def test_peek_pins_the_snapshot_selected_on_snaps_when_loaded_from_the_tab() -> None:
+    # I1: the pane's stated goal is a preview "pinned to the selected
+    # snapshot when one is chosen" -- this drives the whole path through the
+    # widget (tab click, DataTable row selection, tab click) rather than
+    # calling the VM directly, because the bug was in the *view*'s wiring:
+    # ``on__iceberg_tab_selected`` called ``preview.load`` with no snapshot
+    # at all, even though ``selected_snapshot_id`` was already read for the
+    # Snaps table highlight one line away.
+    port = InMemoryDuckDb(columns=("id",), rows=(("1",),))
+    vm, _ = _build_vm(duckdb_port=port)
+    await vm.setup()
+
+    async with _GlueIcebergApp(vm).run_test(size=(100, 30)) as pilot:
+        await pilot.click("#glue-iceberg-tab-snapshots")
+        await wait_until(
+            lambda: len(vm.catalog.iceberg.snapshots) > 1,
+            what="the snapshots pane loaded",
+        )
+        await pilot.pause()
+        table = pilot.app.query_one("#glue-iceberg-table", DataTable)
+        table.focus()
+        # Row 0 is snapshot 43 (the newest, and already the default
+        # selection) -- picking row 1 instead proves the pin tracks a
+        # deliberate selection rather than passing on the coincidence that
+        # row 0 was selected anyway.
+        table.move_cursor(row=1)
+        await wait_until(
+            lambda: vm.catalog.iceberg.selected_snapshot_id == 42,
+            what="the Snaps table selection landed on snapshot 42",
+        )
+        await pilot.pause()
+
+        await pilot.click("#glue-iceberg-tab-preview")
+        await wait_until(
+            lambda: vm.catalog.iceberg.preview.state is PaneState.IDLE,
+            what="the preview pane finished loading",
+        )
+        await pilot.pause()
+
+        assert len(port.queries) == 1
+        assert "snapshot_from_id := 42" in port.queries[0][0]
+        footer = pilot.app.query_one("#glue-iceberg-footer", Static)
+        assert "· snapshot 42" in str(footer.render())
+
+
+@pytest.mark.asyncio
+async def test_peek_load_more_keeps_the_pinned_snapshot() -> None:
+    # I1's second broken site: the "more" button re-ran the scan with no
+    # snapshot at all.
+    port = InMemoryDuckDb(columns=("id",), rows=tuple((str(i),) for i in range(100)))
+    vm, _ = _build_vm(duckdb_port=port)
+    await vm.setup()
+
+    async with _GlueIcebergApp(vm).run_test(size=(100, 30)) as pilot:
+        await pilot.click("#glue-iceberg-tab-snapshots")
+        await wait_until(
+            lambda: len(vm.catalog.iceberg.snapshots) > 1,
+            what="the snapshots pane loaded",
+        )
+        await pilot.pause()
+        table = pilot.app.query_one("#glue-iceberg-table", DataTable)
+        table.focus()
+        table.move_cursor(row=1)
+        await wait_until(
+            lambda: vm.catalog.iceberg.selected_snapshot_id == 42,
+            what="the Snaps table selection landed on snapshot 42",
+        )
+        await pilot.pause()
+
+        await pilot.click("#glue-iceberg-tab-preview")
+        await wait_until(
+            lambda: vm.catalog.iceberg.preview.state is PaneState.IDLE,
+            what="the preview pane finished loading",
+        )
+        await pilot.pause()
+
+        await pilot.click("#glue-iceberg-more")
+        await wait_until(
+            lambda: vm.catalog.iceberg.preview.limit == 1000,
+            what="load-more advanced to the next row-limit step",
+        )
+        await wait_until(
+            lambda: vm.catalog.iceberg.preview.state is PaneState.IDLE,
+            what="the second preview scan finished",
+        )
+        await pilot.pause()
+
+        assert len(port.queries) == 2
+        assert "snapshot_from_id := 42" in port.queries[1][0]
+
+
+@pytest.mark.asyncio
+async def test_peek_retry_keeps_the_pinned_snapshot() -> None:
+    # I1's third broken site: retry passed ``preview.snapshot_id``, which is
+    # never set by anything but ``load`` itself -- always None in practice.
+    error_port = InMemoryDuckDb(outcome=DuckDbOutcome.FAILED)
+    vm, _ = _build_vm(duckdb_port=error_port)
+    await vm.setup()
+
+    async with _GlueIcebergApp(vm).run_test(size=(100, 30)) as pilot:
+        await pilot.click("#glue-iceberg-tab-snapshots")
+        await wait_until(
+            lambda: len(vm.catalog.iceberg.snapshots) > 1,
+            what="the snapshots pane loaded",
+        )
+        await pilot.pause()
+        table = pilot.app.query_one("#glue-iceberg-table", DataTable)
+        table.focus()
+        table.move_cursor(row=1)
+        await wait_until(
+            lambda: vm.catalog.iceberg.selected_snapshot_id == 42,
+            what="the Snaps table selection landed on snapshot 42",
+        )
+        await pilot.pause()
+
+        await pilot.click("#glue-iceberg-tab-preview")
+        await wait_until(
+            lambda: vm.catalog.iceberg.preview.state is PaneState.ERROR,
+            what="the preview pane finished failing",
+        )
+        await pilot.pause()
+
+        await pilot.click("#glue-iceberg-retry")
+        await wait_until(
+            lambda: len(error_port.queries) == 2,
+            what="retry re-ran the scan",
+        )
+        await pilot.pause()
+
+        assert "snapshot_from_id := 42" in error_port.queries[1][0]

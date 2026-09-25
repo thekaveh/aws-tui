@@ -988,8 +988,8 @@ S3 location directly with a local DuckDB engine — no Athena workgroup, no
 query execution, no AWS query bill. It needs the optional `duckdb` extra
 (`pip install aws-tui[duckdb]`) and an AWS profile connection; it is not
 available on `s3-compatible` connections. Without the extra installed, the
-tab is present but disabled and states the install command instead of
-disappearing silently.
+tab is still present and selectable; choosing it reports the missing engine
+and states the install command instead of disappearing silently.
 
 1. Select **Glue**, open an Iceberg table, and switch to the **Peek** tab
    (it sits after **Refs** in the Iceberg tab strip).

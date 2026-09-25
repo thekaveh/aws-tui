@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import cast
 
 from aws_tui.composition import AppContext, build_app_context
-from aws_tui.infra.duckdb import DuckDbPort, InMemoryDuckDb, NativeDuckDb
+from aws_tui.infra.duckdb import DuckDbOutcome, DuckDbPort, InMemoryDuckDb, NativeDuckDb
 from aws_tui.services.glue.service import GlueService
 
 
@@ -21,6 +21,44 @@ def test_build_app_context_wires_a_native_duckdb_port(tmp_path) -> None:
     try:
         assert isinstance(ctx.duckdb, NativeDuckDb)
         assert isinstance(ctx.duckdb, DuckDbPort)
+    finally:
+        _dispose(ctx)
+
+
+def test_demo_mode_does_not_wire_a_native_duckdb_port(tmp_path) -> None:
+    # I4: with the extra installed, a real NativeDuckDb in --demo would run
+    # INSTALL httpfs/aws/iceberg (a network fetch from extensions.duckdb.org)
+    # and resolve credentials for the demo profile -- the only demo path that
+    # would reach the outside world, breaking the no-real-AWS contract
+    # test_demo_mode_boots_with_four_demo_connections relies on. Demo gets a
+    # seeded InMemoryDuckDb instead, so Peek still shows plausible rows.
+    ctx = build_app_context(
+        config_dir=tmp_path / "config",
+        cache_dir=tmp_path / "cache",
+        demo=True,
+    )
+    try:
+        assert not isinstance(ctx.duckdb, NativeDuckDb)
+        assert isinstance(ctx.duckdb, InMemoryDuckDb)
+        assert ctx.duckdb.outcome is DuckDbOutcome.OK
+        assert ctx.duckdb.columns
+        assert ctx.duckdb.rows
+    finally:
+        _dispose(ctx)
+
+
+def test_an_explicitly_injected_duckdb_port_wins_over_the_demo_default(tmp_path) -> None:
+    # A test harness that injects its own fake wants exactly that fake, demo
+    # or not -- only the *default* changes under demo=True.
+    fake = InMemoryDuckDb()
+    ctx = build_app_context(
+        config_dir=tmp_path / "config",
+        cache_dir=tmp_path / "cache",
+        demo=True,
+        duckdb_port=fake,
+    )
+    try:
+        assert ctx.duckdb is fake
     finally:
         _dispose(ctx)
 

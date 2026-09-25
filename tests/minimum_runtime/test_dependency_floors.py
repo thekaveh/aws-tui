@@ -14,6 +14,7 @@ from aws_tui.domain.filesystem import PathRef
 from aws_tui.domain.local_fs import LocalFS
 from aws_tui.domain.sql_policy import QueryRejectedError, ReadOnlySqlPolicy
 from aws_tui.infra.config_store import Config, ConfigStore, Defaults, Keybindings
+from aws_tui.infra.duckdb import DuckDbOutcome, NativeDuckDb
 
 
 @pytest.mark.asyncio
@@ -99,3 +100,13 @@ def test_duckdb_floor_loads_iceberg_extensions_and_supports_interrupt() -> None:
         assert issubclass(duckdb.InterruptException, duckdb.Error)
     finally:
         connection.close()
+
+    # T1a: no job anywhere else exercises the *port*'s real statements
+    # against a real engine -- everything above drives raw duckdb. A bogus
+    # profile fails secret validation before any S3 traffic, so this stays
+    # offline while still proving NativeDuckDb classifies a real DuckDB
+    # failure correctly, not just a fake one.
+    result = NativeDuckDb().query(
+        "SELECT 1", profile="definitely-not-a-real-profile", region="us-east-1"
+    )
+    assert result.outcome is DuckDbOutcome.AUTH_REQUIRED

@@ -261,7 +261,7 @@ class GlueIcebergView(DeferredWorkerMixin, Widget):
             # button (see ``on_button_pressed``), not a silent re-run.
             if self._vm.preview.state is PaneState.EMPTY:
                 self._run_lifecycle_worker(
-                    self._vm.preview.load,
+                    partial(self._vm.preview.load, self._vm.selected_snapshot_id),
                     group="glue-iceberg-preview",
                 )
             self._schedule_refresh()
@@ -291,7 +291,7 @@ class GlueIcebergView(DeferredWorkerMixin, Widget):
                 # scan at the next row-limit step, unlike the sibling panes'
                 # local-window widen.
                 self._run_lifecycle_worker(
-                    self._vm.preview.load_more,
+                    partial(self._vm.preview.load_more, self._vm.selected_snapshot_id),
                     group="glue-iceberg-preview",
                 )
             else:
@@ -302,7 +302,7 @@ class GlueIcebergView(DeferredWorkerMixin, Widget):
         elif event.button.id == "glue-iceberg-retry":
             if self._preview_active:
                 self._run_lifecycle_worker(
-                    partial(self._vm.preview.load, self._vm.preview.snapshot_id),
+                    partial(self._vm.preview.load, self._vm.selected_snapshot_id),
                     group="glue-iceberg-preview",
                 )
             else:
@@ -431,7 +431,7 @@ class GlueIcebergView(DeferredWorkerMixin, Widget):
                 f" · snapshot {preview.snapshot_id}" if preview.snapshot_id is not None else ""
             )
             footer.update(f"{len(preview.rows)} rows · limit {preview.limit}{snapshot_suffix}")
-            more.disabled = not preview.has_more
+            more.disabled = not preview.has_more or preview.state is PaneState.LOADING
             retry.display = preview.state in {
                 PaneState.AUTH_REQUIRED,
                 PaneState.FORBIDDEN,
@@ -465,6 +465,18 @@ class GlueIcebergView(DeferredWorkerMixin, Widget):
 
     def _current_view(self) -> _TabView:
         return "preview" if self._preview_active else self._vm.active_view
+
+    @property
+    def preview_active(self) -> bool:
+        """True when Peek is the active tab.
+
+        Public so the page-level ``l`` / palette load-more router
+        (``GluePage._load_more_target``) can tell the Peek pane's honest
+        second query apart from the six metadata panes' local-window pager
+        -- both are reached through the same ``#glue-iceberg-table``, so the
+        distinction cannot be read off a focused widget id alone.
+        """
+        return self._preview_active
 
     def _enable_highlight(self) -> None:
         self._suppress_highlight = False
