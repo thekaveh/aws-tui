@@ -8,11 +8,13 @@ its connection factory as an injected keyword, the same seam
 
 from __future__ import annotations
 
+import sys
 from typing import Any
 
 import pytest
 
 from aws_tui.infra.duckdb import (
+    DuckDbErrorTypes,
     DuckDbOutcome,
     InMemoryDuckDb,
     NativeDuckDb,
@@ -31,6 +33,14 @@ class _FakeHttpError(_FakeError):
 
 class _FakeInterrupt(_FakeError):
     pass
+
+
+# Every ``NativeDuckDb`` here injects this. Leaving it off makes ``query`` fall
+# through to ``_default_error_types``, which imports the engine -- and the CI
+# unit tier installs the project without the ``duckdb`` extra, so such a test
+# passes locally and fails on all nine legs. ``test_needs_no_engine_...`` below
+# is the guard that keeps it that way.
+_FAKE_ERROR_TYPES = DuckDbErrorTypes(base=_FakeError, http=_FakeHttpError, interrupt=_FakeInterrupt)
 
 
 class _FakeConnection:
@@ -70,7 +80,7 @@ def _connection_with(rows: list[tuple[Any, ...]], columns: list[str]) -> _FakeCo
 
 def test_loads_extensions_then_creates_the_secret_then_scans() -> None:
     connection = _connection_with([(1,)], ["a"])
-    port = NativeDuckDb(connect=lambda: connection)
+    port = NativeDuckDb(connect=lambda: connection, error_types=_FAKE_ERROR_TYPES)
 
     port.query("SELECT 1", profile="analytics", region="us-east-1")
 
@@ -92,7 +102,7 @@ def test_loads_extensions_then_creates_the_secret_then_scans() -> None:
 
 def test_returns_columns_and_stringified_rows_preserving_null() -> None:
     connection = _connection_with([(1, None), (2, "x")], ["n", "label"])
-    port = NativeDuckDb(connect=lambda: connection)
+    port = NativeDuckDb(connect=lambda: connection, error_types=_FAKE_ERROR_TYPES)
 
     result = port.query("SELECT 1", profile="p", region="r")
 
@@ -110,7 +120,7 @@ def test_maps_http_status_codes_to_outcomes(status_code: int, expected: DuckDbOu
     connection = _FakeConnection(raises=_FakeHttpError(status_code))
     port = NativeDuckDb(
         connect=lambda: connection,
-        error_types=(_FakeError, _FakeHttpError, _FakeInterrupt),
+        error_types=_FAKE_ERROR_TYPES,
     )
 
     result = port.query("SELECT 1", profile="p", region="r")
@@ -123,7 +133,7 @@ def test_maps_a_version_guess_failure_to_not_iceberg() -> None:
     failure = _FakeError("Could not guess Iceberg table version using 'none' compression")
     port = NativeDuckDb(
         connect=lambda: _FakeConnection(raises=failure),
-        error_types=(_FakeError, _FakeHttpError, _FakeInterrupt),
+        error_types=_FAKE_ERROR_TYPES,
     )
 
     result = port.query("SELECT 1", profile="p", region="r")
@@ -135,7 +145,7 @@ def test_maps_a_missing_profile_to_auth_required() -> None:
     failure = _FakeError("Secret Validation Failure: no profile 'x' found in config file")
     port = NativeDuckDb(
         connect=lambda: _FakeConnection(raises=failure),
-        error_types=(_FakeError, _FakeHttpError, _FakeInterrupt),
+        error_types=_FAKE_ERROR_TYPES,
     )
 
     result = port.query("SELECT 1", profile="x", region="r")
@@ -146,7 +156,7 @@ def test_maps_a_missing_profile_to_auth_required() -> None:
 def test_maps_an_interrupt_to_cancelled() -> None:
     port = NativeDuckDb(
         connect=lambda: _FakeConnection(raises=_FakeInterrupt("interrupted")),
-        error_types=(_FakeError, _FakeHttpError, _FakeInterrupt),
+        error_types=_FAKE_ERROR_TYPES,
     )
 
     result = port.query("SELECT 1", profile="p", region="r")
@@ -183,7 +193,7 @@ def test_a_connect_failure_that_is_not_an_import_error_is_reported_not_raised(
 
 def test_a_quote_in_the_profile_cannot_break_out_of_the_secret_literal() -> None:
     connection = _connection_with([(1,)], ["a"])
-    port = NativeDuckDb(connect=lambda: connection)
+    port = NativeDuckDb(connect=lambda: connection, error_types=_FAKE_ERROR_TYPES)
 
     port.query("SELECT 1", profile="ev'il", region="us-east-1")
 
@@ -198,7 +208,7 @@ def test_interrupt_during_a_query_reaches_the_live_connection() -> None:
     on its way out, so interrupting afterwards is meaningless by construction.
     """
     connection = _connection_with([(1,)], ["a"])
-    port = NativeDuckDb(connect=lambda: connection)
+    port = NativeDuckDb(connect=lambda: connection, error_types=_FAKE_ERROR_TYPES)
     original_execute = connection.execute
 
     def _execute_and_interrupt(sql: str) -> object:
@@ -217,7 +227,7 @@ def test_interrupt_during_a_query_reaches_the_live_connection() -> None:
 def test_interrupt_after_the_query_returns_is_a_no_op() -> None:
     """The connection is closed and released once `query()` returns."""
     connection = _connection_with([(1,)], ["a"])
-    port = NativeDuckDb(connect=lambda: connection)
+    port = NativeDuckDb(connect=lambda: connection, error_types=_FAKE_ERROR_TYPES)
     port.query("SELECT 1", profile="p", region="r")
 
     port.interrupt()
@@ -233,3 +243,76 @@ def test_in_memory_fake_records_queries_and_replays_a_result() -> None:
     assert port.queries == [("SELECT 1", "p", "r")]
     assert result.outcome is DuckDbOutcome.OK
     assert result.rows == (("1",),)
+
+
+def test_needs_no_engine_installed_to_run_a_query(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The port must never import ``duckdb`` when both seams are injected.
+
+    The CI unit tier installs the project WITHOUT the ``duckdb`` extra, so a
+    test that reaches ``_default_connect`` or ``_default_error_types`` passes
+    locally and fails on every leg. Hiding the module here makes that failure
+    local and immediate instead.
+    """
+
+    class _Blocker:
+        def find_module(self, name: str, path: object = None) -> None:
+            if name == "duckdb" or name.startswith("duckdb."):
+                raise AssertionError(f"the port imported {name!r}")
+            return None
+
+        def find_spec(self, name: str, path: object = None, target: object = None) -> None:
+            return self.find_module(name, path)
+
+    monkeypatch.delitem(sys.modules, "duckdb", raising=False)
+    monkeypatch.setattr(sys, "meta_path", [_Blocker(), *sys.meta_path])
+
+    connection = _connection_with([(1, None)], ["n", "label"])
+    port = NativeDuckDb(connect=lambda: connection, error_types=_FAKE_ERROR_TYPES)
+
+    result = port.query("SELECT 1", profile="p", region="r")
+
+    assert result.outcome is DuckDbOutcome.OK
+    assert result.rows == (("1", None),)
+
+
+def test_a_failure_resolving_the_error_types_still_closes_the_connection(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The connection opened before that failure must not leak.
+
+    ``self._connection`` used to be published outside the guarded block, so this
+    path left an open connection behind and a stale handle for ``interrupt``.
+    """
+    connection = _connection_with([(1,)], ["a"])
+
+    def _no_types() -> DuckDbErrorTypes:
+        raise RuntimeError("engine half-installed")
+
+    monkeypatch.setattr("aws_tui.infra.duckdb._default_error_types", _no_types)
+
+    port = NativeDuckDb(connect=lambda: connection)
+    result = port.query("SELECT 1", profile="p", region="r")
+
+    assert result.outcome is DuckDbOutcome.FAILED
+    assert connection.closed is True
+    # The handle was released too, so a late interrupt cannot reach it.
+    port.interrupt()
+    assert connection.interrupts == 0
+
+
+def test_an_unrecognised_engine_failure_is_classified_not_raised() -> None:
+    """``_classify`` must not assume how many error types it was given.
+
+    It unpacked the tuple positionally inside an ``except`` handler, so any
+    other shape raised ``ValueError`` out of ``query``.
+    """
+    failure = _FakeError("something the taxonomy has never seen")
+    port = NativeDuckDb(
+        connect=lambda: _FakeConnection(raises=failure),
+        error_types=_FAKE_ERROR_TYPES,
+    )
+
+    result = port.query("SELECT 1", profile="p", region="r")
+
+    assert result.outcome is DuckDbOutcome.FAILED
+    assert result.error_type == "_FakeError"

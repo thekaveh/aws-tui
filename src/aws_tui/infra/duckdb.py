@@ -22,6 +22,7 @@ from enum import StrEnum
 from typing import Any, Protocol, runtime_checkable
 
 __all__ = [
+    "DuckDbErrorTypes",
     "DuckDbOutcome",
     "DuckDbPort",
     "DuckDbResult",
@@ -76,10 +77,32 @@ def _default_connect() -> Any:
     return duckdb.connect()
 
 
-def _default_error_types() -> tuple[type[BaseException], ...]:
+@dataclass(frozen=True, slots=True)
+class DuckDbErrorTypes:
+    """The engine exception classes this port needs, named rather than ordered.
+
+    ``_classify`` used to unpack a bare tuple positionally, so a tuple of any
+    other length raised ``ValueError`` out of ``query`` from inside an ``except``
+    handler -- turning a classifiable engine failure into a crash. Naming the
+    roles removes the arity assumption entirely.
+    """
+
+    base: type[BaseException]
+    http: type[BaseException]
+    interrupt: type[BaseException]
+
+    @property
+    def catchable(self) -> tuple[type[BaseException], ...]:
+        """For the ``except`` clause. Injected types need not share a base."""
+        return (self.base, self.http, self.interrupt)
+
+
+def _default_error_types() -> DuckDbErrorTypes:
     import duckdb
 
-    return (duckdb.Error, duckdb.HTTPException, duckdb.InterruptException)
+    return DuckDbErrorTypes(
+        base=duckdb.Error, http=duckdb.HTTPException, interrupt=duckdb.InterruptException
+    )
 
 
 class NativeDuckDb:
@@ -91,7 +114,7 @@ class NativeDuckDb:
         self,
         *,
         connect: Callable[[], Any] | None = None,
-        error_types: tuple[type[BaseException], ...] | None = None,
+        error_types: DuckDbErrorTypes | None = None,
     ) -> None:
         self._connect = connect or _default_connect
         self._error_types = error_types
@@ -113,25 +136,34 @@ class NativeDuckDb:
             return DuckDbResult(outcome=DuckDbOutcome.ENGINE_MISSING, error_type=type(exc).__name__)
         except Exception as exc:
             return DuckDbResult(outcome=DuckDbOutcome.FAILED, error_type=type(exc).__name__)
-        self._connection = connection
+        # Everything past a successful connect runs under this guard: resolving
+        # the error types imports the engine and can raise, and an early return
+        # there used to leak the open connection and leave ``self._connection``
+        # dangling for a later ``interrupt``.
         try:
-            error_types = self._error_types or _default_error_types()
-        except ImportError as exc:
-            return DuckDbResult(outcome=DuckDbOutcome.ENGINE_MISSING, error_type=type(exc).__name__)
-        except Exception as exc:
-            return DuckDbResult(outcome=DuckDbOutcome.FAILED, error_type=type(exc).__name__)
-        try:
-            self._prepare(connection, profile=profile, region=region)
-            cursor = connection.execute(sql)
-            columns = tuple(str(column[0]) for column in cursor.description)
-            rows = tuple(
-                tuple(None if value is None else str(value) for value in row)
-                for row in cursor.fetchall()
-            )
-        except error_types as exc:
-            return DuckDbResult(outcome=_classify(exc, error_types), error_type=type(exc).__name__)
-        except Exception as exc:
-            return DuckDbResult(outcome=DuckDbOutcome.FAILED, error_type=type(exc).__name__)
+            try:
+                error_types = self._error_types or _default_error_types()
+            except ImportError as exc:
+                return DuckDbResult(
+                    outcome=DuckDbOutcome.ENGINE_MISSING, error_type=type(exc).__name__
+                )
+            except Exception as exc:
+                return DuckDbResult(outcome=DuckDbOutcome.FAILED, error_type=type(exc).__name__)
+            self._connection = connection
+            try:
+                self._prepare(connection, profile=profile, region=region)
+                cursor = connection.execute(sql)
+                columns = tuple(str(column[0]) for column in cursor.description)
+                rows = tuple(
+                    tuple(None if value is None else str(value) for value in row)
+                    for row in cursor.fetchall()
+                )
+            except error_types.catchable as exc:
+                return DuckDbResult(
+                    outcome=_classify(exc, error_types), error_type=type(exc).__name__
+                )
+            except Exception as exc:
+                return DuckDbResult(outcome=DuckDbOutcome.FAILED, error_type=type(exc).__name__)
         finally:
             self._connection = None
             _close_quietly(connection)
@@ -160,18 +192,15 @@ def _close_quietly(connection: Any) -> None:
         return
 
 
-def _classify(exc: BaseException, error_types: tuple[type[BaseException], ...]) -> DuckDbOutcome:
+def _classify(exc: BaseException, error_types: DuckDbErrorTypes) -> DuckDbOutcome:
     """Map an engine failure, preferring structured fields over message text.
 
     The Athena path classifies by casefolded message and its own comments call
     that fragile. DuckDB exposes ``HTTPException.status_code``, so use it.
     """
-    # ``error_types`` is ordered (base, http, interrupt) by both
-    # ``_default_error_types`` and every test that injects it.
-    _base, http_type, interrupt_type = error_types
-    if isinstance(exc, interrupt_type):
+    if isinstance(exc, error_types.interrupt):
         return DuckDbOutcome.CANCELLED
-    status = getattr(exc, "status_code", None) if isinstance(exc, http_type) else None
+    status = getattr(exc, "status_code", None) if isinstance(exc, error_types.http) else None
     if status == 403:
         return DuckDbOutcome.FORBIDDEN
     if status == 404:
