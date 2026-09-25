@@ -14,7 +14,7 @@ from aws_tui.domain.filesystem import PathRef
 from aws_tui.domain.local_fs import LocalFS
 from aws_tui.domain.sql_policy import QueryRejectedError, ReadOnlySqlPolicy
 from aws_tui.infra.config_store import Config, ConfigStore, Defaults, Keybindings
-from aws_tui.infra.duckdb import DuckDbOutcome, NativeDuckDb
+from aws_tui.infra.duckdb import ICEBERG_EXTENSIONS, DuckDbOutcome, NativeDuckDb
 
 
 @pytest.mark.asyncio
@@ -91,7 +91,7 @@ def test_duckdb_floor_loads_iceberg_extensions_and_supports_interrupt() -> None:
 
     connection = duckdb.connect()
     try:
-        for extension in ("httpfs", "aws", "iceberg"):
+        for extension in ICEBERG_EXTENSIONS:
             connection.execute(f"INSTALL {extension}")
             connection.execute(f"LOAD {extension}")
         connection.execute("SET unsafe_enable_version_guessing = true")

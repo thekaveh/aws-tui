@@ -19,9 +19,10 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from enum import StrEnum
-from typing import Any, Protocol, runtime_checkable
+from typing import Any, Final, Protocol, runtime_checkable
 
 __all__ = [
+    "ICEBERG_EXTENSIONS",
     "DuckDbErrorTypes",
     "DuckDbOutcome",
     "DuckDbPort",
@@ -30,7 +31,9 @@ __all__ = [
     "NativeDuckDb",
 ]
 
-_EXTENSIONS = ("httpfs", "aws", "iceberg")
+ICEBERG_EXTENSIONS: Final[tuple[str, ...]] = ("httpfs", "aws", "iceberg")
+"""The extensions ``_prepare`` installs, public so the dependency-floor test
+asserts against this list rather than a copy of it that can silently drift."""
 _SECRET_NAME = "aws_tui_preview"
 
 
@@ -170,7 +173,7 @@ class NativeDuckDb:
         return DuckDbResult(outcome=DuckDbOutcome.OK, columns=columns, rows=rows)
 
     def _prepare(self, connection: Any, *, profile: str, region: str) -> None:
-        for extension in _EXTENSIONS:
+        for extension in ICEBERG_EXTENSIONS:
             connection.execute(f"INSTALL {extension}")
             connection.execute(f"LOAD {extension}")
         connection.execute("SET unsafe_enable_version_guessing = true")

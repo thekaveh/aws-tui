@@ -10,6 +10,8 @@ from __future__ import annotations
 
 from typing import Final
 
+from aws_tui.domain.s3_uri import parse_s3_uri
+
 ROW_LIMIT_STEPS: Final[tuple[int, ...]] = (100, 1000, 10000)
 """Selectable row limits, ascending.
 
@@ -49,8 +51,14 @@ def iceberg_preview_sql(
     (``src/aws_tui/domain/data_catalog.py:145-154``). The caller therefore
     enables version guessing so DuckDB finds the newest metadata itself.
     """
-    if not location.strip() or not location.startswith("s3://"):
-        raise ValueError("preview requires an s3:// location")
+    # Reuse the project's real validator rather than a prefix check. A bare
+    # "s3://", "s3:// bucket/x" or "s3://../evil" all pass ``startswith`` and
+    # would be quoted straight into the generated statement; ``parse_s3_uri``
+    # rejects an empty or malformed bucket, embedded whitespace and control
+    # characters, bad percent escapes, IP-shaped names and the reserved
+    # prefixes and suffixes.
+    if parse_s3_uri(location) is None:
+        raise ValueError("preview requires a valid s3:// location")
     if isinstance(limit, bool) or not isinstance(limit, int) or limit not in ROW_LIMIT_STEPS:
         raise ValueError(f"row limit must be one of {ROW_LIMIT_STEPS}")
     scan_args = _quote_literal(location)
