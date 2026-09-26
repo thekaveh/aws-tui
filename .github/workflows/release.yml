@@ -156,7 +156,7 @@ jobs:
       - name: export locked requirements
         run: |
           for py in 3.11 3.12 3.13; do
-            uv export --locked --all-groups --python "$py" --format requirements-txt --no-emit-project --output-file "$RUNNER_TEMP/requirements-audit-$py.txt"
+            uv export --locked --all-groups --all-extras --python "$py" --format requirements-txt --no-emit-project --output-file "$RUNNER_TEMP/requirements-audit-$py.txt"
           done
 
       - name: pip-audit (locked dependencies)

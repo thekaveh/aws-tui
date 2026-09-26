@@ -30,6 +30,10 @@ def _assert_hashed_audit_pair(workflow_path: str, job: str) -> None:
     assert "--no-hashes" not in export_run
     assert "--python" in export_run
     assert "--all-groups" in export_run
+    # ``--all-groups`` covers dependency GROUPS only, so an optional-dependency
+    # extra is invisible to the audit without this. The `duckdb` extra was the
+    # repo's first, and it went unaudited until this assertion existed.
+    assert "--all-extras" in export_run
     assert "--require-hashes" in audit_run
     assert "--disable-pip" in audit_run
     assert "--python" in audit_run
