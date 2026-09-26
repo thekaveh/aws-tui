@@ -2,14 +2,18 @@
 
 from __future__ import annotations
 
+import threading
+
+import anyio
 import pytest
 from vmx import NULL_DISPATCHER, MessageHub
 from vmx.messages import ConstructionStatusChangedMessage
 from vmx.messages.protocols import Message
 
-from aws_tui.infra.duckdb import DuckDbOutcome, InMemoryDuckDb
+from aws_tui.infra.duckdb import DuckDbOutcome, DuckDbResult, InMemoryDuckDb
 from aws_tui.vm.file_manager.pane_vm import PaneState
 from aws_tui.vm.glue.iceberg_preview_vm import IcebergPreviewVM
+from tests.helpers import WAIT_UNTIL_TIMEOUT_SECONDS, wait_until
 
 
 def _build(port: InMemoryDuckDb) -> IcebergPreviewVM:
@@ -32,6 +36,30 @@ def test_is_unavailable_without_an_aws_profile() -> None:
     vm.bind("s3://bkt/t", profile=None, region="us-east-1")
 
     assert vm.available is False
+
+
+class _GatedPort:
+    """A port whose query blocks in the worker thread until released.
+
+    `InMemoryDuckDb` is slotted, so its `query` cannot be patched, and a test
+    for an in-flight scan needs the scan to actually still be in flight.
+    """
+
+    def __init__(self, *, rows: tuple[tuple[str | None, ...], ...]) -> None:
+        self._rows = rows
+        self.entered = threading.Event()
+        self._gate = threading.Event()
+
+    def release(self) -> None:
+        self._gate.set()
+
+    def query(self, sql: str, *, profile: str, region: str) -> DuckDbResult:
+        self.entered.set()
+        assert self._gate.wait(WAIT_UNTIL_TIMEOUT_SECONDS), "the gate was never released"
+        return DuckDbResult(outcome=DuckDbOutcome.OK, columns=("a",), rows=self._rows)
+
+    def interrupt(self) -> None:
+        self._gate.set()
 
 
 @pytest.mark.asyncio
@@ -114,14 +142,20 @@ async def test_maps_each_outcome_to_a_pane_state(
 
 
 @pytest.mark.asyncio
-async def test_a_cancelled_query_returns_to_idle_without_an_error() -> None:
+async def test_a_cancelled_first_query_leaves_the_pane_empty_without_an_error() -> None:
+    """Cancelling is not a failure, and an empty pane must not claim to be loaded.
+
+    This previously asserted IDLE, which is how the pane came to report "0 rows"
+    for a table it had never finished reading.
+    """
     vm = _build(InMemoryDuckDb(outcome=DuckDbOutcome.CANCELLED))
     vm.bind("s3://bkt/t", profile="p", region="r")
 
     await vm.load()
 
-    assert vm.state is PaneState.IDLE
+    assert vm.state is PaneState.EMPTY
     assert vm.error_text is None
+    assert vm.rows == ()
 
 
 @pytest.mark.asyncio
@@ -169,9 +203,9 @@ async def test_no_state_change_is_published_through_the_shared_hub() -> None:
 
     Sibling VMs in this package deliberately dual-publish to the shared hub;
     this one must not, so a view can never be tempted to filter the hub instead
-    of binding to `on_property_changed`. Without this test the guarantee rests
-    on the implementation happening to be written correctly, and a future edit
-    reintroducing a hub publish would pass the whole suite.
+    of binding to `on_property_changed`. The inner `AsyncResourceVM` would
+    dual-publish, so it is given a private hub -- this test is what holds that
+    wiring in place.
     """
     hub: MessageHub[Message] = MessageHub()
     port = InMemoryDuckDb(columns=("a",), rows=(("1",),))
@@ -186,9 +220,75 @@ async def test_no_state_change_is_published_through_the_shared_hub() -> None:
     await vm.cancel()
     vm.dispose()
 
-    # Filter out infrastructure lifecycle messages from the inner ComponentVM.
-    # Data state changes (state, rows, columns, etc.) must never be published.
-    data_state_messages = [
-        msg for msg in seen if not isinstance(msg, ConstructionStatusChangedMessage)
-    ]
-    assert data_state_messages == [], f"VM state leaked to the shared hub: {data_state_messages}"
+    # Nothing at all, not even the resource's lifecycle: the shared hub has no
+    # audience for this VM's internals.
+    leaked = [msg for msg in seen if not isinstance(msg, ConstructionStatusChangedMessage)]
+    assert leaked == [], f"VM state leaked to the shared hub: {leaked}"
+
+
+@pytest.mark.asyncio
+async def test_an_in_flight_scan_cannot_write_its_rows_into_a_rebound_pane() -> None:
+    """The stale-write defect: table A's rows appearing under table B's name.
+
+    `AsyncResourceVM` stamps each operation and discards a superseded one's
+    value, so releasing A's scan after the re-bind must change nothing.
+    """
+    port = _GatedPort(rows=(("from-table-a",),))
+    vm = _build(port)
+    vm.bind("s3://bkt/table-a", profile="p", region="r")
+
+    async with anyio.create_task_group() as tg:
+        tg.start_soon(vm.load)
+        # The scan is genuinely inside the engine call before we re-bind.
+        await wait_until(port.entered.is_set, what="the scan for table A to start")
+        vm.bind("s3://bkt/table-b", profile="p", region="r")
+        port.release()
+
+    assert vm.rows == (), f"table A's rows leaked into table B's pane: {vm.rows}"
+    assert vm.state is PaneState.EMPTY
+
+
+@pytest.mark.asyncio
+async def test_cancelling_a_reload_keeps_the_rows_already_on_screen() -> None:
+    """The wipe-on-cancel defect.
+
+    `cancel_metadata_loads_and_drain_silently` runs on an ordinary database or
+    table switch, so wiping here showed the user "0 rows" for a table they had
+    just successfully read.
+    """
+    port = InMemoryDuckDb(columns=("a",), rows=(("1",), ("2",)))
+    vm = _build(port)
+    vm.bind("s3://bkt/t", profile="p", region="r")
+    await vm.load()
+    assert vm.rows == (("1",), ("2",))
+
+    # A genuinely cancelled scan comes back with no columns and no rows -- that
+    # empty result is what used to be written straight over the loaded page.
+    port.outcome = DuckDbOutcome.CANCELLED
+    port.columns = ()
+    port.rows = ()
+    await vm.load()
+
+    assert vm.rows == (("1",), ("2",)), "a cancelled reload wiped the loaded rows"
+    assert vm.columns == ("a",)
+    assert vm.error_text is None
+    assert vm.state is PaneState.IDLE
+
+
+@pytest.mark.asyncio
+async def test_a_failed_reload_keeps_the_rows_already_on_screen() -> None:
+    """RETAIN_PREVIOUS: an error annotates the pane rather than emptying it."""
+    port = InMemoryDuckDb(columns=("a",), rows=(("1",),))
+    vm = _build(port)
+    vm.bind("s3://bkt/t", profile="p", region="r")
+    await vm.load()
+    assert vm.rows == (("1",),)
+
+    port.outcome = DuckDbOutcome.FORBIDDEN
+    port.columns = ()
+    port.rows = ()
+    await vm.load()
+
+    assert vm.state is PaneState.FORBIDDEN
+    assert vm.error_text == "S3 access is forbidden for this table"
+    assert vm.rows == (("1",),), "the error discarded rows the user could still read"
