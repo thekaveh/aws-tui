@@ -762,11 +762,18 @@ async def test_peek_falls_back_to_the_first_tab_when_it_stops_being_available() 
             lambda: vm.catalog.iceberg.active_view == "snapshots",
             what="the active view fell back to the first tab",
         )
-        await pilot.pause()
 
         snapshots_tab = pilot.app.query_one("#glue-iceberg-tab-snapshots")
         refs_tab = pilot.app.query_one("#glue-iceberg-tab-refs")
         preview_tab = pilot.app.query_one("#glue-iceberg-tab-preview")
+        # The view model settling and the widget repainting are two different
+        # events: `-active` is applied by the scheduled `_refresh`, so waiting on
+        # `active_view` alone and then pausing once asserts on whichever the
+        # scheduler happened to reach first.
+        await wait_until(
+            lambda: snapshots_tab.has_class("-active"),
+            what="the first tab to repaint as active",
+        )
         assert snapshots_tab.has_class("-active")
         assert not refs_tab.has_class("-active")
         assert not preview_tab.has_class("-active")

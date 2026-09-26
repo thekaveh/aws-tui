@@ -297,6 +297,15 @@ class IcebergPreviewVM:
         loaded pane is the previous table's rows. Rebuilding guarantees no
         retained value and no in-flight operation survives a re-bind, which is
         the other half of the stale-rows defect.
+
+        It is replaced only when there is something to discard. An Idle resource
+        holds no value and runs no operation, so a fresh one would be identical
+        and rebuilding it is pure cost -- paid on the hot path, since
+        ``IcebergVM.cancel_metadata_loads_and_drain_silently`` calls this on
+        every database and table switch whether Peek was ever opened or not.
+        Disposing and reconstructing a VMx component there publishes lifecycle
+        messages and adds scheduler hops to a selection change, which is enough
+        to strand a reactive hint recomputation on the slower CI runners.
         """
         self._location = location
         self._profile = profile
@@ -304,7 +313,7 @@ class IcebergPreviewVM:
         self._snapshot_id = None
         self._limit = ROW_LIMIT_STEPS[0]
         self._load_requested = False
-        if not self._disposed:
+        if not self._disposed and self._resource.state.status is not AsyncResourceStatus.IDLE:
             self._release_resource()
             self._resource = self._new_resource()
             if self._constructed:
