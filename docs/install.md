@@ -23,7 +23,35 @@ Verify the installed console entry point:
 aws-tui --version
 ```
 
-## 2. Development install
+## 2. Optional extras
+
+`pip install aws-tui` installs everything the application needs. One feature
+ships as an extra because its wheel is large relative to the rest of the
+install:
+
+| Extra | Installs | Enables |
+| --- | --- | --- |
+| `duckdb` | `duckdb>=1.3,<2` (~14 MB per platform) | The Glue Iceberg **Peek** tab, which previews table rows by reading S3 directly |
+
+```bash
+pipx install "aws-tui[duckdb] @ git+https://github.com/thekaveh/aws-tui.git"
+```
+
+```bash
+uv tool install "aws-tui[duckdb] @ git+https://github.com/thekaveh/aws-tui.git"
+```
+
+Without the extra, aws-tui runs normally and the Peek tab reports the missing
+engine and the install command rather than disappearing.
+
+The first Peek query on a machine downloads DuckDB's `httpfs`, `aws`, and
+`iceberg` extensions from `extensions.duckdb.org` and caches them under
+`~/.duckdb/`. Queries after that need no connection beyond S3 itself. On a
+host without egress to that domain the first query fails; pre-populating the
+cache on a connected machine, or installing the extensions into the same
+DuckDB version yourself, avoids it.
+
+## 3. Development install
 
 ```bash
 git clone https://github.com/thekaveh/aws-tui.git
@@ -37,7 +65,7 @@ The lockfile is the reproducibility baseline for development and CI. See
 [Connections](connections.md) to configure AWS profiles or S3-compatible
 endpoints.
 
-## 3. Demo mode
+## 4. Demo mode
 
 Launch the complete interface against deterministic in-memory providers when
 AWS credentials are unavailable:
@@ -50,7 +78,7 @@ Demo mode does not write the user's aws-tui configuration and does not issue
 AWS requests. Its local filesystem pane still points at the real local
 filesystem.
 
-## 4. Release channels
+## 5. Release channels
 
 The repository contains PyPI, TestPyPI, GitHub Release, and Homebrew automation,
 but the public PyPI package and Homebrew tap are not yet available. The Git

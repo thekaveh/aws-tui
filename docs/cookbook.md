@@ -1011,9 +1011,13 @@ DuckDB resolves AWS credentials itself, through a fresh `credential_chain`
 secret bound to the connection's exact profile and region on every query —
 never the ambient default credential chain, and never a cached token, so an
 `aws sso login` run in another terminal is picked up on the next `↻` the same
-way an Athena query already is. The engine runs entirely on your machine: it
-reads S3 objects directly with whatever permissions your profile already
-grants on that bucket, and it never touches Athena, a workgroup, or a
+way an Athena query already is. Queries run entirely on your machine: the
+engine reads S3 objects directly with whatever permissions your profile
+already grants on that bucket, and it never touches Athena, a workgroup, or a
 query-result location, so it incurs none of the costs or setup in §6 and
-§7.1. Forbidden, not-found, not-Iceberg, and expired-credential failures
+§7.1. The one exception is setup, not querying: the first Peek query on a
+machine downloads DuckDB's `httpfs`, `aws`, and `iceberg` extensions from
+`extensions.duckdb.org` and caches them under `~/.duckdb/`, so on a host
+without egress to that domain the first query fails until the cache is
+populated (see [Installation](install.md)). Forbidden, not-found, not-Iceberg, and expired-credential failures
 surface through the same placeholder styling as the six metadata tabs.
