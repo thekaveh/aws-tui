@@ -292,3 +292,60 @@ async def test_a_failed_reload_keeps_the_rows_already_on_screen() -> None:
     assert vm.state is PaneState.FORBIDDEN
     assert vm.error_text == "S3 access is forbidden for this table"
     assert vm.rows == (("1",),), "the error discarded rows the user could still read"
+
+
+@pytest.mark.asyncio
+async def test_ensure_loaded_runs_once_per_binding_then_no_ops() -> None:
+    """The pane calls this on every refresh, so it must not re-query.
+
+    It is also what stops the pane looping: a scan that legitimately rests on
+    EMPTY must not be retried forever by the next refresh.
+    """
+    port = InMemoryDuckDb(columns=("a",), rows=(("1",),))
+    vm = _build(port)
+    vm.bind("s3://bkt/t", profile="p", region="r")
+
+    await vm.ensure_loaded()
+    await vm.ensure_loaded()
+    await vm.ensure_loaded()
+
+    assert len(port.queries) == 1
+    assert vm.needs_load is False
+
+    # A new binding is a new question, so it may load again.
+    vm.bind("s3://bkt/other", profile="p", region="r")
+    assert vm.needs_load is True
+    await vm.ensure_loaded()
+    assert len(port.queries) == 2
+
+
+@pytest.mark.asyncio
+async def test_a_cancelled_scan_that_rests_on_empty_is_not_retried_forever() -> None:
+    """The loop `ensure_loaded` exists to prevent, stated as a test."""
+    vm = _build(InMemoryDuckDb(outcome=DuckDbOutcome.CANCELLED))
+    vm.bind("s3://bkt/t", profile="p", region="r")
+
+    await vm.ensure_loaded()
+    assert vm.state is PaneState.EMPTY
+
+    # The pane would call this again on the refresh that EMPTY itself triggered.
+    assert vm.needs_load is False
+
+
+def test_a_subscriber_cannot_dispose_the_property_stream_for_the_others() -> None:
+    """VMX-013: the observable is sealed, so one subscriber cannot break another.
+
+    `on_property_changed` used to return the `ObserverSafeSubject` itself, which
+    exposes `on_next` and `dispose` to anyone holding it.
+    """
+    vm = _build(InMemoryDuckDb())
+    seen: list[str] = []
+    vm.on_property_changed.subscribe(on_next=seen.append)
+    stream = vm.on_property_changed
+
+    # Neither lever the raw subject exposes survives the seal.
+    assert not hasattr(stream, "on_next"), "a subscriber can inject property names"
+    assert not hasattr(stream, "dispose"), "a subscriber can dispose the shared stream"
+    vm.bind("s3://bkt/t", profile="p", region="r")
+
+    assert seen, "the subscriber received no notifications at all"
