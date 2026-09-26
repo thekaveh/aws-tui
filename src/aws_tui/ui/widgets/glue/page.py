@@ -270,6 +270,10 @@ class GluePage(DeferredWorkerMixin, HubSubscriberMixin, Widget):
             # row-limit step, pinned to the same snapshot as the Snaps tab --
             # never the METADATA pager's local-window widen over a HIDDEN
             # pane's already-capped rows. See ``_load_more_target``.
+            #
+            # The callable is here for symmetry and for ``can_load_more``'s
+            # ``has_more``; ``action_load_more`` deliberately does NOT dispatch
+            # it, routing to the widget's worker group instead.
             "iceberg-preview": (preview_load_more, preview.has_more),
         }[target]
 
@@ -313,6 +317,14 @@ class GluePage(DeferredWorkerMixin, HubSubscriberMixin, Widget):
             return
         method, has_more = self._loader(target)
         if not has_more:
+            return
+        if target == "iceberg-preview":
+            # Route to the Iceberg widget's own worker group instead of starting
+            # one here. Textual's ``exclusive=True`` only cancels within the same
+            # node AND group, so a worker started on this node would not be
+            # serialized against the widget's -- the two scans would race the
+            # port's single connection and each bump the row limit a step.
+            self.query_one(GlueIcebergView).request_preview_load_more()
             return
         # Dispatch, never await: this runs inside the App's message pump and
         # the page fetch is a Glue round trip (see action_refresh_active).

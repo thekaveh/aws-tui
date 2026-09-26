@@ -36,6 +36,13 @@ from aws_tui.vm.glue.iceberg_vm import GlueIcebergVM, IcebergRow, IcebergView
 # (``IcebergPreviewVM``) that the metadata VM has no notion of selecting.
 _TabView: TypeAlias = IcebergView | Literal["preview"]
 
+# Every preview scan runs in this one group on this one node. Textual's
+# ``exclusive=True`` only cancels within the same node AND group, so a second
+# owner elsewhere -- GluePage.action_load_more used to be one -- would not be
+# serialized against it: two scans would race the port's single connection and
+# each bump the row limit.
+_PREVIEW_WORKER_GROUP = "glue-iceberg-preview"
+
 # ``_VIEW_ORDER[0]`` typed narrowly, for the "Peek became unavailable" fallback
 # in ``_refresh`` -- ``select_view`` only accepts ``IcebergView``, not the
 # wider ``_TabView`` indexing ``_VIEW_ORDER`` would otherwise produce.
@@ -259,11 +266,7 @@ class GlueIcebergView(DeferredWorkerMixin, Widget):
             # ``select_view``: a re-click on an already-loaded Peek tab is a
             # no-op here too. Recovery from an error goes through the retry
             # button (see ``on_button_pressed``), not a silent re-run.
-            if self._vm.preview.state is PaneState.EMPTY:
-                self._run_lifecycle_worker(
-                    partial(self._vm.preview.load, self._vm.selected_snapshot_id),
-                    group="glue-iceberg-preview",
-                )
+            self._request_preview_load()
             self._schedule_refresh()
             return
         self._preview_active = False
@@ -290,10 +293,7 @@ class GlueIcebergView(DeferredWorkerMixin, Widget):
                 # The Peek pane's honest load-more: a real second DuckDB
                 # scan at the next row-limit step, unlike the sibling panes'
                 # local-window widen.
-                self._run_lifecycle_worker(
-                    partial(self._vm.preview.load_more, self._vm.selected_snapshot_id),
-                    group="glue-iceberg-preview",
-                )
+                self.request_preview_load_more()
             else:
                 self._run_lifecycle_worker(
                     self._vm.load_more,
@@ -303,7 +303,7 @@ class GlueIcebergView(DeferredWorkerMixin, Widget):
             if self._preview_active:
                 self._run_lifecycle_worker(
                     partial(self._vm.preview.load, self._vm.selected_snapshot_id),
-                    group="glue-iceberg-preview",
+                    group=_PREVIEW_WORKER_GROUP,
                 )
             else:
                 self._run_lifecycle_worker(
@@ -318,6 +318,33 @@ class GlueIcebergView(DeferredWorkerMixin, Widget):
 
     def _on_preview_changed(self, _property_name: str) -> None:
         self._schedule_refresh()
+
+    def request_preview_load_more(self) -> None:
+        """Start a preview load-more in this widget's single worker group.
+
+        Public because ``GluePage.action_load_more`` must route here rather than
+        start its own worker -- see ``_PREVIEW_WORKER_GROUP``.
+        """
+        if not self._preview_active:
+            return
+        self._run_lifecycle_worker(
+            partial(self._vm.preview.load_more, self._vm.selected_snapshot_id),
+            group=_PREVIEW_WORKER_GROUP,
+        )
+
+    def _request_preview_load(self) -> None:
+        """Start the first scan for the current binding, if it needs one.
+
+        ``ensure_loaded`` is idempotent per binding, so this is safe to call
+        from ``_refresh``; the guard here only avoids spawning a worker that
+        would immediately return.
+        """
+        if not self._vm.preview.needs_load:
+            return
+        self._run_lifecycle_worker(
+            partial(self._vm.preview.ensure_loaded, self._vm.selected_snapshot_id),
+            group=_PREVIEW_WORKER_GROUP,
+        )
 
     def _schedule_refresh(self) -> None:
         if self._refresh_pending:
@@ -363,6 +390,10 @@ class GlueIcebergView(DeferredWorkerMixin, Widget):
         try:
             if active == "preview":
                 preview = self._vm.preview
+                # Navigating to another Iceberg table rebinds the preview while
+                # Peek stays active; no tab selection re-fires, so without this
+                # the pane showed an empty table for a table it never read.
+                self._request_preview_load()
                 table_snapshot: object = ("preview", preview.columns, preview.rows)
                 if table_snapshot != self._table_snapshot:
                     self._table_snapshot = table_snapshot
@@ -436,6 +467,9 @@ class GlueIcebergView(DeferredWorkerMixin, Widget):
                 PaneState.AUTH_REQUIRED,
                 PaneState.FORBIDDEN,
                 PaneState.ERROR,
+                # A scan cancelled before it returned rows rests on EMPTY.
+                # Without retry here the pane offers the user no way back.
+                PaneState.EMPTY,
             }
             retry.disabled = preview.state is PaneState.LOADING
         else:

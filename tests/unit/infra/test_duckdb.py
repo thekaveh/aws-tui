@@ -9,6 +9,8 @@ its connection factory as an injected keyword, the same seam
 from __future__ import annotations
 
 import sys
+import threading
+import time
 from typing import Any
 
 import pytest
@@ -16,9 +18,12 @@ import pytest
 from aws_tui.infra.duckdb import (
     DuckDbErrorTypes,
     DuckDbOutcome,
+    DuckDbResult,
     InMemoryDuckDb,
     NativeDuckDb,
 )
+
+WAIT_TIMEOUT_SECONDS = 5.0
 
 
 class _FakeError(Exception):
@@ -316,3 +321,63 @@ def test_an_unrecognised_engine_failure_is_classified_not_raised() -> None:
 
     assert result.outcome is DuckDbOutcome.FAILED
     assert result.error_type == "_FakeError"
+
+
+def test_two_overlapping_queries_never_share_the_connection() -> None:
+    """The port serializes, so one query cannot close another's connection.
+
+    Two callers used to be able to overlap: each published to
+    ``self._connection`` and each closed a connection in its ``finally``, so the
+    second ran against a connection the first had already closed. Cancelling a
+    Textual worker does not unblock a thread already inside ``query``, so the
+    caller's worker group cannot prevent this on its own.
+    """
+    barrier_reached = threading.Event()
+    release = threading.Event()
+    live = 0
+    peak = 0
+    guard = threading.Lock()
+
+    class _CountingConnection(_FakeConnection):
+        def execute(self, sql: str) -> _FakeConnection:
+            nonlocal live, peak
+            if sql.lstrip().upper().startswith("SELECT"):
+                with guard:
+                    live += 1
+                    peak = max(peak, live)
+                barrier_reached.set()
+                release.wait(WAIT_TIMEOUT_SECONDS)
+                with guard:
+                    live -= 1
+            return super().execute(sql)
+
+    def _connect() -> _FakeConnection:
+        connection = _CountingConnection()
+        connection.fetchall = lambda: [(1,)]  # type: ignore[method-assign]
+        connection.description = [("a",)]  # type: ignore[assignment]
+        return connection
+
+    port = NativeDuckDb(connect=_connect, error_types=_FAKE_ERROR_TYPES)
+    results: list[DuckDbResult] = []
+
+    def _run() -> None:
+        results.append(port.query("SELECT 1", profile="p", region="r"))
+
+    first = threading.Thread(target=_run)
+    second = threading.Thread(target=_run)
+    first.start()
+    assert barrier_reached.wait(WAIT_TIMEOUT_SECONDS), "the first query never started"
+    second.start()
+    # Give the second thread every chance to get inside the engine while the
+    # first is still in there. Without the port's lock it gets in immediately;
+    # with it, it cannot get in until the first has finished and closed. Polling
+    # for the bug's own signature keeps this from passing by being too quick.
+    deadline = time.monotonic() + 1.0
+    while time.monotonic() < deadline and peak < 2:
+        time.sleep(0.01)
+    release.set()
+    first.join(WAIT_TIMEOUT_SECONDS)
+    second.join(WAIT_TIMEOUT_SECONDS)
+
+    assert peak == 1, f"{peak} queries were inside the engine at once"
+    assert [result.outcome for result in results] == [DuckDbOutcome.OK, DuckDbOutcome.OK]

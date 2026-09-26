@@ -144,6 +144,7 @@ class IcebergPreviewVM:
         self._region: str = ""
         self._limit: int = ROW_LIMIT_STEPS[0]
         self._snapshot_id: int | None = None
+        self._load_requested: bool = False
 
         # Per-VM Observable -- the pane binds here, never to the shared hub.
         self._on_property_changed: ObserverSafeSubject[str] = ObserverSafeSubject[str]()
@@ -265,6 +266,18 @@ class IcebergPreviewVM:
         return self._snapshot_id
 
     @property
+    def needs_load(self) -> bool:
+        """True when this binding has never been asked to load.
+
+        The pane polls this so it can start the first scan for a newly bound
+        table without the user re-selecting the tab. Keeping the once-per-binding
+        policy here rather than in the view is what stops the pane looping on a
+        state that stays EMPTY, such as a scan that was cancelled before it
+        returned any rows.
+        """
+        return self.available and not self._load_requested
+
+    @property
     def on_property_changed(self) -> rx.Observable[str]:
         """Sealed so a subscriber cannot ``on_next`` or dispose the stream.
 
@@ -290,6 +303,7 @@ class IcebergPreviewVM:
         self._region = region
         self._snapshot_id = None
         self._limit = ROW_LIMIT_STEPS[0]
+        self._load_requested = False
         if not self._disposed:
             self._release_resource()
             self._resource = self._new_resource()
@@ -301,6 +315,15 @@ class IcebergPreviewVM:
         self._notify("rows")
         self._notify("error_text")
         self._notify("state")
+
+    async def ensure_loaded(self, snapshot_id: int | None = None) -> None:
+        """Run the first scan for this binding; a no-op every time after.
+
+        Idempotent per binding, so the pane may call it on every refresh.
+        """
+        if not self.needs_load:
+            return
+        await self.load(snapshot_id)
 
     async def load(self, snapshot_id: int | None = None) -> None:
         """Run (or re-run) the preview scan at the current row limit.
@@ -314,6 +337,7 @@ class IcebergPreviewVM:
         if self._location is None or self._profile is None:
             self._notify("state")
             return
+        self._load_requested = True
         self._snapshot_id = snapshot_id
         self._notify("snapshot_id")
         if self._resource.state.status is AsyncResourceStatus.IDLE:

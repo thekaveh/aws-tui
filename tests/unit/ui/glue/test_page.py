@@ -21,6 +21,7 @@ from aws_tui.ui.widgets.context_picker import ContextPicker
 from aws_tui.ui.widgets.glue.catalog_view import GlueCatalogView
 from aws_tui.ui.widgets.glue.crawlers_view import GlueCrawlersView
 from aws_tui.ui.widgets.glue.detail_rows import DetailRows, ResourceListPane
+from aws_tui.ui.widgets.glue.iceberg_view import GlueIcebergView
 from aws_tui.ui.widgets.glue.jobs_view import GlueJobsView
 from aws_tui.ui.widgets.glue.page import GluePage
 from aws_tui.ui.widgets.nav_menu import NavMenu
@@ -1853,3 +1854,71 @@ async def test_clicking_a_more_available_footer_loads_the_next_page() -> None:
 
         assert len(vm.crawlers.crawlers) == 2
         assert "more available" not in str(footer.content)
+
+
+@pytest.mark.asyncio
+async def test_load_more_action_routes_peek_through_the_widgets_own_worker_group() -> None:
+    """One owner for preview scans, so they serialize against each other.
+
+    The page used to start its own worker in ``glue-load-more`` on the page node
+    while the Iceberg widget's ↓ button started one in ``glue-iceberg-preview``
+    on the widget node. Textual's ``exclusive=True`` only cancels within the same
+    node AND group, so neither cancelled the other: both scans ran, each bumping
+    the row limit a step and each reaching the port's single connection.
+    """
+    fake = seeded_glue()
+    ref = fake.tables["analytics"][0].ref
+    fake.table_details[ref] = replace(fake.table_details[ref], table_format=TableFormat.ICEBERG)
+    port = InMemoryDuckDb(columns=("id",), rows=tuple((str(i),) for i in range(100)))
+    hub: MessageHub[Message] = MessageHub()
+    vm = GluePageVM(
+        client=fake,
+        iceberg_inspector=RecordingInspector(),
+        connection=Connection(
+            name="analytics-dev",
+            kind="aws",
+            region="us-east-1",
+            source="test",
+            profile="analytics-dev",
+        ),
+        hub=hub,
+        dispatcher=NULL_DISPATCHER,
+        duckdb_port=port,
+    )
+    vm.construct()
+    await vm.setup()
+    app = _GlueApp(vm)
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        page = app.query_one(GluePage)
+        await pilot.click("#glue-iceberg-tab-preview")
+        await wait_until(
+            lambda: vm.catalog.iceberg.preview.state is PaneState.IDLE,
+            what="the preview pane finished loading",
+        )
+        await pilot.pause()
+        assert vm.catalog.iceberg.preview.has_more
+
+        view = app.query_one(GlueIcebergView)
+        routed: list[bool] = []
+        delegate = view.request_preview_load_more
+
+        def _record() -> None:
+            routed.append(True)
+            delegate()
+
+        view.request_preview_load_more = _record  # type: ignore[method-assign]
+        page.query_one("#glue-iceberg-more").focus()
+        await pilot.pause()
+
+        await page.action_load_more()
+
+        assert routed == [True], "the page started its own preview worker instead of routing"
+        await wait_until(
+            lambda: len(port.queries) == 2, what="load-more issued a second DuckDB query"
+        )
+        await drain_workers(app)
+        # Exactly one extra scan, at exactly one step up: no double bump.
+        assert len(port.queries) == 2
+        assert port.queries[1][0].endswith("LIMIT 1000")

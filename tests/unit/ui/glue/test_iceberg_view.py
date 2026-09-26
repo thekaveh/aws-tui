@@ -996,3 +996,33 @@ async def test_peek_retry_keeps_the_pinned_snapshot() -> None:
         await pilot.pause()
 
         assert "snapshot_from_id := 42" in error_port.queries[1][0]
+
+
+@pytest.mark.asyncio
+async def test_peek_loads_the_newly_selected_table_while_it_stays_active() -> None:
+    """Navigating A -> B with Peek active must read B, not sit blank.
+
+    The pane only ever asked for a scan from tab selection, and selecting a
+    different Iceberg table does not re-fire that -- so the rebind cleared the
+    table and nothing reloaded it. The retry button was hidden on EMPTY too, so
+    the pane offered no way out.
+    """
+    port = InMemoryDuckDb(columns=("id",), rows=(("1",),))
+    vm, _ = _build_vm(duckdb_port=port)
+    await vm.setup()
+
+    async with _GlueIcebergApp(vm).run_test(size=(100, 30)) as pilot:
+        await pilot.click("#glue-iceberg-tab-preview")
+        table = pilot.app.query_one("#glue-iceberg-table", DataTable)
+        await wait_until(lambda: table.row_count == 1, what="the first table's rows to render")
+
+        port.rows = (("7",), ("8",))
+        await vm.catalog.iceberg.bind_table(
+            OTHER_REF, table_format=TableFormat.ICEBERG, location="s3://bkt/other"
+        )
+
+        await wait_until(
+            lambda: table.row_count == 2,
+            what="the newly selected table's rows to render",
+        )
+        assert vm.catalog.iceberg.preview.state is PaneState.IDLE

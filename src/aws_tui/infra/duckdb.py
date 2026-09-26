@@ -16,6 +16,7 @@ with ``anyio.to_thread.run_sync``.
 
 from __future__ import annotations
 
+import threading
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from enum import StrEnum
@@ -111,7 +112,7 @@ def _default_error_types() -> DuckDbErrorTypes:
 class NativeDuckDb:
     """The real engine, with its connection factory injected for tests."""
 
-    __slots__ = ("_connect", "_connection", "_error_types")
+    __slots__ = ("_connect", "_connection", "_error_types", "_lock")
 
     def __init__(
         self,
@@ -122,6 +123,13 @@ class NativeDuckDb:
         self._connect = connect or _default_connect
         self._error_types = error_types
         self._connection: Any | None = None
+        # One query at a time. Two overlapping calls would each publish to
+        # ``self._connection`` and each close a connection in their ``finally``,
+        # so the second would be running against a connection the first had
+        # already closed. Callers are expected to serialize too, but cancelling a
+        # Textual worker does not unblock a thread already inside ``query``, so
+        # the port cannot rely on that alone.
+        self._lock = threading.Lock()
 
     def interrupt(self) -> None:
         connection = self._connection
@@ -133,6 +141,10 @@ class NativeDuckDb:
             return
 
     def query(self, sql: str, *, profile: str, region: str) -> DuckDbResult:
+        with self._lock:
+            return self._query_locked(sql, profile=profile, region=region)
+
+    def _query_locked(self, sql: str, *, profile: str, region: str) -> DuckDbResult:
         try:
             connection = self._connect()
         except ImportError as exc:
