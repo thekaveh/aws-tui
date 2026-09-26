@@ -252,12 +252,9 @@ class GluePage(DeferredWorkerMixin, HubSubscriberMixin, Widget):
         vm = self._vm
         preview = vm.catalog.iceberg.preview
         # Explicitly typed so it joins cleanly with the plain bound-method
-        # entries below -- an inline ``partial(...)`` in the dict literal
-        # made mypy widen the whole literal's inferred value type to
-        # ``tuple[object, bool]``.
-        preview_load_more: Callable[[], Awaitable[object]] = partial(
-            preview.load_more, vm.catalog.iceberg.selected_snapshot_id
-        )
+        # entries below -- an inline lambda in the dict literal made mypy widen
+        # the whole literal's inferred value type to ``tuple[object, bool]``.
+        preview_load_more: Callable[[], Awaitable[object]] = self._route_preview_load_more
         return {
             "databases": (vm.catalog.load_more_databases, vm.catalog.has_more_databases),
             "tables": (vm.catalog.load_more_tables, vm.catalog.has_more_tables),
@@ -270,12 +267,20 @@ class GluePage(DeferredWorkerMixin, HubSubscriberMixin, Widget):
             # row-limit step, pinned to the same snapshot as the Snaps tab --
             # never the METADATA pager's local-window widen over a HIDDEN
             # pane's already-capped rows. See ``_load_more_target``.
-            #
-            # The callable is here for symmetry and for ``can_load_more``'s
-            # ``has_more``; ``action_load_more`` deliberately does NOT dispatch
-            # it, routing to the widget's worker group instead.
             "iceberg-preview": (preview_load_more, preview.has_more),
         }[target]
+
+    async def _route_preview_load_more(self) -> object:
+        """Hand a preview load-more to the Iceberg widget's own worker group.
+
+        Never runs the scan here. Textual's ``exclusive=True`` only cancels
+        within the same node AND group, so a scan started on the page node would
+        not be serialized against the widget's ``↓`` button -- both would run,
+        each bumping the row limit a step and each reaching the port's single
+        connection. This returns as soon as it has delegated.
+        """
+        self.query_one(GlueIcebergView).request_preview_load_more()
+        return None
 
     def _load_more_target(self) -> str | None:
         """The list the user means: the focused one, else the first with a page."""
@@ -317,14 +322,6 @@ class GluePage(DeferredWorkerMixin, HubSubscriberMixin, Widget):
             return
         method, has_more = self._loader(target)
         if not has_more:
-            return
-        if target == "iceberg-preview":
-            # Route to the Iceberg widget's own worker group instead of starting
-            # one here. Textual's ``exclusive=True`` only cancels within the same
-            # node AND group, so a worker started on this node would not be
-            # serialized against the widget's -- the two scans would race the
-            # port's single connection and each bump the row limit a step.
-            self.query_one(GlueIcebergView).request_preview_load_more()
             return
         # Dispatch, never await: this runs inside the App's message pump and
         # the page fetch is a Glue round trip (see action_refresh_active).

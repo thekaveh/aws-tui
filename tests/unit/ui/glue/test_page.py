@@ -1914,7 +1914,12 @@ async def test_load_more_action_routes_peek_through_the_widgets_own_worker_group
 
         await page.action_load_more()
 
-        assert routed == [True], "the page started its own preview worker instead of routing"
+        # The page dispatches the route, so this is async -- what matters is that
+        # the widget is what ultimately starts the scan.
+        await wait_until(
+            lambda: routed == [True],
+            what="the page to route load-more to the Iceberg widget",
+        )
         await wait_until(
             lambda: len(port.queries) == 2, what="load-more issued a second DuckDB query"
         )
