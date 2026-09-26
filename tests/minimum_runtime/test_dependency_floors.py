@@ -101,12 +101,23 @@ def test_duckdb_floor_loads_iceberg_extensions_and_supports_interrupt() -> None:
     finally:
         connection.close()
 
-    # T1a: no job anywhere else exercises the *port*'s real statements
-    # against a real engine -- everything above drives raw duckdb. A bogus
-    # profile fails secret validation before any S3 traffic, so this stays
-    # offline while still proving NativeDuckDb classifies a real DuckDB
-    # failure correctly, not just a fake one.
+    # T1a: no job anywhere else exercises the *port*'s real statements against a
+    # real engine -- everything above drives raw duckdb. A bogus profile needs no
+    # network, so this stays offline while still driving NativeDuckDb's own
+    # statements through a real engine rather than a fake one.
     result = NativeDuckDb().query(
         "SELECT 1", profile="definitely-not-a-real-profile", region="us-east-1"
     )
-    assert result.outcome is DuckDbOutcome.AUTH_REQUIRED
+    # Eager credential validation arrived in duckdb 1.4.0. At the declared 1.3
+    # floor, `CREATE OR REPLACE SECRET ... PROFILE '<nonexistent>'` is accepted
+    # without validation, so the statement simply succeeds and there is no auth
+    # failure to classify. Verified against real 1.3.0 and 1.4.0 engines: 1.3.0
+    # accepts the secret, 1.4.0 raises "Failed to load profile ... in
+    # credentials file". AUTH_REQUIRED is therefore a 1.4+ refinement, not a
+    # floor guarantee -- on 1.3 a bad profile degrades to a later, less precise
+    # outcome rather than misreporting success of a real read.
+    if tuple(int(part) for part in duckdb.__version__.split(".")[:2]) >= (1, 4):
+        assert result.outcome is DuckDbOutcome.AUTH_REQUIRED
+    else:
+        # What must hold at every supported version: a result, never a raise.
+        assert result.outcome is DuckDbOutcome.OK
