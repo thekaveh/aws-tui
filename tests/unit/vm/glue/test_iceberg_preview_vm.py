@@ -29,7 +29,7 @@ def test_is_unavailable_without_a_location() -> None:
 def test_is_unavailable_without_an_aws_profile() -> None:
     # s3-compatible connections carry no profile and are a non-goal.
     vm = _build(InMemoryDuckDb())
-    vm.bind("s3://b/t", profile=None, region="us-east-1")
+    vm.bind("s3://bkt/t", profile=None, region="us-east-1")
 
     assert vm.available is False
 
@@ -38,7 +38,7 @@ def test_is_unavailable_without_an_aws_profile() -> None:
 async def test_loads_rows_and_reaches_idle() -> None:
     port = InMemoryDuckDb(columns=("a", "b"), rows=(("1", None),))
     vm = _build(port)
-    vm.bind("s3://b/t", profile="analytics", region="us-east-1")
+    vm.bind("s3://bkt/t", profile="analytics", region="us-east-1")
 
     await vm.load()
 
@@ -52,7 +52,7 @@ async def test_loads_rows_and_reaches_idle() -> None:
 async def test_pins_the_selected_snapshot_in_the_statement() -> None:
     port = InMemoryDuckDb(columns=("a",), rows=(("1",),))
     vm = _build(port)
-    vm.bind("s3://b/t", profile="p", region="r")
+    vm.bind("s3://bkt/t", profile="p", region="r")
 
     await vm.load(snapshot_id=4201)
 
@@ -64,7 +64,7 @@ async def test_pins_the_selected_snapshot_in_the_statement() -> None:
 async def test_load_more_reruns_at_the_next_limit() -> None:
     port = InMemoryDuckDb(columns=("a",), rows=tuple((str(n),) for n in range(100)))
     vm = _build(port)
-    vm.bind("s3://b/t", profile="p", region="r")
+    vm.bind("s3://bkt/t", profile="p", region="r")
     await vm.load()
     assert vm.limit == 100
     assert vm.has_more is True
@@ -81,7 +81,7 @@ async def test_load_more_reruns_at_the_next_limit() -> None:
 async def test_has_more_is_false_when_fewer_rows_than_the_limit_return() -> None:
     port = InMemoryDuckDb(columns=("a",), rows=(("1",),))
     vm = _build(port)
-    vm.bind("s3://b/t", profile="p", region="r")
+    vm.bind("s3://bkt/t", profile="p", region="r")
 
     await vm.load()
 
@@ -104,7 +104,7 @@ async def test_maps_each_outcome_to_a_pane_state(
     outcome: DuckDbOutcome, expected_state: PaneState, expected_text: str
 ) -> None:
     vm = _build(InMemoryDuckDb(outcome=outcome))
-    vm.bind("s3://b/t", profile="p", region="r")
+    vm.bind("s3://bkt/t", profile="p", region="r")
 
     await vm.load()
 
@@ -116,7 +116,7 @@ async def test_maps_each_outcome_to_a_pane_state(
 @pytest.mark.asyncio
 async def test_a_cancelled_query_returns_to_idle_without_an_error() -> None:
     vm = _build(InMemoryDuckDb(outcome=DuckDbOutcome.CANCELLED))
-    vm.bind("s3://b/t", profile="p", region="r")
+    vm.bind("s3://bkt/t", profile="p", region="r")
 
     await vm.load()
 
@@ -128,7 +128,7 @@ async def test_a_cancelled_query_returns_to_idle_without_an_error() -> None:
 async def test_cancel_interrupts_the_engine() -> None:
     port = InMemoryDuckDb(columns=("a",), rows=(("1",),))
     vm = _build(port)
-    vm.bind("s3://b/t", profile="p", region="r")
+    vm.bind("s3://bkt/t", profile="p", region="r")
 
     await vm.cancel()
 
@@ -152,7 +152,7 @@ async def test_loading_while_unbound_is_a_no_op_not_a_raise() -> None:
 async def test_publishes_property_changes_on_its_own_subject() -> None:
     # MVVM: the view binds to this, never to the shared hub.
     vm = _build(InMemoryDuckDb(columns=("a",), rows=(("1",),)))
-    vm.bind("s3://b/t", profile="p", region="r")
+    vm.bind("s3://bkt/t", profile="p", region="r")
     seen: list[str] = []
     subscription = vm.on_property_changed.subscribe(on_next=seen.append)
 
@@ -180,7 +180,7 @@ async def test_no_state_change_is_published_through_the_shared_hub() -> None:
     seen: list[object] = []
     hub.messages.subscribe(on_next=seen.append)
 
-    vm.bind("s3://b/t", profile="analytics", region="us-east-1")
+    vm.bind("s3://bkt/t", profile="analytics", region="us-east-1")
     await vm.load()
     await vm.load_more()
     await vm.cancel()

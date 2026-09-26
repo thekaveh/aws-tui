@@ -1362,7 +1362,7 @@ async def test_provider_error_with_hostile_string_is_contained_and_value_free(
 async def test_bind_table_passes_the_location_to_the_preview() -> None:
     vm, _inspector, _hub = make_vm()
 
-    await vm.bind_table(ICEBERG_REF, table_format=TableFormat.ICEBERG, location="s3://b/t")
+    await vm.bind_table(ICEBERG_REF, table_format=TableFormat.ICEBERG, location="s3://bkt/t")
 
     assert vm.preview.available is True
 
@@ -1371,7 +1371,7 @@ async def test_bind_table_passes_the_location_to_the_preview() -> None:
 async def test_preview_is_unavailable_for_a_non_iceberg_table() -> None:
     vm, _inspector, _hub = make_vm()
 
-    await vm.bind_table(ICEBERG_REF, table_format=TableFormat.HIVE, location="s3://b/t")
+    await vm.bind_table(ICEBERG_REF, table_format=TableFormat.HIVE, location="s3://bkt/t")
 
     assert vm.preview.available is False
 
@@ -1381,7 +1381,7 @@ async def test_preview_is_unavailable_without_an_aws_profile() -> None:
     # s3-compatible connections carry no profile; the pane must stay hidden.
     vm, _inspector, _hub = make_vm(aws_profile=None)
 
-    await vm.bind_table(ICEBERG_REF, table_format=TableFormat.ICEBERG, location="s3://b/t")
+    await vm.bind_table(ICEBERG_REF, table_format=TableFormat.ICEBERG, location="s3://bkt/t")
 
     assert vm.preview.available is False
 
@@ -1391,7 +1391,7 @@ async def test_an_injected_duckdb_port_reaches_the_preview() -> None:
     port = InMemoryDuckDb(columns=("a",), rows=(("1",),))
     vm, _inspector, _hub = make_vm(duckdb_port=port)
 
-    await vm.bind_table(ICEBERG_REF, table_format=TableFormat.ICEBERG, location="s3://b/t")
+    await vm.bind_table(ICEBERG_REF, table_format=TableFormat.ICEBERG, location="s3://bkt/t")
     await vm.preview.load()
 
     assert port.queries, "the injected port was not used"
@@ -1401,7 +1401,7 @@ async def test_an_injected_duckdb_port_reaches_the_preview() -> None:
 async def test_clear_table_unbinds_the_preview() -> None:
     """`clear_table()` is the only deselect path production calls."""
     vm, _inspector, _hub = make_vm()
-    await vm.bind_table(ICEBERG_REF, table_format=TableFormat.ICEBERG, location="s3://b/t")
+    await vm.bind_table(ICEBERG_REF, table_format=TableFormat.ICEBERG, location="s3://bkt/t")
     assert vm.preview.available is True
 
     vm.clear_table()
@@ -1413,7 +1413,7 @@ async def test_clear_table_unbinds_the_preview() -> None:
 async def test_clear_table_and_drain_interrupts_the_preview() -> None:
     port = InMemoryDuckDb()
     vm, _inspector, _hub = make_vm(duckdb_port=port)
-    await vm.bind_table(ICEBERG_REF, table_format=TableFormat.ICEBERG, location="s3://b/t")
+    await vm.bind_table(ICEBERG_REF, table_format=TableFormat.ICEBERG, location="s3://bkt/t")
 
     await vm.clear_table_and_drain()
 
@@ -1424,7 +1424,7 @@ async def test_clear_table_and_drain_interrupts_the_preview() -> None:
 async def test_cancel_metadata_loads_and_drain_silently_interrupts_the_preview() -> None:
     port = InMemoryDuckDb()
     vm, _inspector, _hub = make_vm(duckdb_port=port)
-    await vm.bind_table(ICEBERG_REF, table_format=TableFormat.ICEBERG, location="s3://b/t")
+    await vm.bind_table(ICEBERG_REF, table_format=TableFormat.ICEBERG, location="s3://bkt/t")
 
     await vm.cancel_metadata_loads_and_drain_silently()
 
@@ -1435,7 +1435,7 @@ async def test_cancel_metadata_loads_and_drain_silently_interrupts_the_preview()
 async def test_shutdown_interrupts_the_preview() -> None:
     port = InMemoryDuckDb()
     vm, _inspector, _hub = make_vm(duckdb_port=port)
-    await vm.bind_table(ICEBERG_REF, table_format=TableFormat.ICEBERG, location="s3://b/t")
+    await vm.bind_table(ICEBERG_REF, table_format=TableFormat.ICEBERG, location="s3://bkt/t")
 
     await vm.shutdown()
 
@@ -1445,7 +1445,7 @@ async def test_shutdown_interrupts_the_preview() -> None:
 @pytest.mark.asyncio
 async def test_begin_shutdown_unbinds_the_preview() -> None:
     vm, _inspector, _hub = make_vm()
-    await vm.bind_table(ICEBERG_REF, table_format=TableFormat.ICEBERG, location="s3://b/t")
+    await vm.bind_table(ICEBERG_REF, table_format=TableFormat.ICEBERG, location="s3://bkt/t")
     assert vm.preview.available is True
 
     vm.begin_shutdown()

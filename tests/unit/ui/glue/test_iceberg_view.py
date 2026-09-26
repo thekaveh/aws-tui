@@ -716,7 +716,9 @@ async def test_peek_tab_appears_after_navigating_to_an_iceberg_table() -> None:
         iceberg = vm.catalog.iceberg
         assert iceberg.preview.available is False
 
-        await iceberg.bind_table(ICEBERG_REF, table_format=TableFormat.ICEBERG, location="s3://b/t")
+        await iceberg.bind_table(
+            ICEBERG_REF, table_format=TableFormat.ICEBERG, location="s3://bkt/t"
+        )
         await wait_until(
             lambda: iceberg.preview.available,
             what="the preview became available after selecting an Iceberg table",
