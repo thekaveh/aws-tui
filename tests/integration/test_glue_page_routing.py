@@ -18,7 +18,7 @@ from aws_tui.ui.widgets.context_picker import ContextPicker
 from aws_tui.ui.widgets.glue.page import GluePage
 from aws_tui.ui.widgets.service_tab_strip import ServiceTabStrip
 from aws_tui.vm.glue.page_vm import GluePageVM
-from tests.helpers import focus_and_settle
+from tests.helpers import focus_and_settle, wait_until
 from tests.unit.vm.glue._fake_glue import InMemoryGlue, seeded_glue
 
 
@@ -191,12 +191,19 @@ async def test_glue_copy_hint_tracks_selected_table_reactively(
         fake.add_database("empty")
         await vm.catalog.refresh_databases()
         await vm.select_database("empty")
-        await pilot.pause()
-        assert not copy_enabled()
+        # The hint is recomputed reactively, off a hub PropertyChangedMessage
+        # (app.py:4525), so the settled value is what this asserts -- not
+        # whatever one scheduler cycle happens to have reached. A single
+        # `pilot.pause()` yields one cycle without advancing the clock, so it is
+        # not a wait: any change that adds a hop on this path turns the
+        # assertion red on the slower runners while macOS stays green.
+        await wait_until(
+            lambda: not copy_enabled(),
+            what="the copy hint to disable for a database with no tables",
+        )
 
         await vm.select_database("analytics")
-        await pilot.pause()
-        assert copy_enabled()
+        await wait_until(copy_enabled, what="the copy hint to re-enable for a database with tables")
 
         await vm.select_view("jobs")
         await pilot.pause()
