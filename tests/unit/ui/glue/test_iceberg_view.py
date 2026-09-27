@@ -126,6 +126,24 @@ class _GlueIcebergApp(App[None]):
         return None
 
 
+async def _peek_repainted(pilot: object, vm: GluePageVM) -> None:
+    """Wait for the Peek pane to repaint what the view model already holds.
+
+    The view model settling and the widget repainting are two different events:
+    `_refresh` is scheduled, so waiting on `preview.state` and then pausing once
+    asserts against whichever the scheduler happened to reach first. That is how
+    the footer assertion read "0 rows" against a fully loaded pane on the Windows
+    runners while passing on every other platform.
+    """
+    preview = vm.catalog.iceberg.preview
+    table = pilot.app.query_one("#glue-iceberg-table", DataTable)  # type: ignore[attr-defined]
+    expected = len(preview.rows)
+    await wait_until(
+        lambda: table.row_count == len(preview.rows),
+        what=f"the Peek table to repaint {expected} rows",
+    )
+
+
 @pytest.mark.asyncio
 async def test_iceberg_metadata_region_is_hidden_for_non_iceberg_table() -> None:
     vm, _inspector = _build_vm(iceberg=False)
@@ -746,7 +764,7 @@ async def test_peek_falls_back_to_the_first_tab_when_it_stops_being_available() 
             lambda: vm.catalog.iceberg.preview.state is PaneState.IDLE,
             what="the preview pane finished loading",
         )
-        await pilot.pause()
+        await _peek_repainted(pilot, vm)
 
         # Navigate to a different Iceberg table with no usable S3 location:
         # the pane stays visible (still Iceberg-formatted), but Peek stops
@@ -797,7 +815,7 @@ async def test_peek_renders_rows_and_keeps_null_distinct() -> None:
             lambda: vm.catalog.iceberg.preview.state is PaneState.IDLE,
             what="the preview pane finished loading",
         )
-        await pilot.pause()
+        await _peek_repainted(pilot, vm)
         table = pilot.app.query_one("#glue-iceberg-table", DataTable)
 
         assert table.row_count == 2
@@ -824,7 +842,7 @@ async def test_peek_footer_reports_rows_and_limit_without_more_available_phrasin
             lambda: vm.catalog.iceberg.preview.state is PaneState.IDLE,
             what="the preview pane finished loading",
         )
-        await pilot.pause()
+        await _peek_repainted(pilot, vm)
         footer = pilot.app.query_one("#glue-iceberg-footer", Static)
 
         assert str(footer.render()) == "2 rows · limit 100"
@@ -846,7 +864,7 @@ async def test_peek_more_button_reruns_the_query_at_the_next_row_limit() -> None
             lambda: vm.catalog.iceberg.preview.state is PaneState.IDLE,
             what="the preview pane finished loading",
         )
-        await pilot.pause()
+        await _peek_repainted(pilot, vm)
         more = pilot.app.query_one("#glue-iceberg-more", Button)
         assert not more.disabled
         assert vm.catalog.iceberg.preview.limit == 100
@@ -910,7 +928,7 @@ async def test_peek_pins_the_snapshot_selected_on_snaps_when_loaded_from_the_tab
             lambda: vm.catalog.iceberg.preview.state is PaneState.IDLE,
             what="the preview pane finished loading",
         )
-        await pilot.pause()
+        await _peek_repainted(pilot, vm)
 
         assert len(port.queries) == 1
         assert "snapshot_from_id := 42" in port.queries[0][0]
@@ -947,7 +965,7 @@ async def test_peek_load_more_keeps_the_pinned_snapshot() -> None:
             lambda: vm.catalog.iceberg.preview.state is PaneState.IDLE,
             what="the preview pane finished loading",
         )
-        await pilot.pause()
+        await _peek_repainted(pilot, vm)
 
         await pilot.click("#glue-iceberg-more")
         await wait_until(

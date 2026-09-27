@@ -15,7 +15,7 @@ from aws_tui.infra.connection_resolver import Connection
 from aws_tui.ui.widgets.command_palette import CommandPalette
 from aws_tui.ui.widgets.glue.page import GluePage
 from aws_tui.vm.glue.page_vm import GluePageVM
-from tests.helpers import drain_workers
+from tests.helpers import drain_workers, wait_until
 from tests.unit.vm.glue._fake_glue import seeded_glue
 from tests.unit.vm.glue.test_iceberg_vm import RecordingInspector
 
@@ -295,8 +295,20 @@ async def test_glue_handoff_disabled_state_tracks_table_and_snapshot_selection(
                 "glue.load_more",
             }
 
+            # `select_database` clears the table selection and calls
+            # `iceberg.clear_table()`, so there are no snapshots to select until a
+            # table is bound again. The tables pane re-highlighting row 0 does
+            # that, which makes the next two assertions a race against a repaint
+            # -- they failed on both Windows legs across two runs for exactly
+            # that reason. Selecting the table is what "tracks table and snapshot
+            # selection" means, so do it rather than race it.
             await vm.select_database("analytics")
+            await vm.select_table("events")
             assert await vm.catalog.iceberg.select_view("snapshots")
+            await wait_until(
+                lambda: vm.catalog.iceberg.snapshots,
+                what="the snapshots pane to load for the re-selected table",
+            )
             assert vm.catalog.iceberg.select_snapshot(43)
             await pilot.pause()
             assert disabled_actions() == {"glue.load_more"}

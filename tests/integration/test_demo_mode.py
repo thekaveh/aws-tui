@@ -31,7 +31,7 @@ from aws_tui.vm.athena.page_vm import AthenaPageVM
 from aws_tui.vm.chrome.focus_coordinator_vm import FocusSlot
 from aws_tui.vm.file_manager.pane_vm import PaneState
 from aws_tui.vm.glue.page_vm import GluePageVM
-from tests.helpers import drain_workers
+from tests.helpers import drain_workers, wait_until
 
 pytestmark = pytest.mark.asyncio
 
@@ -521,6 +521,13 @@ async def test_demo_source_switch_clears_old_iceberg_metadata_and_restores_scope
             )
             await dev.open_table(dev_ref)
             await dev.catalog.iceberg.select_view("snapshots")
+            # `select_view` returns before the pane's load finishes, so the
+            # snapshots are not there yet on a slow runner. Both Windows legs
+            # failed here with an empty set across two runs.
+            await wait_until(
+                lambda: dev.catalog.iceberg.snapshots,
+                what="the dev table's snapshots to load",
+            )
             assert dev.catalog.iceberg.select_snapshot(4201)
             assert {row.snapshot_id for row in dev.catalog.iceberg.snapshots} == {4201, 4202}
 
@@ -540,6 +547,10 @@ async def test_demo_source_switch_clears_old_iceberg_metadata_and_restores_scope
             )
             await prod.open_table(prod_ref)
             await prod.catalog.iceberg.select_view("snapshots")
+            await wait_until(
+                lambda: prod.catalog.iceberg.snapshots,
+                what="the prod table's snapshots to load",
+            )
             assert {row.snapshot_id for row in prod.catalog.iceberg.snapshots} == {7701, 7702}
             assert all(
                 row.snapshot_id not in {4201, 4202} for row in prod.catalog.iceberg.snapshots
