@@ -65,6 +65,10 @@ async def _open_iceberg_preview(
     vm = ctx.root_vm.content_host.current
     assert isinstance(vm, GluePageVM)
     await vm.select_table("dev_events_iceberg")
+    await wait_until(
+        lambda: vm.catalog.selected_table_name == "dev_events_iceberg",
+        what="the Iceberg sibling to become the selected table",
+    )
     await pilot.pause()  # type: ignore[attr-defined]
 
     await wait_until(
