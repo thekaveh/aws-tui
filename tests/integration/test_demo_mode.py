@@ -408,13 +408,23 @@ async def test_demo_profiles_seed_disjoint_complete_iceberg_metadata(
                 ctx.root_vm.active_connection.region,
             )
             await page.open_table(ref)
+            # `open_table` and `select_view` both return before the pane loads
+            # they start have finished, so each collection is waited for rather
+            # than assumed. All three assertions below failed on a Windows leg
+            # for that reason -- `table_detail` as `None`, the others as empty.
+            await wait_until(
+                lambda: page.catalog.table_detail is not None,
+                what=f"the table detail for {database}.{table} to load",
+            )
             assert page.catalog.table_detail is not None
             assert page.catalog.table_detail.table_format is TableFormat.ICEBERG
 
             iceberg = page.catalog.iceberg
             await iceberg.select_view("snapshots")
+            await wait_until(lambda: iceberg.snapshots, what=f"{table}'s snapshots to load")
             assert tuple(row.snapshot_id for row in iceberg.snapshots) == snapshot_ids
             await iceberg.select_view("history")
+            await wait_until(lambda: iceberg.history, what=f"{table}'s history to load")
             assert {row.snapshot_id for row in iceberg.history} == set(snapshot_ids)
             await iceberg.select_view("manifests")
             assert all(profile in row.path for row in iceberg.manifests)
