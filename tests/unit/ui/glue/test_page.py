@@ -1111,7 +1111,14 @@ async def test_deferred_focus_projection_skips_target_collection_during_teardown
         assert not page.display
 
         await removal
-        await pilot.pause()
+        # The projection is deferred, so one `pilot.pause()` is not a wait for it
+        # -- it yields a single scheduler cycle. This assertion saw `[]` on a
+        # Windows leg for that reason. Wait for the deferral to run, then assert
+        # what it was called with.
+        await wait_until(
+            lambda: bool(executions),
+            what="the deferred focus projection to run",
+        )
 
         assert executions == [FocusSlot.GLUE_ICEBERG_TIME_TRAVEL]
 

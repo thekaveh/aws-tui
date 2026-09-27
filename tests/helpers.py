@@ -121,15 +121,27 @@ async def focus_and_settle(
     Waiting on the precondition rather than assuming it keeps the test honest:
     a widget that genuinely cannot take focus now fails saying so, instead of
     silently asserting against a key that went somewhere else.
+
+    Waiting alone is not enough, though, and that is the defect #276 names. The
+    two facts in the paragraph above combine badly: ``focus()`` defers through
+    ``call_later``, and by the time that deferred call runs ``App.set_focus`` is
+    a *no-op* if the widget is not focusable yet. The request is dropped
+    silently. Polling ``has_focus`` after a single ``focus()`` therefore waits
+    out the whole timeout for a request that will never be honoured -- which is
+    how this reads as "never took focus within Ns" on a loaded runner while
+    passing standalone. So the request is re-issued each cycle: the first cycle
+    in which the widget *can* take focus is the one that lands it.
     """
-    widget.focus()
     deadline = asyncio.get_running_loop().time() + timeout
+    widget.focus()
     while not widget.has_focus:
         if asyncio.get_running_loop().time() >= deadline:
             raise AssertionError(
                 f"{type(widget).__name__}(id={widget.id!r}) never took focus within {timeout}s"
             )
         await asyncio.sleep(0.01)
+        if not widget.has_focus:
+            widget.focus()
 
 
 async def seed_athena_sql(pilot: object, query_vm: object, editor: TextArea, sql: str) -> None:
