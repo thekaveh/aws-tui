@@ -3,7 +3,7 @@ from __future__ import annotations
 from collections.abc import Awaitable, Callable
 from functools import partial
 from inspect import isawaitable
-from typing import ClassVar, cast
+from typing import ClassVar, Literal, TypeAlias, cast
 
 from reactivex.abc import DisposableBase
 from rich.text import Text
@@ -30,21 +30,41 @@ from aws_tui.ui.widgets.glue.detail_rows import display_time, display_value, sta
 from aws_tui.vm.file_manager.pane_vm import PaneState
 from aws_tui.vm.glue.iceberg_vm import GlueIcebergVM, IcebergRow, IcebergView
 
-_VIEW_ORDER: tuple[IcebergView, ...] = (
+# The pane's own display selector. ``GlueIcebergVM.active_view`` only knows
+# about the six metadata panes -- "preview" is a widget-local display mode
+# layered on top, since the Peek pane binds to a wholly separate child VM
+# (``IcebergPreviewVM``) that the metadata VM has no notion of selecting.
+_TabView: TypeAlias = IcebergView | Literal["preview"]
+
+# Every preview scan runs in this one group on this one node. Textual's
+# ``exclusive=True`` only cancels within the same node AND group, so a second
+# owner elsewhere -- GluePage.action_load_more used to be one -- would not be
+# serialized against it: two scans would race the port's single connection and
+# each bump the row limit.
+_PREVIEW_WORKER_GROUP = "glue-iceberg-preview"
+
+# ``_VIEW_ORDER[0]`` typed narrowly, for the "Peek became unavailable" fallback
+# in ``_refresh`` -- ``select_view`` only accepts ``IcebergView``, not the
+# wider ``_TabView`` indexing ``_VIEW_ORDER`` would otherwise produce.
+_FIRST_METADATA_VIEW: IcebergView = "snapshots"
+
+_VIEW_ORDER: tuple[_TabView, ...] = (
     "snapshots",
     "history",
     "manifests",
     "files",
     "partitions",
     "refs",
+    "preview",
 )
-_VIEW_LABELS: dict[IcebergView, str] = {
+_VIEW_LABELS: dict[_TabView, str] = {
     "snapshots": "Snaps",
     "history": "Hist",
     "manifests": "Mnfst",
     "files": "Files",
     "partitions": "Parts",
     "refs": "Refs",
+    "preview": "Peek",
 }
 
 
@@ -54,11 +74,11 @@ class _IcebergTab(Static, can_focus=True):
     ]
 
     class Selected(TextualMessage):
-        def __init__(self, view: IcebergView) -> None:
+        def __init__(self, view: _TabView) -> None:
             super().__init__()
             self.view = view
 
-    def __init__(self, view: IcebergView) -> None:
+    def __init__(self, view: _TabView) -> None:
         super().__init__(
             _VIEW_LABELS[view],
             id=f"glue-iceberg-tab-{view}",
@@ -66,7 +86,9 @@ class _IcebergTab(Static, can_focus=True):
             markup=False,
         )
         self.view = view
-        self.tooltip = f"Show Iceberg {view}"
+        self.tooltip = (
+            "Peek at table rows via DuckDB" if view == "preview" else f"Show Iceberg {view}"
+        )
 
     def on_click(self, _event: Click) -> None:
         self.focus()
@@ -136,12 +158,23 @@ class GlueIcebergView(DeferredWorkerMixin, Widget):
         super().__init__(id=id, classes="glue-pane glue-iceberg-view")
         self._vm = vm
         self._sub: DisposableBase | None = None
+        self._preview_sub: DisposableBase | None = None
+        # Widget-local display selector -- see the ``_TabView`` comment above.
+        self._preview_active = False
         self._suppress_highlight = False
         self._refresh_pending = False
         self._table_snapshot: object | None = None
 
     def compose(self) -> ComposeResult:
         with Horizontal(id="glue-iceberg-tabs"):
+            # Composed unconditionally, like its six siblings: ``compose()``
+            # runs once at mount, but ``preview.available`` can become True
+            # *after* mount (the common case -- landing on a Hive table
+            # first, then navigating to an Iceberg one). A tab only created
+            # when ``available`` happens to be true at mount time is a
+            # feature some users could never reach. Visibility is instead
+            # driven live, in ``_refresh``, exactly like ``self.display =
+            # self._vm.available`` already drives the whole widget.
             for view in _VIEW_ORDER:
                 yield _IcebergTab(view)
         yield Static("", id="glue-iceberg-status", markup=False)
@@ -179,18 +212,26 @@ class GlueIcebergView(DeferredWorkerMixin, Widget):
         self.border_title = "Iceberg metadata"
         self._refresh()
         self._sub = self._vm.on_property_changed.subscribe(on_next=self._on_vm_changed)
+        # The Peek pane binds directly to its own child VM's Observable --
+        # never filtered from the shared hub, never pushed in by the parent.
+        self._preview_sub = self._vm.preview.on_property_changed.subscribe(
+            on_next=self._on_preview_changed
+        )
 
     def on_unmount(self) -> None:
         if self._sub is not None:
             self._sub.dispose()
             self._sub = None
+        if self._preview_sub is not None:
+            self._preview_sub.dispose()
+            self._preview_sub = None
 
     def focus_targets(self) -> tuple[Widget, ...]:
         """Return the complete enabled Iceberg interaction surface."""
         if not self.display:
             return ()
         candidates = (
-            *(self.query_one(f"#glue-iceberg-tab-{view}", _IcebergTab) for view in _VIEW_ORDER),
+            *self.query(_IcebergTab),
             self.query_one("#glue-iceberg-table", DataTable),
             self.query_one("#glue-iceberg-more", Button),
             self.query_one("#glue-iceberg-retry", Button),
@@ -218,14 +259,27 @@ class GlueIcebergView(DeferredWorkerMixin, Widget):
         return False
 
     def on__iceberg_tab_selected(self, event: _IcebergTab.Selected) -> None:
+        view = event.view
+        if view == "preview":
+            self._preview_active = True
+            # Load-once-then-cache, exactly like the six sibling panes'
+            # ``select_view``: a re-click on an already-loaded Peek tab is a
+            # no-op here too. Recovery from an error goes through the retry
+            # button (see ``on_button_pressed``), not a silent re-run.
+            self._request_preview_load()
+            self._schedule_refresh()
+            return
+        self._preview_active = False
         self._run_lifecycle_worker(
-            partial(self._vm.select_view, event.view),
+            partial(self._vm.select_view, view),
             group="glue-iceberg-select-view",
         )
+        self._schedule_refresh()
 
     def on_data_table_row_highlighted(self, event: DataTable.RowHighlighted) -> None:
         if (
             self._suppress_highlight
+            or self._preview_active
             or event.cursor_row != event.data_table.cursor_row
             or self._vm.active_view != "snapshots"
             or event.cursor_row >= len(self._vm.snapshots)
@@ -235,19 +289,64 @@ class GlueIcebergView(DeferredWorkerMixin, Widget):
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
         if event.button.id == "glue-iceberg-more":
-            self._run_lifecycle_worker(
-                self._vm.load_more,
-                group="glue-iceberg-load-more",
-            )
+            if self._preview_active:
+                # The Peek pane's honest load-more: a real second DuckDB
+                # scan at the next row-limit step, unlike the sibling panes'
+                # local-window widen.
+                self.request_preview_load_more()
+            else:
+                self._run_lifecycle_worker(
+                    self._vm.load_more,
+                    group="glue-iceberg-load-more",
+                )
         elif event.button.id == "glue-iceberg-retry":
-            self._run_lifecycle_worker(
-                self._vm.retry,
-                group="glue-iceberg-retry",
-            )
+            if self._preview_active:
+                self._run_lifecycle_worker(
+                    partial(self._vm.preview.load, self._vm.selected_snapshot_id),
+                    group=_PREVIEW_WORKER_GROUP,
+                )
+            else:
+                self._run_lifecycle_worker(
+                    self._vm.retry,
+                    group="glue-iceberg-retry",
+                )
         elif event.button.id == "glue-iceberg-time-travel":
             self._time_travel_selected()
 
     def _on_vm_changed(self, _property_name: str) -> None:
+        self._schedule_refresh()
+
+    def _on_preview_changed(self, _property_name: str) -> None:
+        self._schedule_refresh()
+
+    def request_preview_load_more(self) -> None:
+        """Start a preview load-more in this widget's single worker group.
+
+        Public because ``GluePage.action_load_more`` must route here rather than
+        start its own worker -- see ``_PREVIEW_WORKER_GROUP``.
+        """
+        if not self._preview_active:
+            return
+        self._run_lifecycle_worker(
+            partial(self._vm.preview.load_more, self._vm.selected_snapshot_id),
+            group=_PREVIEW_WORKER_GROUP,
+        )
+
+    def _request_preview_load(self) -> None:
+        """Start the first scan for the current binding, if it needs one.
+
+        ``ensure_loaded`` is idempotent per binding, so this is safe to call
+        from ``_refresh``; the guard here only avoids spawning a worker that
+        would immediately return.
+        """
+        if not self._vm.preview.needs_load:
+            return
+        self._run_lifecycle_worker(
+            partial(self._vm.preview.ensure_loaded, self._vm.selected_snapshot_id),
+            group=_PREVIEW_WORKER_GROUP,
+        )
+
+    def _schedule_refresh(self) -> None:
         if self._refresh_pending:
             return
         self._refresh_pending = True
@@ -270,68 +369,148 @@ class GlueIcebergView(DeferredWorkerMixin, Widget):
         self.display = self._vm.available
         if not self._vm.available:
             return
-        for view in _VIEW_ORDER:
-            self.query_one(f"#glue-iceberg-tab-{view}", _IcebergTab).set_class(
-                view == self._vm.active_view,
-                "-active",
+        if self._preview_active and not self._vm.preview.available:
+            # Peek was active and just stopped being available (e.g. the
+            # user navigated to a different Iceberg table with no usable S3
+            # location). Never leave the pane sitting on a tab that is about
+            # to be hidden -- fall back to the first tab, exactly like the
+            # widget would show on first mount.
+            self._preview_active = False
+            self._run_lifecycle_worker(
+                partial(self._vm.select_view, _FIRST_METADATA_VIEW),
+                group="glue-iceberg-select-view",
             )
+        active = self._current_view()
+        for tab in self.query(_IcebergTab):
+            tab.set_class(tab.view == active, "-active")
+            if tab.view == "preview":
+                tab.display = self._vm.preview.available
         selected_snapshot_id = self._vm.selected_snapshot_id
         self._suppress_highlight = True
         try:
-            table_snapshot = (self._vm.active_view, self._vm.items)
-            if table_snapshot != self._table_snapshot:
-                self._table_snapshot = table_snapshot
-                table.clear(columns=True)
-                columns = _columns(self._vm.active_view)
-                for index, column in enumerate(columns):
-                    table.add_column(column, key=f"glue-iceberg-column-{index}")
-                for index, row in enumerate(self._vm.items):
-                    row_key = (
-                        f"iceberg-snapshot-{cast(IcebergSnapshot, row).snapshot_id}"
-                        if self._vm.active_view == "snapshots"
-                        else f"iceberg-row-{index}"
+            if active == "preview":
+                preview = self._vm.preview
+                # Navigating to another Iceberg table rebinds the preview while
+                # Peek stays active; no tab selection re-fires, so without this
+                # the pane showed an empty table for a table it never read.
+                self._request_preview_load()
+                table_snapshot: object = ("preview", preview.columns, preview.rows)
+                if table_snapshot != self._table_snapshot:
+                    self._table_snapshot = table_snapshot
+                    table.clear(columns=True)
+                    for index, column in enumerate(preview.columns):
+                        table.add_column(column, key=f"glue-iceberg-preview-column-{index}")
+                    for index, preview_row in enumerate(preview.rows):
+                        table.add_row(
+                            *(
+                                Text(
+                                    "NULL" if value is None else value,
+                                    style="dim italic" if value is None else "",
+                                    no_wrap=True,
+                                )
+                                for value in preview_row
+                            ),
+                            key=f"iceberg-preview-row-{index}",
+                        )
+            else:
+                table_snapshot = (active, self._vm.items)
+                if table_snapshot != self._table_snapshot:
+                    self._table_snapshot = table_snapshot
+                    table.clear(columns=True)
+                    columns = _columns(active)
+                    for index, column in enumerate(columns):
+                        table.add_column(column, key=f"glue-iceberg-column-{index}")
+                    for index, row in enumerate(self._vm.items):
+                        row_key = (
+                            f"iceberg-snapshot-{cast(IcebergSnapshot, row).snapshot_id}"
+                            if active == "snapshots"
+                            else f"iceberg-row-{index}"
+                        )
+                        table.add_row(
+                            *(Text(cell, no_wrap=True) for cell in _cells(active, row)),
+                            key=row_key,
+                        )
+                if active == "snapshots" and self._vm.snapshots:
+                    selected_index = next(
+                        (
+                            index
+                            for index, row in enumerate(self._vm.snapshots)
+                            if row.snapshot_id == selected_snapshot_id
+                        ),
+                        0,
                     )
-                    table.add_row(
-                        *(Text(cell, no_wrap=True) for cell in _cells(self._vm.active_view, row)),
-                        key=row_key,
-                    )
-            if self._vm.active_view == "snapshots" and self._vm.snapshots:
-                selected_index = next(
-                    (
-                        index
-                        for index, row in enumerate(self._vm.snapshots)
-                        if row.snapshot_id == selected_snapshot_id
-                    ),
-                    0,
-                )
-                selected_snapshot_id = self._vm.snapshots[selected_index].snapshot_id
-                table.move_cursor(row=selected_index)
-                self._vm.select_snapshot(selected_snapshot_id)
+                    selected_snapshot_id = self._vm.snapshots[selected_index].snapshot_id
+                    table.move_cursor(row=selected_index)
+                    self._vm.select_snapshot(selected_snapshot_id)
         finally:
             self.call_after_refresh(self._enable_highlight)
-        placeholder = state_placeholder(
-            self._vm.state,
-            error_text=self._vm.error_text,
-            empty_text=f"No Iceberg {self._vm.active_view}",
-        )
-        status.update(
-            placeholder[0]
-            if placeholder is not None and self._vm.state is not PaneState.IDLE
-            else ""
-        )
-        status.set_class(self._vm.state is PaneState.FORBIDDEN, "-warning")
-        status.set_class(self._vm.state is PaneState.ERROR, "-error")
-        suffix = " · more available" if self._vm.has_more else ""
-        footer.update(f"{len(self._vm.items)} rows{suffix}")
-        more.disabled = not self._vm.has_more or self._vm.state is PaneState.LOADING
-        retry.display = self._vm.state in {
-            PaneState.AUTH_REQUIRED,
-            PaneState.FORBIDDEN,
-            PaneState.UNREACHABLE,
-            PaneState.ERROR,
-        }
-        retry.disabled = self._vm.state is PaneState.LOADING
+        if active == "preview":
+            preview = self._vm.preview
+            placeholder = state_placeholder(
+                preview.state,
+                error_text=preview.error_text,
+                empty_text="No preview rows",
+            )
+            status.update(
+                placeholder[0]
+                if placeholder is not None and preview.state is not PaneState.IDLE
+                else ""
+            )
+            status.set_class(preview.state is PaneState.FORBIDDEN, "-warning")
+            status.set_class(preview.state is PaneState.ERROR, "-error")
+            snapshot_suffix = (
+                f" · snapshot {preview.snapshot_id}" if preview.snapshot_id is not None else ""
+            )
+            footer.update(f"{len(preview.rows)} rows · limit {preview.limit}{snapshot_suffix}")
+            more.disabled = not preview.has_more or preview.state is PaneState.LOADING
+            retry.display = preview.state in {
+                PaneState.AUTH_REQUIRED,
+                PaneState.FORBIDDEN,
+                PaneState.ERROR,
+                # A scan cancelled before it returned rows rests on EMPTY.
+                # Without retry here the pane offers the user no way back.
+                PaneState.EMPTY,
+            }
+            retry.disabled = preview.state is PaneState.LOADING
+        else:
+            placeholder = state_placeholder(
+                self._vm.state,
+                error_text=self._vm.error_text,
+                empty_text=f"No Iceberg {active}",
+            )
+            status.update(
+                placeholder[0]
+                if placeholder is not None and self._vm.state is not PaneState.IDLE
+                else ""
+            )
+            status.set_class(self._vm.state is PaneState.FORBIDDEN, "-warning")
+            status.set_class(self._vm.state is PaneState.ERROR, "-error")
+            suffix = " · more available" if self._vm.has_more else ""
+            footer.update(f"{len(self._vm.items)} rows{suffix}")
+            more.disabled = not self._vm.has_more or self._vm.state is PaneState.LOADING
+            retry.display = self._vm.state in {
+                PaneState.AUTH_REQUIRED,
+                PaneState.FORBIDDEN,
+                PaneState.UNREACHABLE,
+                PaneState.ERROR,
+            }
+            retry.disabled = self._vm.state is PaneState.LOADING
         time_travel.disabled = not self._vm.can_time_travel_in_athena
+
+    def _current_view(self) -> _TabView:
+        return "preview" if self._preview_active else self._vm.active_view
+
+    @property
+    def preview_active(self) -> bool:
+        """True when Peek is the active tab.
+
+        Public so the page-level ``l`` / palette load-more router
+        (``GluePage._load_more_target``) can tell the Peek pane's honest
+        second query apart from the six metadata panes' local-window pager
+        -- both are reached through the same ``#glue-iceberg-table``, so the
+        distinction cannot be read off a focused widget id alone.
+        """
+        return self._preview_active
 
     def _enable_highlight(self) -> None:
         self._suppress_highlight = False

@@ -270,6 +270,7 @@ def test_dependency_ledger_matches_locked_runtime_and_build_versions() -> None:
         "aioboto3",
         "anyio",
         "botocore",
+        "duckdb",
         "hatchling",
         "keyring",
         "platformdirs",

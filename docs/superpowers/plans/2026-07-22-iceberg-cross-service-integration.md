@@ -13,6 +13,13 @@
 - Requires the completed profile-switching, Glue, and Athena plans.
 - Iceberg is not a separate navigation service.
 - Do not add PyIceberg, Arrow, DuckDB, DataFusion, or a JVM.
+
+  > **2026-09-24:** The "no DuckDB" constraint above was scoped to the first
+  > release. It is superseded for the local Iceberg preview pane by
+  > `docs/superpowers/specs/2026-09-24-duckdb-iceberg-preview-design.md`,
+  > approved by the maintainer. The original text is left unedited as the
+  > historical record of this pass.
+
 - Iceberg metadata is read through bounded Athena metadata-table queries.
 - Supported metadata tables are `$snapshots`, `$history`, `$manifests`, `$files`, `$partitions`, and `$refs`.
 - Generated time-travel queries are inserted into the editor and never auto-executed.

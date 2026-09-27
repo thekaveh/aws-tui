@@ -14,12 +14,14 @@ from vmx.messages.protocols import Message
 from aws_tui.app import AwsTuiApp
 from aws_tui.domain.data_catalog import TableFormat
 from aws_tui.infra.connection_resolver import Connection
+from aws_tui.infra.duckdb import InMemoryDuckDb
 from aws_tui.infra.keymap_store import KeymapStore
 from aws_tui.infra.theme_store import ThemeStore
 from aws_tui.ui.widgets.context_picker import ContextPicker
 from aws_tui.ui.widgets.glue.catalog_view import GlueCatalogView
 from aws_tui.ui.widgets.glue.crawlers_view import GlueCrawlersView
 from aws_tui.ui.widgets.glue.detail_rows import DetailRows, ResourceListPane
+from aws_tui.ui.widgets.glue.iceberg_view import GlueIcebergView
 from aws_tui.ui.widgets.glue.jobs_view import GlueJobsView
 from aws_tui.ui.widgets.glue.page import GluePage
 from aws_tui.ui.widgets.nav_menu import NavMenu
@@ -1699,6 +1701,134 @@ async def test_load_more_action_targets_the_focused_iceberg_pager_not_partitions
 
 
 @pytest.mark.asyncio
+async def test_load_more_action_targets_peek_when_it_is_the_active_iceberg_tab() -> None:
+    """I2: with Peek the active Iceberg tab, `l` / the palette's load-more
+    must reach ``preview.load_more`` -- a real second DuckDB query -- not
+    the METADATA pager's ``load_more``/``has_more``. Both share one focused
+    container (``#glue-iceberg-view``) and one DataTable id, so only
+    ``GlueIcebergView.preview_active`` can tell them apart; before the fix,
+    `l` always widened the metadata pane's local window even while a wholly
+    different, HIDDEN pane was on screen.
+    """
+    fake = seeded_glue()
+    ref = fake.tables["analytics"][0].ref
+    fake.table_details[ref] = replace(
+        fake.table_details[ref],
+        table_format=TableFormat.ICEBERG,
+    )
+    inspector = RecordingInspector()
+    port = InMemoryDuckDb(columns=("id",), rows=tuple((str(i),) for i in range(100)))
+    hub: MessageHub[Message] = MessageHub()
+    vm = GluePageVM(
+        client=fake,
+        iceberg_inspector=inspector,
+        connection=Connection(
+            name="analytics-dev",
+            kind="aws",
+            region="us-east-1",
+            source="test",
+            profile="analytics-dev",
+        ),
+        hub=hub,
+        dispatcher=NULL_DISPATCHER,
+        duckdb_port=port,
+    )
+    vm.construct()
+    await vm.setup()
+    app = _GlueApp(vm)
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        page = app.query_one(GluePage)
+
+        await pilot.click("#glue-iceberg-tab-preview")
+        await wait_until(
+            lambda: vm.catalog.iceberg.preview.state is PaneState.IDLE,
+            what="the preview pane finished loading",
+        )
+        await pilot.pause()
+        assert len(port.queries) == 1
+        assert vm.catalog.iceberg.preview.has_more
+
+        # METADATA snapshots were never touched by any of this -- proves the
+        # route never fell through to the Athena-backed pager.
+        assert inspector.calls == []
+
+        page.query_one("#glue-iceberg-more").focus()
+        await pilot.pause()
+        assert page.can_load_more()
+        await page.action_load_more()
+        await wait_until(
+            lambda: len(port.queries) == 2,
+            what="load-more issued a second DuckDB query",
+        )
+        await drain_workers(app)
+
+        assert port.queries[1][0].endswith("LIMIT 1000")
+        assert inspector.calls == []
+
+
+@pytest.mark.asyncio
+async def test_load_more_action_does_nothing_when_peek_is_at_its_ceiling() -> None:
+    """I2's other half: with Peek active and ``has_more`` already False --
+    a short page, the same condition reached for real once the row-limit
+    steps run out at 10000 -- `l` must issue no query at all, and must not
+    fall through to the METADATA pager either.
+    """
+    fake = seeded_glue()
+    ref = fake.tables["analytics"][0].ref
+    fake.table_details[ref] = replace(
+        fake.table_details[ref],
+        table_format=TableFormat.ICEBERG,
+    )
+    inspector = RecordingInspector()
+    # Fewer rows than the limit: has_more is False, exactly like a real
+    # engine that has genuinely run out of rows to return.
+    port = InMemoryDuckDb(columns=("id",), rows=(("1",),))
+    hub: MessageHub[Message] = MessageHub()
+    vm = GluePageVM(
+        client=fake,
+        iceberg_inspector=inspector,
+        connection=Connection(
+            name="analytics-dev",
+            kind="aws",
+            region="us-east-1",
+            source="test",
+            profile="analytics-dev",
+        ),
+        hub=hub,
+        dispatcher=NULL_DISPATCHER,
+        duckdb_port=port,
+    )
+    vm.construct()
+    await vm.setup()
+    app = _GlueApp(vm)
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        page = app.query_one(GluePage)
+
+        await pilot.click("#glue-iceberg-tab-preview")
+        await wait_until(
+            lambda: vm.catalog.iceberg.preview.state is PaneState.IDLE,
+            what="the preview pane finished loading",
+        )
+        await pilot.pause()
+        assert len(port.queries) == 1
+        assert not vm.catalog.iceberg.preview.has_more
+
+        page.query_one("#glue-iceberg-more").focus()
+        await pilot.pause()
+        assert not page.can_load_more()
+        await page.action_load_more()
+        await drain_workers(app)
+        await pilot.pause()
+
+        assert len(port.queries) == 1
+        assert inspector.calls == []
+
+
+@pytest.mark.asyncio
 async def test_clicking_a_more_available_footer_loads_the_next_page() -> None:
     fake = seeded_glue()
     fake.crawler_page_size = 1
@@ -1724,3 +1854,76 @@ async def test_clicking_a_more_available_footer_loads_the_next_page() -> None:
 
         assert len(vm.crawlers.crawlers) == 2
         assert "more available" not in str(footer.content)
+
+
+@pytest.mark.asyncio
+async def test_load_more_action_routes_peek_through_the_widgets_own_worker_group() -> None:
+    """One owner for preview scans, so they serialize against each other.
+
+    The page used to start its own worker in ``glue-load-more`` on the page node
+    while the Iceberg widget's ↓ button started one in ``glue-iceberg-preview``
+    on the widget node. Textual's ``exclusive=True`` only cancels within the same
+    node AND group, so neither cancelled the other: both scans ran, each bumping
+    the row limit a step and each reaching the port's single connection.
+    """
+    fake = seeded_glue()
+    ref = fake.tables["analytics"][0].ref
+    fake.table_details[ref] = replace(fake.table_details[ref], table_format=TableFormat.ICEBERG)
+    port = InMemoryDuckDb(columns=("id",), rows=tuple((str(i),) for i in range(100)))
+    hub: MessageHub[Message] = MessageHub()
+    vm = GluePageVM(
+        client=fake,
+        iceberg_inspector=RecordingInspector(),
+        connection=Connection(
+            name="analytics-dev",
+            kind="aws",
+            region="us-east-1",
+            source="test",
+            profile="analytics-dev",
+        ),
+        hub=hub,
+        dispatcher=NULL_DISPATCHER,
+        duckdb_port=port,
+    )
+    vm.construct()
+    await vm.setup()
+    app = _GlueApp(vm)
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        page = app.query_one(GluePage)
+        await pilot.click("#glue-iceberg-tab-preview")
+        await wait_until(
+            lambda: vm.catalog.iceberg.preview.state is PaneState.IDLE,
+            what="the preview pane finished loading",
+        )
+        await pilot.pause()
+        assert vm.catalog.iceberg.preview.has_more
+
+        view = app.query_one(GlueIcebergView)
+        routed: list[bool] = []
+        delegate = view.request_preview_load_more
+
+        def _record() -> None:
+            routed.append(True)
+            delegate()
+
+        view.request_preview_load_more = _record  # type: ignore[method-assign]
+        page.query_one("#glue-iceberg-more").focus()
+        await pilot.pause()
+
+        await page.action_load_more()
+
+        # The page dispatches the route, so this is async -- what matters is that
+        # the widget is what ultimately starts the scan.
+        await wait_until(
+            lambda: routed == [True],
+            what="the page to route load-more to the Iceberg widget",
+        )
+        await wait_until(
+            lambda: len(port.queries) == 2, what="load-more issued a second DuckDB query"
+        )
+        await drain_workers(app)
+        # Exactly one extra scan, at exactly one step up: no double bump.
+        assert len(port.queries) == 2
+        assert port.queries[1][0].endswith("LIMIT 1000")

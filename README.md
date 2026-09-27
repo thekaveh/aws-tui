@@ -73,8 +73,11 @@ profile or S3 endpoint.
   arrow button, to open Athena with the same statement plus
   `FOR VERSION AS OF`. Neither handoff executes the query. Every handoff
   preserves the exact Glue connection name and region; it never substitutes
-  another profile. Glue is AWS-only and does not appear for S3-compatible
-  connections.
+  another profile. A seventh **Peek** tab previews the table's rows without
+  Athena at all, reading its S3 location directly with a local DuckDB engine
+  pinned to the selected snapshot; it needs the optional `duckdb` extra
+  (`pip install aws-tui[duckdb]`) and a profile connection. Glue is AWS-only
+  and does not appear for S3-compatible connections.
 - **Amazon Athena read-only query console.** Pick **Athena** in the nav rail
   to choose a workgroup, catalog, and database; submit one allowed read-only
   statement; follow its lifecycle; page through Results; inspect History; and

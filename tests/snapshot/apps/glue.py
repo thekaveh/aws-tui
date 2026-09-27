@@ -13,6 +13,7 @@ from vmx.messages.protocols import Message
 from aws_tui.domain.data_catalog import TableFormat
 from aws_tui.domain.filesystem import PermissionDeniedError
 from aws_tui.infra.connection_resolver import Connection
+from aws_tui.infra.duckdb import DuckDbPort
 from aws_tui.infra.keymap_store import KeymapStore
 from aws_tui.infra.theme_store import ThemeStore
 from aws_tui.ui.widgets.context_picker import ContextPicker
@@ -21,9 +22,11 @@ from aws_tui.ui.widgets.hint_legend import HintLegend
 from aws_tui.ui.widgets.service_source_header import ServiceSourceHeader
 from aws_tui.ui.widgets.service_tab_strip import ServiceTabStrip
 from aws_tui.vm.chrome.hint_legend_vm import HintLegendVM
+from aws_tui.vm.file_manager.pane_vm import PaneState
 from aws_tui.vm.glue.iceberg_vm import IcebergView
 from aws_tui.vm.glue.page_vm import GluePageVM, GlueView
 from aws_tui.vm.service_source_vm import ServiceSourceContext
+from tests.helpers import wait_until
 from tests.unit.vm.glue._fake_glue import InMemoryGlue
 from tests.unit.vm.glue.test_iceberg_vm import RecordingInspector
 
@@ -71,6 +74,7 @@ class GluePageApp(App[None]):
         open_picker: bool = False,
         focus_tabs: bool = False,
         show_legend: bool = False,
+        duckdb_port: DuckDbPort | None = None,
     ) -> None:
         super().__init__()
         self.CSS = ThemeStore().load(theme)
@@ -90,6 +94,7 @@ class GluePageApp(App[None]):
             ),
             hub=self._hub,
             dispatcher=NULL_DISPATCHER,
+            duckdb_port=duckdb_port,
         )
         self._vm.construct()
         self._hint_vm = (
@@ -146,6 +151,16 @@ class GluePageApp(App[None]):
         assert self.focused is table
         assert table.has_focus
         assert not source.has_focus_within
+
+    async def open_preview_tab(self, pilot: Pilot) -> None:
+        await pilot.pause()
+        preview = self._vm.catalog.iceberg.preview
+        await pilot.click("#glue-iceberg-tab-preview")
+        await wait_until(
+            lambda: preview.state not in (PaneState.EMPTY, PaneState.LOADING),
+            what="the Peek pane settled after loading",
+        )
+        await pilot.pause()
 
     async def open_run_state_picker_with_geometry_check(self, pilot: Pilot) -> None:
         await pilot.pause()

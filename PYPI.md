@@ -13,7 +13,9 @@ aws-tui provides a dual-pane S3/local file manager plus operational views for
 EMR Serverless, AWS Glue, Amazon Athena, and Apache Iceberg metadata. The EMR
 view is read-mostly, with focused clone submission for an existing job run.
 It supports multiple AWS profiles and S3-compatible connections, keyboard-first
-navigation, deterministic demo mode, and built-in themes.
+navigation, deterministic demo mode, and built-in themes. One optional extra,
+`pip install aws-tui[duckdb]`, adds a local row preview for Iceberg tables that
+reads S3 directly instead of running an Athena query.
 
 ![aws-tui Glue and Iceberg demo](https://raw.githubusercontent.com/thekaveh/aws-tui/main/assets/screenshots/aws-tui-running.png)
 

@@ -8,10 +8,11 @@ clients for deterministic in-memory fakes — see
 overall design.
 
 This package is consumed by ``aws_tui.app`` and ``aws_tui.composition``
-only. Importing from ``aws_tui.{domain,infra,vm,services,ui}`` is
-banned by ``scripts/check-layers.sh`` — the demo fakes live BELOW
-those layers (they implement domain interfaces) so the import arrow
-must point downward.
+only. The demo fakes live BELOW the app's own layers -- they implement
+domain and infra contracts -- so the import arrow must point downward:
+``scripts/check-layers.sh`` lets this package reach ``aws_tui.domain``
+and ``aws_tui.infra`` but bans ``textual``, ``aws_tui.ui``,
+``aws_tui.vm``, ``aws_tui.services`` and ``aws_tui.composition``.
 """
 
 from __future__ import annotations

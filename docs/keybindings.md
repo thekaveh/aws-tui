@@ -146,7 +146,7 @@ same size.
 | Cursor up / down | `↑` `↓` (also `k` / `j`) | Moves the focused resource list or scrolls detail. |
 | Cycle focus | `Tab` / `Shift+Tab` | Walks the complete deterministic Glue ring described below; reverse traversal is the exact inverse. |
 | Refresh active view | `r` | Reloads only the selected Catalog, Jobs, or Crawlers view. |
-| Load more rows in the focused list | `l`, or `:` / `Ctrl+K`, then **Load more Glue rows** | Runs `glue.load_more`. Fetches the next page for the focused Glue list (databases, tables, partitions, jobs, runs, crawlers, or the focused Iceberg metadata tab); clicking a list footer that reads `more available` does the same. Disabled when the list has no further page or hit its 1,000-item safety limit. |
+| Load more rows in the focused list | `l`, or `:` / `Ctrl+K`, then **Load more Glue rows** | Runs `glue.load_more`. Fetches the next page for the focused Glue list (databases, tables, partitions, jobs, runs, crawlers, or the focused Iceberg metadata tab); clicking a list footer that reads `more available` does the same. Disabled when the list has no further page or hit its 1,000-item safety limit. On the Iceberg **Peek** tab the same control instead reruns a genuinely new local DuckDB query at the next row-limit step (100 → 1,000 → 10,000); its ceiling is real, not a local-window widen, and its footer never reads `more available`. |
 | Switch AWS source | `Shift+S` | Runs `app.swap_source` and rebuilds Glue under the next resolver-ordered supported AWS profile and region. The bordered **Source** selector can instead choose an exact source. |
 | Copy selected table reference | `y` | Runs `glue.copy_table_ref`. The canonical, fully quoted identifier and its source identity are retained in the authoritative typed in-app clipboard; the OS clipboard write then goes through the single app-level writer, whose toast names the channel that actually accepted the text and never reports an unacknowledged OSC 52 write as a copy. |
 | Open selected table location in S3 | `:` / `Ctrl+K`, then **Open table location in S3** | `glue.open_s3_location` is palette-only and absent from `KeymapStore.DEFAULT_BINDINGS`. It preserves the exact Glue connection name and region; malformed or missing locations do not navigate. |
@@ -156,7 +156,13 @@ same size.
 Glue's forward focus order is:
 
 - **Catalog:** Source, view tabs, databases, tables, table detail, then every
-  visible and enabled Iceberg tab/control, and the navigation rail.
+  visible and enabled Iceberg tab/control, and the navigation rail. The
+  seventh Iceberg tab, **Peek**, previews table rows through a local DuckDB
+  engine; it needs the optional `duckdb` extra and an AWS profile connection,
+  so it is simply absent without an AWS profile connection, but stays present
+  and selectable — never disabled — when the extra is missing: choosing it
+  is how the install prompt is reached, the same Iceberg-only visibility
+  gating as the six metadata tabs it follows.
 - **Jobs:** Source, Run state, view tabs, jobs, runs, job detail, and the
   navigation rail.
 - **Crawlers:** Source, Crawler state, view tabs, crawlers, crawler detail, and
