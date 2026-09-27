@@ -952,7 +952,12 @@ async def test_peek_load_more_keeps_the_pinned_snapshot() -> None:
         )
         await pilot.pause()
         table = pilot.app.query_one("#glue-iceberg-table", DataTable)
-        table.focus()
+        # `focus_and_settle`, not a bare `focus()`: the request is dropped
+        # silently while the table is not yet focusable (#276), and an unfocused
+        # DataTable does not drive the row-highlight that selects the snapshot --
+        # which is how this read as "the Snaps table selection landed on snapshot
+        # 42" never settling on a Windows leg.
+        await focus_and_settle(table)
         table.move_cursor(row=1)
         await wait_until(
             lambda: vm.catalog.iceberg.selected_snapshot_id == 42,
@@ -998,7 +1003,12 @@ async def test_peek_retry_keeps_the_pinned_snapshot() -> None:
         )
         await pilot.pause()
         table = pilot.app.query_one("#glue-iceberg-table", DataTable)
-        table.focus()
+        # `focus_and_settle`, not a bare `focus()`: the request is dropped
+        # silently while the table is not yet focusable (#276), and an unfocused
+        # DataTable does not drive the row-highlight that selects the snapshot --
+        # which is how this read as "the Snaps table selection landed on snapshot
+        # 42" never settling on a Windows leg.
+        await focus_and_settle(table)
         table.move_cursor(row=1)
         await wait_until(
             lambda: vm.catalog.iceberg.selected_snapshot_id == 42,
