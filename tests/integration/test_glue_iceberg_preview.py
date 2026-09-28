@@ -64,10 +64,24 @@ async def _open_iceberg_preview(
 
     vm = ctx.root_vm.content_host.current
     assert isinstance(vm, GluePageVM)
+    # Let Glue's own auto-selection of the first table finish COMPLETELY before
+    # selecting the Iceberg sibling. `select_table` sets `_selected_table_name`
+    # early and then checks `_is_catalog_operation_current` twice more before it
+    # loads the detail and calls `bind_table`, so a selection that is superseded
+    # midway still leaves the name set -- and `preview.available`, which depends
+    # on the bind, never arrives. Waiting on the detail rather than the name is
+    # what makes the precondition real.
+    await wait_until(
+        lambda: vm.catalog.table_detail is not None,
+        what="Glue's initial table auto-selection to finish loading",
+    )
     await vm.select_table("dev_events_iceberg")
     await wait_until(
-        lambda: vm.catalog.selected_table_name == "dev_events_iceberg",
-        what="the Iceberg sibling to become the selected table",
+        lambda: (
+            (detail := vm.catalog.table_detail) is not None
+            and detail.summary.ref.table_name == "dev_events_iceberg"
+        ),
+        what="the Iceberg sibling's own detail to load",
     )
     await pilot.pause()  # type: ignore[attr-defined]
 

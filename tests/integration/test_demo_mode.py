@@ -530,6 +530,14 @@ async def test_demo_source_switch_clears_old_iceberg_metadata_and_restores_scope
                 "us-east-1",
             )
             await dev.open_table(dev_ref)
+            # `open_table` returns before the table detail has loaded, and the
+            # Iceberg pane is only bound once it has. Asking for a view first
+            # means the snapshots can never arrive if the selection was
+            # superseded midway -- seen as this wait timing out on a Windows leg.
+            await wait_until(
+                lambda: dev.catalog.table_detail is not None,
+                what="the dev table's detail to load before its views are asked for",
+            )
             await dev.catalog.iceberg.select_view("snapshots")
             # `select_view` returns before the pane's load finishes, so the
             # snapshots are not there yet on a slow runner. Both Windows legs
@@ -556,6 +564,10 @@ async def test_demo_source_switch_clears_old_iceberg_metadata_and_restores_scope
                 "us-east-1",
             )
             await prod.open_table(prod_ref)
+            await wait_until(
+                lambda: prod.catalog.table_detail is not None,
+                what="the prod table's detail to load before its views are asked for",
+            )
             await prod.catalog.iceberg.select_view("snapshots")
             await wait_until(
                 lambda: prod.catalog.iceberg.snapshots,
