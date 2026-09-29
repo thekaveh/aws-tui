@@ -697,12 +697,18 @@ async def test_settings_selection_during_boot_replays_after_boot_mount(
             assert ctx.root_vm.services_menu.selected_id == SETTINGS_NAV_ID
 
             release.set()
-            await app.workers.wait_for_complete(  # type: ignore[attr-defined]
-                list(app.workers._workers)  # type: ignore[attr-defined]
-            )
-            await pilot.pause()
-
+            # Selecting Settings intentionally cancels the boot worker. Drain
+            # remaining work without requiring cancelled work to succeed.
+            await drain_workers(app)
             host = pilot.app.query_one("#content-host")
+            await wait_until(
+                lambda: (
+                    ctx.root_vm.content_host.current_id == SETTINGS_NAV_ID
+                    and len(host.query(SettingsView)) == 1
+                    and len(host.query(DualPane)) == 0
+                ),
+                what="Settings to remain mounted after boot cancellation settles",
+            )
             assert ctx.root_vm.content_host.current_id == SETTINGS_NAV_ID
             assert len(host.query(SettingsView)) == 1
             assert len(host.query(DualPane)) == 0

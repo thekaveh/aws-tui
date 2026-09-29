@@ -533,8 +533,29 @@ async def test_recovered_context_pager_clears_error_styling_tooltip_and_hint(
         vm._workgroup_pager._current_token = "workgroups-next"  # type: ignore[attr-defined]
         vm._notify_context_lists()  # type: ignore[attr-defined]
         client.workgroup_error = ProviderError("temporary failure")
+        original_page = client.list_workgroups_page
+        request_started = asyncio.Event()
+        release_request = asyncio.Event()
+
+        async def fail_after_loading_projection(
+            *, start_token: str | None = None
+        ) -> tuple[list[object], str | None]:
+            request_started.set()
+            await release_request.wait()
+            return await original_page(start_token=start_token)
+
+        client.list_workgroups_page = fail_after_loading_projection  # type: ignore[method-assign]
         await focus_and_settle(button)
-        await page.action_load_more()
+        load_task = asyncio.create_task(page.action_load_more())
+        try:
+            await wait_until(request_started.is_set, what="workgroup request to start")
+            await wait_until(
+                lambda: button.disabled and not button.has_focus,
+                what="busy pager to disable its button and release focus",
+            )
+        finally:
+            release_request.set()
+            await load_task
         await wait_until(
             lambda: (
                 (button.has_class("-error")) and (button.tooltip == "Athena context request failed")
@@ -555,7 +576,11 @@ async def test_recovered_context_pager_clears_error_styling_tooltip_and_hint(
             return list(client.workgroups), "workgroups-after-retry"
 
         client.list_workgroups_page = retry_page  # type: ignore[method-assign]
+        # Busy buttons release focus; restore the routing target for the retry.
+        await focus_and_settle(button)
         await page.action_load_more()
+        # The load-more hint describes the focused pager after recovery.
+        await focus_and_settle(button)
         await wait_until(
             lambda: (
                 (vm.workgroups_state.name == "IDLE")
