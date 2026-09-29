@@ -14,6 +14,7 @@ from aws_tui.domain.filesystem import PathRef
 from aws_tui.domain.local_fs import LocalFS
 from aws_tui.domain.sql_policy import QueryRejectedError, ReadOnlySqlPolicy
 from aws_tui.infra.config_store import Config, ConfigStore, Defaults, Keybindings
+from aws_tui.infra.duckdb import ICEBERG_EXTENSIONS, DuckDbOutcome, NativeDuckDb
 
 
 @pytest.mark.asyncio
@@ -76,3 +77,47 @@ async def test_textual_and_tomli_w_floors_construct_and_round_trip(tmp_path: Pat
         assert app._app_ctx is ctx
     finally:
         await app._aws_tui_shutdown()
+
+
+def test_duckdb_floor_loads_iceberg_extensions_and_supports_interrupt() -> None:
+    """The declared duckdb floor must actually provide what the port uses.
+
+    Runs in the lowest-supported-dependencies CI job, which installs the
+    duckdb extra at the lowest resolution so this exercises the declared
+    floor itself. The importorskip keeps it green for anyone running the
+    suite without the extra.
+    """
+    duckdb = pytest.importorskip("duckdb")
+
+    connection = duckdb.connect()
+    try:
+        for extension in ICEBERG_EXTENSIONS:
+            connection.execute(f"INSTALL {extension}")
+            connection.execute(f"LOAD {extension}")
+        connection.execute("SET unsafe_enable_version_guessing = true")
+        assert hasattr(connection, "interrupt")
+        assert issubclass(duckdb.HTTPException, duckdb.Error)
+        assert issubclass(duckdb.InterruptException, duckdb.Error)
+    finally:
+        connection.close()
+
+    # T1a: no job anywhere else exercises the *port*'s real statements against a
+    # real engine -- everything above drives raw duckdb. A bogus profile needs no
+    # network, so this stays offline while still driving NativeDuckDb's own
+    # statements through a real engine rather than a fake one.
+    result = NativeDuckDb().query(
+        "SELECT 1", profile="definitely-not-a-real-profile", region="us-east-1"
+    )
+    # Eager credential validation arrived in duckdb 1.4.0. At the declared 1.3
+    # floor, `CREATE OR REPLACE SECRET ... PROFILE '<nonexistent>'` is accepted
+    # without validation, so the statement simply succeeds and there is no auth
+    # failure to classify. Verified against real 1.3.0 and 1.4.0 engines: 1.3.0
+    # accepts the secret, 1.4.0 raises "Failed to load profile ... in
+    # credentials file". AUTH_REQUIRED is therefore a 1.4+ refinement, not a
+    # floor guarantee -- on 1.3 a bad profile degrades to a later, less precise
+    # outcome rather than misreporting success of a real read.
+    if tuple(int(part) for part in duckdb.__version__.split(".")[:2]) >= (1, 4):
+        assert result.outcome is DuckDbOutcome.AUTH_REQUIRED
+    else:
+        # What must hold at every supported version: a result, never a raise.
+        assert result.outcome is DuckDbOutcome.OK

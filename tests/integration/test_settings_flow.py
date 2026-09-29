@@ -107,6 +107,28 @@ def _dispose(ctx: object) -> None:
             log_sink.close()
 
 
+def _toml_connections(path: Path) -> dict[str, object] | None:
+    """Connections from ``config.toml``, or ``None`` if the read raced the writer.
+
+    The settings path writes ``config.toml`` from a worker thread and replaces it
+    atomically. On Windows, opening a file while it is being replaced raises
+    ``PermissionError`` rather than returning either version, so a poll that reads
+    it can fail on the race instead of on the outcome. That is #274, and it is why
+    all three windows-latest legs failed here as
+    ``PermissionError: [Errno 13] Permission denied: 'C:\\Users...'`` or as the
+    30s wait timing out.
+
+    ``None`` means "no information yet", which is deliberately distinct from an
+    empty mapping: the delete path asserts a name is *absent*, and treating a
+    failed read as an empty file would satisfy that assertion for the wrong
+    reason. Both callers therefore require a successful read first.
+    """
+    try:
+        return dict(ConfigStore(path=path).load().connections)
+    except OSError:
+        return None
+
+
 @pytest.mark.asyncio
 async def test_toggle_settings_s3_settings_does_not_crash(tmp_path: Path) -> None:
     """Regression: clicking Settings → S3 → Settings used to crash with
@@ -297,7 +319,8 @@ async def test_add_inline_form_persists_to_toml(
             await drain_workers(app)
             await wait_until(
                 lambda: (
-                    "minio-test" in ConfigStore(path=config_dir / "config.toml").load().connections
+                    (found := _toml_connections(config_dir / "config.toml")) is not None
+                    and "minio-test" in found
                 ),
                 what="the added connection landed in config.toml",
                 # The integration tier keeps the 30s budget this wait had
@@ -545,8 +568,8 @@ async def test_delete_via_confirm_removes_from_toml(tmp_path: Path) -> None:
             await drain_workers(app)
             await wait_until(
                 lambda: (
-                    "minio-local"
-                    not in ConfigStore(path=config_dir / "config.toml").load().connections
+                    (found := _toml_connections(config_dir / "config.toml")) is not None
+                    and "minio-local" not in found
                 ),
                 what="the deleted connection left config.toml",
                 timeout=DEFAULT_DRAIN_TIMEOUT_SECONDS,  # see the add path above

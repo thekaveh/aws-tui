@@ -450,6 +450,7 @@ def test_focus_slot_enum_has_all_required_members() -> None:
         "GLUE_ICEBERG_MORE",
         "GLUE_ICEBERG_RETRY",
         "GLUE_ICEBERG_TIME_TRAVEL",
+        "GLUE_ICEBERG_PREVIEW",
         "ATHENA_SOURCE",
         "ATHENA_WORKGROUP",
         "ATHENA_WORKGROUP_MORE",

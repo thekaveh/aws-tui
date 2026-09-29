@@ -12,6 +12,7 @@ from vmx.messages.protocols import Message
 from aws_tui.domain.data_catalog import TableFormat, TableRef
 from aws_tui.domain.filesystem import PermissionDeniedError
 from aws_tui.infra.connection_resolver import Connection
+from aws_tui.infra.duckdb import DuckDbPort, InMemoryDuckDb
 from aws_tui.vm.file_manager.pane_vm import PaneState
 from aws_tui.vm.glue.catalog_vm import GlueCatalogVM
 from aws_tui.vm.glue.crawlers_vm import GlueCrawlersVM
@@ -49,6 +50,8 @@ def make_page_vm(
     region: str = "us-east-1",
     selection_store: ServiceSelectionStore | None = None,
     iceberg_inspector: RecordingInspector | None = None,
+    connection_kind: str = "aws",
+    duckdb_port: DuckDbPort | None = None,
 ) -> GluePageVM:
     hub: MessageHub[Message] = MessageHub()
     page = GluePageVM(
@@ -56,7 +59,7 @@ def make_page_vm(
         iceberg_inspector=iceberg_inspector,
         connection=Connection(
             name=connection_name,
-            kind="aws",
+            kind=connection_kind,
             region=region,
             source="config",
             profile=connection_name,
@@ -64,6 +67,7 @@ def make_page_vm(
         hub=hub,
         dispatcher=NULL_DISPATCHER,
         selection_store=selection_store,
+        duckdb_port=duckdb_port,
     )
     page.construct()
     return page
@@ -1083,3 +1087,53 @@ def test_dispose_cascades_once_without_disposing_service_store(
     assert set(calls.values()) == {1}
     assert store.dispose_calls == 0
     assert page._inner.status is ConstructionStatus.DISPOSED  # type: ignore[attr-defined]
+
+
+def _seeded_iceberg_glue() -> InMemoryGlue:
+    """One Iceberg table ("events", selected first by setup()) plus a sibling."""
+    fake = seeded_glue()
+    ref = fake.tables["analytics"][0].ref
+    fake.table_details[ref] = replace(fake.table_details[ref], table_format=TableFormat.ICEBERG)
+    return fake
+
+
+@pytest.mark.asyncio
+async def test_an_aws_connections_profile_reaches_the_preview_through_the_real_page() -> None:
+    """The full GluePageVM -> GlueCatalogVM -> GlueIcebergVM chain, not make_vm()."""
+    page = make_page_vm(_seeded_iceberg_glue(), iceberg_inspector=RecordingInspector())
+
+    await page.setup()
+
+    assert page.catalog.iceberg.preview.available is True
+
+
+@pytest.mark.asyncio
+async def test_a_non_aws_connections_missing_profile_hides_the_preview() -> None:
+    """This is the exact mechanism enforcing the s3-compatible non-goal."""
+    page = make_page_vm(
+        _seeded_iceberg_glue(),
+        iceberg_inspector=RecordingInspector(),
+        connection_kind="s3-compatible",
+    )
+
+    await page.setup()
+
+    assert page.catalog.iceberg.preview.available is False
+    assert page.catalog.iceberg.preview.state is not PaneState.ERROR
+    assert page.catalog.iceberg.preview.state is not PaneState.AUTH_REQUIRED
+    assert page.catalog.iceberg.preview.state is not PaneState.FORBIDDEN
+
+
+@pytest.mark.asyncio
+async def test_an_injected_duckdb_port_reaches_the_preview_through_the_real_page() -> None:
+    port = InMemoryDuckDb(columns=("a",), rows=(("1",),))
+    page = make_page_vm(
+        _seeded_iceberg_glue(),
+        iceberg_inspector=RecordingInspector(),
+        duckdb_port=port,
+    )
+
+    await page.setup()
+    await page.catalog.iceberg.preview.load()
+
+    assert port.queries, "the injected port was not used"

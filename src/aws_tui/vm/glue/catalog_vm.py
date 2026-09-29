@@ -21,6 +21,7 @@ from aws_tui.domain.data_catalog import (
 )
 from aws_tui.domain.filesystem import ProviderError
 from aws_tui.domain.s3_uri import parse_s3_uri
+from aws_tui.infra.duckdb import DuckDbPort
 from aws_tui.vm._observable import ObserverSafeSubject, send_value_free
 from aws_tui.vm._token_paging import reject_token_cycles
 from aws_tui.vm.file_manager.pane_vm import PaneState
@@ -79,6 +80,8 @@ class GlueCatalogVM:
         iceberg_inspector: IcebergInspectorProtocol | None = None,
         hub: MessageHub[Message],
         dispatcher: Dispatcher,
+        aws_profile: str | None = None,
+        duckdb_port: DuckDbPort | None = None,
         _operations: GlueOperationOwner | None = None,
     ) -> None:
         self._client = client
@@ -102,6 +105,8 @@ class GlueCatalogVM:
             inspector=iceberg_inspector or UnavailableIcebergInspector(),
             hub=hub,
             dispatcher=dispatcher,
+            aws_profile=aws_profile,
+            duckdb_port=duckdb_port,
         )
 
         self._database_generation = 0
@@ -488,6 +493,7 @@ class GlueCatalogVM:
                 await self.iceberg.bind_table(
                     detail.summary.ref,
                     table_format=detail.table_format,
+                    location=detail.storage.location,
                 )
                 if not self._is_catalog_operation_current(operation):
                     return

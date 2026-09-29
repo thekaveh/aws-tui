@@ -4,6 +4,7 @@ from pathlib import Path
 
 import pytest
 
+from aws_tui.infra.duckdb import DuckDbOutcome, InMemoryDuckDb
 from aws_tui.vm.glue.page_vm import GlueView
 from tests.snapshot.apps.glue import GluePageApp
 from tests.snapshot.conftest import THEMES
@@ -81,6 +82,36 @@ def test_glue_iceberg_table_focus_snapshot(snap_compare) -> None:
         terminal_size=WIDE,
         run_before=app.focus_iceberg_table,
     )
+
+
+def test_glue_iceberg_preview_loaded_snapshot(snap_compare) -> None:
+    app = GluePageApp(
+        theme="carbon",
+        fixture="iceberg",
+        duckdb_port=InMemoryDuckDb(
+            columns=("event_id", "event_name"),
+            rows=(("8821", "click"), ("8822", "view")),
+        ),
+    )
+    assert snap_compare(app, terminal_size=WIDE, run_before=app.open_preview_tab)
+
+
+def test_glue_iceberg_preview_empty_snapshot(snap_compare) -> None:
+    app = GluePageApp(
+        theme="carbon",
+        fixture="iceberg",
+        duckdb_port=InMemoryDuckDb(columns=("event_id", "event_name"), rows=()),
+    )
+    assert snap_compare(app, terminal_size=WIDE, run_before=app.open_preview_tab)
+
+
+def test_glue_iceberg_preview_engine_missing_snapshot(snap_compare) -> None:
+    app = GluePageApp(
+        theme="carbon",
+        fixture="iceberg",
+        duckdb_port=InMemoryDuckDb(outcome=DuckDbOutcome.ENGINE_MISSING),
+    )
+    assert snap_compare(app, terminal_size=WIDE, run_before=app.open_preview_tab)
 
 
 @pytest.mark.parametrize("view", ["catalog", "jobs", "crawlers"])
@@ -217,6 +248,35 @@ def test_glue_iceberg_metadata_content_guards() -> None:
     narrow = _snapshot("test_glue_iceberg_narrow_snapshot")
     for label in ("Snaps", "Hist", "Mnfst", "Files", "Parts", "Refs"):
         assert label in narrow
+
+
+def test_glue_iceberg_preview_content_guards() -> None:
+    # The `#glue-iceberg-footer` "N rows · limit ..." text is never captured
+    # by the SVG export for any Iceberg pane -- the six sibling panes' own
+    # footer guards (above) don't assert it either. The distinguishing
+    # content between these three states is the DataTable body and the
+    # status line, both of which do render.
+    loaded = _snapshot("test_glue_iceberg_preview_loaded_snapshot")
+    assert "Peek" in loaded
+    assert "event_id" in loaded
+    assert "event_name" in loaded
+    assert "8821" in loaded
+    assert "click" in loaded
+    assert "8822" in loaded
+    assert "view" in loaded
+
+    empty = _snapshot("test_glue_iceberg_preview_empty_snapshot")
+    assert "Peek" in empty
+    assert "event_id" in empty
+    assert "event_name" in empty
+    assert "8821" not in empty
+    assert "click" not in empty
+
+    missing = _snapshot("test_glue_iceberg_preview_engine_missing_snapshot")
+    assert "Peek" in missing
+    assert "pip" in missing
+    assert "install" in missing
+    assert "duckdb" in missing
 
 
 def test_glue_narrow_catalog_keeps_table_type_on_its_resource_row() -> None:

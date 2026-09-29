@@ -9,23 +9,31 @@ from typing import ClassVar
 import pytest
 from textual.app import App, ComposeResult
 from textual.binding import Binding
-from textual.widgets import Button, DataTable
+from textual.coordinate import Coordinate
+from textual.widgets import Button, DataTable, Static
 from textual.worker import NoActiveWorker, Worker, get_current_worker
 from vmx import NULL_DISPATCHER, MessageHub
 from vmx.messages.protocols import Message
 
 from aws_tui.domain.data_catalog import TableFormat
 from aws_tui.infra.connection_resolver import Connection
+from aws_tui.infra.duckdb import DuckDbOutcome, DuckDbPort, InMemoryDuckDb
 from aws_tui.ui.widgets.glue.iceberg_view import GlueIcebergView
 from aws_tui.ui.widgets.glue.page import GluePage
 from aws_tui.vm.chrome.focus_coordinator_vm import FocusCoordinatorVM, FocusSlot
+from aws_tui.vm.file_manager.pane_vm import PaneState
 from aws_tui.vm.glue.page_vm import GluePageVM
 from tests.helpers import focus_and_settle, wait_until
 from tests.unit.vm.glue._fake_glue import InMemoryGlue
-from tests.unit.vm.glue.test_iceberg_vm import RecordingInspector
+from tests.unit.vm.glue.test_iceberg_vm import ICEBERG_REF, OTHER_REF, RecordingInspector
 
 
-def _build_vm(*, iceberg: bool = True) -> tuple[GluePageVM, RecordingInspector]:
+def _build_vm(
+    *,
+    iceberg: bool = True,
+    profile: str | None = "dev",
+    duckdb_port: DuckDbPort | None = None,
+) -> tuple[GluePageVM, RecordingInspector]:
     fake = InMemoryGlue()
     table = fake.add_table("analytics", "events")
     if iceberg:
@@ -43,10 +51,13 @@ def _build_vm(*, iceberg: bool = True) -> tuple[GluePageVM, RecordingInspector]:
             kind="aws",
             region="us-east-1",
             source="test",
-            profile="dev",
+            profile=profile,
         ),
         hub=hub,
         dispatcher=NULL_DISPATCHER,
+        # Never a real engine in a unit test: the widget tests that click the
+        # Peek tab inject rows through this double.
+        duckdb_port=duckdb_port or InMemoryDuckDb(),
     )
     vm.construct()
     return vm, inspector
@@ -115,6 +126,24 @@ class _GlueIcebergApp(App[None]):
         return None
 
 
+async def _peek_repainted(pilot: object, vm: GluePageVM) -> None:
+    """Wait for the Peek pane to repaint what the view model already holds.
+
+    The view model settling and the widget repainting are two different events:
+    `_refresh` is scheduled, so waiting on `preview.state` and then pausing once
+    asserts against whichever the scheduler happened to reach first. That is how
+    the footer assertion read "0 rows" against a fully loaded pane on the Windows
+    runners while passing on every other platform.
+    """
+    preview = vm.catalog.iceberg.preview
+    table = pilot.app.query_one("#glue-iceberg-table", DataTable)  # type: ignore[attr-defined]
+    expected = len(preview.rows)
+    await wait_until(
+        lambda: table.row_count == len(preview.rows),
+        what=f"the Peek table to repaint {expected} rows",
+    )
+
+
 @pytest.mark.asyncio
 async def test_iceberg_metadata_region_is_hidden_for_non_iceberg_table() -> None:
     vm, _inspector = _build_vm(iceberg=False)
@@ -157,7 +186,9 @@ async def test_iceberg_view_composes_compact_tabs_table_and_time_travel_control(
         iceberg = pilot.app.query_one(GlueIcebergView)
 
         assert iceberg.display
-        assert len(list(iceberg.query(".glue-iceberg-tab"))) == 6
+        # Six metadata tabs plus Peek, present because this fixture's table
+        # has an S3 location and the connection carries a profile.
+        assert len(list(iceberg.query(".glue-iceberg-tab"))) == 7
         assert iceberg.query_one("#glue-iceberg-table", DataTable)
         assert iceberg.query_one("#glue-iceberg-time-travel", Button).disabled
         assert inspector.calls == []
@@ -653,4 +684,380 @@ async def test_compact_tab_labels_are_distinct_and_untruncated_at_80_columns() -
             for tab in pilot.app.query(GlueIcebergView).first().query(".glue-iceberg-tab")
         ]
 
-        assert labels == ["Snaps", "Hist", "Mnfst", "Files", "Parts", "Refs"]
+        assert labels == ["Snaps", "Hist", "Mnfst", "Files", "Parts", "Refs", "Peek"]
+
+
+@pytest.mark.asyncio
+async def test_peek_tab_is_present_for_an_iceberg_table() -> None:
+    vm, _ = _build_vm()
+    await vm.setup()
+
+    async with _GlueIcebergApp(vm).run_test(size=(100, 30)) as pilot:
+        await pilot.pause()
+
+        tab = pilot.app.query_one("#glue-iceberg-tab-preview")
+        assert tab.display is True
+
+
+@pytest.mark.asyncio
+async def test_peek_tab_is_hidden_without_an_aws_profile() -> None:
+    # The table itself is Iceberg-formatted (the metadata tabs stay visible);
+    # only the profile is missing. Visibility must be honest: the Peek tab is
+    # hidden, not present and broken. The tab is still *composed* -- always,
+    # like its six siblings -- so that availability changing after mount (see
+    # below) has something to turn visible.
+    vm, _ = _build_vm(profile=None)
+    await vm.setup()
+
+    async with _GlueIcebergApp(vm).run_test(size=(100, 30)) as pilot:
+        await pilot.pause()
+
+        assert vm.catalog.iceberg.available
+        assert not vm.catalog.iceberg.preview.available
+        tab = pilot.app.query_one("#glue-iceberg-tab-preview")
+        assert tab.display is False
+
+
+@pytest.mark.asyncio
+async def test_peek_tab_appears_after_navigating_to_an_iceberg_table() -> None:
+    """Presence is decided at compose time; availability changes after mount.
+
+    Landing on a non-Iceberg table first is the common case, so a tab that is
+    only created when `available` happens to be true at mount is a feature the
+    user can never reach.
+    """
+    vm, _ = _build_vm(iceberg=False)
+    await vm.setup()
+    app = _GlueIcebergApp(vm)
+    async with app.run_test(size=(100, 30)) as pilot:
+        await pilot.pause()
+        iceberg = vm.catalog.iceberg
+        assert iceberg.preview.available is False
+
+        await iceberg.bind_table(
+            ICEBERG_REF, table_format=TableFormat.ICEBERG, location="s3://bkt/t"
+        )
+        await wait_until(
+            lambda: iceberg.preview.available,
+            what="the preview became available after selecting an Iceberg table",
+        )
+        await pilot.pause()
+
+        tab = app.query_one("#glue-iceberg-tab-preview")
+        assert tab.display is True
+
+
+@pytest.mark.asyncio
+async def test_peek_falls_back_to_the_first_tab_when_it_stops_being_available() -> None:
+    port = InMemoryDuckDb(columns=("id",), rows=(("1",),))
+    vm, _ = _build_vm(duckdb_port=port)
+    await vm.setup()
+
+    async with _GlueIcebergApp(vm).run_test(size=(100, 30)) as pilot:
+        # Establish a non-default active metadata view first, so landing on
+        # "snapshots" below proves the fallback goes to the *first* tab, not
+        # merely back to whatever was active before Peek.
+        await pilot.click("#glue-iceberg-tab-refs")
+        await pilot.pause()
+        await pilot.click("#glue-iceberg-tab-preview")
+        await wait_until(
+            lambda: vm.catalog.iceberg.preview.state is PaneState.IDLE,
+            what="the preview pane finished loading",
+        )
+        await _peek_repainted(pilot, vm)
+
+        # Navigate to a different Iceberg table with no usable S3 location:
+        # the pane stays visible (still Iceberg-formatted), but Peek stops
+        # being available.
+        await vm.catalog.iceberg.bind_table(
+            OTHER_REF, table_format=TableFormat.ICEBERG, location="not-s3"
+        )
+        await wait_until(
+            lambda: not vm.catalog.iceberg.preview.available,
+            what="the preview became unavailable on the new table",
+        )
+        await wait_until(
+            lambda: vm.catalog.iceberg.active_view == "snapshots",
+            what="the active view fell back to the first tab",
+        )
+
+        snapshots_tab = pilot.app.query_one("#glue-iceberg-tab-snapshots")
+        refs_tab = pilot.app.query_one("#glue-iceberg-tab-refs")
+        preview_tab = pilot.app.query_one("#glue-iceberg-tab-preview")
+        # The view model settling and the widget repainting are two different
+        # events: `-active` is applied by the scheduled `_refresh`, so waiting on
+        # `active_view` alone and then pausing once asserts on whichever the
+        # scheduler happened to reach first.
+        await wait_until(
+            lambda: snapshots_tab.has_class("-active"),
+            what="the first tab to repaint as active",
+        )
+        assert snapshots_tab.has_class("-active")
+        assert not refs_tab.has_class("-active")
+        assert not preview_tab.has_class("-active")
+        assert preview_tab.display is False
+        footer = pilot.app.query_one("#glue-iceberg-footer", Static)
+        assert "limit" not in str(footer.render())
+
+
+@pytest.mark.asyncio
+async def test_peek_renders_rows_and_keeps_null_distinct() -> None:
+    port = InMemoryDuckDb(
+        columns=("id", "name"),
+        rows=(("1", "alice"), ("2", None)),
+    )
+    vm, _ = _build_vm(duckdb_port=port)
+    await vm.setup()
+
+    async with _GlueIcebergApp(vm).run_test(size=(100, 30)) as pilot:
+        await pilot.click("#glue-iceberg-tab-preview")
+        await wait_until(
+            lambda: vm.catalog.iceberg.preview.state is PaneState.IDLE,
+            what="the preview pane finished loading",
+        )
+        await _peek_repainted(pilot, vm)
+        table = pilot.app.query_one("#glue-iceberg-table", DataTable)
+
+        assert table.row_count == 2
+        real_cell = table.get_cell_at(Coordinate(0, 1))
+        assert real_cell.plain == "alice"
+        assert real_cell.style == ""
+        null_cell = table.get_cell_at(Coordinate(1, 1))
+        # A real SQL NULL renders dimmed, never as the four literal
+        # characters, so it is never confused with a column that genuinely
+        # contains the string "NULL".
+        assert null_cell.plain == "NULL"
+        assert null_cell.style == "dim italic"
+
+
+@pytest.mark.asyncio
+async def test_peek_footer_reports_rows_and_limit_without_more_available_phrasing() -> None:
+    port = InMemoryDuckDb(columns=("id",), rows=(("1",), ("2",)))
+    vm, _ = _build_vm(duckdb_port=port)
+    await vm.setup()
+
+    async with _GlueIcebergApp(vm).run_test(size=(100, 30)) as pilot:
+        await pilot.click("#glue-iceberg-tab-preview")
+        await wait_until(
+            lambda: vm.catalog.iceberg.preview.state is PaneState.IDLE,
+            what="the preview pane finished loading",
+        )
+        await _peek_repainted(pilot, vm)
+        footer = pilot.app.query_one("#glue-iceberg-footer", Static)
+
+        assert str(footer.render()) == "2 rows · limit 100"
+        assert "more available" not in str(footer.render())
+
+
+@pytest.mark.asyncio
+async def test_peek_more_button_reruns_the_query_at_the_next_row_limit() -> None:
+    # A full page of exactly the current limit: honest paging, not a widened
+    # local window -- ``has_more`` is real, and clicking the button issues a
+    # genuinely new DuckDB scan at the next row-limit step.
+    port = InMemoryDuckDb(columns=("id",), rows=tuple((str(i),) for i in range(100)))
+    vm, _ = _build_vm(duckdb_port=port)
+    await vm.setup()
+
+    async with _GlueIcebergApp(vm).run_test(size=(100, 30)) as pilot:
+        await pilot.click("#glue-iceberg-tab-preview")
+        await wait_until(
+            lambda: vm.catalog.iceberg.preview.state is PaneState.IDLE,
+            what="the preview pane finished loading",
+        )
+        await _peek_repainted(pilot, vm)
+        more = pilot.app.query_one("#glue-iceberg-more", Button)
+        assert not more.disabled
+        assert vm.catalog.iceberg.preview.limit == 100
+
+        await pilot.click("#glue-iceberg-more")
+        await wait_until(
+            lambda: vm.catalog.iceberg.preview.limit == 1000,
+            what="load-more advanced to the next row-limit step",
+        )
+        await wait_until(
+            lambda: vm.catalog.iceberg.preview.state is PaneState.IDLE,
+            what="the second preview scan finished",
+        )
+        await pilot.pause()
+
+        assert [sql.endswith("LIMIT 100") for sql, _profile, _region in port.queries] == [
+            True,
+            False,
+        ]
+        assert port.queries[1][0].endswith("LIMIT 1000")
+        # The canned double never grows past 100 rows, so the pane is
+        # honestly out of pages after the second scan.
+        assert pilot.app.query_one("#glue-iceberg-more", Button).disabled
+
+
+@pytest.mark.asyncio
+async def test_peek_pins_the_snapshot_selected_on_snaps_when_loaded_from_the_tab() -> None:
+    # I1: the pane's stated goal is a preview "pinned to the selected
+    # snapshot when one is chosen" -- this drives the whole path through the
+    # widget (tab click, DataTable row selection, tab click) rather than
+    # calling the VM directly, because the bug was in the *view*'s wiring:
+    # ``on__iceberg_tab_selected`` called ``preview.load`` with no snapshot
+    # at all, even though ``selected_snapshot_id`` was already read for the
+    # Snaps table highlight one line away.
+    port = InMemoryDuckDb(columns=("id",), rows=(("1",),))
+    vm, _ = _build_vm(duckdb_port=port)
+    await vm.setup()
+
+    async with _GlueIcebergApp(vm).run_test(size=(100, 30)) as pilot:
+        await pilot.click("#glue-iceberg-tab-snapshots")
+        await wait_until(
+            lambda: len(vm.catalog.iceberg.snapshots) > 1,
+            what="the snapshots pane loaded",
+        )
+        await pilot.pause()
+        table = pilot.app.query_one("#glue-iceberg-table", DataTable)
+        table.focus()
+        # Row 0 is snapshot 43 (the newest, and already the default
+        # selection) -- picking row 1 instead proves the pin tracks a
+        # deliberate selection rather than passing on the coincidence that
+        # row 0 was selected anyway.
+        table.move_cursor(row=1)
+        await wait_until(
+            lambda: vm.catalog.iceberg.selected_snapshot_id == 42,
+            what="the Snaps table selection landed on snapshot 42",
+        )
+        await pilot.pause()
+
+        await pilot.click("#glue-iceberg-tab-preview")
+        await wait_until(
+            lambda: vm.catalog.iceberg.preview.state is PaneState.IDLE,
+            what="the preview pane finished loading",
+        )
+        await _peek_repainted(pilot, vm)
+
+        assert len(port.queries) == 1
+        assert "snapshot_from_id := 42" in port.queries[0][0]
+        footer = pilot.app.query_one("#glue-iceberg-footer", Static)
+        assert "· snapshot 42" in str(footer.render())
+
+
+@pytest.mark.asyncio
+async def test_peek_load_more_keeps_the_pinned_snapshot() -> None:
+    # I1's second broken site: the "more" button re-ran the scan with no
+    # snapshot at all.
+    port = InMemoryDuckDb(columns=("id",), rows=tuple((str(i),) for i in range(100)))
+    vm, _ = _build_vm(duckdb_port=port)
+    await vm.setup()
+
+    async with _GlueIcebergApp(vm).run_test(size=(100, 30)) as pilot:
+        await pilot.click("#glue-iceberg-tab-snapshots")
+        await wait_until(
+            lambda: len(vm.catalog.iceberg.snapshots) > 1,
+            what="the snapshots pane loaded",
+        )
+        await pilot.pause()
+        table = pilot.app.query_one("#glue-iceberg-table", DataTable)
+        # `focus_and_settle`, not a bare `focus()`: the request is dropped
+        # silently while the table is not yet focusable (#276), and an unfocused
+        # DataTable does not drive the row-highlight that selects the snapshot --
+        # which is how this read as "the Snaps table selection landed on snapshot
+        # 42" never settling on a Windows leg.
+        await focus_and_settle(table)
+        table.move_cursor(row=1)
+        await wait_until(
+            lambda: vm.catalog.iceberg.selected_snapshot_id == 42,
+            what="the Snaps table selection landed on snapshot 42",
+        )
+        await pilot.pause()
+
+        await pilot.click("#glue-iceberg-tab-preview")
+        await wait_until(
+            lambda: vm.catalog.iceberg.preview.state is PaneState.IDLE,
+            what="the preview pane finished loading",
+        )
+        await _peek_repainted(pilot, vm)
+
+        await pilot.click("#glue-iceberg-more")
+        await wait_until(
+            lambda: vm.catalog.iceberg.preview.limit == 1000,
+            what="load-more advanced to the next row-limit step",
+        )
+        await wait_until(
+            lambda: vm.catalog.iceberg.preview.state is PaneState.IDLE,
+            what="the second preview scan finished",
+        )
+        await pilot.pause()
+
+        assert len(port.queries) == 2
+        assert "snapshot_from_id := 42" in port.queries[1][0]
+
+
+@pytest.mark.asyncio
+async def test_peek_retry_keeps_the_pinned_snapshot() -> None:
+    # I1's third broken site: retry passed ``preview.snapshot_id``, which is
+    # never set by anything but ``load`` itself -- always None in practice.
+    error_port = InMemoryDuckDb(outcome=DuckDbOutcome.FAILED)
+    vm, _ = _build_vm(duckdb_port=error_port)
+    await vm.setup()
+
+    async with _GlueIcebergApp(vm).run_test(size=(100, 30)) as pilot:
+        await pilot.click("#glue-iceberg-tab-snapshots")
+        await wait_until(
+            lambda: len(vm.catalog.iceberg.snapshots) > 1,
+            what="the snapshots pane loaded",
+        )
+        await pilot.pause()
+        table = pilot.app.query_one("#glue-iceberg-table", DataTable)
+        # `focus_and_settle`, not a bare `focus()`: the request is dropped
+        # silently while the table is not yet focusable (#276), and an unfocused
+        # DataTable does not drive the row-highlight that selects the snapshot --
+        # which is how this read as "the Snaps table selection landed on snapshot
+        # 42" never settling on a Windows leg.
+        await focus_and_settle(table)
+        table.move_cursor(row=1)
+        await wait_until(
+            lambda: vm.catalog.iceberg.selected_snapshot_id == 42,
+            what="the Snaps table selection landed on snapshot 42",
+        )
+        await pilot.pause()
+
+        await pilot.click("#glue-iceberg-tab-preview")
+        await wait_until(
+            lambda: vm.catalog.iceberg.preview.state is PaneState.ERROR,
+            what="the preview pane finished failing",
+        )
+        await pilot.pause()
+
+        await pilot.click("#glue-iceberg-retry")
+        await wait_until(
+            lambda: len(error_port.queries) == 2,
+            what="retry re-ran the scan",
+        )
+        await pilot.pause()
+
+        assert "snapshot_from_id := 42" in error_port.queries[1][0]
+
+
+@pytest.mark.asyncio
+async def test_peek_loads_the_newly_selected_table_while_it_stays_active() -> None:
+    """Navigating A -> B with Peek active must read B, not sit blank.
+
+    The pane only ever asked for a scan from tab selection, and selecting a
+    different Iceberg table does not re-fire that -- so the rebind cleared the
+    table and nothing reloaded it. The retry button was hidden on EMPTY too, so
+    the pane offered no way out.
+    """
+    port = InMemoryDuckDb(columns=("id",), rows=(("1",),))
+    vm, _ = _build_vm(duckdb_port=port)
+    await vm.setup()
+
+    async with _GlueIcebergApp(vm).run_test(size=(100, 30)) as pilot:
+        await pilot.click("#glue-iceberg-tab-preview")
+        table = pilot.app.query_one("#glue-iceberg-table", DataTable)
+        await wait_until(lambda: table.row_count == 1, what="the first table's rows to render")
+
+        port.rows = (("7",), ("8",))
+        await vm.catalog.iceberg.bind_table(
+            OTHER_REF, table_format=TableFormat.ICEBERG, location="s3://bkt/other"
+        )
+
+        await wait_until(
+            lambda: table.row_count == 2,
+            what="the newly selected table's rows to render",
+        )
+        assert vm.catalog.iceberg.preview.state is PaneState.IDLE

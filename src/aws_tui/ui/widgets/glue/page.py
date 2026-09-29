@@ -58,6 +58,7 @@ _GLUE_FOCUS_ORDER = (
     FocusSlot.GLUE_ICEBERG_FILES,
     FocusSlot.GLUE_ICEBERG_PARTITIONS,
     FocusSlot.GLUE_ICEBERG_REFS,
+    FocusSlot.GLUE_ICEBERG_PREVIEW,
     FocusSlot.GLUE_ICEBERG_TABLE,
     FocusSlot.GLUE_ICEBERG_MORE,
     FocusSlot.GLUE_ICEBERG_RETRY,
@@ -71,6 +72,7 @@ _ICEBERG_FOCUS_SLOTS = {
     "glue-iceberg-tab-files": FocusSlot.GLUE_ICEBERG_FILES,
     "glue-iceberg-tab-partitions": FocusSlot.GLUE_ICEBERG_PARTITIONS,
     "glue-iceberg-tab-refs": FocusSlot.GLUE_ICEBERG_REFS,
+    "glue-iceberg-tab-preview": FocusSlot.GLUE_ICEBERG_PREVIEW,
     "glue-iceberg-table": FocusSlot.GLUE_ICEBERG_TABLE,
     "glue-iceberg-more": FocusSlot.GLUE_ICEBERG_MORE,
     "glue-iceberg-retry": FocusSlot.GLUE_ICEBERG_RETRY,
@@ -248,6 +250,11 @@ class GluePage(DeferredWorkerMixin, HubSubscriberMixin, Widget):
 
     def _loader(self, target: str) -> tuple[Callable[[], Awaitable[object]], bool]:
         vm = self._vm
+        preview = vm.catalog.iceberg.preview
+        # Explicitly typed so it joins cleanly with the plain bound-method
+        # entries below -- an inline lambda in the dict literal made mypy widen
+        # the whole literal's inferred value type to ``tuple[object, bool]``.
+        preview_load_more: Callable[[], Awaitable[object]] = self._route_preview_load_more
         return {
             "databases": (vm.catalog.load_more_databases, vm.catalog.has_more_databases),
             "tables": (vm.catalog.load_more_tables, vm.catalog.has_more_tables),
@@ -256,7 +263,24 @@ class GluePage(DeferredWorkerMixin, HubSubscriberMixin, Widget):
             "runs": (vm.jobs.load_more_runs, vm.jobs.has_more_runs),
             "crawlers": (vm.crawlers.load_more_crawlers, vm.crawlers.has_more_crawlers),
             "iceberg": (vm.catalog.iceberg.load_more, vm.catalog.iceberg.has_more),
+            # Peek's honest load-more: a real second DuckDB query at the next
+            # row-limit step, pinned to the same snapshot as the Snaps tab --
+            # never the METADATA pager's local-window widen over a HIDDEN
+            # pane's already-capped rows. See ``_load_more_target``.
+            "iceberg-preview": (preview_load_more, preview.has_more),
         }[target]
+
+    async def _route_preview_load_more(self) -> object:
+        """Hand a preview load-more to the Iceberg widget's own worker group.
+
+        Never runs the scan here. Textual's ``exclusive=True`` only cancels
+        within the same node AND group, so a scan started on the page node would
+        not be serialized against the widget's ``↓`` button -- both would run,
+        each bumping the row limit a step and each reaching the port's single
+        connection. This returns as soon as it has delegated.
+        """
+        self.query_one(GlueIcebergView).request_preview_load_more()
+        return None
 
     def _load_more_target(self) -> str | None:
         """The list the user means: the focused one, else the first with a page."""
@@ -269,7 +293,13 @@ class GluePage(DeferredWorkerMixin, HubSubscriberMixin, Widget):
         # view first so an Iceberg tab/control focused there routes to its
         # own pager, not to catalog partitions.
         if "glue-iceberg-view" in focused:
-            return "iceberg"
+            # Peek and the six metadata panes share one focused container
+            # and one DataTable id, so only the widget itself knows which
+            # tab is active -- route to the preview's real query there,
+            # never the metadata pager's local-window widen over a hidden
+            # pane (see ``GlueIcebergView.preview_active``).
+            iceberg_view = self.query_one(GlueIcebergView)
+            return "iceberg-preview" if iceberg_view.preview_active else "iceberg"
         if "glue-table-detail-region" in focused:
             return "partitions"
         candidates = {

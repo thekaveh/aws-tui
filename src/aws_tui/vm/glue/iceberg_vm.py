@@ -30,8 +30,10 @@ from aws_tui.domain.iceberg import (
     IcebergReference,
     IcebergSnapshot,
 )
+from aws_tui.infra.duckdb import DuckDbPort, NativeDuckDb
 from aws_tui.vm._observable import ObserverSafeSubject, send_value_free
 from aws_tui.vm.file_manager.pane_vm import PaneState
+from aws_tui.vm.glue.iceberg_preview_vm import IcebergPreviewVM
 from aws_tui.vm.messages import OpenAthenaTableRequest
 from aws_tui.vm.service_diagnostics import report_unexpected_service_error
 
@@ -159,12 +161,15 @@ class GlueIcebergVM:
         hub: MessageHub[Message],
         dispatcher: Dispatcher,
         page_size: int = 50,
+        aws_profile: str | None = None,
+        duckdb_port: DuckDbPort | None = None,
     ) -> None:
         if type(page_size) is not int or page_size <= 0:
             raise ValueError("Iceberg metadata page size must be positive")
         self._inspector = inspector
         self._hub = hub
         self._page_size = page_size
+        self._aws_profile = aws_profile
         self._disposed = False
         self._shutdown_started = False
         self._shutdown_complete = False
@@ -186,6 +191,11 @@ class GlueIcebergVM:
             .services(hub, dispatcher)
             .build()
         )
+        self._preview: IcebergPreviewVM = IcebergPreviewVM(
+            port=duckdb_port or NativeDuckDb(),
+            hub=hub,
+            dispatcher=dispatcher,
+        )
 
     @property
     def status(self) -> ConstructionStatus:
@@ -202,6 +212,10 @@ class GlueIcebergVM:
     @property
     def table_ref(self) -> TableRef | None:
         return self._table_ref
+
+    @property
+    def preview(self) -> IcebergPreviewVM:
+        return self._preview
 
     @property
     def active_view(self) -> IcebergView:
@@ -278,6 +292,7 @@ class GlueIcebergVM:
     def construct(self) -> None:
         if not self._disposed:
             self._inner.construct()
+            self._preview.construct()
 
     def dispose(self) -> None:
         if self._disposed:
@@ -293,24 +308,35 @@ class GlueIcebergVM:
             try:
                 self._on_property_changed.dispose()
             finally:
-                self._inner.dispose()
+                try:
+                    self._preview.dispose()
+                finally:
+                    self._inner.dispose()
 
     async def bind_table(
         self,
         table_ref: TableRef | None,
         *,
         table_format: TableFormat | None = None,
+        location: str | None = None,
     ) -> None:
         """Replace the table and clear every pane without issuing provider calls."""
         if self._disposed or self._shutdown_started:
             return
         self._binding_mutation_epoch += 1
         binding_mutation_epoch = self._binding_mutation_epoch
-        if (
+        bound = (
             table_ref is not None
             and table_format is TableFormat.ICEBERG
             and _valid_table_ref(table_ref)
-        ):
+        )
+        self._preview.bind(
+            location if bound else None,
+            profile=self._aws_profile,
+            region=table_ref.region if table_ref is not None else "",
+        )
+        if bound:
+            assert table_ref is not None
             await self._replace_table(table_ref, binding_mutation_epoch)
             return
         await self._replace_table(None, binding_mutation_epoch)
@@ -322,6 +348,7 @@ class GlueIcebergVM:
         self._binding_mutation_epoch += 1
         self._invalidate_binding()
         self._cancel_metadata_tasks()
+        self._preview.bind(None, profile=self._aws_profile, region="")
 
     async def clear_table_and_drain(self) -> None:
         """Invalidate metadata and durably drain provider work."""
@@ -341,6 +368,7 @@ class GlueIcebergVM:
             ):
                 self._invalidate_binding()
             await self._cancel_and_drain_metadata_tasks()
+            await self._preview.cancel()
 
     async def cancel_metadata_loads_and_drain_silently(self) -> None:
         """Supersede provider loads without changing or publishing the binding."""
@@ -353,6 +381,7 @@ class GlueIcebergVM:
                 if self._shutdown_complete:
                     return
                 await self._cancel_and_drain_metadata_tasks()
+                await self._preview.cancel()
         finally:
             if has_drain_lease:
                 self._metadata_load_drain_count -= 1
@@ -365,6 +394,7 @@ class GlueIcebergVM:
         if not self._disposed:
             self._invalidate_binding()
         self._cancel_metadata_tasks()
+        self._preview.bind(None, profile=self._aws_profile, region="")
 
     async def shutdown(self) -> None:
         self.begin_shutdown()
@@ -372,6 +402,7 @@ class GlueIcebergVM:
             if self._shutdown_complete:
                 return
             await self._cancel_and_drain_metadata_tasks()
+            await self._preview.cancel()
             self._shutdown_complete = True
 
     async def _replace_table(

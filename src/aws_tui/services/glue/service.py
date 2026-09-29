@@ -41,6 +41,7 @@ from aws_tui.domain.query import QueryContext
 from aws_tui.domain.sql_policy import ReadOnlySqlPolicy
 from aws_tui.infra.aws_session import AwsSession
 from aws_tui.infra.connection_resolver import Connection
+from aws_tui.infra.duckdb import DuckDbPort
 from aws_tui.vm.glue.iceberg_vm import IcebergInspectionUnavailableError
 from aws_tui.vm.glue.page_vm import GluePageVM
 from aws_tui.vm.service_source_vm import SelectionScope, ServiceSelectionStore
@@ -241,6 +242,7 @@ class GlueService:
         glue_client_factory: GlueClientFactory | None = None,
         athena_client_factory: AthenaClientFactory | None = None,
         selection_store: ServiceSelectionStore | None = None,
+        duckdb_port: DuckDbPort | None = None,
     ) -> None:
         self._hub = hub
         self._dispatcher = dispatcher
@@ -248,6 +250,7 @@ class GlueService:
         self._client_factory = glue_client_factory
         self._athena_client_factory = athena_client_factory
         self._selections = selection_store or ServiceSelectionStore()
+        self._duckdb_port = duckdb_port
 
     def supports(self, connection: Connection) -> bool:
         return connection.kind == "aws"
@@ -274,6 +277,7 @@ class GlueService:
             selection_store=self._selections,
             hub=self._hub,
             dispatcher=self._dispatcher,
+            duckdb_port=self._duckdb_port,
         )
 
 

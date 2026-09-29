@@ -21,6 +21,13 @@ shared Glue/Athena/S3 capability rather than a third navigation service.
   through Athena.
 - Use Glue and Athena APIs remotely. Do not add PyIceberg, Arrow, DuckDB, or a
   JVM runtime in the first release.
+
+  > **2026-09-24:** The "no DuckDB" constraint above was scoped to the first
+  > release. It is superseded for the local Iceberg preview pane by
+  > `docs/superpowers/specs/2026-09-24-duckdb-iceberg-preview-design.md`,
+  > approved by the maintainer. The original text is left unedited as the
+  > historical record of this pass.
+
 - Add `sqlglot>=30.13.0,<31` as the sole new runtime dependency, using its
   Athena dialect for structured read-only SQL validation.
 - Never aggregate resources from multiple AWS connections into one list in
@@ -48,6 +55,13 @@ The first release does not:
   MERGE, OPTIMIZE, VACUUM, UNLOAD, or CREATE VIEW;
 - provide a generic Iceberg REST catalog backend;
 - query Iceberg locally with PyIceberg, Arrow, DataFusion, or DuckDB;
+
+  > **2026-09-24:** The "no DuckDB" constraint above was scoped to the first
+  > release. It is superseded for the local Iceberg preview pane by
+  > `docs/superpowers/specs/2026-09-24-duckdb-iceberg-preview-design.md`,
+  > approved by the maintainer. The original text is left unedited as the
+  > historical record of this pass.
+
 - aggregate resources across accounts, profiles, or regions;
 - replace AWS IAM, Lake Formation, workgroup, or S3 bucket policies;
 - add CloudWatch Logs as a first-class service;

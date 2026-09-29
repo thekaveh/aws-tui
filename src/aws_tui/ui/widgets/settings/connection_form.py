@@ -271,8 +271,13 @@ class ConnectionFormInline(Widget):
             inp.remove_class("-invalid")
         self._refresh_save_button()
         self.add_class("-open")
-        # Focus the first field for keyboard convenience.
-        self.query_one("#form-name", Input).focus()
+        # Focus the first field for keyboard convenience -- but only once the
+        # class above has actually been applied. `.-open` is what sets
+        # `display: block`; until the next refresh this widget is still
+        # `display: none`, and `App.set_focus` is a no-op on a widget that
+        # cannot take focus. Focusing inline here is therefore dropped silently
+        # and the form opens with focus nowhere in it (#276).
+        self.call_after_refresh(self.query_one("#form-name", Input).focus)
 
     def open_for_edit(self, *, name: str, defaults: S3CompatForm) -> None:
         """Show the form in Edit mode (pre-filled, name locked)."""
@@ -290,7 +295,9 @@ class ConnectionFormInline(Widget):
         # Apply error markers from any initial validation pass.
         self._apply_error_classes()
         self.add_class("-open")
-        self.query_one("#form-endpoint_url", Input).focus()
+        # Deferred for the same reason as `open_for_add` above: `.-open` is what
+        # makes this focusable, and it is not applied until the next refresh.
+        self.call_after_refresh(self.query_one("#form-endpoint_url", Input).focus)
 
     def close(self) -> None:
         """Hide the form and clear state."""

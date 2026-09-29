@@ -118,6 +118,22 @@ section; the current tree must not be tagged as v0.8.0.
   hands focus off). New ``DualPane.focus_left_pane`` +
   ``SettingsView.focus_default``.
 
+- **Local Iceberg row preview with DuckDB (Peek).** A seventh tab in the Glue
+  Iceberg view previews rows of the selected table by running one
+  `iceberg_scan(...)` statement against the table's S3 root with a local DuckDB
+  engine, pinned to the snapshot selected on **Snaps**. It needs no Athena
+  workgroup and no query-result location, which is what the existing
+  Glue-to-Athena handoff fails on. `↓` re-queries at the next row-limit step
+  (100 → 1,000 → 10,000) rather than widening a local window over rows already
+  in hand; `↻` retries at the active pin and limit. The engine ships as the
+  optional `duckdb` extra (`pip install aws-tui[duckdb]`, ~14 MB per platform);
+  without it the tab reports the missing engine and the install command. AWS
+  credentials come from a fresh `credential_chain` secret bound to the
+  connection's exact profile and region on every query, so an `aws sso login`
+  in another terminal is picked up on the next retry. Profile connections only;
+  not available on `s3-compatible` connections. See
+  [Installation](docs/install.md) and the cookbook's §7.4.
+
 ### Changed
 
 - **Live chrome cleanup.** Removed the unmounted legacy `StatusBar` widget,

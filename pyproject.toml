@@ -58,6 +58,12 @@ dependencies = [
 ]
 dynamic = ["version"]
 
+[project.optional-dependencies]
+# Local Iceberg preview. Optional because the wheel is ~14 MB per platform and
+# the feature is one pane. Next-major cap matches the policy on `dependencies`:
+# insulate `pip install aws-tui` from a transitive breaking change.
+duckdb = ["duckdb>=1.3,<2"]
+
 [project.urls]
 Homepage = "https://thekaveh.github.io/aws-tui/"
 Documentation = "https://thekaveh.github.io/aws-tui/"
@@ -230,6 +236,10 @@ disallow_untyped_defs = false
 
 [[tool.mypy.overrides]]
 # Third-party libs without type stubs. We rely on local boundary tests +
-# layer rules to keep their usage contained.
-module = ["aioboto3", "aioboto3.*", "botocore", "botocore.*"]
+# layer rules to keep their usage contained. `duckdb` is additionally an
+# optional extra (`pyproject.toml`'s `[project.optional-dependencies]`):
+# the module may be entirely absent in an environment that never installed
+# it, e.g. the lint job's `uv sync --locked` with no `--extra`, and this
+# override must tolerate that too, not just missing stubs.
+module = ["aioboto3", "aioboto3.*", "botocore", "botocore.*", "duckdb"]
 ignore_missing_imports = true

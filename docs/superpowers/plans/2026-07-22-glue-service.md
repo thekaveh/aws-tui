@@ -18,6 +18,13 @@
 - Service-specific access denial must not mark a profile globally unreachable.
 - Raw boto dictionaries do not escape the domain client.
 - Do not add PyIceberg, Arrow, DuckDB, DataFusion, or a JVM.
+
+  > **2026-09-24:** The "no DuckDB" constraint above was scoped to the first
+  > release. It is superseded for the local Iceberg preview pane by
+  > `docs/superpowers/specs/2026-09-24-duckdb-iceberg-preview-design.md`,
+  > approved by the maintainer. The original text is left unedited as the
+  > historical record of this pass.
+
 - Iceberg metadata queries and Glue-to-Athena navigation belong to the later integration plan.
 - Preserve the enforced View -> ViewModel -> Service -> Domain -> Infrastructure dependency direction.
 
