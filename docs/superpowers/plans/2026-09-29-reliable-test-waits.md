@@ -73,7 +73,7 @@ assert widget.has_focus
 
 ## 7. Local review evidence
 
-The reviewed test sweep reduces bare pauses from 1,059 to 667 and immediate sibling pause/assert sites from 411 to 87. Retained sites have inline explanations for event delivery, unchanged geometry, stale-callback rejection or exact callback counts. An AST comparison preserves all 2,190 original assertions across the 48 edited test files.
+The reviewed test sweep reduces bare pauses from 1,059 to 667 and immediate sibling pause/assert sites from 411 to 88. Retained sites have inline explanations for event delivery, unchanged geometry, stale-callback rejection or exact callback counts. An AST comparison preserves all 2,190 original assertions across the 48 edited test files.
 
 Independent review found and corrected three sequencing mistakes: the Quick Look no-op check needed an event-delivery barrier; the navigation cascade guard needed to drain queued projections; and navigation rebuilding needed to observe mounted replacement rows rather than merely the rebuild method call. The two affected modules pass all 11 tests after these corrections.
 
@@ -100,3 +100,6 @@ Run `36644202395` on PR #295 exposed two remaining sequencing assumptions. Ubunt
 Windows Python 3.11/3.12 failed the Settings-during-boot check with `WorkerCancelled`. Settings navigation intentionally cancels the content-mount worker in `AwsTuiApp`; requiring that worker to finish successfully is the wrong wait contract. The test now uses the existing `drain_workers` helper and a named condition for the final mounted Settings content, retaining every original assertion. All 28 Settings module tests pass after the correction. Independent review found no substantive issues in either fix, and all 199 original assertions across both modules are unchanged.
 
 These are fixes before a new commit/run, not reruns of unchanged failing jobs. The first run's coverage percentage was 86.09%, above the required 70%; its failure was the pager test rather than a coverage shortfall. Both hosted snapshot jobs passed without golden changes.
+
+
+The delayed macOS Python 3.12 result also exposed a teardown measurement boundary: the pane's render counter recorded a callback queued before removal after the counter had been reset. The subscription observer count and post-removal notification count were already correct. A documented event-delivery barrier after removal, before resetting counters, separates that earlier work from the new detached navigation. All 25 pane-widget tests, strict mypy, Ruff and independent review pass, with all 123 original assertions unchanged. The final census includes 88 retained original barriers plus two in the new projection regression tests.

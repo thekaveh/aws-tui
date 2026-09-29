@@ -1009,6 +1009,9 @@ async def test_the_pane_releases_its_binding_when_it_unmounts() -> None:
                 lambda: len(app.query(Pane)) == 0,
                 what="removed pane left the DOM",
             )
+            # Deliver renders queued before removal before measuring whether
+            # later VM changes notify or rebuild the detached pane.
+            await pilot.pause()
             # Named precondition: the pane really left the DOM.
             assert len(app.query(Pane)) == 0
             assert _bound_observers(vm._on_property_changed) == 0, (
