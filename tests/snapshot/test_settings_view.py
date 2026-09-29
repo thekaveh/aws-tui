@@ -5,8 +5,10 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
+from textual.widgets import Input
 
 from aws_tui.infra.theme_store import ThemeStore
+from tests.helpers import wait_until
 from tests.snapshot.apps.settings_view import (
     SettingsViewEmptyApp,
     SettingsViewFormOpenApp,
@@ -28,9 +30,29 @@ def test_settings_view_populated(theme: str, snap_compare) -> None:  # type: ign
     assert snap_compare(SettingsViewPopulatedApp(theme=theme), terminal_size=TERMINAL_SIZE)
 
 
+async def _await_form_focus(pilot) -> None:  # type: ignore[no-untyped-def]
+    """Capture the settled form, with its first field focused.
+
+    `ConnectionFormInline.open_for_add` defers that focus through
+    `call_after_refresh`, because `.-open` — which sets `display: block` — is not
+    applied until then, and `App.set_focus` is a no-op on a widget that cannot
+    take focus yet. Capturing before it lands would bake an unfocused form into
+    the golden and quietly stop this snapshot covering the focus ring at all.
+    """
+    first_field = pilot.app.query_one("#form-name", Input)
+    await wait_until(
+        lambda: pilot.app.focused is first_field,
+        what="the snapshot form to focus its first field",
+    )
+
+
 @pytest.mark.parametrize("theme", THEMES)
 def test_settings_view_form_open(theme: str, snap_compare) -> None:  # type: ignore[no-untyped-def]
-    assert snap_compare(SettingsViewFormOpenApp(theme=theme), terminal_size=TERMINAL_SIZE)
+    assert snap_compare(
+        SettingsViewFormOpenApp(theme=theme),
+        terminal_size=TERMINAL_SIZE,
+        run_before=_await_form_focus,
+    )
 
 
 @pytest.mark.parametrize("theme", THEMES)
