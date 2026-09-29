@@ -10,7 +10,7 @@ from vmx import NULL_DISPATCHER, Message, MessageHub
 from aws_tui.ui.widgets.transfers_overlay import TransferRowWidget, TransfersOverlay
 from aws_tui.vm.file_manager.transfer_vm import TransferModel, TransferState, TransferVM
 from aws_tui.vm.file_manager.transfers_vm import TransfersVM
-from tests.helpers import focus_and_settle
+from tests.helpers import focus_and_settle, wait_until
 
 
 class _TransferRowApp(App[None]):
@@ -68,7 +68,10 @@ async def test_cancel_button_activates_the_vm_command_when_focused(key: str) -> 
             assert cancel.tooltip == "Cancel transfer"
 
             await pilot.press(key)
-            await pilot.pause()
+            await wait_until(
+                lambda: vm.state is TransferState.CANCELLED and cancel.disabled,
+                what="transfer cancelled and cancel button disabled",
+            )
 
             assert vm.state is TransferState.CANCELLED
             assert cancel.disabled

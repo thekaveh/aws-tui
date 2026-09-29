@@ -7,7 +7,7 @@ from textual.app import App, ComposeResult
 from textual.widgets import Button
 
 from aws_tui.ui.widgets.service_tab_strip import ServiceTabStrip
-from tests.helpers import focus_and_settle
+from tests.helpers import focus_and_settle, wait_until
 
 
 class TabHost(App[None]):
@@ -38,7 +38,10 @@ async def test_service_tab_strip_is_one_focus_target() -> None:
 
     async with TabHost(tabs).run_test() as pilot:
         tabs.focus()
-        await pilot.pause()
+        await wait_until(
+            lambda: pilot.app.focused is tabs,
+            what="service tabs took focus",
+        )
 
         assert pilot.app.focused is tabs
         assert all(not child.can_focus for child in tabs.children)
@@ -87,6 +90,7 @@ async def test_service_tab_strip_set_active_updates_without_emitting() -> None:
 
     async with TabHost(tabs).run_test() as pilot:
         tabs.set_active("crawlers")
+        # Deliver queued messages before checking set_active emitted no change event.
         await pilot.pause()
 
         assert tabs.active == "crawlers"
@@ -119,8 +123,11 @@ async def test_service_tab_strip_keeps_selection_and_adds_soft_focus_fill() -> N
         after = pilot.app.query_one("#after-tabs", Button)
         active = tabs.query_one("#service-tab-catalog")
         inactive = tabs.query_one("#service-tab-jobs")
-        after.focus()
-        await pilot.pause()
+        await focus_and_settle(after)
+        await wait_until(
+            lambda: active.styles.background == inactive.styles.background,
+            what="resting tab background applied",
+        )
 
         resting_size = tabs.region.size
         assert tabs.border_title is None
@@ -128,13 +135,19 @@ async def test_service_tab_strip_keeps_selection_and_adds_soft_focus_fill() -> N
         assert active.styles.background == inactive.styles.background
 
         tabs.focus()
-        await pilot.pause()
+        await wait_until(
+            lambda: active.styles.background != inactive.styles.background,
+            what="active tab focus background applied",
+        )
 
         assert active.styles.background != inactive.styles.background
         assert tabs.region.size == resting_size
 
         after.focus()
-        await pilot.pause()
+        await wait_until(
+            lambda: after.has_focus and active.styles.background == inactive.styles.background,
+            what="tab focus background cleared",
+        )
 
         assert active.has_class("-active")
         assert active.styles.background == inactive.styles.background

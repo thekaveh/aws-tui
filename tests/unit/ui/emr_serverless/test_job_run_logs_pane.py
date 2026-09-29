@@ -21,7 +21,7 @@ from aws_tui.ui.widgets.emr_serverless.job_run_logs_pane import (
     _format_log_file_label,
 )
 from aws_tui.vm.emr_serverless.job_run_logs_vm import JobRunLogsVM, LogsState
-from tests.helpers import focus_and_settle
+from tests.helpers import focus_and_settle, wait_until
 
 
 def _make_vm() -> tuple[JobRunLogsVM, MessageHub[Message], _InMemoryEmr]:
@@ -180,7 +180,10 @@ async def test_pressing_enter_calls_action_load() -> None:
 
         pane.action_load = spy_action
         await pilot.press("enter")
-        await pilot.pause()
+        await wait_until(
+            lambda: "load" in calls,
+            what="Enter dispatched log loading",
+        )
         assert "load" in calls, "Expected action_load to be called"
 
 
@@ -202,7 +205,10 @@ async def test_pressing_r_calls_action_reload() -> None:
 
         pane.action_reload = spy_action
         await pilot.press("r")
-        await pilot.pause()
+        await wait_until(
+            lambda: "reload" in calls,
+            what="reload binding dispatched log reload",
+        )
         assert "reload" in calls, "Expected action_reload to be called"
 
 

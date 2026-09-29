@@ -26,7 +26,7 @@ from aws_tui.services.glue import GlueClientProtocol, GlueService
 from aws_tui.ui.widgets.context_picker import ContextPicker
 from aws_tui.ui.widgets.emr_serverless.page import EmrServerlessPage
 from aws_tui.ui.widgets.glue.page import GluePage
-from tests.helpers import focus_and_settle
+from tests.helpers import focus_and_settle, wait_until
 from tests.unit.vm.glue._fake_glue import seeded_glue
 
 
@@ -302,10 +302,16 @@ async def test_emr_source_picker_rebuilds_exact_selected_target(tmp_path: Path) 
             ctx.aws_session.probe_token = probe  # type: ignore[method-assign]
             await focus_and_settle(picker)
             await pilot.press("enter")
-            await pilot.pause()
+            await wait_until(
+                lambda: picker.is_open,
+                what="source picker to open",
+            )
             assert picker.is_open
             await pilot.press("down")
-            await pilot.pause()
+            await wait_until(
+                lambda: picker.query_one(OptionList).highlighted == 1,
+                what="source picker to highlight its second option",
+            )
             assert picker.query_one(OptionList).highlighted == 1
             await pilot.press("enter")
             await _await_service_mount(pilot, app)
@@ -570,7 +576,15 @@ async def test_glue_source_picker_restores_active_source_when_target_disappears(
             await pilot.pause()
             await pilot.press("down", "enter")
             await asyncio.wait_for(handled.wait(), timeout=1)
-            await pilot.pause()
+            await wait_until(
+                lambda: (
+                    accepted == [("dev", "us-east-1", False)]
+                    and picker.value == "0"
+                    and str(picker.query_one(".context-picker-value", Static).render())
+                    == current.source.label.replace(" · ", "·")
+                ),
+                what="rejected source switch to restore picker value and rendered source label",
+            )
 
             assert accepted == [("dev", "us-east-1", False)]
             assert picker.value == "0"

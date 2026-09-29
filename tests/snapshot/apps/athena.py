@@ -5,6 +5,7 @@ from typing import Literal
 from textual.app import App, ComposeResult
 from textual.containers import Container, Horizontal
 from textual.pilot import Pilot
+from textual.widgets import OptionList
 
 from aws_tui.domain.filesystem import PermissionDeniedError
 from aws_tui.domain.query import (
@@ -25,6 +26,7 @@ from aws_tui.vm.athena.page_vm import AthenaPageVM
 from aws_tui.vm.chrome.hint_legend_vm import HintLegendVM
 from aws_tui.vm.file_manager.pane_vm import PaneState
 from aws_tui.vm.service_source_vm import ServiceSourceContext
+from tests.helpers import wait_until
 from tests.unit.vm.athena.test_page_vm import PageClient, make_page_vm
 
 AthenaFixture = Literal[
@@ -161,16 +163,31 @@ class AthenaPageApp(App[None]):
         closed_regions = tuple(widget.region for widget in widgets)
 
         catalog.open()
+        await wait_until(
+            lambda: catalog.is_open and self.focused is catalog.query_one(OptionList),
+            what="picker overlay opened and focused",
+        )
+        # Deliver overlay layout before asserting geometry stayed unchanged.
         await pilot.pause()
         assert catalog.is_open
         assert tuple(widget.region for widget in widgets) == closed_regions
 
         await pilot.press("escape")
+        await wait_until(
+            lambda: not catalog.is_open and self.focused is catalog,
+            what="picker closed and trigger refocused",
+        )
+        # Deliver overlay layout before asserting geometry stayed unchanged.
         await pilot.pause()
         assert not catalog.is_open
         assert tuple(widget.region for widget in widgets) == closed_regions
 
         catalog.open()
+        await wait_until(
+            lambda: catalog.is_open and self.focused is catalog.query_one(OptionList),
+            what="picker overlay opened and focused",
+        )
+        # Deliver overlay layout before asserting geometry stayed unchanged.
         await pilot.pause()
         assert catalog.is_open
         assert tuple(widget.region for widget in widgets) == closed_regions

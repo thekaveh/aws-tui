@@ -9,6 +9,7 @@ from textual.widgets import OptionList
 from aws_tui.app import AwsTuiApp
 from aws_tui.composition import AppContext, build_app_context
 from aws_tui.ui.widgets.glue.page import GluePage
+from tests.helpers import wait_until
 
 
 async def wait_for_service_setup(ctx: AppContext, pilot: object) -> None:
@@ -56,7 +57,16 @@ async def test_glue_page_mounts_and_explicit_entry_focuses_catalog(tmp_path: Pat
 
             page = app.query_one("#content-glue-page", GluePage)
             app.focus_active_service_pane()
-            await pilot.pause()
+            await wait_until(
+                lambda: (
+                    (ctx.root_vm.content_host.current_id == "glue")
+                    and (page.has_focus_within)
+                    and (
+                        app.focused is page.query_one("#glue-databases-pane").query_one(OptionList)
+                    )
+                ),
+                what="Glue database list to receive explicit entry focus",
+            )
 
             assert ctx.root_vm.content_host.current_id == "glue"
             assert page.has_focus_within

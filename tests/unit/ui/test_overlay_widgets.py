@@ -22,6 +22,7 @@ from aws_tui.vm.chrome.command_palette_vm import (
 )
 from aws_tui.vm.chrome.confirm_vm import ConfirmationVM, ConfirmRequest
 from aws_tui.vm.chrome.quick_look_vm import QuickLookContent, QuickLookVM
+from tests.helpers import wait_until
 
 # ── CommandPalette ──────────────────────────────────────────────────────────
 
@@ -55,15 +56,20 @@ async def test_command_palette_renders_entries() -> None:
 
         app = _App()
         async with app.run_test(size=(80, 24)) as pilot:
-            await pilot.pause()
-            await pilot.pause()
+            await wait_until(
+                lambda: len(app.screen.query(CommandPaletteItem)) == 3,
+                what="command palette entries mounted",
+            )
             items = app.screen.query(CommandPaletteItem)
             assert len(items) == 3
             # Move + execute via VM commands.
             vm.move_selection_command.execute(1)
             await pilot.pause()
             vm.execute_selected_command.execute()
-            await pilot.pause()
+            await wait_until(
+                lambda: captured == ["conn.minio"],
+                what="selected palette command executed",
+            )
             assert captured == ["conn.minio"]
     finally:
         vm.dispose()
@@ -120,7 +126,10 @@ async def test_confirm_modal_reflex_enter_routes_to_the_safe_side(
 
             # A bare Enter, with no navigation first.
             modal.action_commit_focused()
-            await pilot.pause()
+            await wait_until(
+                lambda: answered == [resolves_to],
+                what="confirmation resolved to its focused action",
+            )
 
         assert answered == [resolves_to]
     finally:
@@ -256,11 +265,13 @@ async def test_quick_look_streams_content() -> None:
                 await self.push_screen(QuickLook(vm, hub=hub))
 
         app = _App()
-        async with app.run_test(size=(80, 24)) as pilot:
-            await pilot.pause()
-            await pilot.pause()
+        async with app.run_test(size=(80, 24)):
             from textual.widgets import Static
 
+            await wait_until(
+                lambda: "Hello" in str(app.screen.query_one("#quicklook-body", Static).render()),
+                what="quick look streamed body rendered",
+            )
             body = app.screen.query_one("#quicklook-body", Static)
             assert "Hello" in str(body.render())
     finally:

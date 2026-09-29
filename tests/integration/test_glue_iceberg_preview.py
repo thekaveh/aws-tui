@@ -163,7 +163,13 @@ async def test_peek_more_button_issues_a_second_query_at_the_next_limit(
                 lambda: vm.catalog.iceberg.preview.state is PaneState.IDLE,
                 what="the first preview scan finished",
             )
-            await pilot.pause()
+            await wait_until(
+                lambda: (
+                    len(port.queries) == 1
+                    and not app.query_one("#glue-iceberg-more", Button).disabled
+                ),
+                what="first preview scan to enable the load-more button",
+            )
             assert len(port.queries) == 1
             assert vm.catalog.iceberg.preview.limit == 100
 
@@ -182,7 +188,13 @@ async def test_peek_more_button_issues_a_second_query_at_the_next_limit(
                 lambda: vm.catalog.iceberg.preview.state is PaneState.IDLE,
                 what="the second preview scan finished",
             )
-            await pilot.pause()
+            await wait_until(
+                lambda: (
+                    vm.catalog.iceberg.preview.limit == 1000
+                    and app.query_one("#glue-iceberg-more", Button).disabled
+                ),
+                what="expanded preview to exhaust rows and disable load more",
+            )
 
             assert vm.catalog.iceberg.preview.limit == 1000
             assert port.queries[0][0].endswith("LIMIT 100")
@@ -216,7 +228,15 @@ async def test_peek_pane_shows_the_install_line_when_the_engine_is_missing(
                 lambda: vm.catalog.iceberg.preview.state is PaneState.ERROR,
                 what="the preview pane reported the missing engine",
             )
-            await pilot.pause()
+            await wait_until(
+                lambda: (
+                    "pip install aws-tui[duckdb]"
+                    in str(app.query_one("#glue-iceberg-status", Static).render())
+                    and app.query_one("#glue-iceberg-retry", Button).display
+                    and not app.query_one("#glue-iceberg-retry", Button).disabled
+                ),
+                what="missing preview engine to render its install hint and retry button",
+            )
 
             assert vm.catalog.iceberg.preview.error_text == (
                 "local preview needs DuckDB: pip install aws-tui[duckdb]"

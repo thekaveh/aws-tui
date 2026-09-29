@@ -19,6 +19,7 @@ from textual.widgets import Static
 from aws_tui.app import AwsTuiApp
 from aws_tui.ui.widgets.brand_banner import BrandBanner
 from aws_tui.ui.widgets.hint_legend import HintLegend, _fit_actions
+from tests.helpers import wait_until
 from tests.integration.conftest import AppContextBuilder
 
 
@@ -55,7 +56,10 @@ async def test_chrome_has_banner_no_statusbar(
     app = AwsTuiApp(ctx)
     async with app.run_test(size=(120, 40)) as pilot:
         await pilot.pause()
-        await pilot.pause()
+        await wait_until(
+            lambda: (len(app.query(BrandBanner)) == 1) and (not app.query("#status-bar")),
+            what="brand banner to mount without the retired status bar",
+        )
         assert len(app.query(BrandBanner)) == 1
         assert not app.query("#status-bar")
 
@@ -66,8 +70,11 @@ async def test_app_unmount_disposes_table_clipboard_subscription(
 ) -> None:
     app = AwsTuiApp(app_context_factory())
 
-    async with app.run_test(size=(120, 40)) as pilot:
-        await pilot.pause()
+    async with app.run_test(size=(120, 40)) as _pilot:
+        await wait_until(
+            lambda: app._table_clipboard_sub is not None,
+            what="table clipboard subscription to be installed",
+        )
         assert app._table_clipboard_sub is not None
 
     assert app._table_clipboard_sub is None

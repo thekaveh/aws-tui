@@ -13,6 +13,7 @@ from textual.screen import ModalScreen
 from textual.widgets import Button, Static
 
 from aws_tui.ui.widgets._focus_guard import focus_rests_within, is_on_active_screen
+from tests.helpers import wait_until
 
 
 class _Host(App[None]):
@@ -64,7 +65,10 @@ async def test_focus_rests_within_does_not_raise_for_a_detached_widget() -> None
         outer = app.query_one("#outer", Vertical)
         inner = app.query_one("#inner", Button)
         await inner.remove()
-        await pilot.pause()
+        await wait_until(
+            lambda: not inner.is_attached,
+            what="inner widget detached",
+        )
 
         assert not focus_rests_within(outer, inner)
 
@@ -85,12 +89,18 @@ async def test_is_on_active_screen_is_false_once_a_modal_is_pushed() -> None:
         assert is_on_active_screen(outer)
 
         app.push_screen(_Modal())
-        await pilot.pause()
+        await wait_until(
+            lambda: isinstance(app.screen, _Modal),
+            what="modal became active screen",
+        )
 
         assert not is_on_active_screen(outer)
 
         app.pop_screen()
-        await pilot.pause()
+        await wait_until(
+            lambda: is_on_active_screen(outer),
+            what="base screen active after modal pop",
+        )
 
         assert is_on_active_screen(outer)
 
@@ -102,7 +112,10 @@ async def test_is_on_active_screen_is_false_for_a_detached_widget() -> None:
         await pilot.pause()
         inner = app.query_one("#inner", Button)
         await inner.remove()
-        await pilot.pause()
+        await wait_until(
+            lambda: not inner.is_attached,
+            what="inner widget detached",
+        )
 
         assert not is_on_active_screen(inner)
 

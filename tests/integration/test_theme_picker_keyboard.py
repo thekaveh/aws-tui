@@ -18,6 +18,7 @@ from aws_tui.app import AwsTuiApp
 from aws_tui.infra.theme_store import ThemeStore
 from aws_tui.ui.widgets.theme_picker_modal import ThemePickerModal
 from aws_tui.vm.messages import ThemeChangedMessage
+from tests.helpers import wait_until
 from tests.integration.conftest import AppContextBuilder
 
 
@@ -43,7 +44,13 @@ async def test_theme_picker_enter_applies_selection(
         await pilot.press("down")
         await pilot.pause()
         await pilot.press("enter")
-        await pilot.pause()
+        await wait_until(
+            lambda: (
+                (not isinstance(app.screen, ThemePickerModal))
+                and (ctx.initial_theme != initial_theme)
+            ),
+            what="Enter to close the theme picker and commit its theme",
+        )
         # Modal closed.
         assert not isinstance(app.screen, ThemePickerModal), "Enter didn't close the theme picker"
         # Theme actually changed.
@@ -68,13 +75,19 @@ async def test_theme_picker_arrows_move_cursor(
         initial = modal._cursor  # type: ignore[attr-defined]
 
         await pilot.press("down")
-        await pilot.pause()
+        await wait_until(
+            lambda: modal._cursor == initial + 1,
+            what="Down to advance the theme picker cursor",
+        )
         assert modal._cursor == initial + 1, (  # type: ignore[attr-defined]
             f"Down arrow didn't advance cursor: {modal._cursor} vs {initial + 1}"  # type: ignore[attr-defined]
         )
 
         await pilot.press("up")
-        await pilot.pause()
+        await wait_until(
+            lambda: modal._cursor == initial,
+            what="Up to restore the theme picker cursor",
+        )
         assert modal._cursor == initial, (  # type: ignore[attr-defined]
             f"Up arrow didn't reverse cursor: {modal._cursor} vs {initial}"  # type: ignore[attr-defined]
         )
@@ -117,7 +130,20 @@ async def test_theme_picker_applies_custom_theme_through_modal(
                 await pilot.pause()
 
             await pilot.press("enter")
-            await pilot.pause()
+            await wait_until(
+                lambda: (
+                    (not isinstance(app.screen, ThemePickerModal))
+                    and (ctx.initial_theme == "midnight")
+                    and (changed[-1] == "midnight")
+                    and (sum(key == app._THEME_SOURCE_KEY for key in app.stylesheet.source) == 1)
+                    and ("custom-midnight" in app.stylesheet.source[app._THEME_SOURCE_KEY].content)
+                    and (
+                        ctx.root_vm.chrome.toast_stack.toasts[-1].model.id
+                        == "theme-changed-midnight"
+                    )
+                ),
+                what="Enter to commit and publish the midnight theme",
+            )
 
             assert not isinstance(app.screen, ThemePickerModal)
             assert ctx.initial_theme == "midnight"
@@ -168,7 +194,22 @@ async def test_invalid_custom_theme_keeps_previous_theme_and_app_usable(
             changed.clear()
 
             await pilot.press("down")
-            await pilot.pause()
+            await wait_until(
+                lambda: (
+                    (ctx.initial_theme == previous_theme)
+                    and (app.stylesheet.source[app._THEME_SOURCE_KEY].content == previous_source)
+                    and (changed == [])
+                    and (
+                        [
+                            toast.model.id
+                            for toast in ctx.root_vm.chrome.toast_stack.toasts
+                            if toast.model.id == "theme-switch-failed-broken"
+                        ]
+                        == ["theme-switch-failed-broken"]
+                    )
+                ),
+                what="invalid theme preview to report failure without changing the theme",
+            )
 
             assert ctx.initial_theme == previous_theme
             assert app.stylesheet.source[app._THEME_SOURCE_KEY].content == previous_source
@@ -180,7 +221,15 @@ async def test_invalid_custom_theme_keeps_previous_theme_and_app_usable(
             ] == ["theme-switch-failed-broken"]
 
             await pilot.press("enter")
-            await pilot.pause()
+            await wait_until(
+                lambda: (
+                    (not isinstance(app.screen, ThemePickerModal))
+                    and (ctx.initial_theme == previous_theme)
+                    and (app.stylesheet.source[app._THEME_SOURCE_KEY].content == previous_source)
+                    and (changed == [])
+                ),
+                what="Enter to close the picker after an invalid preview",
+            )
 
             assert not isinstance(app.screen, ThemePickerModal)
             assert ctx.initial_theme == previous_theme
@@ -197,7 +246,10 @@ async def test_invalid_custom_theme_keeps_previous_theme_and_app_usable(
             assert events.count("app.theme.switch_failed") == 1
 
             await pilot.press("T")
-            await pilot.pause()
+            await wait_until(
+                lambda: ctx.initial_theme == ThemeStore.BUILTIN_NAMES[0],
+                what="theme cycle to recover after invalid preview",
+            )
             assert ctx.initial_theme == ThemeStore.BUILTIN_NAMES[0]
     finally:
         subscription.dispose()
@@ -233,7 +285,14 @@ async def test_escape_restores_theme_after_valid_custom_preview(
 
         assert ctx.initial_theme == "midnight"
         await pilot.press("escape")
-        await pilot.pause()
+        await wait_until(
+            lambda: (
+                (not isinstance(app.screen, ThemePickerModal))
+                and (ctx.initial_theme == "carbon")
+                and (app.stylesheet.source[app._THEME_SOURCE_KEY].content == original_source)
+            ),
+            what="Escape to close the picker and restore carbon CSS",
+        )
 
         assert not isinstance(app.screen, ThemePickerModal)
         assert ctx.initial_theme == "carbon"
@@ -261,6 +320,9 @@ async def test_cycle_theme_remains_limited_to_builtins(
     async with app.run_test(size=(120, 40)) as pilot:
         await pilot.pause()
         await pilot.press("T")
-        await pilot.pause()
+        await wait_until(
+            lambda: ctx.initial_theme == ThemeStore.BUILTIN_NAMES[0],
+            what="theme cycle to select the first builtin",
+        )
 
         assert ctx.initial_theme == ThemeStore.BUILTIN_NAMES[0]

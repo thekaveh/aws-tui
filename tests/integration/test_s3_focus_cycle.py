@@ -13,6 +13,7 @@ from aws_tui.ui.widgets.nav_menu import NavMenu
 from aws_tui.ui.widgets.nav_row import NavRow
 from aws_tui.ui.widgets.pane import Pane
 from aws_tui.vm.chrome.focus_coordinator_vm import FocusSlot
+from tests.helpers import wait_until
 from tests.integration.test_settings_flow import (
     _MINIO_LOCAL_TOML,
     _await_boot,
@@ -81,17 +82,44 @@ async def test_s3_launch_and_tab_cycle_have_one_visual_focus(
             _assert_one_visual_focus(app, slot=FocusSlot.S3_LEFT)
 
             await pilot.press("tab")
-            await pilot.pause()
+            await wait_until(
+                lambda: (
+                    (ctx.focus_coordinator.focused_slot is FocusSlot.S3_RIGHT)
+                    and (
+                        "-rail-active" not in app.screen.classes
+                        and [row.descriptor_id for row in _selected_nav_rows(app)] == ["s3"]
+                        and [pane.id for pane in _focused_panes(app)] == ["pane-right"]
+                    )
+                ),
+                what="S3 right focus slot and visible border",
+            )
             assert ctx.focus_coordinator.focused_slot is FocusSlot.S3_RIGHT
             _assert_one_visual_focus(app, slot=FocusSlot.S3_RIGHT)
 
             await pilot.press("tab")
-            await pilot.pause()
+            await wait_until(
+                lambda: (
+                    (ctx.focus_coordinator.focused_slot is FocusSlot.NAV_MENU)
+                    and ("-rail-active" in app.screen.classes and not _focused_panes(app))
+                    and [row.descriptor_id for row in _selected_nav_rows(app)] == ["s3"]
+                ),
+                what="navigation focus slot and visible rail",
+            )
             assert ctx.focus_coordinator.focused_slot is FocusSlot.NAV_MENU
             _assert_one_visual_focus(app, slot=FocusSlot.NAV_MENU)
 
             await pilot.press("tab")
-            await pilot.pause()
+            await wait_until(
+                lambda: (
+                    (ctx.focus_coordinator.focused_slot is FocusSlot.S3_LEFT)
+                    and (
+                        "-rail-active" not in app.screen.classes
+                        and [row.descriptor_id for row in _selected_nav_rows(app)] == ["s3"]
+                        and [pane.id for pane in _focused_panes(app)] == ["pane-left"]
+                    )
+                ),
+                what="S3 left focus slot and visible border",
+            )
             assert ctx.focus_coordinator.focused_slot is FocusSlot.S3_LEFT
             _assert_one_visual_focus(app, slot=FocusSlot.S3_LEFT)
     finally:
@@ -111,17 +139,44 @@ async def test_s3_shift_tab_uses_reverse_visual_focus_cycle(
             _assert_one_visual_focus(app, slot=FocusSlot.S3_LEFT)
 
             await pilot.press("shift+tab")
-            await pilot.pause()
+            await wait_until(
+                lambda: (
+                    (ctx.focus_coordinator.focused_slot is FocusSlot.NAV_MENU)
+                    and ("-rail-active" in app.screen.classes and not _focused_panes(app))
+                    and [row.descriptor_id for row in _selected_nav_rows(app)] == ["s3"]
+                ),
+                what="reverse Tab to focus navigation and its rail",
+            )
             assert ctx.focus_coordinator.focused_slot is FocusSlot.NAV_MENU
             _assert_one_visual_focus(app, slot=FocusSlot.NAV_MENU)
 
             await pilot.press("shift+tab")
-            await pilot.pause()
+            await wait_until(
+                lambda: (
+                    (ctx.focus_coordinator.focused_slot is FocusSlot.S3_RIGHT)
+                    and (
+                        "-rail-active" not in app.screen.classes
+                        and [row.descriptor_id for row in _selected_nav_rows(app)] == ["s3"]
+                        and [pane.id for pane in _focused_panes(app)] == ["pane-right"]
+                    )
+                ),
+                what="reverse Tab to focus the S3 right pane and border",
+            )
             assert ctx.focus_coordinator.focused_slot is FocusSlot.S3_RIGHT
             _assert_one_visual_focus(app, slot=FocusSlot.S3_RIGHT)
 
             await pilot.press("shift+tab")
-            await pilot.pause()
+            await wait_until(
+                lambda: (
+                    (ctx.focus_coordinator.focused_slot is FocusSlot.S3_LEFT)
+                    and (
+                        "-rail-active" not in app.screen.classes
+                        and [row.descriptor_id for row in _selected_nav_rows(app)] == ["s3"]
+                        and [pane.id for pane in _focused_panes(app)] == ["pane-left"]
+                    )
+                ),
+                what="reverse Tab to focus the S3 left pane and border",
+            )
             assert ctx.focus_coordinator.focused_slot is FocusSlot.S3_LEFT
             _assert_one_visual_focus(app, slot=FocusSlot.S3_LEFT)
     finally:
@@ -140,16 +195,39 @@ async def test_arrow_walking_back_to_s3_keeps_visual_focus_on_nav(
             await pilot.press("tab")
             await pilot.pause()
             await pilot.press("tab")
-            await pilot.pause()
+            await wait_until(
+                lambda: (
+                    (ctx.focus_coordinator.focused_slot is FocusSlot.NAV_MENU)
+                    and ("-rail-active" in app.screen.classes and not _focused_panes(app))
+                    and [row.descriptor_id for row in _selected_nav_rows(app)] == ["s3"]
+                ),
+                what="navigation focus slot and visible rail",
+            )
             assert ctx.focus_coordinator.focused_slot is FocusSlot.NAV_MENU
 
             await pilot.press("down")
-            await pilot.pause()
+            await wait_until(
+                lambda: (
+                    (ctx.root_vm.services_menu.selected_id == "settings")
+                    and (ctx.focus_coordinator.focused_slot is FocusSlot.NAV_MENU)
+                    and (isinstance(app.focused, NavMenu))
+                    and ("-rail-active" in app.screen.classes and not _focused_panes(app))
+                ),
+                what="Down to select Settings while retaining navigation focus",
+            )
             assert ctx.root_vm.services_menu.selected_id == "settings"
             assert ctx.focus_coordinator.focused_slot is FocusSlot.NAV_MENU
             assert isinstance(app.focused, NavMenu)
             await pilot.press("up")
-            await pilot.pause()
+            await wait_until(
+                lambda: (
+                    (ctx.root_vm.services_menu.selected_id == "s3")
+                    and (ctx.focus_coordinator.focused_slot is FocusSlot.NAV_MENU)
+                    and ("-rail-active" in app.screen.classes and not _focused_panes(app))
+                    and [row.descriptor_id for row in _selected_nav_rows(app)] == ["s3"]
+                ),
+                what="Up to select S3 while retaining the navigation rail",
+            )
 
             assert ctx.root_vm.services_menu.selected_id == "s3"
             assert ctx.focus_coordinator.focused_slot is FocusSlot.NAV_MENU
@@ -170,13 +248,32 @@ async def test_enter_on_active_s3_from_nav_highlights_left_pane(
             await pilot.press("tab")
             await pilot.pause()
             await pilot.press("tab")
-            await pilot.pause()
+            await wait_until(
+                lambda: (
+                    (ctx.root_vm.services_menu.selected_id == "s3")
+                    and (ctx.focus_coordinator.focused_slot is FocusSlot.NAV_MENU)
+                    and ("-rail-active" in app.screen.classes and not _focused_panes(app))
+                    and [row.descriptor_id for row in _selected_nav_rows(app)] == ["s3"]
+                ),
+                what="navigation slot and rail after two Tabs",
+            )
             assert ctx.root_vm.services_menu.selected_id == "s3"
             assert ctx.focus_coordinator.focused_slot is FocusSlot.NAV_MENU
             _assert_one_visual_focus(app, slot=FocusSlot.NAV_MENU)
 
             await pilot.press("enter")
-            await pilot.pause()
+            await wait_until(
+                lambda: (
+                    (ctx.root_vm.services_menu.selected_id == "s3")
+                    and (ctx.focus_coordinator.focused_slot is FocusSlot.S3_LEFT)
+                    and (
+                        "-rail-active" not in app.screen.classes
+                        and [row.descriptor_id for row in _selected_nav_rows(app)] == ["s3"]
+                        and [pane.id for pane in _focused_panes(app)] == ["pane-left"]
+                    )
+                ),
+                what="Enter on S3 to restore the left pane border",
+            )
 
             assert ctx.root_vm.services_menu.selected_id == "s3"
             assert ctx.focus_coordinator.focused_slot is FocusSlot.S3_LEFT
@@ -196,13 +293,32 @@ async def test_enter_on_s3_from_nav_when_vm_already_left_repaints_left_pane(
 
             assert ctx.focus_coordinator.focused_slot is FocusSlot.S3_LEFT
             await pilot.press("shift+tab")
-            await pilot.pause()
+            await wait_until(
+                lambda: (
+                    (ctx.root_vm.services_menu.selected_id == "s3")
+                    and (ctx.focus_coordinator.focused_slot is FocusSlot.NAV_MENU)
+                    and ("-rail-active" in app.screen.classes and not _focused_panes(app))
+                    and [row.descriptor_id for row in _selected_nav_rows(app)] == ["s3"]
+                ),
+                what="reverse Tab to activate the navigation rail",
+            )
             assert ctx.root_vm.services_menu.selected_id == "s3"
             assert ctx.focus_coordinator.focused_slot is FocusSlot.NAV_MENU
             _assert_one_visual_focus(app, slot=FocusSlot.NAV_MENU)
 
             await pilot.press("enter")
-            await pilot.pause()
+            await wait_until(
+                lambda: (
+                    (ctx.root_vm.services_menu.selected_id == "s3")
+                    and (ctx.focus_coordinator.focused_slot is FocusSlot.S3_LEFT)
+                    and (
+                        "-rail-active" not in app.screen.classes
+                        and [row.descriptor_id for row in _selected_nav_rows(app)] == ["s3"]
+                        and [pane.id for pane in _focused_panes(app)] == ["pane-left"]
+                    )
+                ),
+                what="Enter to repaint the S3 left pane border",
+            )
 
             assert ctx.root_vm.services_menu.selected_id == "s3"
             assert ctx.focus_coordinator.focused_slot is FocusSlot.S3_LEFT

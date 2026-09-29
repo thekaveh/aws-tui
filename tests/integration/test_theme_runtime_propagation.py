@@ -21,6 +21,7 @@ from aws_tui.app import AwsTuiApp
 from aws_tui.infra.theme_store import ThemeStore
 from aws_tui.ui.widgets.brand_banner import _THEME_PALETTES, BrandBanner
 from aws_tui.vm.messages import ThemeChangedMessage
+from tests.helpers import wait_until
 from tests.integration.conftest import AppContextBuilder
 from tests.snapshot.apps.athena import AthenaPageApp
 
@@ -38,7 +39,10 @@ async def test_switch_theme_repaints_banner_via_hub(
         assert banner.palette == _THEME_PALETTES["carbon"]
 
         app.switch_theme("amber")
-        await pilot.pause()
+        await wait_until(
+            lambda: (banner.palette == _THEME_PALETTES["amber"]) and (ctx.initial_theme == "amber"),
+            what="amber palette to reach the banner and app theme",
+        )
 
         assert banner.palette == _THEME_PALETTES["amber"]
         assert ctx.initial_theme == "amber"
@@ -77,7 +81,10 @@ async def test_shift_t_cycles_theme(
         await pilot.pause()
         before = ctx.initial_theme
         await pilot.press("T")  # uppercase T = Shift+t
-        await pilot.pause()
+        await wait_until(
+            lambda: ctx.initial_theme != before,
+            what="theme-cycle key to change the active theme",
+        )
         assert ctx.initial_theme != before
 
 
@@ -129,8 +136,28 @@ async def test_invalid_configured_theme_starts_with_packaged_carbon_fallback(
     )
 
     try:
-        async with app.run_test(size=(120, 40)) as pilot:
-            await pilot.pause()
+        async with app.run_test(size=(120, 40)) as _pilot:
+            await wait_until(
+                lambda: (
+                    (ctx.initial_theme == ThemeStore.DEFAULT_NAME)
+                    and (
+                        app.stylesheet.source[app._THEME_SOURCE_KEY].content
+                        == store.load_builtin(ThemeStore.DEFAULT_NAME)
+                    )
+                    and (
+                        "definitely-not-a-color"
+                        not in app.stylesheet.source[app._THEME_SOURCE_KEY].content
+                    )
+                    and (changed == [])
+                    and (
+                        not any(
+                            toast.model.id.startswith("theme-")
+                            for toast in ctx.root_vm.chrome.toast_stack.toasts
+                        )
+                    )
+                ),
+                what="invalid startup theme to apply packaged fallback CSS",
+            )
 
             assert ctx.initial_theme == ThemeStore.DEFAULT_NAME
             assert app.stylesheet.source[app._THEME_SOURCE_KEY].content == store.load_builtin(
@@ -154,7 +181,13 @@ async def test_invalid_configured_theme_starts_with_packaged_carbon_fallback(
             assert "app.theme.switch_failed" not in events
 
             assert app.switch_theme("amber") is True
-            await pilot.pause()
+            await wait_until(
+                lambda: (
+                    ctx.initial_theme == "amber"
+                    and app.query_one(BrandBanner).palette == _THEME_PALETTES["amber"]
+                ),
+                what="amber palette to reach the banner after fallback",
+            )
             assert ctx.initial_theme == "amber"
     finally:
         subscription.dispose()
@@ -179,8 +212,26 @@ async def test_invalid_overlay_starts_with_packaged_carbon_fallback(
     )
 
     try:
-        async with app.run_test(size=(120, 40)) as pilot:
-            await pilot.pause()
+        async with app.run_test(size=(120, 40)) as _pilot:
+            await wait_until(
+                lambda: (
+                    (ctx.initial_theme == ThemeStore.DEFAULT_NAME)
+                    and (
+                        app.stylesheet.source[app._THEME_SOURCE_KEY].content
+                        == store.load_builtin(ThemeStore.DEFAULT_NAME)
+                    )
+                    and (
+                        "definitely-not-a-color"
+                        not in app.stylesheet.source[app._THEME_SOURCE_KEY].content
+                    )
+                    and (changed == [])
+                    and (
+                        app.query_one(BrandBanner).palette
+                        == _THEME_PALETTES[ThemeStore.DEFAULT_NAME]
+                    )
+                ),
+                what="invalid overlay to apply packaged fallback CSS and palette",
+            )
 
             assert ctx.initial_theme == ThemeStore.DEFAULT_NAME
             assert app.stylesheet.source[app._THEME_SOURCE_KEY].content == store.load_builtin(
@@ -201,7 +252,13 @@ async def test_invalid_overlay_starts_with_packaged_carbon_fallback(
 
             overlay.unlink()
             assert app.switch_theme("amber") is True
-            await pilot.pause()
+            await wait_until(
+                lambda: (
+                    ctx.initial_theme == "amber"
+                    and app.query_one(BrandBanner).palette == _THEME_PALETTES["amber"]
+                ),
+                what="amber palette to reach the banner after overlay removal",
+            )
             assert ctx.initial_theme == "amber"
     finally:
         subscription.dispose()
@@ -226,8 +283,18 @@ async def test_initial_live_apply_failure_uses_packaged_fallback(
 
     monkeypatch.setattr(app, "refresh_css", fail_first_refresh)
 
-    async with app.run_test(size=(120, 40)) as pilot:
-        await pilot.pause()
+    async with app.run_test(size=(120, 40)) as _pilot:
+        await wait_until(
+            lambda: (
+                (refresh_calls >= 3)
+                and (ctx.initial_theme == ThemeStore.DEFAULT_NAME)
+                and (
+                    app.stylesheet.source[app._THEME_SOURCE_KEY].content
+                    == ctx.theme_store.load_builtin(ThemeStore.DEFAULT_NAME)
+                )
+            ),
+            what="startup CSS failure to apply the packaged fallback",
+        )
 
         assert refresh_calls >= 3
         assert ctx.initial_theme == ThemeStore.DEFAULT_NAME
@@ -280,7 +347,13 @@ async def test_live_apply_failure_rolls_back_and_next_switch_succeeds(
             monkeypatch.setattr(app, "refresh_css", fail_first_refresh)
 
             assert app.switch_theme("amber") is False
-            await pilot.pause()
+            await wait_until(
+                lambda: any(
+                    toast.model.id == "theme-switch-failed-amber"
+                    for toast in ctx.root_vm.chrome.toast_stack.toasts
+                ),
+                what="failed live theme application to report its failure toast",
+            )
 
             assert app.stylesheet is previous_stylesheet
             assert app.stylesheet.source is previous_sources
@@ -298,7 +371,14 @@ async def test_live_apply_failure_rolls_back_and_next_switch_succeeds(
             assert events.count("app.theme.switch_failed") == 1
 
             assert app.switch_theme("voidline") is True
-            await pilot.pause()
+            await wait_until(
+                lambda: (
+                    (ctx.initial_theme == "voidline")
+                    and (changed == ["voidline"])
+                    and (app.query_one(BrandBanner).palette == _THEME_PALETTES["voidline"])
+                ),
+                what="voidline theme change to publish and reach the banner",
+            )
             assert ctx.initial_theme == "voidline"
             assert changed == ["voidline"]
             assert app.query_one(BrandBanner).palette == _THEME_PALETTES["voidline"]

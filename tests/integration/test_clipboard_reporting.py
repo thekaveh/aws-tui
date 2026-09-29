@@ -31,7 +31,7 @@ from aws_tui.domain.filesystem import PathRef
 from aws_tui.infra.clipboard import ClipboardResult, InMemoryClipboard
 from aws_tui.ui.widgets.pane import EntryRow
 from aws_tui.vm.chrome.toast_vm import ToastLevel
-from tests.helpers import drain_workers
+from tests.helpers import drain_workers, wait_until
 from tests.integration.conftest import AppContextBuilder
 
 
@@ -155,7 +155,10 @@ async def test_copy_path_reports_each_outcome_distinctly(
     async with app.run_test(size=(120, 40)) as pilot:
         await pilot.pause()
         await drain_workers(app)
-        await pilot.pause()
+        await wait_until(
+            lambda: bool(app.query(EntryRow)),
+            what="file entry rows to mount for clipboard reporting",
+        )
         assert await _wait_until_entry_rows(app)
 
         await _copy_current_path(app)
@@ -187,7 +190,10 @@ async def test_osc52_only_delivery_is_never_reported_as_copied(
     async with app.run_test(size=(120, 40)) as pilot:
         await pilot.pause()
         await drain_workers(app)
-        await pilot.pause()
+        await wait_until(
+            lambda: bool(app.query(EntryRow)),
+            what="file entry rows to mount for OSC 52 reporting",
+        )
         assert await _wait_until_entry_rows(app)
 
         await _copy_current_path(app)
@@ -224,7 +230,10 @@ async def test_native_write_failure_is_logged_without_the_payload(
     async with app.run_test(size=(120, 40)) as pilot:
         await pilot.pause()
         await drain_workers(app)
-        await pilot.pause()
+        await wait_until(
+            lambda: bool(app.query(EntryRow)),
+            what="file entry rows to mount for native failure logging",
+        )
         assert await _wait_until_entry_rows(app)
 
         await _copy_current_path(app)
@@ -276,7 +285,10 @@ async def test_a_refused_terminal_write_is_logged_without_the_payload(
     async with app.run_test(size=(120, 40)) as pilot:
         await pilot.pause()
         await drain_workers(app)
-        await pilot.pause()
+        await wait_until(
+            lambda: bool(app.query(EntryRow)),
+            what="file entry rows to mount for terminal failure logging",
+        )
         assert await _wait_until_entry_rows(app)
 
         await _copy_current_path(app)
@@ -316,7 +328,13 @@ async def test_nothing_selected_advises_through_the_toast_stack(
         if result is not None:
             await result
         await drain_workers(app)
-        await pilot.pause()
+        await wait_until(
+            lambda: any(
+                toast.model.id == "clipboard-nothing-selected"
+                for toast in ctx.root_vm.chrome.toast_stack.toasts
+            ),
+            what="nothing-selected clipboard advisory to arrive",
+        )
 
         assert port.writes == []
         assert ctx.root_vm.chrome.toast_stack.toasts[-1].model.id == "clipboard-nothing-selected"
@@ -372,7 +390,10 @@ async def test_copy_keystroke_does_not_wait_on_the_helper(
         try:
             await pilot.pause()
             await drain_workers(app)
-            await pilot.pause()
+            await wait_until(
+                lambda: bool(app.query(EntryRow)),
+                what="file entry rows to mount before the wedged clipboard test",
+            )
             assert await _wait_until_entry_rows(app)
 
             result = app.action_dispatch(action)
@@ -393,6 +414,9 @@ async def test_copy_keystroke_does_not_wait_on_the_helper(
         finally:
             port.release.set()
         await drain_workers(app)
-        await pilot.pause()
+        await wait_until(
+            lambda: len(port.writes) == 1,
+            what="released clipboard worker to finish its deferred write",
+        )
 
         assert len(port.writes) == 1, "and the deferred write still lands"

@@ -31,7 +31,7 @@ from aws_tui.vm.messages import (
     OpenS3LocationRequest,
 )
 from aws_tui.vm.nav_menu_vm import SETTINGS_NAV_ID
-from tests.helpers import drain_workers, seed_athena_sql
+from tests.helpers import drain_workers, seed_athena_sql, wait_until
 
 SERVICE_SETUP_TIMEOUT_SECONDS = 30
 
@@ -131,10 +131,19 @@ async def _activate_handoff(pilot: object, *, key: str | None, label: str) -> No
         await pilot.press(key)  # type: ignore[attr-defined]
         return
     await pilot.press("colon")  # type: ignore[attr-defined]
-    await pilot.pause()  # type: ignore[attr-defined]
+    await wait_until(
+        lambda: isinstance(pilot.app.screen, CommandPalette),
+        what="handoff command palette to open",
+    )
     assert isinstance(pilot.app.screen, CommandPalette)  # type: ignore[attr-defined]
     await pilot.press(*label)  # type: ignore[attr-defined]
-    await pilot.pause()  # type: ignore[attr-defined]
+    await wait_until(
+        lambda: (
+            tuple(entry.label for entry in pilot.app._app_ctx.command_palette_vm.filtered_entries)
+            == (label,)
+        ),
+        what="handoff palette to show only the requested command",
+    )
     assert tuple(
         entry.label
         for entry in pilot.app._app_ctx.command_palette_vm.filtered_entries  # type: ignore[attr-defined]
@@ -572,7 +581,13 @@ async def test_athena_insert_empty_clipboard_is_non_mutating(
             await seed_athena_sql(pilot, page.query, editor, "SELECT 1")
 
             await _invoke(app, "athena.insert_table_ref")
-            await pilot.pause()
+            await wait_until(
+                lambda: any(
+                    toast.model.id == "athena-table-reference-empty"
+                    for toast in ctx.root_vm.chrome.toast_stack.toasts
+                ),
+                what="empty table clipboard advisory to arrive",
+            )
 
             assert editor.text == "SELECT 1"
             assert page.query.sql == "SELECT 1"
@@ -614,7 +629,13 @@ async def test_athena_insert_refuses_source_mismatch_without_mutation(
             await seed_athena_sql(pilot, page.query, editor, "SELECT 1")
 
             await _invoke(app, "athena.insert_table_ref")
-            await pilot.pause()
+            await wait_until(
+                lambda: any(
+                    toast.model.id == "athena-table-reference-source-mismatch"
+                    for toast in ctx.root_vm.chrome.toast_stack.toasts
+                ),
+                what="table source-mismatch advisory to arrive",
+            )
 
             assert editor.text == "SELECT 1"
             assert page.query.sql == "SELECT 1"
@@ -656,7 +677,10 @@ async def test_athena_insert_matching_source_switches_view_and_never_executes(
             editor = app.query_one("#athena-editor", TextArea)
             editor.text = "SELECT  LIMIT 10"
             editor.selection = type(editor.selection).cursor((0, 7))
-            await pilot.pause()
+            await wait_until(
+                lambda: page.query.sql == "SELECT  LIMIT 10",
+                what="edited SQL to reach the Athena query model",
+            )
             assert page.query.sql == "SELECT  LIMIT 10"
             await page.select_view("history")
             await pilot.pause()
@@ -1267,7 +1291,15 @@ async def test_user_navigation_supersedes_inflight_table_handoff(
                 _wait_for_service_setup(ctx, app, pilot),
                 timeout=15,
             )
-            await pilot.pause()  # type: ignore[attr-defined]
+            await wait_until(
+                lambda: (
+                    (ctx.root_vm.services_menu.selected_id == selected_service)
+                    and (ctx.root_vm.content_host.current_id == selected_service)
+                    and (app._table_navigation_tasks == set())
+                    and (app._table_handoff_rollbacks == set())
+                ),
+                what="selected service to settle and handoff rollback tasks to finish",
+            )
 
             assert ctx.root_vm.services_menu.selected_id == selected_service
             assert ctx.root_vm.content_host.current_id == selected_service

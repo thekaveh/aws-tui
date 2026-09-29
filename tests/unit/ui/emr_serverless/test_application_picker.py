@@ -23,6 +23,7 @@ from aws_tui.demo.in_memory_emr import InMemoryEmr as _InMemoryEmr
 from aws_tui.domain.emr_serverless import ApplicationState
 from aws_tui.ui.widgets.emr_serverless.application_picker import ApplicationPicker
 from aws_tui.vm.emr_serverless.applications_vm import ApplicationsVM
+from tests.helpers import focus_and_settle, wait_until
 
 
 def _make_vm(fake: _InMemoryEmr | None = None) -> tuple[ApplicationsVM, MessageHub[Message]]:
@@ -152,10 +153,16 @@ async def test_toggle_open_flips_open_class_on_and_off() -> None:
         picker = pilot.app.query_one(ApplicationPicker)
         assert "-open" not in picker.classes
         picker.toggle_open()
-        await pilot.pause()
+        await wait_until(
+            lambda: "-open" in picker.classes,
+            what="application dropdown opened",
+        )
         assert "-open" in picker.classes
         picker.toggle_open()
-        await pilot.pause()
+        await wait_until(
+            lambda: "-open" not in picker.classes,
+            what="application dropdown closed",
+        )
         assert "-open" not in picker.classes
 
 
@@ -167,7 +174,10 @@ async def test_focused_picker_opens_with_enter() -> None:
         await pilot.pause()
 
         await pilot.press("enter")
-        await pilot.pause()
+        await wait_until(
+            lambda: picker.has_class("-open") and picker.has_focus_within,
+            what="keyboard-opened application picker took focus",
+        )
 
         assert picker.has_class("-open")
         assert picker.has_focus_within
@@ -179,10 +189,16 @@ async def test_action_close_removes_open_class() -> None:
         await pilot.pause()
         picker = pilot.app.query_one(ApplicationPicker)
         picker.toggle_open()
-        await pilot.pause()
+        await wait_until(
+            lambda: "-open" in picker.classes,
+            what="application dropdown opened",
+        )
         assert "-open" in picker.classes
         picker.action_close()
-        await pilot.pause()
+        await wait_until(
+            lambda: "-open" not in picker.classes,
+            what="application close removed open class",
+        )
         assert "-open" not in picker.classes
 
 
@@ -195,6 +211,7 @@ async def test_closed_picker_cannot_run_stale_deferred_dropdown_focus() -> None:
         picker.toggle_open()
         picker.close(refocus=False)
         outside.focus()
+        # Drain stale dropdown-focus callbacks before checking they did not steal outside focus.
         await pilot.pause()
 
         assert not picker.is_open
@@ -209,8 +226,11 @@ async def test_deferred_application_focus_yields_to_newer_outside_focus(
         await pilot.pause()
         picker = pilot.app.query_one(ApplicationPicker)
         outside = pilot.app.query_one("#after-picker", Static)
-        picker.focus()
-        await pilot.pause()
+        await focus_and_settle(picker)
+        await wait_until(
+            lambda: pilot.app.focused is picker,
+            what="application picker took focus",
+        )
         assert pilot.app.focused is picker
         callbacks: list[Callable[[], None]] = []
         monkeypatch.setattr(picker, "call_after_refresh", callbacks.append)
@@ -219,6 +239,7 @@ async def test_deferred_application_focus_yields_to_newer_outside_focus(
         assert len(callbacks) == 1
         outside.focus()
         callbacks[0]()
+        # Drain the stale callback effects before checking outside focus remains intact.
         await pilot.pause()
 
         assert not picker.is_open
@@ -237,15 +258,20 @@ async def test_close_reopen_invalidates_stale_application_refocus(
         picker.toggle_open()
         picker.close()
         picker.toggle_open()
+        # Drain open/close events before inspecting the intercepted callback queue.
         await pilot.pause()
 
         assert len(callbacks) == 3
         callbacks[2]()
-        await pilot.pause()
+        await wait_until(
+            lambda: pilot.app.focused is picker.query_one("#app-options", OptionList),
+            what="reopened application options took focus",
+        )
         assert pilot.app.focused is picker.query_one("#app-options", OptionList)
 
         callbacks[1]()
         callbacks[0]()
+        # Drain stale callbacks before checking they did not close or refocus the reopened picker.
         await pilot.pause()
         assert picker.is_open
         assert pilot.app.focused is picker.query_one("#app-options", OptionList)
@@ -265,7 +291,10 @@ async def test_application_picker_normal_close_emits_once() -> None:
         await pilot.pause()
         picker.close()
         picker.close()
-        await pilot.pause()
+        await wait_until(
+            lambda: app.open_states == [True, False],
+            what="normal close emitted one open and one close event",
+        )
 
         assert app.open_states == [True, False]
 
@@ -279,7 +308,10 @@ async def test_application_picker_unmount_relays_one_close_to_parent() -> None:
         picker.toggle_open()
         await pilot.pause()
         await picker.remove()
-        await pilot.pause()
+        await wait_until(
+            lambda: app.open_states == [True, False],
+            what="removed picker relayed its close event",
+        )
 
         assert app.open_states == [True, False]
 
@@ -315,7 +347,6 @@ async def test_application_picker_refresh_is_safe_after_child_teardown() -> None
         picker = pilot.app.query_one(ApplicationPicker)
         options = picker.query_one("#app-options", OptionList)
         await options.remove()
-        await pilot.pause()
 
         # Precondition: it is the ``is_attached`` arm of the guard under test,
         # not the ``is None`` arm -- the reference is assigned in compose and
@@ -354,7 +385,13 @@ async def test_action_commit_with_highlighted_option_closes_dropdown(
         await pilot.pause()
         picker = pilot.app.query_one(ApplicationPicker)
         picker.toggle_open()
-        await pilot.pause()
+        await wait_until(
+            lambda: (
+                picker.has_class("-open")
+                and pilot.app.focused is picker.query_one("#app-options", OptionList)
+            ),
+            what="application dropdown prepared its options and took focus for commit",
+        )
         assert picker.has_class("-open")
         # OptionList is the picker's direct child again.
         opts = picker.query_one("#app-options", OptionList)
@@ -369,7 +406,10 @@ async def test_action_commit_with_highlighted_option_closes_dropdown(
 
         monkeypatch.setattr(vm, "select", select_after_close)
         picker.action_commit()
-        await pilot.pause()
+        await wait_until(
+            lambda: not picker.has_class("-open") and vm.selected_id is not None,
+            what="application selection committed and closed its dropdown",
+        )
         # Commit closes the dropdown AND lands a selection on the VM.
         assert not picker.has_class("-open")
         assert vm.selected_id is not None
@@ -391,6 +431,7 @@ async def test_action_commit_no_highlight_is_noop() -> None:
         opts.highlighted = None
         before_selection = vm.selected_id
         picker.action_commit()
+        # Drain the no-highlight commit event path before asserting selection remains unchanged.
         await pilot.pause()
         assert vm.selected_id == before_selection
 

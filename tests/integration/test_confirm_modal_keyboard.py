@@ -24,6 +24,7 @@ from aws_tui.ui.widgets.crash_modal import CrashModal
 from aws_tui.ui.widgets.emr_serverless.log_filter_modal import LogFilterModal
 from aws_tui.vm.chrome.crash_vm import CrashChoice, CrashReport, CrashVM
 from aws_tui.vm.chrome.focus_coordinator_vm import FocusSlot
+from tests.helpers import focus_and_settle, wait_until
 from tests.integration.conftest import AppContextBuilder
 
 
@@ -52,14 +53,24 @@ async def test_enter_on_copy_confirm_modal_runs_copy(
         await app.workers.wait_for_complete(list(app.workers._workers))  # type: ignore[attr-defined]
         await pilot.pause()
         await pilot.press("c")
-        await pilot.pause()
+        await wait_until(
+            lambda: (
+                (isinstance(app.screen, ConfirmModal))
+                and (ctx.confirm_vm.is_open)
+                and (app.screen.vm is ctx.confirm_vm)
+            ),
+            what="copy confirmation modal and view model to open",
+        )
         # Modal should be on the stack.
         assert isinstance(app.screen, ConfirmModal)
         assert ctx.confirm_vm.is_open
         assert app.screen.vm is ctx.confirm_vm
         await pilot.press("enter")
         await pilot.pause()
-        await pilot.pause()
+        await wait_until(
+            lambda: (not isinstance(app.screen, ConfirmModal)) and (not ctx.confirm_vm.is_open),
+            what="Enter to close the copy confirmation",
+        )
         # Modal closed — Enter forwarded to action_confirm.
         assert not isinstance(app.screen, ConfirmModal), "Enter didn't close the confirm modal"
         assert not ctx.confirm_vm.is_open
@@ -85,10 +96,16 @@ async def test_escape_on_delete_modal_cancels(
         await pilot.pause()
         await pilot.pause()
         await pilot.press("d")
-        await pilot.pause()
+        await wait_until(
+            lambda: isinstance(app.screen, ConfirmModal),
+            what="delete confirmation to open",
+        )
         assert isinstance(app.screen, ConfirmModal)
         await pilot.press("escape")
-        await pilot.pause()
+        await wait_until(
+            lambda: (not isinstance(app.screen, ConfirmModal)) and (app._crash_report is None),
+            what="Escape to close the delete confirmation",
+        )
         assert not isinstance(app.screen, ConfirmModal)
         # No crash.
         assert app._crash_report is None  # type: ignore[attr-defined]
@@ -108,6 +125,7 @@ async def test_repeated_copy_input_does_not_open_a_second_confirmation(
         first_modal = app.screen
 
         await pilot.press("c")
+        # Deliver the repeated copy key before checking that it did not push another modal.
         await pilot.pause()
 
         assert app.screen is first_modal
@@ -127,11 +145,14 @@ async def test_enter_in_modal_text_area_inserts_newline(
         modal = LogFilterModal(DEFAULT_LOG_FILTER)
         await app.push_screen(modal)
         editor = modal.query_one("#log-patterns", TextArea)
-        editor.focus()
+        await focus_and_settle(editor)
         before = editor.text
 
         await pilot.press("enter")
-        await pilot.pause()
+        await wait_until(
+            lambda: (app.screen is modal) and (editor.text == "\n" + before),
+            what="Enter to insert a newline in the modal editor",
+        )
 
         assert app.screen is modal
         assert editor.text == "\n" + before
@@ -149,10 +170,13 @@ async def test_modal_text_area_keeps_arrow_navigation(
         editor = modal.query_one("#log-patterns", TextArea)
         editor.text = "first\nsecond"
         editor.cursor_location = (1, 0)
-        editor.focus()
+        await focus_and_settle(editor)
 
         await pilot.press("up")
-        await pilot.pause()
+        await wait_until(
+            lambda: (app.screen is modal) and (editor.cursor_location == (0, 0)),
+            what="Up to move the modal editor cursor",
+        )
 
         assert app.screen is modal
         assert editor.cursor_location == (0, 0)
@@ -170,10 +194,13 @@ async def test_modal_text_area_keeps_backspace_editing(
         editor = modal.query_one("#log-patterns", TextArea)
         editor.text = "ab"
         editor.cursor_location = (0, 2)
-        editor.focus()
+        await focus_and_settle(editor)
 
         await pilot.press("backspace")
-        await pilot.pause()
+        await wait_until(
+            lambda: (app.screen is modal) and (editor.text == "a"),
+            what="Backspace to edit the modal text",
+        )
 
         assert app.screen is modal
         assert editor.text == "a"
@@ -192,11 +219,18 @@ async def test_tab_stays_inside_modal_and_tracks_vmx_modal_focus(
         modal = LogFilterModal(DEFAULT_LOG_FILTER)
         await app.push_screen(modal)
         editor = modal.query_one("#log-patterns", TextArea)
-        editor.focus()
+        await focus_and_settle(editor)
         assert ctx.focus_coordinator.is_modal
 
         await pilot.press("tab")
-        await pilot.pause()
+        await wait_until(
+            lambda: (
+                app.focused is not None
+                and app.focused is not editor
+                and modal in app.focused.ancestors_with_self
+            ),
+            what="Tab to move focus within the modal",
+        )
 
         assert app.screen is modal
         assert app.focused is not None
@@ -204,7 +238,10 @@ async def test_tab_stays_inside_modal_and_tracks_vmx_modal_focus(
         assert ctx.focus_coordinator.is_modal
 
         modal.dismiss(None)
-        await pilot.pause()
+        await wait_until(
+            lambda: ctx.focus_coordinator.focused_slot is FocusSlot.S3_LEFT,
+            what="modal dismissal to restore the S3 left focus slot",
+        )
         assert ctx.focus_coordinator.focused_slot is FocusSlot.S3_LEFT
 
 
@@ -220,10 +257,11 @@ async def test_deferred_focus_restore_does_not_override_new_modal(
         modal = LogFilterModal(DEFAULT_LOG_FILTER)
         await app.push_screen(modal)
         editor = modal.query_one("#log-patterns", TextArea)
-        editor.focus()
+        await focus_and_settle(editor)
         assert ctx.focus_coordinator.is_modal
 
         app._restore_focus_after_modal(FocusSlot.S3_LEFT)
+        # Run deferred focus restoration before checking that the new modal retains focus.
         await pilot.pause()
 
         assert app.screen is modal
@@ -256,7 +294,10 @@ async def test_enter_on_crash_modal_uses_safe_default(
             await pilot.pause()
 
             await pilot.press("enter")
-            await pilot.pause()
+            await wait_until(
+                lambda: choices == [CrashChoice.CONTINUE],
+                what="crash modal Enter to choose Continue",
+            )
 
             assert choices == [CrashChoice.CONTINUE]
     finally:

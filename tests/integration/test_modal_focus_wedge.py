@@ -36,7 +36,7 @@ from aws_tui.ui.widgets.emr_serverless.page import EmrServerlessPage
 from aws_tui.ui.widgets.glue.page import GluePage
 from aws_tui.ui.widgets.help_modal import HelpModal
 from aws_tui.vm.chrome.focus_coordinator_vm import FocusSlot
-from tests.helpers import drain_workers
+from tests.helpers import drain_workers, wait_until
 
 SERVICE_SETUP_TIMEOUT_SECONDS = 30.0
 
@@ -142,6 +142,7 @@ async def test_projection_landing_behind_a_modal_leaves_it_escapable(
             modal = app.screen
 
             page.project_focus_slot(slot)  # type: ignore[attr-defined]
+            # Run the deferred projection before checking that it did not steal modal focus.
             await pilot.pause()
 
             assert app.screen is modal
@@ -149,7 +150,10 @@ async def test_projection_landing_behind_a_modal_leaves_it_escapable(
             assert not page.has_focus_within
 
             await pilot.press("escape")
-            await pilot.pause()
+            await wait_until(
+                lambda: not isinstance(app.screen, HelpModal),
+                what="Escape to dismiss help after focus projection",
+            )
             assert not isinstance(app.screen, HelpModal)
     finally:
         with contextlib.suppress(Exception):
@@ -184,7 +188,10 @@ async def test_pending_deferred_projection_does_not_wedge_a_modal(tmp_path: Path
             _assert_modal_owns_its_focus(app)
 
             await pilot.press("escape")
-            await pilot.pause()
+            await wait_until(
+                lambda: not isinstance(app.screen, HelpModal),
+                what="Escape to dismiss help after deferred projection",
+            )
             assert not isinstance(app.screen, HelpModal)
     finally:
         with contextlib.suppress(Exception):

@@ -30,6 +30,7 @@ from aws_tui.vm.chrome.toast_stack_vm import ToastStackVM
 from aws_tui.vm.chrome.toast_vm import ToastLevel, ToastModel
 from aws_tui.vm.nav_menu_vm import NavMenuVM as ServicesMenuVM
 from aws_tui.vm.services_protocol import ServiceDescriptor, ServiceRegistry
+from tests.helpers import wait_until
 
 
 class _S3Stub:
@@ -89,6 +90,10 @@ async def test_hint_legend_renders_service_actions() -> None:
             def _strip_text(host: HintLegend) -> str:
                 return " ".join(str(s.render()) for s in host.query(Static))
 
+            await wait_until(
+                lambda: "more" in _strip_text(widget) and "quit" in _strip_text(widget),
+                what="service hint legend rendered",
+            )
             strip = _strip_text(widget)
             assert "more" in strip
             assert "quit" in strip
@@ -286,7 +291,10 @@ async def test_hint_chip_click_dispatches_enabled_action_but_not_disabled_action
             )
             assert not enabled.can_focus
             await pilot.click(enabled)
-            await pilot.pause()
+            await wait_until(
+                lambda: app.dispatched_actions == ["athena.query"],
+                what="enabled hint dispatched query action",
+            )
             assert app.dispatched_actions == ["athena.query"]
 
             vm.set_disabled_actions(frozenset(("athena.query",)))
@@ -299,6 +307,7 @@ async def test_hint_chip_click_dispatches_enabled_action_but_not_disabled_action
             assert not disabled.action.enabled
             assert not disabled.can_focus
             await pilot.click(disabled)
+            # Deliver the disabled click before checking that no additional action was dispatched.
             await pilot.pause()
             assert app.dispatched_actions == ["athena.query"]
     finally:
@@ -331,7 +340,10 @@ async def test_retired_hint_chip_does_not_dispatch_its_action() -> None:
             assert chip.action.enabled
 
             chip.retire()
-            await pilot.pause()
+            await wait_until(
+                lambda: not chip.display,
+                what="retired hint chip hidden",
+            )
             assert not chip.display
 
             chip.on_click(
@@ -347,6 +359,7 @@ async def test_retired_hint_chip_does_not_dispatch_its_action() -> None:
                     ctrl=False,
                 )
             )
+            # Deliver queued click messages before checking that the retired chip stayed silent.
             await pilot.pause()
 
             assert app.dispatched_actions == [], (
@@ -545,7 +558,13 @@ async def test_hint_legend_holds_compositor_frame_until_replacement_finishes(
             finally:
                 release_mount.set()
 
-            await pilot.pause()
+            await wait_until(
+                lambda: (
+                    app.display_count > frame_count_before_release
+                    and _visible_hint_ids(legend) == _expected_hint_ids(legend)
+                ),
+                what="replacement hint frame displayed",
+            )
             assert app.display_count > frame_count_before_release
             assert _visible_hint_ids(legend) == _expected_hint_ids(legend)
     finally:
@@ -953,9 +972,12 @@ async def test_toast_stack_renders_three_toasts_with_levels() -> None:
                     action_action=None,
                 )
             )
-            await pilot.pause()
             from aws_tui.ui.widgets.toast import Toast
 
+            await wait_until(
+                lambda: len(app.query(Toast)) == 3,
+                what="three toast notifications mounted",
+            )
             toasts = app.query(Toast)
             assert len(toasts) == 3
             classes = {tuple(t.classes) for t in toasts}

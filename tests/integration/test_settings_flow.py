@@ -247,7 +247,14 @@ async def test_comma_selects_settings_and_swaps_main_area(tmp_path: Path) -> Non
         async with app.run_test() as pilot:
             await _await_boot(pilot, app)
             await pilot.press("comma")
-            await pilot.pause()
+            await wait_until(
+                lambda: (
+                    ctx.root_vm.services_menu.selected_id == "settings"
+                    and ctx.root_vm.content_host.current_id == "settings"
+                    and bool(app.query("SettingsView"))
+                ),
+                what="Settings navigation and content view to mount",
+            )
             # NavMenuVM should now have settings selected.
             # ctx.root_vm.services_menu is the canonical accessor (NavMenuVM).
             assert ctx.root_vm.services_menu.selected_id == "settings"
@@ -548,7 +555,10 @@ async def test_delete_via_confirm_removes_from_toml(tmp_path: Path) -> None:
             )
             await pilot.pause()
             await pilot.click("#delete-0")
-            await pilot.pause()
+            await wait_until(
+                lambda: (isinstance(app.screen, ConfirmModal)) and (app.screen.vm.is_open),
+                what="delete confirmation modal to open",
+            )
             assert isinstance(app.screen, ConfirmModal)
             assert app.screen.vm.is_open
             # ConfirmModal opens; danger defaults focus to Cancel — press
@@ -677,7 +687,13 @@ async def test_settings_selection_during_boot_replays_after_boot_mount(
             from aws_tui.vm.nav_menu_vm import SETTINGS_NAV_ID
 
             ctx.root_vm.services_menu.switch_service_command.execute(SETTINGS_NAV_ID)
-            await pilot.pause()
+            await wait_until(
+                lambda: (
+                    ctx.root_vm.services_menu.selected_id == SETTINGS_NAV_ID
+                    and bool(app.query(SettingsView))
+                ),
+                what="Settings view to mount while startup is paused",
+            )
             assert ctx.root_vm.services_menu.selected_id == SETTINGS_NAV_ID
 
             release.set()
@@ -860,7 +876,13 @@ async def test_local_only_mount_returns_true_only_with_mounted_view(tmp_path: Pa
                 initial_conn=connection,
                 reason="test",
             )
-            await pilot.pause()
+            await wait_until(
+                lambda: (
+                    len(app.query_one("#content-host").query(DualPane)) == 1
+                    and app.query_one(DualPane).vm is ctx.root_vm.content_host.current
+                ),
+                what="local-only dual pane to mount with the current view model",
+            )
 
             assert result is True
             host = app.query_one("#content-host")
