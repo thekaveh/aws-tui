@@ -46,6 +46,7 @@ _ATHENA_FOCUS_ORDER = (
     FocusSlot.ATHENA_HISTORY_MORE,
     FocusSlot.ATHENA_SECONDARY,
     FocusSlot.ATHENA_CANCEL,
+    FocusSlot.ATHENA_STATUS,
     FocusSlot.ATHENA_SAVED_PREPARED_MORE,
     FocusSlot.ATHENA_DETAIL,
     FocusSlot.ATHENA_SAVED_OPEN_EDITOR,
@@ -98,6 +99,18 @@ class AthenaPage(DeferredWorkerMixin, HubSubscriberMixin, Widget):
     AthenaPage .athena-service-view {
         width: 1fr;
         height: 1fr;
+    }
+    AthenaPage.-narrow-context #athena-source-header {
+        width: 20;
+        min-width: 20;
+    }
+    AthenaPage.-narrow-context #athena-context-row > ContextPicker {
+        width: 1fr;
+        min-width: 0;
+    }
+    AthenaPage.-narrow-context #athena-context-row > #athena-catalog,
+    AthenaPage.-narrow-context #athena-context-row > #athena-database {
+        min-width: 0;
     }
     AthenaPage ResourceListPane,
     AthenaPage DetailRows {
@@ -206,6 +219,16 @@ class AthenaPage(DeferredWorkerMixin, HubSubscriberMixin, Widget):
             for view, child in views:
                 child.display = view == self._vm.active_view
                 yield child
+
+    def on_resize(self, event: events.Resize) -> None:
+        self._sync_context_width(event.size.width)
+
+    def _sync_context_width(self, width: int) -> None:
+        # Preserve the roomy selector minima whenever they fit, including
+        # the three-column pagination buttons only while they are displayed.
+        buttons = self.query("#athena-context-row > AthenaLoadMoreButton")
+        required = 29 + 16 + 19 + 12 + 3 * sum(button.display for button in buttons)
+        self.set_class(width < required, "-narrow-context")
 
     def on_mount(self) -> None:
         self.subscribe_to_vm(
@@ -549,6 +572,7 @@ class AthenaPage(DeferredWorkerMixin, HubSubscriberMixin, Widget):
                 (FocusSlot.ATHENA_PRIMARY, self.query_one("#athena-editor", TextArea)),
                 (FocusSlot.ATHENA_SECONDARY, self.query_one("#athena-execute", Button)),
                 (FocusSlot.ATHENA_CANCEL, self.query_one("#athena-cancel", Button)),
+                (FocusSlot.ATHENA_STATUS, self.query_one("#athena-query-status", Widget)),
                 (
                     FocusSlot.ATHENA_DETAIL,
                     self.query_one("#athena-query-detail", VerticalScroll),
@@ -677,6 +701,11 @@ class AthenaPage(DeferredWorkerMixin, HubSubscriberMixin, Widget):
                 focused.action_cursor_down()
         elif isinstance(focused, ContextPicker):
             focused.open()
+        elif isinstance(focused, VerticalScroll):
+            if delta < 0:
+                focused.action_scroll_up()
+            else:
+                focused.action_scroll_down()
 
     def activate_focused(self) -> bool:
         focused = self.app.focused
@@ -802,6 +831,7 @@ class AthenaPage(DeferredWorkerMixin, HubSubscriberMixin, Widget):
                 self._vm.databases_error_text,
             )
             self._sync_context_load_more(load_more)
+            self._sync_context_width(self.size.width)
         finally:
             self._syncing_context = False
 

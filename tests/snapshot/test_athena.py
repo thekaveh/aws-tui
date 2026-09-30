@@ -1,12 +1,21 @@
 from __future__ import annotations
 
+import os
+from html import unescape
 from itertools import product
 from pathlib import Path
+from typing import cast
 
 import pytest
+from textual.pilot import Pilot
+from textual.widgets import TextArea
 
+from aws_tui.ui.widgets.athena.page import AthenaPage
+from tests.helpers import drain_workers, seed_athena_sql, wait_until
 from tests.snapshot.apps.athena import AthenaFixture, AthenaPageApp
+from tests.snapshot.apps.demo_mode import DemoModeApp
 from tests.snapshot.conftest import THEMES
+from tests.snapshot.test_demo_mode import _dismiss_demo_startup_advisory
 
 WIDE = (150, 44)
 COMPACT = (100, 30)
@@ -22,6 +31,81 @@ FIXTURES: tuple[AthenaFixture, ...] = (
     "missing-result-config",
     "focused-rebound-tabs",
 )
+FULL_APP_CASES = [
+    pytest.param(theme, size, id=f"{theme}-{size[0]}x{size[1]}")
+    for theme, size in product(("carbon", "github-light"), ((80, 24), (120, 40)))
+]
+
+
+async def _show_full_app_query(pilot: Pilot[None]) -> None:
+    app = cast(DemoModeApp, pilot.app)
+    await drain_workers(app)
+    app.app_ctx.root_vm.services_menu.switch_service_command.execute("athena")
+    await wait_until(lambda: bool(app.query(AthenaPage)), what="full-app Athena page mounted")
+    await drain_workers(app)
+    page = app.query_one(AthenaPage)
+    await wait_until(
+        lambda: page.vm.context.database == "dev_events",
+        what="full-app Athena snapshot context loaded",
+    )
+    editor = app.query_one("#athena-editor", TextArea)
+    await seed_athena_sql(pilot, page.vm.query, editor, "SELECT 42 AS compact_layout")
+    await _dismiss_demo_startup_advisory(pilot)
+    try:
+        await wait_until(
+            lambda: editor.region.height >= 3 and "compact_layout" in app.export_screenshot(),
+            what="full-app snapshot contains visibly rendered SQL",
+        )
+    except AssertionError as error:
+        # run_before failures happen before the snapshot plugin captures an
+        # image. Preserve this demo-only SVG too, so CI can distinguish a
+        # layout failure from missing SQL or split SVG text spans.
+        try:
+            state = (
+                f"size={app.size!r}; screen={app.screen.classes!r}; "
+                f"service={app.app_ctx.root_vm.content_host.current_id!r}; "
+                f"focus={app.focused!r}; editor_attached={editor.is_attached}; "
+                f"editor_current={editor in app.query('#athena-editor')}; "
+                f"editor_region={editor.region!r}; editor_scroll={editor.scroll_offset!r}; "
+                f"editor_text={editor.text!r}; vm_sql={page.vm.query.sql!r}; "
+                f"regions={[(type(w).__name__, w.region, w.classes) for w in app.query('BrandBanner, AthenaPage, AthenaQueryView')]!r}"
+            )
+            error.add_note(state)
+            svg = app.export_screenshot()
+            destination = os.environ.get("AWS_TUI_SNAPSHOT_ARTIFACT_DIR")
+            if destination:
+                output = Path(destination)
+                output.mkdir(parents=True, exist_ok=True)
+                theme = app.app_ctx.initial_theme
+                name = f"athena-readiness-{theme}-{app.size.width}x{app.size.height}.svg"
+                (output / name).write_text(svg, encoding="utf-8")
+            error.add_note(f"rendered_marker={'compact_layout' in svg}")
+        except Exception as diagnostic_error:
+            error.add_note(f"Could not complete snapshot diagnostics: {diagnostic_error!r}")
+        raise
+    assert editor.region.height >= 3
+    assert editor.text == "SELECT 42 AS compact_layout"
+
+
+@pytest.mark.parametrize(("theme", "size"), FULL_APP_CASES)
+def test_athena_full_app_snapshot(theme: str, size: tuple[int, int], snap_compare) -> None:
+    app = DemoModeApp(theme=theme)
+    try:
+        assert snap_compare(app, terminal_size=size, run_before=_show_full_app_query)
+    finally:
+        app.app_ctx.root_vm.dispose()
+
+
+@pytest.mark.parametrize(("theme", "size"), FULL_APP_CASES)
+def test_athena_full_app_snapshot_content_guard(theme: str, size: tuple[int, int]) -> None:
+    snapshot = _named_snapshot(f"test_athena_full_app_snapshot[{theme}-{size[0]}x{size[1]}]")
+    rendered = unescape(snapshot).replace("\xa0", " ")
+    assert "query editor" in rendered
+    assert "SELECT" in rendered
+    assert "compact_layout" in rendered
+    assert "Athena" in rendered
+    assert "demo-dev" in rendered
+    assert "DEMO MODE" in rendered
 
 
 @pytest.mark.parametrize(

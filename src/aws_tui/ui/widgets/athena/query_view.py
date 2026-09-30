@@ -3,9 +3,11 @@ from __future__ import annotations
 from typing import ClassVar
 
 from reactivex.abc import DisposableBase
+from textual import events
 from textual.app import ComposeResult
 from textual.binding import Binding, BindingType
 from textual.containers import Horizontal, VerticalScroll
+from textual.screen import Screen
 from textual.widget import Widget
 from textual.widgets import Button, Static, TextArea
 
@@ -67,6 +69,13 @@ class AthenaQueryView(DeferredWorkerMixin, Widget):
         width: 1fr;
         height: auto;
     }
+    AthenaQueryView.-compact {
+        grid-rows: 3 1fr 3;
+    }
+    AthenaQueryView.-compact > #athena-query-controls,
+    AthenaQueryView.-compact > #athena-query-detail {
+        height: 3;
+    }
     """
 
     def __init__(self, vm: AthenaPageVM, *, id: str | None = None) -> None:
@@ -75,6 +84,7 @@ class AthenaQueryView(DeferredWorkerMixin, Widget):
         self._vm = vm.query
         self._sub: DisposableBase | None = None
         self._syncing_editor = False
+        self._layout_screen: Screen[object] | None = None
 
     def compose(self) -> ComposeResult:
         with Horizontal(id="athena-query-controls"):
@@ -94,7 +104,9 @@ class AthenaQueryView(DeferredWorkerMixin, Widget):
                 flat=True,
                 tooltip="Stop query submission or the active query",
             )
-            yield Static("", id="athena-query-status", markup=False)
+            status = Static("", id="athena-query-status", markup=False)
+            status.can_focus = True
+            yield status
         yield TextArea(
             self._vm.sql,
             language="sql",
@@ -107,7 +119,22 @@ class AthenaQueryView(DeferredWorkerMixin, Widget):
         with VerticalScroll(id="athena-query-detail"):
             yield Static("", id="athena-query-detail-text", markup=False)
 
+    def on_resize(self, event: events.Resize) -> None:
+        self._sync_compact_height(event.size.height)
+
+    def _on_screen_layout(self, _screen: Screen[object]) -> None:
+        self._sync_compact_height(self.size.height)
+
+    def _sync_compact_height(self, height: int) -> None:
+        if height > 0:
+            self.set_class(height < 15, "-compact")
+
     def on_mount(self) -> None:
+        # An early geometry read can consume Textual's size change before it
+        # emits Resize. Reconcile after layouts too, with deferred delivery so
+        # the screen has finished clearing its pending-layout flag.
+        self._layout_screen = self.screen
+        self._layout_screen.screen_layout_refresh_signal.subscribe(self, self._on_screen_layout)
         self.query_one("#athena-editor", TextArea).border_title = "query editor"
         self.query_one("#athena-query-controls").border_title = "query controls"
         self.query_one("#athena-query-detail").border_title = "execution detail"
@@ -115,6 +142,9 @@ class AthenaQueryView(DeferredWorkerMixin, Widget):
         self._sub = self._vm.on_property_changed.subscribe(on_next=self._on_vm_changed)
 
     def on_unmount(self) -> None:
+        if self._layout_screen is not None:
+            self._layout_screen.screen_layout_refresh_signal.unsubscribe(self)
+            self._layout_screen = None
         if self._sub is not None:
             self._sub.dispose()
             self._sub = None
@@ -179,6 +209,7 @@ class AthenaQueryView(DeferredWorkerMixin, Widget):
             self.query_one("#athena-editor", TextArea),
             self.query_one("#athena-execute", Button),
             self.query_one("#athena-cancel", Button),
+            self.query_one("#athena-query-status", Static),
             self.query_one("#athena-query-detail", VerticalScroll),
         )
         focus_chain = self.screen.focus_chain

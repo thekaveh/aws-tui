@@ -44,9 +44,16 @@ Workgroup configuration determines customer-S3 output or Athena managed
 results. Only a successful customer-S3 execution has an artifact that can be
 opened in the S3 service.
 
-The Query view orders Query controls, Query editor, then Execution detail. The
-framed controls row fully contains its Run and Stop buttons at every supported
-terminal width. Glue table and Iceberg snapshot handoffs prefill a quoted
+The Query view orders Query controls, Query editor, then Execution detail. Run,
+Stop, and query status participate in keyboard focus traversal when available.
+At the minimum supported terminal size of 80×24, the app uses a one-line banner
+that names the service, source, region, and demo status. Compact controls and a
+scrollable Execution detail pane leave at least three rows for the SQL editor.
+Tab to Execution detail and use the Up and Down arrows to read additional rows.
+Resizing keeps typed SQL, context selections, and keyboard focus; taller terminals
+restore the spacious banner and query layout.
+
+Glue table and Iceberg snapshot handoffs prefill a quoted
 `SELECT *` starter ending in `LIMIT 5`; the transaction explicitly projects the
 starter into the mounted editor and never executes it.
 
