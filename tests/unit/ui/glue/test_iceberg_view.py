@@ -708,7 +708,10 @@ async def test_retry_and_load_more_buttons_run_current_view_actions() -> None:
         assert len(vm.catalog.iceberg.snapshots) == 1
         assert pilot.app.query_one("#glue-iceberg-more", Button) in pilot.app.screen.focus_chain
 
-        await pilot.click("#glue-iceberg-more")
+        # Hiding Retry moves More as the footer expands. Focusability updates
+        # before layout, and click() samples coordinates before its own pause.
+        await pilot.pause()
+        assert await pilot.click("#glue-iceberg-more")
         await wait_until(
             lambda: len(vm.catalog.iceberg.snapshots) == 2,
             what="snapshot load-more appended its second page",
