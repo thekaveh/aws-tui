@@ -16,6 +16,7 @@ from aws_tui.domain.data_catalog import TableRef
 from aws_tui.infra.aws_session import TokenState
 from aws_tui.ui.widgets.pane import Pane
 from aws_tui.ui.widgets.toast import Toast
+from aws_tui.vm.chrome.toast_vm import ToastLevel, ToastVM
 from aws_tui.vm.file_manager.pane_vm import PaneState
 from aws_tui.vm.glue.iceberg_vm import GlueIcebergVM, IcebergView
 from aws_tui.vm.glue.page_vm import GluePageVM
@@ -30,6 +31,13 @@ from tests.snapshot.conftest import THEMES
 TERMINAL_SIZE = (120, 30)
 _SERVICE_TAB_LABELS = ("3 crawlers", "1 catalog", "2 jobs")
 _DEMO_STARTUP_ADVISORY = "Demo mode active — AWS data resets; local pane is real"
+_DEMO_BOOT_OUTCOME_ID = "boot-outcome-aws-demo-dev"
+
+
+def _is_demo_boot_success(toast: ToastVM) -> bool:
+    # DemoModeApp always boots its isolated fixture on demo-dev. Warnings and
+    # errors use the same outcome ID and must remain visible in snapshots.
+    return toast.model.id == _DEMO_BOOT_OUTCOME_ID and toast.model.level == ToastLevel.SUCCESS
 
 
 async def _drain_workers(pilot) -> None:  # type: ignore[no-untyped-def]
@@ -84,6 +92,21 @@ async def _drain_workers(pilot) -> None:  # type: ignore[no-untyped-def]
         setup_task: asyncio.Task[None] | None = pilot.app._app_ctx.root_vm.content_host._setup_task  # type: ignore[attr-defined]
         if setup_task is not None and not setup_task.done():
             await setup_task
+
+    # Slow boot displays a transient success after its 500 ms grace period.
+    # Worker completion does not wait for its raw asyncio expiry timer. Clear
+    # only that known success; retain the demo advisory and all other notices.
+    toast_stack = pilot.app.app_ctx.root_vm.chrome.toast_stack
+    for toast in tuple(toast_stack.toasts):
+        if _is_demo_boot_success(toast):
+            toast_stack.dismiss(toast.model.id)
+    await wait_until(
+        lambda: (
+            not any(_is_demo_boot_success(toast) for toast in toast_stack.toasts)
+            and not any(_is_demo_boot_success(toast.toast_vm) for toast in pilot.app.query(Toast))
+        ),
+        what="transient demo boot success to leave the model and rendered widget tree",
+    )
 
     # Layer 3: wait for the production VM subscription to update every
     # mounted Pane footer. Do not call a private render method here: doing
