@@ -8,6 +8,9 @@ Ubuntu only (rendering-tolerance reasons).
 
 from __future__ import annotations
 
+import os
+from pathlib import Path
+
 import pytest
 
 from aws_tui.infra.theme_store import ThemeStore
@@ -19,6 +22,30 @@ THEMES = ThemeStore.BUILTIN_NAMES
 
 #: Standard terminal size for every snapshot fixture.
 TERMINAL_SIZE = (120, 40)
+
+
+@pytest.hookimpl(trylast=True)
+def pytest_sessionfinish(session: pytest.Session, exitstatus: int) -> None:
+    """Retain failed SVG pairs after the snapshot plugin assembles its report.
+
+    Export only its image fields: the HTML report also embeds every environment
+    variable, including unescaped values that may themselves contain SVG tags.
+    The opt-in directory keeps local runs free of extra generated files.
+    """
+    destination = os.environ.get("AWS_TUI_SNAPSHOT_ARTIFACT_DIR")
+    diffs = getattr(session.config, "_textual_snapshots", ())
+    if not destination or not diffs:
+        return
+    output = Path(destination)
+    output.mkdir(parents=True, exist_ok=True)
+    for index, diff in enumerate(diffs, start=1):
+        prefix = f"{index:03d}"
+        (output / f"{prefix}-test.txt").write_text(
+            f"{diff.path}:{diff.line_number}\n{diff.test_name}\n", encoding="utf-8"
+        )
+        for kind, svg in (("expected", diff.snapshot), ("actual", diff.actual)):
+            if svg is not None and (kind == "actual" or diff.snapshot_exists):
+                (output / f"{prefix}-{kind}.svg").write_text(svg, encoding="utf-8")
 
 
 @pytest.fixture
