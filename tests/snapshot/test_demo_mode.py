@@ -24,10 +24,8 @@ from tests.helpers import wait_until
 from tests.snapshot.apps.demo_mode import DemoModeApp
 from tests.snapshot.conftest import THEMES
 
-# Narrower than conftest.TERMINAL_SIZE (120, 40): the extra 10 rows push
-# the boot toast below the captured frame, hiding the "Demo mode active"
-# advisory that our content-presence guard checks for.  30 rows keeps
-# both the BrandBanner "DEMO MODE" chip and the toast overlay in frame.
+# Thirty rows exercise compact chrome with the startup advisory still in
+# frame. The 120x40 Iceberg snapshots below retain the spacious banner.
 TERMINAL_SIZE = (120, 30)
 _SERVICE_TAB_LABELS = ("3 crawlers", "1 catalog", "2 jobs")
 _DEMO_STARTUP_ADVISORY = "Demo mode active — AWS data resets; local pane is real"
@@ -322,7 +320,7 @@ def test_demo_iceberg_profile_snapshot(
 @pytest.mark.parametrize("theme", THEMES)
 def test_demo_mode_renders_chip_and_seed_data(theme: str) -> None:
     """Content-presence guard. ``DEMO MODE`` text MUST appear in the
-    snapshot (BrandBanner subtitle) and at least one seeded demo
+    snapshot (compact BrandBanner) and at least one seeded demo
     artifact MUST be rendered (proves the demo wiring actually
     landed, not just an empty shell)."""
     p = (
@@ -337,6 +335,7 @@ def test_demo_mode_renders_chip_and_seed_data(theme: str) -> None:
     # non-breaking spaces in text nodes). Decode entities and normalise
     # non-breaking spaces so plain substring checks work reliably.
     svg_plain = html_lib.unescape(svg).replace("\xa0", " ")
+    assert "aws-tui · DEMO MODE · S3 · demo-dev · us-east-1" in svg_plain
     # The DEMO affordance appears as either:
     # - "DEMO MODE" in the BrandBanner border_subtitle (when no overlay
     #   covers it), or

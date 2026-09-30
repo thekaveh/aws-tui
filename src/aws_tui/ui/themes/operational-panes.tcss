@@ -71,6 +71,19 @@ AthenaPage DataTable:focus {
     border-title-color: $accent;
 }
 
+/* The short query controls track still fits its three-row buttons when
+   its enclosing decorative border is removed. */
+AthenaPage AthenaQueryView.-compact > #athena-query-controls,
+AthenaPage AthenaQueryView.-compact > #athena-query-controls:focus-within {
+    border: none;
+}
+
+AthenaPage #athena-query-status:focus {
+    background: $bg-sel;
+    color: $accent;
+    text-style: bold;
+}
+
 /* Shared service-local segmented tab frame */
 ServiceTabStrip {
     background: $bg;

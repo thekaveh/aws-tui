@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import ClassVar
 
 from reactivex.abc import DisposableBase
+from textual import events
 from textual.app import ComposeResult
 from textual.binding import Binding, BindingType
 from textual.containers import Horizontal, VerticalScroll
@@ -67,6 +68,13 @@ class AthenaQueryView(DeferredWorkerMixin, Widget):
         width: 1fr;
         height: auto;
     }
+    AthenaQueryView.-compact {
+        grid-rows: 3 1fr 3;
+    }
+    AthenaQueryView.-compact > #athena-query-controls,
+    AthenaQueryView.-compact > #athena-query-detail {
+        height: 3;
+    }
     """
 
     def __init__(self, vm: AthenaPageVM, *, id: str | None = None) -> None:
@@ -94,7 +102,9 @@ class AthenaQueryView(DeferredWorkerMixin, Widget):
                 flat=True,
                 tooltip="Stop query submission or the active query",
             )
-            yield Static("", id="athena-query-status", markup=False)
+            status = Static("", id="athena-query-status", markup=False)
+            status.can_focus = True
+            yield status
         yield TextArea(
             self._vm.sql,
             language="sql",
@@ -106,6 +116,9 @@ class AthenaQueryView(DeferredWorkerMixin, Widget):
         )
         with VerticalScroll(id="athena-query-detail"):
             yield Static("", id="athena-query-detail-text", markup=False)
+
+    def on_resize(self, event: events.Resize) -> None:
+        self.set_class(event.size.height < 15, "-compact")
 
     def on_mount(self) -> None:
         self.query_one("#athena-editor", TextArea).border_title = "query editor"
@@ -179,6 +192,7 @@ class AthenaQueryView(DeferredWorkerMixin, Widget):
             self.query_one("#athena-editor", TextArea),
             self.query_one("#athena-execute", Button),
             self.query_one("#athena-cancel", Button),
+            self.query_one("#athena-query-status", Static),
             self.query_one("#athena-query-detail", VerticalScroll),
         )
         focus_chain = self.screen.focus_chain

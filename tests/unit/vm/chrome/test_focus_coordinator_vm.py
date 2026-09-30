@@ -462,6 +462,7 @@ def test_focus_slot_enum_has_all_required_members() -> None:
         "ATHENA_PRIMARY",
         "ATHENA_SECONDARY",
         "ATHENA_CANCEL",
+        "ATHENA_STATUS",
         "ATHENA_DETAIL",
         "ATHENA_HISTORY_MORE",
         "ATHENA_SAVED_NAMED_MORE",
@@ -512,6 +513,7 @@ def test_focus_slot_values_are_canonical_strings() -> None:
     assert FocusSlot.ATHENA_PRIMARY.value == "athena.primary"
     assert FocusSlot.ATHENA_SECONDARY.value == "athena.secondary"
     assert FocusSlot.ATHENA_CANCEL.value == "athena.cancel"
+    assert FocusSlot.ATHENA_STATUS.value == "athena.status"
     assert FocusSlot.ATHENA_DETAIL.value == "athena.detail"
     assert FocusSlot.ATHENA_HISTORY_MORE.value == "athena.history.more"
     assert FocusSlot.ATHENA_SAVED_NAMED_MORE.value == "athena.saved.named.more"
