@@ -182,7 +182,22 @@ async def test_athena_ring_includes_enabled_context_load_more_controls() -> None
         await pilot.pause()
         page = app.query_one(AthenaPage)
         page._refresh_page()  # type: ignore[attr-defined]
-        await pilot.pause()
+        await wait_until(
+            lambda: (
+                _athena_target_ids(page)[:8]
+                == (
+                    "athena-source-header",
+                    "athena-workgroup",
+                    "athena-more-workgroups",
+                    "athena-catalog",
+                    "athena-more-catalogs",
+                    "athena-database",
+                    "athena-more-databases",
+                    "athena-view-tabs",
+                )
+            ),
+            what="Athena context pager controls entered the focus ring",
+        )
 
         assert _athena_target_ids(page)[:8] == (
             "athena-source-header",
@@ -226,7 +241,18 @@ async def test_athena_rings_include_enabled_query_history_results_and_saved_cont
         await page.action_select_view("history")
         vm.history._pager._current_token = "history-next"  # type: ignore[attr-defined]
         page.query_one(AthenaHistoryView)._refresh()  # type: ignore[attr-defined]
-        await pilot.pause()
+        await wait_until(
+            lambda: (
+                {
+                    "athena-history-pane-options",
+                    "athena-more-history",
+                    "athena-history-results",
+                    "athena-history-detail-scroll",
+                }
+                <= set(_athena_target_ids(page))
+            ),
+            what="Athena history controls entered the focus ring",
+        )
         assert {
             "athena-history-pane-options",
             "athena-more-history",
@@ -237,7 +263,12 @@ async def test_athena_rings_include_enabled_query_history_results_and_saved_cont
         await page.action_select_view("results")
         vm.results._pager._current_token = "results-next"  # type: ignore[attr-defined]
         page.query_one(AthenaResultsView)._refresh()  # type: ignore[attr-defined]
-        await pilot.pause()
+        await wait_until(
+            lambda: (
+                {"athena-results-table", "athena-more-results"} <= set(_athena_target_ids(page))
+            ),
+            what="Athena results controls entered the focus ring",
+        )
         assert {
             "athena-results-table",
             "athena-more-results",
@@ -248,7 +279,20 @@ async def test_athena_rings_include_enabled_query_history_results_and_saved_cont
         vm.saved._prepared_pager._current_token = "prepared-next"  # type: ignore[attr-defined]
         await vm.select_named_query("named-1")
         page.query_one(AthenaSavedView)._refresh()  # type: ignore[attr-defined]
-        await pilot.pause()
+        await wait_until(
+            lambda: (
+                {
+                    "athena-named-pane-options",
+                    "athena-more-named",
+                    "athena-prepared-pane-options",
+                    "athena-more-prepared",
+                    "athena-saved-detail-scroll",
+                    "athena-open-editor",
+                }
+                <= set(_athena_target_ids(page))
+            ),
+            what="Athena saved-query controls entered the focus ring",
+        )
         assert {
             "athena-named-pane-options",
             "athena-more-named",
@@ -269,23 +313,43 @@ async def test_athena_ring_syncs_direct_focus_and_projects_to_nav() -> None:
         await pilot.pause()
         page = app.query_one(AthenaPage)
         catalog = app.query_one("#athena-catalog", ContextPicker)
-        catalog.focus()
-        await pilot.pause()
+        await focus_and_settle(catalog)
+        await wait_until(
+            lambda: (
+                catalog.has_focus and app.focus_coordinator.focused_slot is FocusSlot.ATHENA_CATALOG
+            ),
+            what="Athena catalog focus reached the coordinator",
+        )
 
         assert app.focus_coordinator.focused_slot is FocusSlot.ATHENA_CATALOG
         page.cycle_focus(reverse=False)
-        await pilot.pause()
+        await wait_until(
+            lambda: app.query_one("#athena-database", ContextPicker).has_focus,
+            what="Athena database took focus",
+        )
         assert app.query_one("#athena-database", ContextPicker).has_focus
 
         await pilot.click("#athena-tab-history")
-        await pilot.pause()
+        await wait_until(
+            lambda: (
+                app.query_one("#athena-view-tabs", ServiceTabStrip).has_focus
+                and app.focus_coordinator.focused_slot is FocusSlot.ATHENA_TABS
+            ),
+            what="clicked Athena tab received coordinated focus",
+        )
         assert app.query_one("#athena-view-tabs", ServiceTabStrip).has_focus
         assert app.focus_coordinator.focused_slot is FocusSlot.ATHENA_TABS
 
         app.query_one("#athena-source-header").focus()
         await pilot.pause()
         page.cycle_focus(reverse=True)
-        await pilot.pause()
+        await wait_until(
+            lambda: (
+                app.query_one("#nav-menu", NavMenu).has_focus
+                and app.focus_coordinator.focused_slot is FocusSlot.NAV_MENU
+            ),
+            what="Athena reverse cycle focused navigation",
+        )
         assert app.query_one("#nav-menu", NavMenu).has_focus
         assert app.focus_coordinator.focused_slot is FocusSlot.NAV_MENU
 
@@ -306,7 +370,14 @@ async def test_athena_refresh_falls_back_to_the_nearest_available_slot() -> None
         await pilot.pause()
 
         vm.query.set_sql("SELECT 2")
-        await pilot.pause()
+        await wait_until(
+            lambda: (
+                cancel.disabled
+                and app.focus_coordinator.focused_slot is FocusSlot.ATHENA_DETAIL
+                and app.query_one("#athena-query-detail").has_focus
+            ),
+            what="disabled Athena cancel reconciled focus to query detail",
+        )
 
         assert cancel.disabled
         assert app.focus_coordinator.focused_slot is FocusSlot.ATHENA_DETAIL
@@ -332,7 +403,14 @@ async def test_context_refresh_reconciles_an_unavailable_pager_to_its_nearest_sl
 
         vm._workgroup_pager._current_token = None  # type: ignore[attr-defined]
         page._refresh_page()  # type: ignore[attr-defined]
-        await pilot.pause()
+        await wait_until(
+            lambda: (
+                load_more.disabled
+                and app.focus_coordinator.focused_slot is FocusSlot.ATHENA_CATALOG
+                and app.query_one("#athena-catalog", ContextPicker).has_focus
+            ),
+            what="disabled workgroup pager reconciled focus to catalog",
+        )
 
         assert load_more.disabled
         assert app.focus_coordinator.focused_slot is FocusSlot.ATHENA_CATALOG
@@ -361,7 +439,14 @@ async def test_saved_refresh_uses_current_ring_forward_tie_for_disappearing_cont
 
         vm.saved._named_pager._current_token = None  # type: ignore[attr-defined]
         vm.saved._notify("has_more_named_queries")  # type: ignore[attr-defined]
-        await pilot.pause()
+        await wait_until(
+            lambda: (
+                load_more.disabled
+                and app.focus_coordinator.focused_slot is FocusSlot.ATHENA_SECONDARY
+                and app.query_one("#athena-prepared-pane-options", OptionList).has_focus
+            ),
+            what="disabled saved-query pager reconciled focus to prepared queries",
+        )
 
         assert load_more.disabled
         assert app.focus_coordinator.focused_slot is FocusSlot.ATHENA_SECONDARY
@@ -486,24 +571,36 @@ async def test_populated_athena_context_picker_opens_by_mouse_and_keyboard(
         assert picker.disabled is False
 
         await pilot.click(f"#{picker_id}")
-        await pilot.pause()
+        await wait_until(
+            lambda: picker.is_open and picker.has_focus_within,
+            what="mouse-opened Athena context picker took focus",
+        )
         assert picker.is_open
 
         await pilot.press("escape")
         await focus_and_settle(picker)
         await pilot.press("enter")
-        await pilot.pause()
+        await wait_until(
+            lambda: picker.is_open and picker.has_focus_within,
+            what="Enter opened Athena context picker",
+        )
         assert picker.is_open
 
         await pilot.press("escape")
         await focus_and_settle(picker)
         await pilot.press("space")
-        await pilot.pause()
+        await wait_until(
+            lambda: picker.is_open and picker.has_focus_within,
+            what="Space opened Athena context picker",
+        )
         assert picker.is_open
 
         selected = picker.value
         await pilot.press("enter")
-        await pilot.pause()
+        await wait_until(
+            lambda: not picker.is_open,
+            what="Enter committed and closed Athena context picker",
+        )
         assert not picker.is_open
         assert picker.value == selected
 
@@ -523,11 +620,21 @@ async def test_open_athena_context_picker_preserves_page_regions() -> None:
         before = (row.region, tabs.region, view_host.region)
 
         page.action_choose_catalog()
+        await wait_until(
+            lambda: (
+                page.query_one("#athena-catalog", ContextPicker).is_open
+                and app.focused
+                is page.query_one("#athena-catalog", ContextPicker).query_one(OptionList)
+            ),
+            what="Athena catalog overlay opened before geometry comparison",
+        )
+        # Drain picker-open layout before asserting page regions did not move.
         await pilot.pause()
 
         assert (row.region, tabs.region, view_host.region) == before
 
         await pilot.press("escape")
+        # Drain Escape and layout before asserting page regions did not move.
         await pilot.pause()
 
         assert (row.region, tabs.region, view_host.region) == before
@@ -548,15 +655,29 @@ async def test_unfocused_source_picker_is_dim_while_focused_content_uses_accent(
         source = app.query_one("#athena-source-header-picker", ContextPicker)
         workgroup = app.query_one("#athena-workgroup", ContextPicker)
         editor = app.query_one("#athena-editor", TextArea)
-        editor.focus()
-        await pilot.pause()
+        await focus_and_settle(editor)
+        await wait_until(
+            lambda: (
+                editor.has_focus
+                and source.styles.border_top == ("solid", Color.parse("#2a2d33"))
+                and workgroup.styles.border_top == ("solid", Color.parse("#2a2d33"))
+                and editor.styles.border_top == ("solid", Color.parse("#6fb8ff"))
+            ),
+            what="focused Athena editor rendered accent with dim context pickers",
+        )
 
         assert source.styles.border_top == ("solid", Color.parse("#2a2d33"))
         assert workgroup.styles.border_top == ("solid", Color.parse("#2a2d33"))
         assert editor.styles.border_top == ("solid", Color.parse("#6fb8ff"))
 
-        workgroup.focus()
-        await pilot.pause()
+        await focus_and_settle(workgroup)
+        await wait_until(
+            lambda: (
+                workgroup.has_focus
+                and workgroup.styles.border_top == ("heavy", Color.parse("#6fb8ff"))
+            ),
+            what="focused Athena workgroup rendered its accent border",
+        )
 
         assert workgroup.styles.border_top == ("heavy", Color.parse("#6fb8ff"))
 
@@ -608,7 +729,12 @@ async def test_same_turn_context_opens_keep_only_newest_picker_focused(
         # deferred reconciliation remains a safety net, but the UI must never
         # render two context dropdowns open while Textual drains messages.
         assert not first.is_open
-        await pilot.pause()
+        await wait_until(
+            lambda: (
+                newest.is_open and not first.is_open and app.focused is newest.query_one(OptionList)
+            ),
+            what="newest Athena context picker received overlay focus",
+        )
 
         assert newest.is_open
         assert not first.is_open
@@ -654,6 +780,7 @@ async def test_reprojecting_an_open_pickers_slot_leaves_it_open(
         )
 
         page.project_focus_slot(slot)
+        # Drain projection events before checking the open Athena picker retained focus.
         await pilot.pause()
 
         assert picker.is_open
@@ -761,7 +888,12 @@ async def test_tab_cycle_closes_departed_context_picker(
         assert picker.is_open
 
         page.cycle_focus(reverse=reverse)
-        await pilot.pause()
+        await wait_until(
+            lambda: (
+                not picker.is_open and app.focused is not None and app.focused.id == expected_id
+            ),
+            what="Athena pane cycle closed picker and focused destination",
+        )
 
         assert not picker.is_open
         assert app.focused is not None
@@ -781,7 +913,6 @@ async def test_context_picker_changed_routes_through_page_vm() -> None:
         event = ContextPicker.Changed(picker, "analysts")
         page.on_context_picker_changed(event)
         await page.workers.wait_for_complete()
-        await pilot.pause()
 
         assert vm.context.workgroup == "analysts"
         assert client.catalog_calls[-1] == ("analysts", None)
@@ -924,17 +1055,26 @@ async def test_view_selection_is_lazy_and_results_mount_a_data_table() -> None:
         assert client.history_calls == []
         assert client.named_calls == []
         await page.action_select_view("history")
-        await pilot.pause()
+        await wait_until(
+            lambda: page.query_one(AthenaHistoryView).display,
+            what="lazy Athena history view rendered",
+        )
         assert client.history_calls == [("primary", None)]
         assert page.query_one(AthenaHistoryView).display
 
         await page.action_select_view("results")
-        await pilot.pause()
+        await wait_until(
+            lambda: page.query_one(AthenaResultsView).display,
+            what="Athena results view rendered",
+        )
         assert page.query_one(AthenaResultsView).display
         assert page.query_one(AthenaResultsView).query_one(DataTable)
 
         await page.action_select_view("saved")
-        await pilot.pause()
+        await wait_until(
+            lambda: page.query_one(AthenaSavedView).display,
+            what="lazy Athena saved-query view rendered",
+        )
         assert client.named_calls == [("primary", None)]
         assert client.prepared_calls == [("primary", None)]
 
@@ -948,11 +1088,20 @@ async def test_editor_and_execute_button_drive_the_query_vm() -> None:
     async with app.run_test() as pilot:
         editor = app.query_one("#athena-editor", TextArea)
         editor.text = "SELECT count(*) FROM events"
-        await pilot.pause()
+        await wait_until(
+            lambda: (
+                vm.query.sql == "SELECT count(*) FROM events"
+                and not app.query_one("#athena-execute", Button).disabled
+            ),
+            what="editor change reached query VM and enabled execution",
+        )
 
         assert vm.query.sql == "SELECT count(*) FROM events"
         await pilot.click("#athena-execute")
-        await pilot.pause()
+        await wait_until(
+            lambda: bool(client.start_calls) and vm.results.rows == (("1",),),
+            what="executed Athena editor query returned its result row",
+        )
 
         assert client.start_calls
         assert client.start_calls[0][0] == "SELECT count(*) FROM events"
@@ -1043,6 +1192,7 @@ async def test_query_view_rejects_empty_identifier_without_mutation() -> None:
         editor = app.query_one("#athena-editor", TextArea)
         await seed_athena_sql(pilot, vm.query, editor, "SELECT 1")
         editor.selection = type(editor.selection).cursor((0, 4))
+        # Drain selection messages before testing the synchronous empty-identifier no-op.
         await pilot.pause()
 
         assert app.query_one(AthenaQueryView).insert_table_reference("") is False
@@ -1064,7 +1214,13 @@ async def test_page_selects_query_view_before_inserting_table_reference() -> Non
         inserted = await app.query_one(AthenaPage).insert_table_reference(
             '"AwsDataCatalog"."analytics"."events"'
         )
-        await pilot.pause()
+        await wait_until(
+            lambda: (
+                app.query_one(AthenaQueryView).display
+                and vm.query.sql == '"AwsDataCatalog"."analytics"."events"'
+            ),
+            what="inserted table reference rendered in the query view",
+        )
 
         assert inserted is True
         assert vm.active_view == "query"
@@ -1110,10 +1266,9 @@ async def test_page_refresh_tolerates_genuine_page_teardown() -> None:
     await vm.setup()
     app = _AthenaApp(vm)
 
-    async with app.run_test() as pilot:
+    async with app.run_test():
         page = app.query_one(AthenaPage)
         await page.remove()
-        await pilot.pause()
 
         assert not page.is_running
         assert not page.is_attached
@@ -1210,7 +1365,14 @@ async def test_saved_open_in_editor_copies_sql_without_executing() -> None:
     async with app.run_test() as pilot:
         await pilot.pause()
         await pilot.click("#athena-open-editor")
-        await pilot.pause()
+        await wait_until(
+            lambda: (
+                vm.active_view == "query"
+                and app.query_one(AthenaQueryView).display
+                and app.query_one("#athena-editor", TextArea).text == "SELECT count(*) FROM events"
+            ),
+            what="saved query opened with its SQL rendered in the editor",
+        )
 
         assert vm.active_view == "query"
         assert app.query_one(AthenaQueryView).display
@@ -1234,7 +1396,10 @@ async def test_default_focus_and_tab_cycle_are_stable() -> None:
         assert editor.has_focus
 
         await pilot.press("tab")
-        await pilot.pause()
+        await wait_until(
+            lambda: app.query_one("#athena-execute", Button).has_focus,
+            what="Tab moved Athena editor focus to Execute",
+        )
         assert app.query_one("#athena-execute", Button).has_focus
 
 
@@ -1272,8 +1437,11 @@ async def test_query_controls_are_compact_above_editor_and_inside_their_frame() 
             await pilot.pause(0.01)
             if not execute.disabled:
                 break
-        execute.focus()
-        await pilot.pause()
+        await focus_and_settle(execute)
+        await wait_until(
+            lambda: execute.has_focus,
+            what="Athena Execute button took focus for geometry checks",
+        )
 
         assert execute.has_focus
         assert execute.region.size == Size(5, 3)

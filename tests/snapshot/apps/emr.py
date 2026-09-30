@@ -9,6 +9,7 @@ from datetime import UTC, datetime
 from textual.app import App, ComposeResult
 from textual.containers import Container, Horizontal
 from textual.pilot import Pilot
+from textual.widgets import OptionList
 from vmx import NULL_DISPATCHER, MessageHub
 from vmx.messages.protocols import Message
 
@@ -24,6 +25,7 @@ from aws_tui.ui.widgets.emr_serverless.page import EmrServerlessPage
 from aws_tui.ui.widgets.service_source_header import ServiceSourceHeader
 from aws_tui.vm.emr_serverless.page_vm import EmrServerlessPageVM
 from aws_tui.vm.service_source_vm import ServiceSourceContext
+from tests.helpers import wait_until
 
 _FIXED_TS = datetime(2026, 6, 25, 12, 0, 0, tzinfo=UTC)
 
@@ -156,16 +158,31 @@ class EmrPageOpenPickerApp(EmrPageApp):
         closed_regions = tuple(widget.region for widget in widgets)
 
         picker.toggle_open()
+        await wait_until(
+            lambda: picker.is_open and self.focused is picker.query_one(OptionList),
+            what="picker overlay opened and focused",
+        )
+        # Deliver overlay layout before asserting geometry stayed unchanged.
         await pilot.pause()
         assert picker.is_open
         assert tuple(widget.region for widget in widgets) == closed_regions
 
         await pilot.press("escape")
+        await wait_until(
+            lambda: not picker.is_open and self.focused is picker,
+            what="picker closed and trigger refocused",
+        )
+        # Deliver overlay layout before asserting geometry stayed unchanged.
         await pilot.pause()
         assert not picker.is_open
         assert tuple(widget.region for widget in widgets) == closed_regions
 
         picker.toggle_open()
+        await wait_until(
+            lambda: picker.is_open and self.focused is picker.query_one(OptionList),
+            what="picker overlay opened and focused",
+        )
+        # Deliver overlay layout before asserting geometry stayed unchanged.
         await pilot.pause()
         assert picker.is_open
         assert tuple(widget.region for widget in widgets) == closed_regions

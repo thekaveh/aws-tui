@@ -6,7 +6,7 @@ from typing import Literal
 from textual.app import App, ComposeResult
 from textual.containers import Container, Horizontal
 from textual.pilot import Pilot
-from textual.widgets import DataTable
+from textual.widgets import DataTable, OptionList
 from vmx import NULL_DISPATCHER, MessageHub
 from vmx.messages.protocols import Message
 
@@ -147,7 +147,10 @@ class GluePageApp(App[None]):
         table = self.query_one("#glue-iceberg-table", DataTable)
         source = self.query_one("#glue-source-header", ServiceSourceHeader)
         table.focus()
-        await pilot.pause()
+        await wait_until(
+            lambda: self.focused is table,
+            what="iceberg table took focus",
+        )
         assert self.focused is table
         assert table.has_focus
         assert not source.has_focus_within
@@ -173,16 +176,31 @@ class GluePageApp(App[None]):
         closed_regions = tuple(widget.region for widget in widgets)
 
         picker.open()
+        await wait_until(
+            lambda: picker.is_open and self.focused is picker.query_one(OptionList),
+            what="picker overlay opened and focused",
+        )
+        # Deliver overlay layout before asserting geometry stayed unchanged.
         await pilot.pause()
         assert picker.is_open
         assert tuple(widget.region for widget in widgets) == closed_regions
 
         await pilot.press("escape")
+        await wait_until(
+            lambda: not picker.is_open and self.focused is picker,
+            what="picker closed and trigger refocused",
+        )
+        # Deliver overlay layout before asserting geometry stayed unchanged.
         await pilot.pause()
         assert not picker.is_open
         assert tuple(widget.region for widget in widgets) == closed_regions
 
         picker.open()
+        await wait_until(
+            lambda: picker.is_open and self.focused is picker.query_one(OptionList),
+            what="picker overlay opened and focused",
+        )
+        # Deliver overlay layout before asserting geometry stayed unchanged.
         await pilot.pause()
         assert picker.is_open
         assert tuple(widget.region for widget in widgets) == closed_regions

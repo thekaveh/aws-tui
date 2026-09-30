@@ -22,6 +22,7 @@ from aws_tui.domain.filesystem import PathRef
 from aws_tui.ui.widgets.confirm_modal import ConfirmModal
 from aws_tui.ui.widgets.help_modal import HelpModal
 from aws_tui.ui.widgets.quick_look import QuickLook
+from tests.helpers import wait_until
 
 
 async def _stream(data: bytes) -> AsyncIterator[bytes]:
@@ -84,6 +85,7 @@ async def test_enter_behind_help_modal_does_not_navigate_pane(app_context_factor
         await _await_screen(app, pilot, HelpModal)
 
         await pilot.press("enter")
+        # Deliver Enter before checking that the modal contained navigation.
         await pilot.pause()
 
         assert str(pane.path) == before
@@ -145,6 +147,7 @@ async def test_quit_keys_behind_a_confirm_modal_do_not_abandon_it(
         await _await_screen(app, pilot, ConfirmModal)
 
         await pilot.press(key)
+        # Deliver the key before checking that the modal did not dispatch quit.
         await pilot.pause()
 
         assert quit_calls == []
@@ -170,12 +173,18 @@ async def test_help_body_scrolls_with_arrow_keys(
 
         for _ in range(3):
             await pilot.press("down")
-        await pilot.pause()
+        await wait_until(
+            lambda: body.scroll_offset.y > 0,
+            what="help body to scroll down",
+        )
         assert body.scroll_offset.y > 0
 
         for _ in range(5):
             await pilot.press("up")
-        await pilot.pause()
+        await wait_until(
+            lambda: body.scroll_offset.y == 0,
+            what="help body to return to the top",
+        )
         assert body.scroll_offset.y == 0
 
 
@@ -212,10 +221,16 @@ async def test_quick_look_preview_scrolls_with_arrow_keys(app_context_factory) -
 
         for _ in range(3):
             await pilot.press("down")
-        await pilot.pause()
+        await wait_until(
+            lambda: scroll.scroll_offset.y > 0,
+            what="modal body to scroll down",
+        )
         assert scroll.scroll_offset.y > 0
 
         for _ in range(5):
             await pilot.press("up")
-        await pilot.pause()
+        await wait_until(
+            lambda: scroll.scroll_offset.y == 0,
+            what="modal body to return to the top",
+        )
         assert scroll.scroll_offset.y == 0

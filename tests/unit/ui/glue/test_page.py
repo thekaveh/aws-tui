@@ -246,19 +246,33 @@ async def test_glue_ring_projects_to_nav_and_direct_focus_resumes_from_typed_slo
         await pilot.pause()
         page = app.query_one(GluePage)
         tables = app.query_one("#glue-tables-pane-options", OptionList)
-        tables.focus()
-        await pilot.pause()
+        await focus_and_settle(tables)
+        await wait_until(
+            lambda: (
+                tables.has_focus and app.focus_coordinator.focused_slot is FocusSlot.GLUE_SECONDARY
+            ),
+            what="Glue tables focus reached the coordinator",
+        )
 
         assert app.focus_coordinator.focused_slot is FocusSlot.GLUE_SECONDARY
         page.cycle_focus(reverse=False)
-        await pilot.pause()
+        await wait_until(
+            lambda: app.query_one("#glue-table-detail-pane-scroll").has_focus,
+            what="Glue detail scroll took focus",
+        )
         assert app.focused is not None
         assert app.focused.id == "glue-table-detail-pane-scroll"
 
         app.query_one("#glue-source-header").focus()
         await pilot.pause()
         page.cycle_focus(reverse=True)
-        await pilot.pause()
+        await wait_until(
+            lambda: (
+                app.query_one("#nav-menu", NavMenu).has_focus
+                and app.focus_coordinator.focused_slot is FocusSlot.NAV_MENU
+            ),
+            what="Glue reverse cycle focused navigation",
+        )
         assert app.query_one("#nav-menu", NavMenu).has_focus
         assert app.focus_coordinator.focused_slot is FocusSlot.NAV_MENU
 
@@ -278,7 +292,13 @@ async def test_glue_refresh_falls_back_to_the_nearest_available_slot() -> None:
         await pilot.pause()
 
         await app.query_one(GluePage).action_select_view("crawlers")
-        await pilot.pause()
+        await wait_until(
+            lambda: (
+                app.focus_coordinator.focused_slot is FocusSlot.GLUE_DETAIL
+                and app.query_one("#glue-crawler-detail-pane-scroll").has_focus
+            ),
+            what="crawler view projected fallback detail focus",
+        )
 
         assert app.focus_coordinator.focused_slot is FocusSlot.GLUE_DETAIL
         assert app.focused is not None
@@ -383,11 +403,17 @@ async def test_open_glue_filter_stays_inside_layout_flow_at_narrow_width() -> No
         before = (row.region, source.region, tabs.region, view_host.region)
 
         run_filter.open()
+        await wait_until(
+            lambda: run_filter.is_open and app.focused is run_filter.query_one(OptionList),
+            what="Glue run filter overlay opened before geometry comparison",
+        )
+        # Drain overlay layout before asserting opening does not reflow page geometry.
         await pilot.pause()
 
         assert (row.region, source.region, tabs.region, view_host.region) == before
 
         await pilot.press("escape")
+        # Drain Escape and layout before asserting closing does not reflow page geometry.
         await pilot.pause()
 
         assert (row.region, source.region, tabs.region, view_host.region) == before
@@ -418,8 +444,17 @@ async def test_glue_tab_labels_resolve_active_keymap(
     await vm.setup()
     app = _GlueApp(vm, keymap=keymap)
 
-    async with app.run_test() as pilot:
-        await pilot.pause()
+    async with app.run_test():
+        await wait_until(
+            lambda: (
+                tuple(
+                    str(app.query_one(f"#glue-tab-{view}", Static).render())
+                    for view in ("catalog", "jobs", "crawlers")
+                )
+                == labels
+            ),
+            what="Glue tabs rendered configured shortcut labels",
+        )
         assert (
             tuple(
                 str(app.query_one(f"#glue-tab-{view}", Static).render())
@@ -440,13 +475,27 @@ async def test_view_actions_switch_views_and_load_them_lazily() -> None:
         page = app.query_one(GluePage)
         page.query_one(GlueCatalogView).query_one(OptionList).focus()
         await page.action_select_view("jobs")
-        await pilot.pause()
+        await wait_until(
+            lambda: (
+                vm.active_view == "jobs"
+                and page.query_one(GlueJobsView).display
+                and fake.job_tokens == [None]
+            ),
+            what="Glue jobs view rendered after lazy loading",
+        )
         assert vm.active_view == "jobs"
         assert page.query_one(GlueJobsView).display
         assert fake.job_tokens == [None]
 
         await page.action_select_view("crawlers")
-        await pilot.pause()
+        await wait_until(
+            lambda: (
+                vm.active_view == "crawlers"
+                and page.query_one(GlueCrawlersView).display
+                and fake.crawler_requests == [(None, None)]
+            ),
+            what="Glue crawlers view rendered after lazy loading",
+        )
         assert vm.active_view == "crawlers"
         assert page.query_one(GlueCrawlersView).display
         assert fake.crawler_requests == [(None, None)]
@@ -560,6 +609,7 @@ async def test_open_named_filter_survives_a_later_child_vm_notification() -> Non
         assert len(names) > 1
         await vm.crawlers.select_crawler(names[-1])
         await pilot.pause()
+        # Drain selection-triggered projection callbacks before checking the open filter retained focus.
         await pilot.pause()
 
         assert crawler_filter.is_open
@@ -597,6 +647,7 @@ async def test_reprojecting_the_filter_slot_leaves_its_picker_open(
         overlay = picker.query_one(OverlayOptionList)
 
         page.project_focus_slot(FocusSlot.GLUE_FILTER)
+        # Drain projection events before asserting the open filter retained focus.
         await pilot.pause()
 
         assert picker.is_open
@@ -737,6 +788,7 @@ async def test_escape_closes_the_open_filter_and_nothing_reopens_it() -> None:
         # The projections queued by the view load are still draining; none of
         # them may bring the picker back.
         for _ in range(20):
+            # Repeated event-delivery barrier checks that queued projections never reopen a dismissed picker.
             await pilot.pause()
             assert _open_picker_ids(page) == ()
         assert page._picker_open_intent.desired is None
@@ -772,6 +824,7 @@ async def test_opening_the_source_picker_closes_an_open_named_filter() -> None:
         )
 
         for _ in range(20):
+            # Repeated event-delivery barrier checks that queued projections preserve the newer source picker.
             await pilot.pause()
             assert _open_picker_ids(page) == ("glue-source-header-picker",)
         assert page._picker_open_intent.desired is source
@@ -813,6 +866,7 @@ async def test_committing_a_source_change_does_not_reopen_a_stale_filter() -> No
         # Every projection and reconciliation queued by the filter switch and
         # by the source change is still draining; none may reopen the filter.
         for _ in range(20):
+            # Repeated event-delivery barrier checks that source-change callbacks never reopen the old filter.
             await pilot.pause()
             assert not crawler_filter.is_open
         assert page._picker_open_intent.desired is None
@@ -850,6 +904,7 @@ async def test_a_satisfied_slot_projection_does_not_pull_focus_out_of_its_target
         assert app.focused is inner
 
         page.project_focus_slot(FocusSlot.GLUE_SOURCE)
+        # Drain projection events before asserting focus was not pulled from the inner source picker.
         await pilot.pause()
 
         assert app.focused is inner, "projection pulled focus up to the container"
@@ -883,11 +938,15 @@ async def test_a_loading_overlay_still_counts_as_holding_the_focus() -> None:
         overlay = picker.query_one(OverlayOptionList)
 
         overlay.loading = True
-        await pilot.pause()
+        await wait_until(
+            lambda: overlay.loading and app.screen.focused is overlay and app.focused is None,
+            what="loading overlay became masked from app focus",
+        )
         assert app.screen.focused is overlay
         assert app.focused is None, "textual is expected to mask a loading widget here"
 
         page.project_focus_slot(FocusSlot.GLUE_FILTER)
+        # Drain projection events before asserting the masked overlay was not closed.
         await pilot.pause()
 
         assert picker.is_open
@@ -1012,7 +1071,12 @@ async def test_tab_cycle_closes_departed_filter_picker(
         assert picker.is_open
 
         page.cycle_focus(reverse=reverse)
-        await pilot.pause()
+        await wait_until(
+            lambda: (
+                not picker.is_open and app.focused is not None and app.focused.id == expected_id
+            ),
+            what="Glue pane cycle closed the filter and focused its destination",
+        )
 
         assert not picker.is_open
         assert app.focused is not None
@@ -1028,7 +1092,10 @@ async def test_clicking_tab_switches_the_active_view() -> None:
     async with app.run_test() as pilot:
         await pilot.pause()
         await pilot.click("#glue-tab-jobs")
-        await pilot.pause()
+        await wait_until(
+            lambda: vm.active_view == "jobs" and app.query_one(GlueJobsView).display,
+            what="clicked Glue jobs tab rendered jobs",
+        )
 
         assert vm.active_view == "jobs"
         assert app.query_one(GlueJobsView).display
@@ -1047,13 +1114,19 @@ async def test_focused_tab_activates_with_keyboard(key: str) -> None:
         page._maybe_focus_active()  # type: ignore[attr-defined]
         await pilot.pause()
         tab = app.query_one("#glue-view-tabs", ServiceTabStrip)
-        tab.focus()
-        await pilot.pause()
+        await focus_and_settle(tab)
+        await wait_until(
+            lambda: tab.has_focus,
+            what="Glue view tab strip took focus",
+        )
         assert tab.has_focus
         tab._highlighted = "jobs"
 
         await pilot.press(key)
-        await pilot.pause()
+        await wait_until(
+            lambda: vm.active_view == "jobs" and app.query_one(GlueJobsView).display,
+            what="keyboard Glue tab activation rendered jobs",
+        )
 
         assert vm.active_view == "jobs"
         assert app.query_one(GlueJobsView).display
@@ -1212,7 +1285,6 @@ async def test_glue_sync_is_safe_during_page_teardown() -> None:
         # teardown -- is never exercised. Forcing that helper to True used to
         # leave this test green, i.e. the queries below could not have raised.
         await app.screen.remove_children(GluePage)
-        await pilot.pause()
         assert not page.is_attached
 
         page._sync_view()  # type: ignore[attr-defined]
@@ -1449,7 +1521,13 @@ async def test_jobs_and_crawlers_use_context_picker_filters() -> None:
         await pilot.pause()
         run_filter = page.query_one("#glue-run-state-filter", ContextPicker)
         run_filter._commit("RUNNING")  # type: ignore[attr-defined]
-        await pilot.pause()
+        await wait_until(
+            lambda: (
+                vm.jobs.run_state_filter == frozenset({"RUNNING"})
+                and fake.run_requests[-1] == ("nightly", None, ("RUNNING",))
+            ),
+            what="committed Glue run filter issued its filtered request",
+        )
         assert vm.jobs.run_state_filter == frozenset({"RUNNING"})
         assert fake.run_requests[-1] == ("nightly", None, ("RUNNING",))
 
@@ -1457,7 +1535,13 @@ async def test_jobs_and_crawlers_use_context_picker_filters() -> None:
         await pilot.pause()
         crawler_filter = page.query_one("#glue-crawler-state-filter", ContextPicker)
         crawler_filter._commit("RUNNING")  # type: ignore[attr-defined]
-        await pilot.pause()
+        await wait_until(
+            lambda: (
+                vm.crawlers.state_filter == "RUNNING"
+                and fake.crawler_requests[-1] == (None, "RUNNING")
+            ),
+            what="committed Glue crawler filter issued its filtered request",
+        )
         assert vm.crawlers.state_filter == "RUNNING"
         assert fake.crawler_requests[-1] == (None, "RUNNING")
 
@@ -1615,8 +1699,14 @@ async def test_load_more_action_pages_the_focused_runs_list() -> None:
         assert len(vm.jobs.runs) == 1
         assert vm.jobs.has_more_runs
 
-        page.query_one("#glue-runs-pane", ResourceListPane).option_list.focus()
-        await pilot.pause()
+        await focus_and_settle(page.query_one("#glue-runs-pane", ResourceListPane).option_list)
+        await wait_until(
+            lambda: (
+                page.query_one("#glue-runs-pane", ResourceListPane).option_list.has_focus
+                and page.can_load_more()
+            ),
+            what="focused Glue runs pager became available",
+        )
         assert page.can_load_more()
         await page.action_load_more()
         await drain_workers(app)
@@ -1641,6 +1731,7 @@ async def test_load_more_action_falls_back_to_the_list_with_another_page() -> No
         await drain_workers(app)
         assert len(vm.catalog.tables) == 1
         app.set_focus(None)
+        # Drain focus-clear events before exercising the no-focus pager fallback.
         await pilot.pause()
 
         assert page.can_load_more()
@@ -1688,7 +1779,10 @@ async def test_load_more_action_targets_the_focused_iceberg_pager_not_partitions
         page = app.query_one(GluePage)
 
         assert await vm.catalog.iceberg.select_view("snapshots")
-        await pilot.pause()
+        await wait_until(
+            lambda: not page.query_one("#glue-iceberg-more").disabled,
+            what="Iceberg snapshot pager rendered enabled",
+        )
         assert len(vm.catalog.iceberg.snapshots) == 1
         assert vm.catalog.iceberg.has_more
         # Partitions also have a second page here -- on purpose. Without the
@@ -1697,8 +1791,13 @@ async def test_load_more_action_targets_the_focused_iceberg_pager_not_partitions
         assert vm.catalog.has_more_partitions
         partitions_before = len(vm.catalog.partitions)
 
-        page.query_one("#glue-iceberg-tab-snapshots").focus()
-        await pilot.pause()
+        await focus_and_settle(page.query_one("#glue-iceberg-tab-snapshots"))
+        await wait_until(
+            lambda: (
+                page.query_one("#glue-iceberg-tab-snapshots").has_focus and page.can_load_more()
+            ),
+            what="focused snapshot tab selected the Iceberg pager",
+        )
         assert page.can_load_more()
         await page.action_load_more()
         await drain_workers(app)
@@ -1753,7 +1852,10 @@ async def test_load_more_action_targets_peek_when_it_is_the_active_iceberg_tab()
             lambda: vm.catalog.iceberg.preview.state is PaneState.IDLE,
             what="the preview pane finished loading",
         )
-        await pilot.pause()
+        await wait_until(
+            lambda: not page.query_one("#glue-iceberg-more").disabled,
+            what="Peek load-more control rendered enabled",
+        )
         assert len(port.queries) == 1
         assert vm.catalog.iceberg.preview.has_more
 
@@ -1761,8 +1863,11 @@ async def test_load_more_action_targets_peek_when_it_is_the_active_iceberg_tab()
         # route never fell through to the Athena-backed pager.
         assert inspector.calls == []
 
-        page.query_one("#glue-iceberg-more").focus()
-        await pilot.pause()
+        await focus_and_settle(page.query_one("#glue-iceberg-more"))
+        await wait_until(
+            lambda: page.query_one("#glue-iceberg-more").has_focus and page.can_load_more(),
+            what="focused Peek control selected preview paging",
+        )
         assert page.can_load_more()
         await page.action_load_more()
         await wait_until(
@@ -1820,15 +1925,20 @@ async def test_load_more_action_does_nothing_when_peek_is_at_its_ceiling() -> No
             lambda: vm.catalog.iceberg.preview.state is PaneState.IDLE,
             what="the preview pane finished loading",
         )
-        await pilot.pause()
+        await wait_until(
+            lambda: page.query_one("#glue-iceberg-more").disabled,
+            what="exhausted Peek load-more control rendered disabled",
+        )
         assert len(port.queries) == 1
         assert not vm.catalog.iceberg.preview.has_more
 
         page.query_one("#glue-iceberg-more").focus()
+        # Drain the focus attempt on the disabled control before asserting paging stays unavailable.
         await pilot.pause()
         assert not page.can_load_more()
         await page.action_load_more()
         await drain_workers(app)
+        # Drain the no-op load-more path before checking it issued no additional queries.
         await pilot.pause()
 
         assert len(port.queries) == 1
@@ -1849,7 +1959,14 @@ async def test_clicking_a_more_available_footer_loads_the_next_page() -> None:
         await page.action_select_view("crawlers")
         await drain_workers(app)
         await pilot.pause()
-        await pilot.pause()
+        await wait_until(
+            lambda: (
+                len(vm.crawlers.crawlers) == 1
+                and "more available"
+                in str(page.query_one("#glue-crawlers-pane .glue-list-footer", Static).content)
+            ),
+            what="crawler first page rendered its more-available footer",
+        )
         assert len(vm.crawlers.crawlers) == 1
 
         footer = page.query_one("#glue-crawlers-pane .glue-list-footer", Static)
@@ -1857,7 +1974,10 @@ async def test_clicking_a_more_available_footer_loads_the_next_page() -> None:
         await pilot.click(footer)
         await drain_workers(app)
         await pilot.pause()
-        await pilot.pause()
+        await wait_until(
+            lambda: len(vm.crawlers.crawlers) == 2 and "more available" not in str(footer.content),
+            what="crawler next page rendered its exhausted footer",
+        )
 
         assert len(vm.crawlers.crawlers) == 2
         assert "more available" not in str(footer.content)
@@ -1904,7 +2024,13 @@ async def test_load_more_action_routes_peek_through_the_widgets_own_worker_group
             lambda: vm.catalog.iceberg.preview.state is PaneState.IDLE,
             what="the preview pane finished loading",
         )
-        await pilot.pause()
+        await wait_until(
+            lambda: (
+                vm.catalog.iceberg.preview.has_more
+                and not page.query_one("#glue-iceberg-more").disabled
+            ),
+            what="Peek initial page rendered its enabled pager",
+        )
         assert vm.catalog.iceberg.preview.has_more
 
         view = app.query_one(GlueIcebergView)

@@ -20,7 +20,7 @@ from aws_tui.ui.widgets.athena.page import AthenaPage
 from aws_tui.ui.widgets.context_picker import ContextPicker
 from aws_tui.ui.widgets.service_tab_strip import ServiceTabStrip
 from aws_tui.vm.athena.page_vm import AthenaPageVM
-from tests.helpers import drain_workers, focus_and_settle, seed_athena_sql
+from tests.helpers import drain_workers, focus_and_settle, seed_athena_sql, wait_until
 from tests.integration.test_glue_page import open_service
 from tests.unit.vm.athena.test_page_vm import PageClient
 
@@ -114,7 +114,10 @@ async def test_real_app_mounts_editor_results_and_explicit_entry_focuses_editor(
     async with _mounted_athena_app(tmp_path) as (app, ctx, vm, _client, pilot):
         page = app.query_one("#content-athena-page", AthenaPage)
         app.focus_active_service_pane()
-        await pilot.pause()
+        await wait_until(
+            lambda: app.focused is page.query_one("#athena-editor", TextArea),
+            what="Athena editor to receive focus",
+        )
 
         assert ctx.root_vm.content_host.current_id == "athena"
         assert app.focused is page.query_one("#athena-editor", TextArea)
@@ -137,10 +140,17 @@ async def test_printable_selector_keys_remain_athena_editor_input(
         page = app.query_one("#content-athena-page", AthenaPage)
         editor = page.query_one("#athena-editor", TextArea)
         editor.text = ""
-        editor.focus()
+        await focus_and_settle(editor)
 
         await pilot.press("W", "C", "D", "F", "G")
-        await pilot.pause()
+        await wait_until(
+            lambda: (
+                (editor.text == "WCDFG")
+                and (editor.has_focus)
+                and (all(not picker.is_open for picker in page.query(ContextPicker)))
+            ),
+            what="selector letters to appear in the focused SQL editor",
+        )
 
         assert editor.text == "WCDFG"
         assert editor.has_focus
@@ -188,7 +198,12 @@ async def test_results_retry_keeps_button_error_visible_until_success(
         button = app.query_one("#athena-more-results", Button)
 
         await vm.results.load_more()
-        await pilot.pause()
+        await wait_until(
+            lambda: (
+                button.has_class("-error") and button.tooltip == "Athena results request failed"
+            ),
+            what="results pager to display its error",
+        )
         assert vm.results.error_text == "Athena results request failed"
         await _settled(pilot, lambda: button.has_class("-error"), what="results button error class")
         assert button.tooltip == "Athena results request failed"
@@ -197,6 +212,7 @@ async def test_results_retry_keeps_button_error_visible_until_success(
         request_started.clear()
         retry = asyncio.create_task(vm.results.load_more())
         await request_started.wait()
+        # Deliver loading notifications before checking that the prior error stays visible.
         await pilot.pause()
 
         assert vm.results.is_loading_more
@@ -206,6 +222,7 @@ async def test_results_retry_keeps_button_error_visible_until_success(
 
         release_request.set()
         await retry
+        # Deliver failed-retry notifications before checking that the error stays visible.
         await pilot.pause()
 
         assert not vm.results.is_loading_more
@@ -218,6 +235,7 @@ async def test_results_retry_keeps_button_error_visible_until_success(
         request_started.clear()
         retry = asyncio.create_task(vm.results.load_more())
         await request_started.wait()
+        # Deliver loading notifications before checking that the prior error stays visible.
         await pilot.pause()
 
         assert vm.results.is_loading_more
@@ -227,7 +245,10 @@ async def test_results_retry_keeps_button_error_visible_until_success(
 
         release_request.set()
         await retry
-        await pilot.pause()
+        await wait_until(
+            lambda: not button.has_class("-error") and button.tooltip == "Load more result rows",
+            what="successful results retry to clear the button error and tooltip",
+        )
 
         assert vm.results.error_text is None
         await _settled(
@@ -240,11 +261,18 @@ async def test_results_retry_keeps_button_error_visible_until_success(
 async def test_printable_app_bindings_do_not_shadow_sql_editor_input(tmp_path: Path) -> None:
     async with _mounted_athena_app(tmp_path) as (app, _ctx, vm, _client, pilot):
         editor = app.query_one("#athena-editor", TextArea)
-        editor.focus()
+        await focus_and_settle(editor)
 
         await pilot.press(*tuple("select"))
         await pilot.press("space", "1", "comma", "space", "2")
-        await pilot.pause()
+        await wait_until(
+            lambda: (
+                (editor.text == "select 1, 2")
+                and (vm.query.sql == "select 1, 2")
+                and (vm.active_view == "query")
+            ),
+            what="typed SQL to reach both editor and query model",
+        )
 
         assert editor.text == "select 1, 2"
         assert vm.query.sql == "select 1, 2"
@@ -265,10 +293,13 @@ async def test_printable_app_bindings_do_not_shadow_sql_editor_input(tmp_path: P
 async def test_real_app_allows_tab_strip_arrow_navigation(tmp_path: Path) -> None:
     async with _mounted_athena_app(tmp_path) as (app, _ctx, vm, _client, pilot):
         tabs = app.query_one("#athena-view-tabs", ServiceTabStrip)
-        tabs.focus()
+        await focus_and_settle(tabs)
 
         await pilot.press("right")
-        await pilot.pause()
+        await wait_until(
+            lambda: vm.active_view == "history",
+            what="Athena history tab to activate",
+        )
 
         assert vm.active_view == "history"
 
@@ -278,7 +309,7 @@ async def test_real_app_routes_tabs_execute_cancel_and_lazy_views(tmp_path: Path
     async with _mounted_athena_app(tmp_path) as (app, _ctx, vm, client, pilot):
         editor = app.query_one("#athena-editor", TextArea)
         await seed_athena_sql(pilot, vm.query, editor, "SELECT 1")
-        editor.focus()
+        await focus_and_settle(editor)
         await pilot.pause()
 
         await pilot.press("ctrl+enter")
@@ -287,12 +318,22 @@ async def test_real_app_routes_tabs_execute_cancel_and_lazy_views(tmp_path: Path
 
         await focus_and_settle(app.query_one("#athena-view-tabs", ServiceTabStrip))
         await pilot.press("2")
-        await pilot.pause()
+        await wait_until(
+            lambda: (vm.active_view == "history") and (client.history_calls == [("primary", None)]),
+            what="Athena history tab to load its first page",
+        )
         assert vm.active_view == "history"
         assert client.history_calls == [("primary", None)]
 
         await pilot.press("4")
-        await pilot.pause()
+        await wait_until(
+            lambda: (
+                (vm.active_view == "saved")
+                and (client.named_calls == [("primary", None)])
+                and (client.prepared_calls == [("primary", None)])
+            ),
+            what="Athena saved tab to load named and prepared queries",
+        )
         assert vm.active_view == "saved"
         assert client.named_calls == [("primary", None)]
         assert client.prepared_calls == [("primary", None)]
@@ -347,7 +388,10 @@ async def test_athena_command_hints_follow_live_command_and_pager_state(
         vm.query._owns_active_query = True  # type: ignore[attr-defined]
         vm.query._notify("is_executing")  # type: ignore[attr-defined]
         vm.query._notify("owns_active_query")  # type: ignore[attr-defined]
-        await pilot.pause()
+        await wait_until(
+            lambda: (not hint_enabled("athena.execute")) and (hint_enabled("athena.cancel")),
+            what="query execution hints to reflect the running query",
+        )
         assert not hint_enabled("athena.execute")
         assert hint_enabled("athena.cancel")
 
@@ -355,13 +399,19 @@ async def test_athena_command_hints_follow_live_command_and_pager_state(
         vm.query._owns_active_query = False  # type: ignore[attr-defined]
         vm.query._execution_ref = None  # type: ignore[attr-defined]
         vm.query._notify("is_executing")  # type: ignore[attr-defined]
-        await pilot.pause()
+        await wait_until(
+            lambda: not hint_enabled("athena.cancel"),
+            what="query cancel hint to disable after execution ends",
+        )
         assert not hint_enabled("athena.cancel")
 
         vm._workgroup_pager._current_token = "workgroups-next"  # type: ignore[attr-defined]
         vm._notify_context_lists()  # type: ignore[attr-defined]
         app.query_one("#athena-more-workgroups").focus()
-        await pilot.pause()
+        await wait_until(
+            lambda: hint_enabled("athena.load_more"),
+            what="workgroup load-more hint to enable",
+        )
         assert hint_enabled("athena.load_more")
 
         workgroup_worker = vm._workgroup_worker  # type: ignore[attr-defined]
@@ -369,7 +419,10 @@ async def test_athena_command_hints_follow_live_command_and_pager_state(
             "workgroups",
             workgroup_worker,
         )
-        await pilot.pause()
+        await wait_until(
+            lambda: not hint_enabled("athena.load_more"),
+            what="workgroup load-more hint to disable during loading",
+        )
         assert not hint_enabled("athena.load_more")
         vm._finish_loading_more(  # type: ignore[attr-defined]
             "workgroups",
@@ -381,7 +434,7 @@ async def test_athena_command_hints_follow_live_command_and_pager_state(
 async def test_athena_insert_hint_tracks_typed_clipboard_and_source(
     tmp_path: Path,
 ) -> None:
-    async with _mounted_athena_app(tmp_path) as (_app, ctx, vm, _client, pilot):
+    async with _mounted_athena_app(tmp_path) as (_app, ctx, vm, _client, _pilot):
 
         def insert_enabled() -> bool:
             return next(
@@ -401,7 +454,10 @@ async def test_athena_insert_hint_tracks_typed_clipboard_and_source(
                 vm.context.region,
             )
         )
-        await pilot.pause()
+        await wait_until(
+            lambda: insert_enabled(),
+            what="insert-table hint to enable for the copied table",
+        )
         assert insert_enabled()
 
         ctx.table_clipboard_vm.copy_command.execute(
@@ -413,7 +469,10 @@ async def test_athena_insert_hint_tracks_typed_clipboard_and_source(
                 "us-west-2",
             )
         )
-        await pilot.pause()
+        await wait_until(
+            lambda: not insert_enabled(),
+            what="insert-table hint to disable for a different source",
+        )
         assert not insert_enabled()
 
 
@@ -421,7 +480,7 @@ async def test_athena_insert_hint_tracks_typed_clipboard_and_source(
 async def test_query_refresh_recovers_detail_without_remounting_athena_page(
     tmp_path: Path,
 ) -> None:
-    async with _mounted_athena_app(tmp_path) as (app, ctx, vm, client, pilot):
+    async with _mounted_athena_app(tmp_path) as (app, ctx, vm, client, _pilot):
         page = app.query_one("#content-athena-page", AthenaPage)
         source_header = page.query_one("#athena-source-header")
         client.workgroup_detail_error = ProviderError("temporary failure")
@@ -434,7 +493,18 @@ async def test_query_refresh_recovers_detail_without_remounting_athena_page(
 
         client.workgroup_detail_error = None
         await app.action_refresh()
-        await pilot.pause()
+        await wait_until(
+            lambda: (
+                (ctx.root_vm.content_host.current is vm)
+                and (app.query_one("#content-athena-page", AthenaPage) is page)
+                and (page.query_one("#athena-source-header") is source_header)
+                and (vm.context.workgroup == "analysts")
+                and (vm.context.catalog == "AwsDataCatalog")
+                and (vm.context.database == "events")
+                and (client.workgroup_detail_calls[-2:] == ["analysts", "analysts"])
+            ),
+            what="Athena workgroup refresh to restore the catalog and database",
+        )
 
         assert ctx.root_vm.content_host.current is vm
         assert app.query_one("#content-athena-page", AthenaPage) is page
@@ -449,7 +519,7 @@ async def test_query_refresh_recovers_detail_without_remounting_athena_page(
 async def test_recovered_context_pager_clears_error_styling_tooltip_and_hint(
     tmp_path: Path,
 ) -> None:
-    async with _mounted_athena_app(tmp_path) as (app, ctx, vm, client, pilot):
+    async with _mounted_athena_app(tmp_path) as (app, ctx, vm, client, _pilot):
         page = app.query_one("#content-athena-page", AthenaPage)
         button = app.query_one("#athena-more-workgroups", Button)
 
@@ -463,9 +533,35 @@ async def test_recovered_context_pager_clears_error_styling_tooltip_and_hint(
         vm._workgroup_pager._current_token = "workgroups-next"  # type: ignore[attr-defined]
         vm._notify_context_lists()  # type: ignore[attr-defined]
         client.workgroup_error = ProviderError("temporary failure")
-        button.focus()
-        await page.action_load_more()
-        await pilot.pause()
+        original_page = client.list_workgroups_page
+        request_started = asyncio.Event()
+        release_request = asyncio.Event()
+
+        async def fail_after_loading_projection(
+            *, start_token: str | None = None
+        ) -> tuple[list[object], str | None]:
+            request_started.set()
+            await release_request.wait()
+            return await original_page(start_token=start_token)
+
+        client.list_workgroups_page = fail_after_loading_projection  # type: ignore[method-assign]
+        await focus_and_settle(button)
+        load_task = asyncio.create_task(page.action_load_more())
+        try:
+            await wait_until(request_started.is_set, what="workgroup request to start")
+            await wait_until(
+                lambda: button.disabled and not button.has_focus,
+                what="busy pager to disable its button and release focus",
+            )
+        finally:
+            release_request.set()
+            await load_task
+        await wait_until(
+            lambda: (
+                (button.has_class("-error")) and (button.tooltip == "Athena context request failed")
+            ),
+            what="workgroup pager to render the request error",
+        )
 
         assert button.has_class("-error")
         assert button.tooltip == "Athena context request failed"
@@ -480,8 +576,21 @@ async def test_recovered_context_pager_clears_error_styling_tooltip_and_hint(
             return list(client.workgroups), "workgroups-after-retry"
 
         client.list_workgroups_page = retry_page  # type: ignore[method-assign]
+        # Busy buttons release focus; restore the routing target for the retry.
+        await focus_and_settle(button)
         await page.action_load_more()
-        await pilot.pause()
+        # The load-more hint describes the focused pager after recovery.
+        await focus_and_settle(button)
+        await wait_until(
+            lambda: (
+                (vm.workgroups_state.name == "IDLE")
+                and (vm.workgroups_error_text is None)
+                and (not button.has_class("-error"))
+                and (button.tooltip == "Load more workgroups")
+                and (hint_enabled("athena.load_more"))
+            ),
+            what="workgroup retry to clear the error styling and enable the hint",
+        )
 
         assert vm.workgroups_state.name == "IDLE"
         assert vm.workgroups_error_text is None
@@ -514,17 +623,24 @@ async def test_configured_athena_rebindings_replace_defaults(tmp_path: Path) -> 
 
         await focus_and_settle(app.query_one("#athena-view-tabs", ServiceTabStrip))
         await pilot.press("8")
-        await pilot.pause()
+        await wait_until(
+            lambda: vm.active_view == "history",
+            what="rebound history shortcut to activate history",
+        )
         assert vm.active_view == "history"
 
         await pilot.press("2")
+        # Deliver the old shortcut before checking that the selected view stays unchanged.
         await pilot.pause()
         assert vm.active_view == "history"
 
         await pilot.press("7")
         app.query_one("#athena-editor", TextArea).text = "SELECT 7"
         await pilot.press("ctrl+x")
-        await pilot.pause()
+        await wait_until(
+            lambda: bool(client.start_calls) and client.start_calls[-1][0] == "SELECT 7",
+            what="rebound execution shortcut to submit SELECT 7",
+        )
         assert client.start_calls[-1][0] == "SELECT 7"
 
         load_calls = 0
@@ -541,9 +657,13 @@ async def test_configured_athena_rebindings_replace_defaults(tmp_path: Path) -> 
         # point of the assertion below, that the rebound ``ctrl+l`` fires and
         # the default ``l`` no longer does.
         await pilot.press("ctrl+l")
-        await pilot.pause()
+        await wait_until(
+            lambda: load_calls == 1,
+            what="rebound load-more shortcut to dispatch once",
+        )
         assert load_calls == 1
         await pilot.press("l")
+        # Deliver the old shortcut before checking that no extra load was dispatched.
         await pilot.pause()
         assert load_calls == 1
 

@@ -130,34 +130,37 @@ class ResourceListPane(Widget):
         limit_reached: bool = False,
     ) -> None:
         options = self.option_list
-        options.clear_options()
-        placeholder = state_placeholder(
-            state,
-            error_text=error_text,
-            empty_text=self._empty_text,
-        )
-        options.remove_class("-warning")
-        options.remove_class("-error")
-        if placeholder is not None and state is not PaneState.IDLE:
-            text, classes = placeholder
-            if classes:
-                options.add_class(classes)
-            options.add_option(
-                Option(Text(text, no_wrap=False), id="__placeholder__", disabled=True)
+        # Projection is not user selection. A queued highlight from an older
+        # render can otherwise overwrite a newer table selection when delivered.
+        with options.prevent(OptionList.OptionHighlighted):
+            options.clear_options()
+            placeholder = state_placeholder(
+                state,
+                error_text=error_text,
+                empty_text=self._empty_text,
             )
-        else:
-            for row_id, label in rows:
+            options.remove_class("-warning")
+            options.remove_class("-error")
+            if placeholder is not None and state is not PaneState.IDLE:
+                text, classes = placeholder
+                if classes:
+                    options.add_class(classes)
                 options.add_option(
-                    Option(
-                        Text(label, no_wrap=True, overflow="ellipsis"),
-                        id=row_id,
-                    )
+                    Option(Text(text, no_wrap=False), id="__placeholder__", disabled=True)
                 )
-        if selected_id is not None:
-            for index in range(options.option_count):
-                if options.get_option_at_index(index).id == selected_id:
-                    options.highlighted = index
-                    break
+            else:
+                for row_id, label in rows:
+                    options.add_option(
+                        Option(
+                            Text(label, no_wrap=True, overflow="ellipsis"),
+                            id=row_id,
+                        )
+                    )
+            if selected_id is not None:
+                for index in range(options.option_count):
+                    if options.get_option_at_index(index).id == selected_id:
+                        options.highlighted = index
+                        break
         count = len(rows)
         self._has_more = has_more and not limit_reached
         suffix = " · safety limit" if limit_reached else " · more available" if has_more else ""

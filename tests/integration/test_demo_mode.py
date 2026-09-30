@@ -530,10 +530,9 @@ async def test_demo_source_switch_clears_old_iceberg_metadata_and_restores_scope
                 "us-east-1",
             )
             await dev.open_table(dev_ref)
-            # `open_table` returns before the table detail has loaded, and the
-            # Iceberg pane is only bound once it has. Asking for a view first
-            # means the snapshots can never arrive if the selection was
-            # superseded midway -- seen as this wait timing out on a Windows leg.
+            # Verify the exact selection before requesting its views. A stale
+            # UI projection used to dispatch a second selection and supersede
+            # open_table, even though open_table awaits its own detail load.
             await wait_until(
                 lambda: (
                     (d := dev.catalog.table_detail) is not None
@@ -542,9 +541,8 @@ async def test_demo_source_switch_clears_old_iceberg_metadata_and_restores_scope
                 what="the dev table's OWN detail to load before its views are asked for",
             )
             await dev.catalog.iceberg.select_view("snapshots")
-            # `select_view` returns before the pane's load finishes, so the
-            # snapshots are not there yet on a slow runner. Both Windows legs
-            # failed here with an empty set across two runs.
+            # A superseded selection can make select_view return without
+            # loading. Require the expected data before selecting a snapshot.
             await wait_until(
                 lambda: dev.catalog.iceberg.snapshots,
                 what="the dev table's snapshots to load",
@@ -567,11 +565,8 @@ async def test_demo_source_switch_clears_old_iceberg_metadata_and_restores_scope
                 "us-east-1",
             )
             await prod.open_table(prod_ref)
-            # `is not None` is not enough: each page auto-selects its own first
-            # table on setup, so a detail can be present and belong to that one
-            # instead. Asking for snapshots then reads a table the test never
-            # chose -- which is how this failed as "the prod table's snapshots to
-            # load" while the detail wait itself passed.
+            # A non-None detail alone could belong to the setup selection.
+            # Verify that opening the requested table retained its identity.
             await wait_until(
                 lambda: (
                     (d := prod.catalog.table_detail) is not None

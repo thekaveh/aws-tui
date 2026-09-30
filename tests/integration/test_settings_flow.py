@@ -247,7 +247,14 @@ async def test_comma_selects_settings_and_swaps_main_area(tmp_path: Path) -> Non
         async with app.run_test() as pilot:
             await _await_boot(pilot, app)
             await pilot.press("comma")
-            await pilot.pause()
+            await wait_until(
+                lambda: (
+                    ctx.root_vm.services_menu.selected_id == "settings"
+                    and ctx.root_vm.content_host.current_id == "settings"
+                    and bool(app.query("SettingsView"))
+                ),
+                what="Settings navigation and content view to mount",
+            )
             # NavMenuVM should now have settings selected.
             # ctx.root_vm.services_menu is the canonical accessor (NavMenuVM).
             assert ctx.root_vm.services_menu.selected_id == "settings"
@@ -311,26 +318,17 @@ async def test_add_inline_form_persists_to_toml(
                 force_path_style=True,
                 verify_tls=True,
             )
+            assert form.has_class("-open")
             form.post_message(
                 ConnectionFormSubmitted(form=form_obj, mode="add", original_name=None)
             )
-            # Same worker-thread persistence as the delete path below, so the
-            # same completion contract: drain, then confirm.
-            await drain_workers(app)
+            # The async message handler closes the form only after persistence
+            # succeeds. It uses an AnyIO thread, not a Textual worker, so
+            # drain_workers cannot await it. Polling config.toml here can hold
+            # a read handle across the writer's atomic replace on Windows.
             await wait_until(
-                lambda: (
-                    (found := _toml_connections(config_dir / "config.toml")) is not None
-                    and "minio-test" in found
-                ),
-                what="the added connection landed in config.toml",
-                # The integration tier keeps the 30s budget this wait had
-                # before #235 consolidated it onto the shared helper, whose
-                # 15s default is sized for in-process UI-tier waits. Halving
-                # it here was an unintended regression: this path writes
-                # `config.toml` through a worker thread on a loaded
-                # windows-latest runner, and it is the suite's most frequent
-                # flake (#274). Only one wait runs in this test, so 30s stays
-                # inside pytest's own 60s per-test kill.
+                lambda: not form.has_class("-open"),
+                what="the connection form to close after successful persistence",
                 timeout=DEFAULT_DRAIN_TIMEOUT_SECONDS,
             )
     finally:
@@ -548,7 +546,10 @@ async def test_delete_via_confirm_removes_from_toml(tmp_path: Path) -> None:
             )
             await pilot.pause()
             await pilot.click("#delete-0")
-            await pilot.pause()
+            await wait_until(
+                lambda: (isinstance(app.screen, ConfirmModal)) and (app.screen.vm.is_open),
+                what="delete confirmation modal to open",
+            )
             assert isinstance(app.screen, ConfirmModal)
             assert app.screen.vm.is_open
             # ConfirmModal opens; danger defaults focus to Cancel — press
@@ -677,16 +678,28 @@ async def test_settings_selection_during_boot_replays_after_boot_mount(
             from aws_tui.vm.nav_menu_vm import SETTINGS_NAV_ID
 
             ctx.root_vm.services_menu.switch_service_command.execute(SETTINGS_NAV_ID)
-            await pilot.pause()
+            await wait_until(
+                lambda: (
+                    ctx.root_vm.services_menu.selected_id == SETTINGS_NAV_ID
+                    and bool(app.query(SettingsView))
+                ),
+                what="Settings view to mount while startup is paused",
+            )
             assert ctx.root_vm.services_menu.selected_id == SETTINGS_NAV_ID
 
             release.set()
-            await app.workers.wait_for_complete(  # type: ignore[attr-defined]
-                list(app.workers._workers)  # type: ignore[attr-defined]
-            )
-            await pilot.pause()
-
+            # Selecting Settings intentionally cancels the boot worker. Drain
+            # remaining work without requiring cancelled work to succeed.
+            await drain_workers(app)
             host = pilot.app.query_one("#content-host")
+            await wait_until(
+                lambda: (
+                    ctx.root_vm.content_host.current_id == SETTINGS_NAV_ID
+                    and len(host.query(SettingsView)) == 1
+                    and len(host.query(DualPane)) == 0
+                ),
+                what="Settings to remain mounted after boot cancellation settles",
+            )
             assert ctx.root_vm.content_host.current_id == SETTINGS_NAV_ID
             assert len(host.query(SettingsView)) == 1
             assert len(host.query(DualPane)) == 0
@@ -860,7 +873,13 @@ async def test_local_only_mount_returns_true_only_with_mounted_view(tmp_path: Pa
                 initial_conn=connection,
                 reason="test",
             )
-            await pilot.pause()
+            await wait_until(
+                lambda: (
+                    len(app.query_one("#content-host").query(DualPane)) == 1
+                    and app.query_one(DualPane).vm is ctx.root_vm.content_host.current
+                ),
+                what="local-only dual pane to mount with the current view model",
+            )
 
             assert result is True
             host = app.query_one("#content-host")

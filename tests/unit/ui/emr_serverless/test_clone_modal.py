@@ -25,7 +25,7 @@ from aws_tui.domain.emr_serverless import JobRunDetail, JobRunState
 from aws_tui.domain.filesystem import AuthRequiredError
 from aws_tui.ui.widgets.emr_serverless.clone_modal import JobRunCloneModal
 from aws_tui.vm.emr_serverless.clone_vm import JobRunCloneVM
-from tests.helpers import focus_and_settle
+from tests.helpers import focus_and_settle, wait_until
 
 _FIXED_TS = datetime(2026, 6, 27, 12, 0, 0, tzinfo=UTC)
 
@@ -88,6 +88,7 @@ async def test_action_submit_provider_error_shows_inline_keeps_modal_open() -> N
         captured: list[str] = []
         modal._show_error = MagicMock(side_effect=captured.append)  # type: ignore[method-assign]
         await modal.action_submit()
+        # Submission was awaited; drain dismissal events before asserting the error kept the modal open.
         await pilot.pause()
         # Modal still active — not dismissed.
         assert isinstance(pilot.app.screen, JobRunCloneModal)
@@ -112,6 +113,7 @@ async def test_action_submit_unexpected_exception_caught_keeps_modal_open() -> N
         captured: list[str] = []
         modal._show_error = MagicMock(side_effect=captured.append)  # type: ignore[method-assign]
         await modal.action_submit()
+        # Submission was awaited; drain dismissal events before asserting the unexpected error kept the modal open.
         await pilot.pause()
         # Modal still active — defensive clause kept the app alive.
         assert isinstance(pilot.app.screen, JobRunCloneModal)
@@ -130,7 +132,10 @@ async def test_enter_in_clone_input_submits_form() -> None:
         assert isinstance(modal, JobRunCloneModal)
         await focus_and_settle(modal.query_one("#clone-name", Input))
         await pilot.press("enter")
-        await pilot.pause()
+        await wait_until(
+            lambda: not isinstance(pilot.app.screen, JobRunCloneModal),
+            what="clone form submission dismissed the modal",
+        )
 
         vm.submit.assert_awaited_once()
         assert not isinstance(pilot.app.screen, JobRunCloneModal)

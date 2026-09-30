@@ -24,6 +24,7 @@ from aws_tui.ui.widgets.pane import _BODY_REFRESH_PROPS, EntryRow, Pane
 from aws_tui.vm._observable import ObserverSafeSubject
 from aws_tui.vm.file_manager.dual_pane_vm import DualPaneVM, FocusedPane
 from aws_tui.vm.file_manager.pane_vm import PaneVM
+from tests.helpers import wait_until
 
 
 async def _astream(data: bytes) -> AsyncIterator[bytes]:
@@ -55,15 +56,11 @@ async def test_pane_mounts_and_populates_rows() -> None:
                 yield Pane(vm, hub=hub, id="pane")
 
         app = _App()
-        async with app.run_test(size=(120, 30)) as pilot:
-            # Two pauses: Pane.on_mount now defers _render_body via
-            # call_after_refresh so #pane-body is fully mounted first.
-            # One pilot.pause() ticks the event loop once; on slow
-            # event loops (notably Windows CI runners) the deferred
-            # render hasn't completed by the time control returns to
-            # this test, so the second pause flushes it.
-            await pilot.pause()
-            await pilot.pause()
+        async with app.run_test(size=(120, 30)):
+            await wait_until(
+                lambda: len(app.query(EntryRow)) == 5,
+                what="pane initial listing mounted",
+            )
             rows = app.query(EntryRow)
             assert len(rows) == 5  # data dir + 4 files
     finally:
@@ -97,10 +94,10 @@ async def test_pane_footer_reacts_to_post_mount_viewmodel_change() -> None:
             footer = pane.query_one(".pane-footer", Static)
 
             vm.toggle_mark_at(0)
-            for _ in range(100):
-                if str(footer.render()) == vm.viewmodel.summary:
-                    break
-                await pilot.pause(0.01)
+            await wait_until(
+                lambda: str(footer.render()) == vm.viewmodel.summary,
+                what="pane footer projected marked summary",
+            )
 
             assert "marked" in str(footer.render())
             assert str(footer.render()) == vm.viewmodel.summary
@@ -135,9 +132,11 @@ async def test_pane_reconciles_viewmodel_change_between_compose_and_mount() -> N
                 yield _RacingPane(vm, hub=hub, id="pane")
 
         app = _App()
-        async with app.run_test(size=(120, 30)) as pilot:
-            await pilot.pause()
-            await pilot.pause()
+        async with app.run_test(size=(120, 30)):
+            await wait_until(
+                lambda: str(app.query_one(".pane-footer", Static).render()) == vm.viewmodel.summary,
+                what="pane footer reconciled mount-time viewmodel change",
+            )
             footer = app.query_one(".pane-footer", Static)
 
             assert "marked" in vm.viewmodel.summary
@@ -163,11 +162,11 @@ async def test_pane_renders_loading_placeholder_for_state() -> None:
                 yield Pane(vm, hub=hub, id="pane")
 
         app = _App()
-        async with app.run_test(size=(120, 30)) as pilot:
-            # See note in test_pane_mounts_and_populates_rows above —
-            # the deferred _render_body needs a second pump on Windows.
-            await pilot.pause()
-            await pilot.pause()
+        async with app.run_test(size=(120, 30)):
+            await wait_until(
+                lambda: len(app.query(".pane-placeholder")) == 1,
+                what="empty pane placeholder mounted",
+            )
             # No rows; instead, a placeholder.
             rows = app.query(EntryRow)
             assert len(rows) == 0
@@ -308,12 +307,14 @@ async def test_pane_dynamic_mount_with_unreachable_state_does_not_crash() -> Non
                 host.mount(DualPane(dual_vm, hub=hub, id="content-dual-pane"))
 
         app = _App()
-        async with app.run_test(size=(120, 30)) as pilot:
-            # Double pause for the same reason described in the other
-            # tests in this file — the deferred _render_body needs a
-            # second event-loop pump on slow runners (Windows CI).
-            await pilot.pause()
-            await pilot.pause()
+        async with app.run_test(size=(120, 30)):
+            await wait_until(
+                lambda: (
+                    len(app.query("#pane-left .pane-placeholder")) == 1
+                    and len(app.query("#pane-right .pane-placeholder")) == 1
+                ),
+                what="both dynamically mounted pane placeholders rendered",
+            )
             # No exception => no MountError on the deferred render.
             left_placeholder = app.query("#pane-left .pane-placeholder")
             right_placeholder = app.query("#pane-right .pane-placeholder")
@@ -388,8 +389,10 @@ async def test_dual_pane_mounts_with_two_panes(tmp_path: Path) -> None:
 
             # Switching focus toggles class.
             dual.switch_focus_command.execute()
-            await pilot.pause()
-            await pilot.pause()
+            await wait_until(
+                lambda: "-focused" in right_w.classes and "-focused" not in left_w.classes,
+                what="right pane focus projected",
+            )
             assert "-focused" in right_w.classes
             assert "-focused" not in left_w.classes
             assert dual.focused is FocusedPane.RIGHT
@@ -431,9 +434,17 @@ async def test_truncated_names_get_a_tooltip_and_short_ones_do_not() -> None:
                 yield Pane(vm, hub=hub, id="pane")
 
         app = _App()
-        async with app.run_test(size=(60, 20)) as pilot:
-            await pilot.pause()
-            await pilot.pause()
+        async with app.run_test(size=(60, 20)):
+            await wait_until(
+                lambda: (
+                    len(app.query(EntryRow)) == 2
+                    and any(
+                        row.entry_vm.name == long_name and row.tooltip is not None
+                        for row in app.query(EntryRow)
+                    )
+                ),
+                what="truncated entry tooltip populated",
+            )
             tips = {r.entry_vm.name: r.tooltip for r in app.query(EntryRow)}
 
             assert tips[long_name] is not None, "a cut-off name must be readable somehow"
@@ -501,7 +512,10 @@ async def test_border_row_hover_offers_the_path_and_click_copies_it() -> None:
             assert str(pane.border_title) == vm.viewmodel.border_title
 
             await pilot.hover(Pane, offset=(4, 0))
-            await pilot.pause()
+            await wait_until(
+                lambda: pane.tooltip is not None and vm.viewmodel.copy_path in str(pane.tooltip),
+                what="pane path tooltip shown",
+            )
             assert pane.tooltip is not None
             assert vm.viewmodel.copy_path in str(pane.tooltip)
             # Again the view model's string rather than a copy of it. The
@@ -512,7 +526,10 @@ async def test_border_row_hover_offers_the_path_and_click_copies_it() -> None:
             assert "click here" in vm.path_tooltip_hint
 
             await pilot.click(Pane, offset=(4, 0))
-            await pilot.pause()
+            await wait_until(
+                lambda: copied == [(vm.viewmodel.copy_path, "path")],
+                what="pane path copied",
+            )
             assert copied == [(vm.viewmodel.copy_path, "path")]
     finally:
         vm.dispose()
@@ -554,8 +571,13 @@ async def test_a_bracketed_path_still_renders_literally_in_the_border() -> None:
             await pilot.pause()
             await pilot.pause()
             await vm.navigate_to(PathRef(("[draft]",)))
-            await pilot.pause()
-            await pilot.pause()
+            await wait_until(
+                lambda: (
+                    Content.from_markup(app.query_one(Pane).border_title or "").plain == "/[draft]"
+                    and bool(app.query_one("#pane-body", VerticalScroll).query(EntryRow))
+                ),
+                what="bracketed path title and listing projected",
+            )
 
             pane = app.query_one(Pane)
             assert vm.viewmodel.border_title == "/[draft]"
@@ -592,12 +614,18 @@ async def test_clicking_a_row_selects_it_rather_than_copying() -> None:
 
         app = _App()
         async with app.run_test(size=(80, 20)) as pilot:
-            await pilot.pause()
-            await pilot.pause()
+            await wait_until(
+                lambda: (
+                    len(app.query(EntryRow)) == len(vm.filtered_entries)
+                    and all(row.is_mounted and row.size.width > 0 for row in app.query(EntryRow))
+                ),
+                what="initial pane entry rows mounted and laid out",
+            )
             rows = list(app.query(EntryRow))
             assert rows
 
             await pilot.click(rows[-1])
+            # Deliver the click before asserting that no clipboard request was emitted.
             await pilot.pause()
 
             assert copied == [], "a row click selects; it must not reach the clipboard"
@@ -641,7 +669,10 @@ async def test_border_click_never_writes_the_clipboard_from_the_pane() -> None:
             await pilot.pause()
 
             await pilot.click(Pane, offset=(4, 0))
-            await pilot.pause()
+            await wait_until(
+                lambda: handed_up == [(vm.viewmodel.copy_path, "path")],
+                what="pane copy request handed to app",
+            )
 
             assert handed_up == [(vm.viewmodel.copy_path, "path")]
             assert written == [], "the pane must not reach the terminal write itself"
@@ -725,9 +756,14 @@ async def test_the_view_layer_binds_per_view_model_and_never_to_the_hub() -> Non
         await vm.setup()
         try:
             app = _single_pane_app(vm, hub)
-            async with app.run_test(size=(120, 30)) as pilot:
-                await pilot.pause()
-                await pilot.pause()
+            async with app.run_test(size=(120, 30)):
+
+                def rows_mounted(app: App[None] = app, row_count: int = row_count) -> bool:
+                    return len(app.query(EntryRow)) == row_count and all(
+                        row.is_mounted for row in app.query(EntryRow)
+                    )
+
+                await wait_until(rows_mounted, what="entry rows mounted for observer count")
                 # Named precondition: the invariance below is meaningless
                 # unless the rows are actually mounted at both sizes.
                 assert len(app.query(EntryRow)) == row_count
@@ -785,8 +821,13 @@ async def test_a_row_repaints_from_its_own_view_model_with_no_help_from_the_pane
     try:
         app = _single_pane_app(vm, hub)
         async with app.run_test(size=(120, 30)) as pilot:
-            await pilot.pause()
-            await pilot.pause()
+            await wait_until(
+                lambda: (
+                    len(app.query(EntryRow)) == len(vm.filtered_entries)
+                    and all(row.is_mounted and row.size.width > 0 for row in app.query(EntryRow))
+                ),
+                what="initial pane entry rows mounted and laid out",
+            )
             rows = list(app.query(EntryRow))
             # Named precondition: the row under test is the one bound to the
             # view model the assertions below mutate.
@@ -805,7 +846,11 @@ async def test_a_row_repaints_from_its_own_view_model_with_no_help_from_the_pane
             monkeypatch.setattr(Pane, "_on_vm_property_changed", _recording_handler)
 
             target.set_marked(True)
-            await pilot.pause()
+            await wait_until(
+                lambda: "-marked" in rows[3].classes and "*" in rows[3].render_line(0).text,
+                what="entry mark painted from its own binding",
+            )
+            # Deliver queued notifications before checking the pane stayed silent.
             await pilot.pause()
 
             assert pane_notifications == [], (
@@ -815,7 +860,11 @@ async def test_a_row_repaints_from_its_own_view_model_with_no_help_from_the_pane
             assert "*" in rows[3].render_line(0).text
 
             target.set_marked(False)
-            await pilot.pause()
+            await wait_until(
+                lambda: "-marked" not in rows[3].classes and "*" not in rows[3].render_line(0).text,
+                what="entry mark cleared from its own binding",
+            )
+            # Deliver queued notifications before checking the pane stayed silent.
             await pilot.pause()
 
             assert pane_notifications == []
@@ -860,8 +909,13 @@ async def test_a_row_releases_its_binding_when_it_unmounts(
     try:
         app = _single_pane_app(vm, hub)
         async with app.run_test(size=(120, 30)) as pilot:
-            await pilot.pause()
-            await pilot.pause()
+            await wait_until(
+                lambda: (
+                    len(app.query(EntryRow)) == len(vm.filtered_entries)
+                    and all(row.is_mounted and row.size.width > 0 for row in app.query(EntryRow))
+                ),
+                what="initial pane entry rows mounted and laid out",
+            )
             rows = list(app.query(EntryRow))
             assert len(rows) == len(vm.filtered_entries) == 5
             detached = vm.filtered_entries[2]
@@ -869,13 +923,15 @@ async def test_a_row_releases_its_binding_when_it_unmounts(
             assert rows[2].entry_vm is detached
 
             await rows[2].remove()
-            await pilot.pause()
-            await pilot.pause()
+            await wait_until(
+                lambda: len(app.query(EntryRow)) == 4,
+                what="removed entry row left the DOM",
+            )
             assert len(app.query(EntryRow)) == 4
             repainted.clear()
 
             detached.set_marked(True)
-            await pilot.pause()
+            # Drain queued notifications before checking the detached binding stayed silent.
             await pilot.pause()
             assert repainted == [], (
                 f"an unmounted row is still bound to its view model: {repainted}"
@@ -885,7 +941,11 @@ async def test_a_row_releases_its_binding_when_it_unmounts(
             # actually on screen, so the silence above is a released
             # subscription and not a broken one.
             still_mounted.set_marked(True)
-            await pilot.pause()
+            await wait_until(
+                lambda: repainted == [still_mounted.name],
+                what="mounted row binding repainted",
+            )
+            # Drain queued repaint work before asserting the exact callback count.
             await pilot.pause()
             assert repainted == [still_mounted.name]
     finally:
@@ -937,13 +997,20 @@ async def test_the_pane_releases_its_binding_when_it_unmounts() -> None:
 
             # Positive control: while mounted, a navigation reaches it.
             await vm.navigate_to(PathRef(("data",)))
-            await pilot.pause()
-            await pilot.pause()
+            await wait_until(
+                lambda: pane.body_notifies > 0 and bool(pane.render_log),
+                what="mounted pane received and rendered navigation",
+            )
             assert pane.body_notifies > 0
             assert pane.render_log
 
             await pane.remove()
-            await pilot.pause()
+            await wait_until(
+                lambda: len(app.query(Pane)) == 0,
+                what="removed pane left the DOM",
+            )
+            # Deliver renders queued before removal before measuring whether
+            # later VM changes notify or rebuild the detached pane.
             await pilot.pause()
             # Named precondition: the pane really left the DOM.
             assert len(app.query(Pane)) == 0
@@ -954,7 +1021,7 @@ async def test_the_pane_releases_its_binding_when_it_unmounts() -> None:
             pane.render_log.clear()
             pane.body_notifies = 0
             await vm.navigate_to(PathRef(()))
-            await pilot.pause()
+            # Drain navigation notifications before asserting the detached pane stayed silent.
             await pilot.pause()
 
             assert pane.body_notifies == 0, (
@@ -991,17 +1058,29 @@ async def test_cursor_move_flips_selected_and_repaints_the_cursor_glyph() -> Non
                 yield Pane(vm, hub=hub, id="pane")
 
         app = _App()
-        async with app.run_test(size=(120, 30)) as pilot:
-            await pilot.pause()
-            await pilot.pause()
+        async with app.run_test(size=(120, 30)):
+            await wait_until(
+                lambda: (
+                    len(app.query(EntryRow)) == len(vm.filtered_entries)
+                    and all(row.is_mounted and row.size.width > 0 for row in app.query(EntryRow))
+                ),
+                what="initial pane entry rows mounted and laid out",
+            )
             rows = list(app.query(EntryRow))
             assert len(rows) == 5
             before = ["-selected" in row.classes for row in rows]
             assert before == [True, False, False, False, False]
 
             vm.move_cursor_command.execute(1)
-            await pilot.pause()
-            await pilot.pause()
+            await wait_until(
+                lambda: (
+                    ["-selected" in row.classes for row in rows]
+                    == [False, True, False, False, False]
+                    and "▌" not in rows[0].render_line(0).text
+                    and "▌" in rows[1].render_line(0).text
+                ),
+                what="cursor classes and glyph moved to the second row",
+            )
 
             after = ["-selected" in row.classes for row in rows]
             assert after == [False, True, False, False, False]
@@ -1030,24 +1109,33 @@ async def test_marking_an_entry_flips_marked_and_repaints_the_mark_glyph() -> No
                 yield Pane(vm, hub=hub, id="pane")
 
         app = _App()
-        async with app.run_test(size=(120, 30)) as pilot:
-            await pilot.pause()
-            await pilot.pause()
+        async with app.run_test(size=(120, 30)):
+            await wait_until(
+                lambda: (
+                    len(app.query(EntryRow)) == len(vm.filtered_entries)
+                    and all(row.is_mounted and row.size.width > 0 for row in app.query(EntryRow))
+                ),
+                what="initial pane entry rows mounted and laid out",
+            )
             rows = list(app.query(EntryRow))
             assert len(rows) == 5
             assert "-marked" not in rows[2].classes
             assert "*" not in rows[2].render_line(0).text
 
             vm.toggle_mark_at(2)
-            await pilot.pause()
-            await pilot.pause()
+            await wait_until(
+                lambda: "-marked" in rows[2].classes and "*" in rows[2].render_line(0).text,
+                what="toggled mark painted",
+            )
 
             assert "-marked" in rows[2].classes
             assert "*" in rows[2].render_line(0).text
 
             vm.toggle_mark_at(2)
-            await pilot.pause()
-            await pilot.pause()
+            await wait_until(
+                lambda: "-marked" not in rows[2].classes and "*" not in rows[2].render_line(0).text,
+                what="toggled mark cleared",
+            )
 
             assert "-marked" not in rows[2].classes
             assert "*" not in rows[2].render_line(0).text
@@ -1094,17 +1182,27 @@ async def test_cursor_move_repaints_only_the_two_affected_rows(
     try:
         app = _single_pane_app(vm, hub)
         async with app.run_test(size=(120, 30)) as pilot:
-            await pilot.pause()
-            await pilot.pause()
+            await wait_until(
+                lambda: (
+                    len(app.query(EntryRow)) == 60
+                    and all(row.is_mounted for row in app.query(EntryRow))
+                ),
+                what="sixty entry rows mounted",
+            )
             # Named precondition: counting repaints across two rows is only
             # meaningful against a body far larger than two rows.
             assert len(app.query(EntryRow)) == 60
             # The initial mount paints everything; only the steady state is
             # under test, so start counting from here.
+            await pilot.pause()  # Drain mount refresh messages before resetting the counter.
             repainted.clear()
 
             vm.move_cursor_command.execute(1)
-            await pilot.pause()
+            await wait_until(
+                lambda: repainted == ["file-0000.txt", "file-0001.txt"],
+                what="cursor move repainted its two rows",
+            )
+            # Drain queued repaint work before asserting the exact callback count.
             await pilot.pause()
 
             assert repainted == [
@@ -1142,9 +1240,13 @@ async def test_cursor_move_keeps_the_cursor_row_scrolled_into_view() -> None:
     await vm.setup()
     try:
         app = _single_pane_app(vm, hub)
-        async with app.run_test(size=(120, 30)) as pilot:
-            await pilot.pause()
-            await pilot.pause()
+        async with app.run_test(size=(120, 30)):
+            await wait_until(
+                lambda: (
+                    app.query_one(Pane).query_one("#pane-body", VerticalScroll).max_scroll_y > 0
+                ),
+                what="initial listing overflow laid out",
+            )
             body = app.query_one(Pane).query_one("#pane-body", VerticalScroll)
             assert body.max_scroll_y > 0, (
                 "the listing must overflow the body for this to mean anything"
@@ -1153,16 +1255,20 @@ async def test_cursor_move_keeps_the_cursor_row_scrolled_into_view() -> None:
 
             last = len(vm.filtered_entries) - 1
             vm.move_cursor_to(last)
-            await pilot.pause()
-            await pilot.pause()
+            await wait_until(
+                lambda: body.scroll_offset.y > 0,
+                what="pane scrolled to the last cursor row",
+            )
 
             assert body.scroll_offset.y > 0, (
                 "the cursor row scrolled off the bottom and the body never followed it"
             )
 
             vm.move_cursor_to(0)
-            await pilot.pause()
-            await pilot.pause()
+            await wait_until(
+                lambda: body.scroll_offset.y == 0,
+                what="pane scrolled back to first row",
+            )
 
             assert body.scroll_offset.y == 0, (
                 "returning to the first row must scroll back to the top"
@@ -1193,9 +1299,14 @@ async def test_cursor_fallback_mark_repaints_the_row_during_a_transfer() -> None
     await vm.setup()
     try:
         app = _single_pane_app(vm, hub)
-        async with app.run_test(size=(120, 30)) as pilot:
-            await pilot.pause()
-            await pilot.pause()
+        async with app.run_test(size=(120, 30)):
+            await wait_until(
+                lambda: (
+                    len(app.query(EntryRow)) == len(vm.filtered_entries)
+                    and all(row.is_mounted and row.size.width > 0 for row in app.query(EntryRow))
+                ),
+                what="initial pane entry rows mounted and laid out",
+            )
             rows = list(app.query(EntryRow))
             assert len(rows) == 5
             target = vm.filtered_entries[1]
@@ -1204,15 +1315,19 @@ async def test_cursor_fallback_mark_repaints_the_row_during_a_transfer() -> None
 
             # Exactly what the worker does on the cursor-fallback path.
             vm.set_marked_entries([target], marked=True)
-            await pilot.pause()
-            await pilot.pause()
+            await wait_until(
+                lambda: "-marked" in rows[1].classes and "*" in rows[1].render_line(0).text,
+                what="transfer fallback mark painted",
+            )
 
             assert "-marked" in rows[1].classes
             assert "*" in rows[1].render_line(0).text
 
             vm.set_marked_entries([target], marked=False)
-            await pilot.pause()
-            await pilot.pause()
+            await wait_until(
+                lambda: "-marked" not in rows[1].classes and "*" not in rows[1].render_line(0).text,
+                what="transfer fallback mark cleared",
+            )
 
             assert "-marked" not in rows[1].classes
             assert "*" not in rows[1].render_line(0).text
@@ -1259,8 +1374,13 @@ async def test_rerendering_the_body_keeps_the_row_list_mirroring_the_dom() -> No
             # Into the (empty) subdirectory: one ".." row, so the body
             # shrinks — an accumulating _rows keeps the five root rows.
             await vm.activate(data_index)
-            await pilot.pause()
-            await pilot.pause()
+            await wait_until(
+                lambda: (
+                    [row.entry_vm.name for row in pane._rows] == [".."]
+                    and pane._rows == list(app.query(EntryRow))
+                ),
+                what="subdirectory rows replaced the root listing",
+            )
 
             assert [row.entry_vm.name for row in pane._rows] == [".."]
             assert pane._rows == list(app.query(EntryRow))
@@ -1268,8 +1388,14 @@ async def test_rerendering_the_body_keeps_the_row_list_mirroring_the_dom() -> No
 
             # Back out through "..": the body grows again.
             await vm.activate(0)
-            await pilot.pause()
-            await pilot.pause()
+            await wait_until(
+                lambda: (
+                    len(app.query(EntryRow)) == 5
+                    and pane._rows == list(app.query(EntryRow))
+                    and all(row.is_mounted for row in pane._rows)
+                ),
+                what="root listing rows remounted after parent navigation",
+            )
 
             rows = list(app.query(EntryRow))
             assert len(rows) == len(vm.filtered_entries) == 5
@@ -1279,8 +1405,14 @@ async def test_rerendering_the_body_keeps_the_row_list_mirroring_the_dom() -> No
             # And the cursor still addresses the rows that are actually
             # mounted after the re-render.
             vm.move_cursor_to(2)
-            await pilot.pause()
-            await pilot.pause()
+            await wait_until(
+                lambda: (
+                    ["-selected" in row.classes for row in rows]
+                    == [False, False, True, False, False]
+                    and "▌" in rows[2].render_line(0).text
+                ),
+                what="rerendered listing painted the selected row",
+            )
             assert [("-selected" in row.classes) for row in rows] == [
                 False,
                 False,
@@ -1374,7 +1506,16 @@ async def test_one_navigation_renders_the_listing_exactly_once() -> None:
             pane.body_notifies = 0
 
             await vm.navigate_to(PathRef(("data",)))
-            await pilot.pause()
+            await wait_until(
+                lambda: (
+                    bool(pane.render_log)
+                    and pane.render_log[-1] == ("IDLE", 3)
+                    and len(app.query(EntryRow)) == 3
+                    and not pane._body_refresh_pending
+                ),
+                what="navigation rendered the final subdirectory listing",
+            )
+            # Drain queued repaint work before asserting the exact callback count.
             await pilot.pause()
 
             assert pane.body_notifies == 4, (
@@ -1396,7 +1537,16 @@ async def test_one_navigation_renders_the_listing_exactly_once() -> None:
 
             pane.render_log.clear()
             await vm.navigate_to(PathRef(()))
-            await pilot.pause()
+            await wait_until(
+                lambda: (
+                    bool(pane.render_log)
+                    and pane.render_log[-1] == ("IDLE", 5)
+                    and len(app.query(EntryRow)) == 5
+                    and not pane._body_refresh_pending
+                ),
+                what="navigation rendered the final root listing",
+            )
+            # Drain queued repaint work before asserting the exact callback count.
             await pilot.pause()
             assert [state for state, _ in pane.render_log] == ["LOADING", "IDLE"]
             assert len(app.query(EntryRow)) == 5
@@ -1431,9 +1581,14 @@ async def test_every_other_row_carries_the_zebra_class() -> None:
     await vm.setup()
     try:
         app = _single_pane_app(vm, hub)
-        async with app.run_test(size=(120, 30)) as pilot:
-            await pilot.pause()
-            await pilot.pause()
+        async with app.run_test(size=(120, 30)):
+            await wait_until(
+                lambda: (
+                    len(app.query(EntryRow)) == len(vm.filtered_entries)
+                    and all(row.is_mounted and row.size.width > 0 for row in app.query(EntryRow))
+                ),
+                what="initial pane entry rows mounted and laid out",
+            )
             rows = list(app.query(EntryRow))
             # Named precondition: the listing this asserts over is the real one.
             assert len(rows) == len(vm.filtered_entries) == 5
@@ -1449,8 +1604,16 @@ async def test_every_other_row_carries_the_zebra_class() -> None:
             # Walk the cursor across a striped row and back off it.
             for index in (1, 2, 3):
                 vm.move_cursor_to(index)
-                await pilot.pause()
-                await pilot.pause()
+
+                def cursor_selected(index: int = index) -> bool:
+                    return ["-selected" in row.classes for row in rows] == [
+                        position == index for position in range(5)
+                    ]
+
+                await wait_until(
+                    cursor_selected,
+                    what="cursor selection projected without changing zebra classes",
+                )
                 assert [("-alt" in row.classes) for row in rows] == [
                     False,
                     True,
@@ -1505,17 +1668,24 @@ async def test_cursor_bar_beats_the_stripe_on_a_striped_row() -> None:
                 yield Pane(vm, hub=hub, id="pane")
 
         app = _ThemedApp()
-        async with app.run_test(size=(120, 30)) as pilot:
-            await pilot.pause()
-            await pilot.pause()
+        async with app.run_test(size=(120, 30)):
+            await wait_until(
+                lambda: (
+                    len(app.query(EntryRow)) == len(vm.filtered_entries)
+                    and all(row.is_mounted and row.size.width > 0 for row in app.query(EntryRow))
+                ),
+                what="initial pane entry rows mounted and laid out",
+            )
             rows = list(app.query(EntryRow))
             assert len(rows) == 5
 
             # Row 1 is striped; park the cursor on row 3, the other stripe,
             # so one striped row is selected and one is not.
             vm.move_cursor_to(3)
-            await pilot.pause()
-            await pilot.pause()
+            await wait_until(
+                lambda: "-selected" in rows[3].classes and rows[3].styles.background == bg_sel,
+                what="striped cursor row received selected background",
+            )
             assert "-alt" in rows[1].classes
             assert "-selected" not in rows[1].classes
             assert "-alt" in rows[3].classes

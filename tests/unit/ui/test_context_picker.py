@@ -15,7 +15,7 @@ from textual.widgets import OptionList, Static
 from aws_tui.infra.theme_store import ThemeStore
 from aws_tui.ui.widgets.context_picker import ContextOption, ContextPicker
 from aws_tui.ui.widgets.overlay_option_list import OverlayOptionList, PickerOpenIntent
-from tests.helpers import focus_and_settle
+from tests.helpers import focus_and_settle, wait_until
 
 _OPTIONS = (
     ContextOption("primary", "primary"),
@@ -116,8 +116,14 @@ async def _wait_for_picker_focus(focused: asyncio.Event) -> None:
 async def test_context_picker_renders_its_label_and_selected_value() -> None:
     picker = _picker()
 
-    async with PickerHost(picker).run_test() as pilot:
-        await pilot.pause()
+    async with PickerHost(picker).run_test():
+        await wait_until(
+            lambda: (
+                str(picker.query_one(".context-picker-value", Static).render()) == "primary"
+                and str(picker.query_one(".context-picker-indicator", Static).render()) == "▾"
+            ),
+            what="picker selected value and closed indicator rendered",
+        )
 
         assert picker.value == "primary"
         assert picker.border_title == "Workgroup"
@@ -130,6 +136,7 @@ async def test_context_picker_has_no_default_border_without_a_theme() -> None:
     picker = _picker()
 
     async with PickerHost(picker).run_test() as pilot:
+        # Apply mount styles before checking that no default border was introduced.
         await pilot.pause()
 
         assert picker.styles.border_top[0] in {"", "none"}
@@ -146,7 +153,10 @@ async def test_context_picker_indicator_tracks_open_state() -> None:
         assert str(indicator.render()) == "▾"
 
         picker.open()
-        await pilot.pause()
+        await wait_until(
+            lambda: str(indicator.render()) == "▴",
+            what="picker open indicator rendered",
+        )
 
         assert str(indicator.render()) == "▴"
 
@@ -169,6 +179,7 @@ async def test_context_picker_overlay_never_reflows_its_host_or_sibling() -> Non
         assert (picker.region, sibling.region) == before
 
         picker.close()
+        # Deliver close and layout messages before checking geometry stayed unchanged.
         await pilot.pause()
         assert (picker.region, sibling.region) == before
 
@@ -183,7 +194,13 @@ async def test_context_picker_loses_open_state_without_refocusing_on_blur(
         picker.open()
         await _wait_for_picker_focus(focus_complete)
         pilot.app.query_one("#after-picker", Static).focus()
-        await pilot.pause()
+        await wait_until(
+            lambda: (
+                not picker.is_open
+                and pilot.app.focused is pilot.app.query_one("#after-picker", Static)
+            ),
+            what="picker closed after outside focus",
+        )
 
         assert not picker.is_open
         assert pilot.app.focused.id == "after-picker"
@@ -198,6 +215,7 @@ async def test_context_picker_closed_before_deferred_focus_cannot_reclaim_focus(
         picker.open()
         picker.close(refocus=False)
         outside.focus()
+        # Deliver stale deferred focus callbacks before checking they did not reclaim focus.
         await pilot.pause()
 
         assert not picker.is_open
@@ -221,7 +239,10 @@ async def test_context_picker_deferred_focus_yields_to_newer_outside_focus(
         assert len(callbacks) == 1
         outside.focus()
         callbacks[0]()
-        await pilot.pause()
+        await wait_until(
+            lambda: not picker.is_open and pilot.app.focused is outside,
+            what="newer outside focus superseded picker callback",
+        )
 
         assert not picker.is_open
         assert pilot.app.focused is outside
@@ -239,15 +260,20 @@ async def test_context_picker_close_reopen_invalidates_stale_refocus(
         picker.open()
         picker.close()
         picker.open()
+        # Drain queued messages before counting captured callbacks; do not invoke them yet.
         await pilot.pause()
 
         assert len(callbacks) == 3
         callbacks[2]()
-        await pilot.pause()
+        await wait_until(
+            lambda: pilot.app.focused is picker.query_one(OverlayOptionList),
+            what="reopened picker overlay took focus",
+        )
         assert pilot.app.focused is picker.query_one(OverlayOptionList)
 
         callbacks[1]()
         callbacks[0]()
+        # Deliver stale callbacks before checking they did not close or refocus the picker.
         await pilot.pause()
         assert picker.is_open
         assert pilot.app.focused is picker.query_one(OverlayOptionList)
@@ -283,6 +309,11 @@ async def test_shared_open_intent_invalidates_older_picker_focus_callback(
         newest.open()
         newest_callbacks[0]()
         first_callbacks[0]()
+        await wait_until(
+            lambda: newest.is_open and pilot.app.focused is newest.query_one(OverlayOptionList),
+            what="newest picker retained overlay focus",
+        )
+        # Deliver the older callback's queued effects before checking it stayed inert.
         await pilot.pause()
 
         assert newest.is_open
@@ -354,7 +385,14 @@ async def test_context_picker_focus_cycle_back_to_owner_closes_overlay(
         assert pilot.app.focused is picker.query_one(OverlayOptionList)
 
         await pilot.press(key)
-        await pilot.pause()
+        await wait_until(
+            lambda: (
+                pilot.app.focused is picker
+                and not picker.is_open
+                and not picker.query_one(OverlayOptionList).display
+            ),
+            what="focus cycled to picker and closed its overlay",
+        )
 
         assert pilot.app.focused is picker
         assert not picker.is_open
@@ -380,7 +418,14 @@ async def test_context_picker_outside_non_focusable_click_closes_without_swallow
         assert pilot.app.focused is picker.query_one(OverlayOptionList)
 
         assert await pilot.click(outside)
-        await pilot.pause()
+        await wait_until(
+            lambda: (
+                outside.clicks == 1
+                and not picker.is_open
+                and not picker.query_one(OverlayOptionList).display
+            ),
+            what="outside click delivered and picker overlay closed",
+        )
 
         assert outside.clicks == 1
         assert not picker.is_open
@@ -406,34 +451,53 @@ async def test_context_picker_semantic_and_disabled_states_override_active_theme
         # Counting pauses assumes how many frames that takes; wait for the
         # painted value instead, which is what the assertion is really about.
         focused_border = ("heavy", Color.parse("#6fb8ff"))
-        for _ in range(50):
-            if picker.styles.border_top == focused_border:
-                break
-            await pilot.pause()
+        await wait_until(
+            lambda: picker.styles.border_top == focused_border,
+            what="open picker focused border applied",
+        )
 
         assert picker.styles.border_top == focused_border
 
         picker.set_state(loading=True)
-        await pilot.pause()
+        await wait_until(
+            lambda: (
+                picker.has_focus
+                and picker.has_class("-loading")
+                and picker.styles.border_top == ("solid", Color.parse("#2a2d33"))
+            ),
+            what="loading picker focus and border projected",
+        )
 
         assert picker.has_focus
         assert picker.has_class("-loading")
         assert picker.styles.border_top == ("solid", Color.parse("#2a2d33"))
 
         picker.set_state(disabled=True)
-        await pilot.pause()
+        await wait_until(
+            lambda: (
+                picker.has_class("-disabled")
+                and picker.styles.border_top == ("solid", Color.parse("#2a2d33"))
+            ),
+            what="disabled picker border applied",
+        )
 
         assert picker.has_class("-disabled")
         assert picker.styles.border_top == ("solid", Color.parse("#2a2d33"))
 
         picker.set_state(warning=True)
         picker.focus()
-        await pilot.pause()
+        await wait_until(
+            lambda: picker.styles.border_top == ("solid", Color.parse("#f0c674")),
+            what="warning picker border applied",
+        )
 
         assert picker.styles.border_top == ("solid", Color.parse("#f0c674"))
 
         picker.set_state(error=True)
-        await pilot.pause()
+        await wait_until(
+            lambda: picker.styles.border_top == ("solid", Color.parse("#ff6b7a")),
+            what="error picker border applied",
+        )
 
         assert picker.styles.border_top == ("solid", Color.parse("#ff6b7a"))
 
@@ -463,7 +527,14 @@ async def test_context_picker_long_value_keeps_indicator_visible_when_narrow() -
         assert str(indicator.render()) == "▾"
 
         picker.open()
-        await pilot.pause()
+        await wait_until(
+            lambda: (
+                picker.is_open
+                and str(indicator.render()) == "▴"
+                and indicator.region.right == trigger.content_region.right
+            ),
+            what="narrow picker open indicator rendered",
+        )
 
         assert picker.is_open
         assert indicator.size.width == 1
@@ -477,7 +548,14 @@ async def test_context_picker_whole_trigger_toggles_from_value_and_indicator() -
 
     async with PickerHost(picker).run_test() as pilot:
         await pilot.click(".context-picker-value")
-        await pilot.pause()
+        await wait_until(
+            lambda: (
+                picker.is_open
+                and picker.query_one(OverlayOptionList).region.y
+                > picker.query_one(".context-picker-indicator", Static).region.y
+            ),
+            what="clicked picker overlay laid out below trigger",
+        )
         assert picker.is_open
 
         indicator = picker.query_one(".context-picker-indicator", Static)
@@ -485,7 +563,10 @@ async def test_context_picker_whole_trigger_toggles_from_value_and_indicator() -
         assert options.region.y > indicator.region.y
 
         await pilot.click(".context-picker-indicator")
-        await pilot.pause()
+        await wait_until(
+            lambda: not picker.is_open,
+            what="indicator click closed picker",
+        )
         assert not picker.is_open
 
 
@@ -593,6 +674,7 @@ async def test_context_picker_closed_height_stays_stable_when_options_change() -
         await pilot.pause()
         closed_height = picker.size.height
         picker.set_options((*_OPTIONS, ContextOption("ad-hoc", "ad-hoc")), selected="primary")
+        # Deliver option and layout messages before checking closed height stayed unchanged.
         await pilot.pause()
 
         assert picker.is_open is False

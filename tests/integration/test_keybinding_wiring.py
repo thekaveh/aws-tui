@@ -21,6 +21,7 @@ from aws_tui.domain.data_catalog import TableFormat
 from aws_tui.ui.widgets.help_modal import HelpModal
 from aws_tui.vm.glue.iceberg_vm import GlueIcebergVM
 from aws_tui.vm.messages import OpenAthenaTableRequest
+from tests.helpers import wait_until
 from tests.unit.vm.glue.test_iceberg_vm import ICEBERG_REF, RecordingInspector
 
 # The full set the App must install under the default keymap: our
@@ -160,10 +161,14 @@ async def test_priority_binding_does_not_dispatch_behind_modal(app_context_facto
 
     async with app.run_test(size=(100, 30)) as pilot:
         await pilot.press("question_mark")
-        await pilot.pause()
+        await wait_until(
+            lambda: isinstance(app.screen, HelpModal),
+            what="help modal to open before execution shortcut",
+        )
         assert isinstance(app.screen, HelpModal)
 
         await pilot.press("ctrl+enter")
+        # Deliver the shortcut before checking that the modal blocked execution.
         await pilot.pause()
 
         assert calls == []
@@ -181,7 +186,10 @@ async def test_quit_keys_dispatch_through_action_registry(
 
     async with app.run_test(size=(100, 30)) as pilot:
         await pilot.press(key)
-        await pilot.pause()
+        await wait_until(
+            lambda: calls == ["quit"],
+            what="quit shortcut to dispatch through the registry",
+        )
 
         assert calls == ["quit"]
 
@@ -206,13 +214,19 @@ async def test_quit_is_the_one_action_that_survives_a_modal(app_context_factory)
 
     async with app.run_test(size=(100, 30)) as pilot:
         await pilot.press("question_mark")
-        await pilot.pause()
+        await wait_until(
+            lambda: (isinstance(app.screen, HelpModal)) and (len(app.screen_stack) > 1),
+            what="help modal to open on the screen stack",
+        )
         assert isinstance(app.screen, HelpModal)
         assert len(app.screen_stack) > 1
 
         app.action_dispatch("app.themes")
         app.action_dispatch("app.quit")
-        await pilot.pause()
+        await wait_until(
+            lambda: (gated_calls == []) and (quit_calls == ["quit"]),
+            what="quit to dispatch while theme action remains gated",
+        )
 
         assert gated_calls == []
         assert quit_calls == ["quit"]
@@ -276,12 +290,21 @@ async def test_global_v_dispatch_uses_active_snapshot_action_guard(
         assert ("V", "dispatch('glue.time_travel_in_athena')", False, False) in _installed(app)
 
         await pilot.press("V")
-        await pilot.pause()
+        await wait_until(
+            lambda: received == [OpenAthenaTableRequest(table_ref=ICEBERG_REF, snapshot_id=43)],
+            what="snapshot shortcut to publish the selected Iceberg request",
+        )
         assert received == [OpenAthenaTableRequest(table_ref=ICEBERG_REF, snapshot_id=43)]
 
         await iceberg.select_view("history")
         await pilot.press("V")
-        await pilot.pause()
+        await wait_until(
+            lambda: any(
+                toast.model.id == "glue-athena-snapshot-unavailable"
+                for toast in ctx.root_vm.chrome.toast_stack.toasts
+            ),
+            what="unavailable snapshot advisory to arrive",
+        )
 
         assert received == [OpenAthenaTableRequest(table_ref=ICEBERG_REF, snapshot_id=43)]
         assert ctx.root_vm.chrome.toast_stack.toasts[-1].model.id == (
@@ -360,6 +383,8 @@ async def test_config_overlay_dispatches_the_registered_action_once(
 
     async with app.run_test(size=(100, 30)) as pilot:
         await pilot.press("ctrl+y")
+        # The spy appends synchronously during key dispatch; deliver any extra
+        # messages before checking that it ran exactly once after teardown.
         await pilot.pause()
 
     assert calls == ["copy"]
@@ -377,5 +402,7 @@ async def test_priority_tab_binding_fires_at_runtime(app_context_factory) -> Non
         await pilot.pause()
         app._actions.register("pane.switch_focus", lambda: calls.append("tab"))
         await pilot.press("tab")
+        # The spy appends synchronously during key dispatch; deliver any extra
+        # messages before checking that it ran exactly once after teardown.
         await pilot.pause()
     assert calls == ["tab"]
