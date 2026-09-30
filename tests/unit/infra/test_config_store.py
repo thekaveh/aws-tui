@@ -722,7 +722,11 @@ raise SystemExit(0)
             check=False,
             capture_output=True,
             text=True,
-            timeout=2.0,
+            # This bounds interpreter startup, imports, and shutdown too.
+            # The lock's own timeout remains 0.05s in the child; a loaded
+            # runner must not lose its successful contention result merely
+            # because the process lifecycle took more than two seconds.
+            timeout=15.0,
         )
 
     assert result.returncode == 23

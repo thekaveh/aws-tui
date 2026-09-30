@@ -12,6 +12,7 @@ from textual.app import App, ComposeResult
 from textual.color import Color
 from textual.containers import VerticalScroll
 from textual.content import Content
+from textual.screen import Screen
 from textual.widgets import Static
 from vmx import Message, MessageHub, RxDispatcher
 
@@ -1145,8 +1146,12 @@ async def test_marking_an_entry_flips_marked_and_repaints_the_mark_glyph() -> No
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "defer_scrollbar_layout", [False, True], ids=["normal", "delayed-scrollbar"]
+)
 async def test_cursor_move_repaints_only_the_two_affected_rows(
     monkeypatch: pytest.MonkeyPatch,
+    defer_scrollbar_layout: bool,
 ) -> None:
     """One keystroke must repaint two rows, whatever the listing size.
 
@@ -1179,6 +1184,22 @@ async def test_cursor_move_repaints_only_the_two_affected_rows(
         return original_refresh(self, *args, **kwargs)
 
     monkeypatch.setattr(EntryRow, "refresh", _counting_refresh)
+    layout_released = not defer_scrollbar_layout
+    layout_deferred = False
+    original_layout = Screen._refresh_layout
+
+    def _defer_followup_layout(self: Screen[Any], *args: Any, **kwargs: Any) -> Any:
+        nonlocal layout_deferred
+        rows = list(self.query(EntryRow))
+        if not layout_released and len(rows) == 60 and all(row.size.width > 0 for row in rows):
+            # Keep the real scrollbar reflow pending across the mount-message
+            # barrier, reproducing the Windows scheduling order without sleeps.
+            layout_deferred = True
+            return None
+        return original_layout(self, *args, **kwargs)
+
+    if defer_scrollbar_layout:
+        monkeypatch.setattr(Screen, "_refresh_layout", _defer_followup_layout)
     try:
         app = _single_pane_app(vm, hub)
         async with app.run_test(size=(120, 30)) as pilot:
@@ -1195,6 +1216,30 @@ async def test_cursor_move_repaints_only_the_two_affected_rows(
             # The initial mount paints everything; only the steady state is
             # under test, so start counting from here.
             await pilot.pause()  # Drain mount refresh messages before resetting the counter.
+            body = app.query_one("#pane-body", VerticalScroll)
+            if defer_scrollbar_layout:
+                assert layout_deferred, "the regression must hold a real follow-up layout"
+                assert any(
+                    row.size.width != body.scrollable_content_region.width
+                    for row in app.query(EntryRow)
+                ), "the initial rows must still need the scrollbar width adjustment"
+                layout_released = True
+                app.screen.refresh(layout=True)
+            # Mounting and laying out the body takes separate passes: adding
+            # the scrollbar reduces every row's width and refreshes all rows.
+            # Count cursor work only after that actual geometry is projected.
+            await wait_until(
+                lambda: (
+                    body.show_vertical_scrollbar
+                    and body.max_scroll_y > 0
+                    and all(
+                        row.size.width == body.scrollable_content_region.width
+                        and row.virtual_size.width == body.scrollable_content_region.width
+                        for row in app.query(EntryRow)
+                    )
+                ),
+                what="all sixty rows laid out at the final scrollbar-adjusted width",
+            )
             repainted.clear()
 
             vm.move_cursor_command.execute(1)
