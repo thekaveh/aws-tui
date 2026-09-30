@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from html import unescape
 from itertools import product
 from pathlib import Path
@@ -50,10 +51,38 @@ async def _show_full_app_query(pilot: Pilot[None]) -> None:
     editor = app.query_one("#athena-editor", TextArea)
     await seed_athena_sql(pilot, page.vm.query, editor, "SELECT 42 AS compact_layout")
     await _dismiss_demo_startup_advisory(pilot)
-    await wait_until(
-        lambda: editor.region.height >= 3 and "compact_layout" in app.export_screenshot(),
-        what="full-app snapshot contains visibly rendered SQL",
-    )
+    try:
+        await wait_until(
+            lambda: editor.region.height >= 3 and "compact_layout" in app.export_screenshot(),
+            what="full-app snapshot contains visibly rendered SQL",
+        )
+    except AssertionError as error:
+        # run_before failures happen before the snapshot plugin captures an
+        # image. Preserve this demo-only SVG too, so CI can distinguish a
+        # layout failure from missing SQL or split SVG text spans.
+        try:
+            state = (
+                f"size={app.size!r}; screen={app.screen.classes!r}; "
+                f"service={app.app_ctx.root_vm.content_host.current_id!r}; "
+                f"focus={app.focused!r}; editor_attached={editor.is_attached}; "
+                f"editor_current={editor in app.query('#athena-editor')}; "
+                f"editor_region={editor.region!r}; editor_scroll={editor.scroll_offset!r}; "
+                f"editor_text={editor.text!r}; vm_sql={page.vm.query.sql!r}; "
+                f"regions={[(type(w).__name__, w.region, w.classes) for w in app.query('BrandBanner, AthenaPage, AthenaQueryView')]!r}"
+            )
+            error.add_note(state)
+            svg = app.export_screenshot()
+            destination = os.environ.get("AWS_TUI_SNAPSHOT_ARTIFACT_DIR")
+            if destination:
+                output = Path(destination)
+                output.mkdir(parents=True, exist_ok=True)
+                theme = app.app_ctx.initial_theme
+                name = f"athena-readiness-{theme}-{app.size.width}x{app.size.height}.svg"
+                (output / name).write_text(svg, encoding="utf-8")
+            error.add_note(f"rendered_marker={'compact_layout' in svg}")
+        except Exception as diagnostic_error:
+            error.add_note(f"Could not complete snapshot diagnostics: {diagnostic_error!r}")
+        raise
     assert editor.region.height >= 3
     assert editor.text == "SELECT 42 AS compact_layout"
 
