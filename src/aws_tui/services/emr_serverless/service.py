@@ -14,7 +14,7 @@ host this VM as a singleton (see [[vmx-content-host-singleton-trap]])."""
 from __future__ import annotations
 
 from collections.abc import AsyncGenerator, Callable
-from typing import ClassVar, cast
+from typing import Any, ClassVar, cast
 
 import aioboto3
 from vmx import Message, MessageHub
@@ -115,6 +115,12 @@ class _FailedEmrClient:
         spark_submit_parameters: str | None,
         client_token: str,
         name: str | None = None,
+        configuration_overrides: dict[str, Any] | None = None,
+        execution_timeout_minutes: int | None = None,
+        retry_policy: dict[str, Any] | None = None,
+        mode: str | None = None,
+        execution_iam_policy: dict[str, Any] | None = None,
+        tags: dict[str, str] | None = None,
     ) -> str:
         raise self._fresh_error()
 

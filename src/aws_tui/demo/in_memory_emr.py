@@ -23,9 +23,11 @@ import logging
 from collections.abc import AsyncIterator
 from dataclasses import replace
 from datetime import datetime, timedelta
+from typing import Any
 
 from aws_tui.demo._bounded_log import BoundedCallLog
 from aws_tui.demo.clock import DEMO_NOW
+from aws_tui.domain.emr_job_request import build_start_job_run_request
 from aws_tui.domain.emr_logs import LogChunk, LogFile, LogFileKind, LogFilter
 from aws_tui.domain.emr_serverless import (
     EMR_BOTO_CONFIG,
@@ -303,6 +305,12 @@ class InMemoryEmr:
         spark_submit_parameters: str | None,
         client_token: str,
         name: str | None = None,
+        configuration_overrides: dict[str, Any] | None = None,
+        execution_timeout_minutes: int | None = None,
+        retry_policy: dict[str, Any] | None = None,
+        mode: str | None = None,
+        execution_iam_policy: dict[str, Any] | None = None,
+        tags: dict[str, str] | None = None,
     ) -> str:
         """Record the submit call + materialise a new ``SUBMITTED`` run.
 
@@ -317,6 +325,21 @@ class InMemoryEmr:
         In demo mode the run also schedules an async state-machine walk
         (SUBMITTED → SCHEDULED → RUNNING → SUCCESS over ~5 s) so the
         runs pane shows realistic state transitions."""
+        request = build_start_job_run_request(
+            application_id,
+            execution_role_arn=execution_role_arn,
+            entry_point=entry_point,
+            entry_point_arguments=entry_point_arguments,
+            spark_submit_parameters=spark_submit_parameters,
+            client_token=client_token,
+            name=name,
+            configuration_overrides=configuration_overrides,
+            execution_timeout_minutes=execution_timeout_minutes,
+            retry_policy=retry_policy,
+            mode=mode,
+            execution_iam_policy=execution_iam_policy,
+            tags=tags,
+        )
         await asyncio.sleep(_DEMO_LATENCY_SEC)
         self.calls.append(
             (
@@ -329,6 +352,7 @@ class InMemoryEmr:
                     spark_submit_parameters,
                     name,
                     client_token,
+                    request,
                 ),
             )
         )
@@ -362,7 +386,19 @@ class InMemoryEmr:
             spark_submit_parameters=spark_submit_parameters,
             execution_role_arn=execution_role_arn,
             duration_ms=None,
-            s3_monitoring_log_uri=None,
+            s3_monitoring_log_uri=(
+                request.get("configurationOverrides", {})
+                .get("monitoringConfiguration", {})
+                .get("s3MonitoringConfiguration", {})
+                .get("logUri")
+            ),
+            job_driver=request["jobDriver"],
+            configuration_overrides=request.get("configurationOverrides"),
+            execution_timeout_minutes=request.get("executionTimeoutMinutes"),
+            retry_policy=request.get("retryPolicy"),
+            mode=request.get("mode"),
+            execution_iam_policy=request.get("executionIamPolicy"),
+            tags=request.get("tags"),
         )
         self._details[(application_id, new_id)] = d
         # Schedule the state walk. ``asyncio.create_task`` requires

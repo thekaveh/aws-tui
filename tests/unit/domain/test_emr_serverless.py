@@ -551,12 +551,11 @@ async def test_start_job_run_forwards_form_fields_to_boto() -> None:
 
 
 @pytest.mark.asyncio
-async def test_start_job_run_omits_name_and_blank_spark_params_when_unset() -> None:
+async def test_start_job_run_omits_name_and_spark_params_when_unset() -> None:
     """``name`` is optional in the boto3 contract — it must be absent
     from the kwargs when the modal leaves the field blank.
-    ``sparkSubmitParameters`` is also optional; botocore requires a
-    non-blank value when the key is present, so blank modal values
-    must omit the key entirely."""
+    ``sparkSubmitParameters`` is also optional; None omits the key.
+    Supplied strings are preserved exactly, covered separately."""
     stub = _StubClient()
     stub.start_job_run.return_value = {"jobRunId": "jr-new-2"}
     client = EmrServerlessClient(session=_StubSession(stub))  # type: ignore[arg-type]
@@ -565,7 +564,7 @@ async def test_start_job_run_omits_name_and_blank_spark_params_when_unset() -> N
         execution_role_arn="arn:aws:iam::123456789012:role/Role",
         entry_point="s3://b/job.py",
         entry_point_arguments=(),
-        spark_submit_parameters="   ",
+        spark_submit_parameters=None,
         client_token="tok",
         name=None,
     )
@@ -717,3 +716,323 @@ async def test_in_memory_emr_reuses_the_run_for_a_repeated_client_token() -> Non
     assert len([c for c in fake.calls if c[0] == "start_job_run"]) == 2
     runs = await fake.list_job_runs("00abc")
     assert len(runs) == 1
+
+
+def _clone_source_response() -> dict:
+    return {
+        "applicationId": "00abc",
+        "jobRunId": "jr-source",
+        "name": "nightly",
+        "state": "SUCCESS",
+        "createdAt": datetime(2026, 6, 25, tzinfo=UTC),
+        "updatedAt": datetime(2026, 6, 25, tzinfo=UTC),
+        "executionRole": "arn:aws:iam::123456789012:role/EmrJobRole",
+        "jobDriver": {
+            "sparkSubmit": {
+                "entryPoint": "s3://b/job.py",
+                "entryPointArguments": ["", "a\nb", "  padded  "],
+                "sparkSubmitParameters": "  --conf k=v  ",
+            }
+        },
+        "configurationOverrides": {
+            "applicationConfiguration": [
+                {
+                    "classification": "spark-defaults",
+                    "properties": {"spark.executor.instances": "4"},
+                    "configurations": [{"classification": "nested", "properties": {"k": "v"}}],
+                }
+            ],
+            "monitoringConfiguration": {
+                "s3MonitoringConfiguration": {
+                    "logUri": "s3://logs/jobs/",
+                    "encryptionKeyArn": "key",
+                },
+                "cloudWatchLoggingConfiguration": {"enabled": True, "logGroupName": "group"},
+                "managedPersistenceMonitoringConfiguration": {"enabled": False},
+                "prometheusMonitoringConfiguration": {"remoteWriteUrl": "https://metrics.example"},
+            },
+        },
+        "executionTimeoutMinutes": 0,
+        "mode": "STREAMING",
+        "retryPolicy": {"maxFailedAttemptsPerHour": 2},
+        "executionIamPolicy": {"policyArns": ["arn:aws:iam::123456789012:policy/JobPolicy"]},
+        "tags": {"team": "analytics"},
+        "releaseLabel": "emr-7.10.0",
+        "networkConfiguration": {"subnetIds": ["subnet-one"]},
+        "imageConfiguration": {"imageUri": "image:tag"},
+        "workerTypeSpecifications": {
+            "SparkDriver": {"imageConfiguration": {"imageUri": "driver:tag"}}
+        },
+    }
+
+
+async def test_get_job_run_preserves_clone_configuration_without_aliasing() -> None:
+    source = _clone_source_response()
+    stub = _StubClient()
+    stub.get_job_run.return_value = {"jobRun": source}
+    client = EmrServerlessClient(session=_StubSession(stub))  # type: ignore[arg-type]
+    detail = await client.get_job_run("00abc", "jr-source")
+    assert detail.configuration_overrides == source["configurationOverrides"]
+    assert detail.execution_timeout_minutes == 0
+    assert detail.retry_policy == source["retryPolicy"]
+    assert detail.mode == "STREAMING"
+    assert detail.execution_iam_policy == source["executionIamPolicy"]
+    assert detail.tags == source["tags"]
+    assert detail.job_driver == source["jobDriver"]
+    assert detail.source_application_settings == {
+        key: source[key]
+        for key in (
+            "releaseLabel",
+            "networkConfiguration",
+            "imageConfiguration",
+            "workerTypeSpecifications",
+        )
+    }
+    assert detail.s3_monitoring_log_uri == "s3://logs/jobs/"
+    source["configurationOverrides"]["applicationConfiguration"][0]["properties"][
+        "spark.executor.instances"
+    ] = "99"
+    source["executionIamPolicy"]["policyArns"].append("changed")
+    source["networkConfiguration"]["subnetIds"].append("changed")
+    source["jobDriver"]["sparkSubmit"]["entryPointArguments"].append("changed")
+    assert (
+        detail.configuration_overrides["applicationConfiguration"][0]["properties"][
+            "spark.executor.instances"
+        ]
+        == "4"
+    )
+    assert len(detail.execution_iam_policy["policyArns"]) == 1
+    assert detail.source_application_settings["networkConfiguration"]["subnetIds"] == ["subnet-one"]
+    assert detail.job_driver["sparkSubmit"]["entryPointArguments"] == ["", "a\nb", "  padded  "]
+
+
+@pytest.mark.parametrize(
+    "driver",
+    [
+        None,
+        {},
+        {"hive": {"query": "s3://b/query.hql"}},
+        {"future": {"config": "value"}},
+        {"sparkSubmit": {"entryPoint": "s3://b/job.py"}, "hive": {}},
+    ],
+)
+async def test_get_job_run_retains_unsupported_driver_for_clone_refusal(
+    driver: dict | None,
+) -> None:
+    source = _clone_source_response()
+    if driver is None:
+        del source["jobDriver"]
+    else:
+        source["jobDriver"] = driver
+    stub = _StubClient()
+    stub.get_job_run.return_value = {"jobRun": source}
+    client = EmrServerlessClient(session=_StubSession(stub))  # type: ignore[arg-type]
+    detail = await client.get_job_run("00abc", "jr-source")
+    assert detail.job_driver == driver
+
+
+@pytest.mark.parametrize("present", [False, True])
+async def test_get_job_run_distinguishes_missing_and_empty_settings(present: bool) -> None:
+    source = _clone_source_response()
+    for key in ["configurationOverrides", "retryPolicy", "executionIamPolicy", "tags"]:
+        if present:
+            source[key] = {}
+        else:
+            del source[key]
+    source.pop("executionTimeoutMinutes")
+    source.pop("mode")
+    stub = _StubClient()
+    stub.get_job_run.return_value = {"jobRun": source}
+    detail = await EmrServerlessClient(session=_StubSession(stub)).get_job_run("00abc", "jr-source")  # type: ignore[arg-type]
+    for value in [
+        detail.configuration_overrides,
+        detail.retry_policy,
+        detail.execution_iam_policy,
+        detail.tags,
+    ]:
+        assert value == ({} if present else None)
+    assert detail.execution_timeout_minutes is None
+    assert detail.mode is None
+
+
+async def test_job_detail_repr_does_not_include_clone_values() -> None:
+    source = _clone_source_response()
+    stub = _StubClient()
+    stub.get_job_run.return_value = {"jobRun": source}
+    detail = await EmrServerlessClient(session=_StubSession(stub)).get_job_run("00abc", "jr-source")  # type: ignore[arg-type]
+    rendered = repr(detail)
+    for sensitive in ["padded", "spark.executor.instances", "JobPolicy", "--conf", "s3://b/job.py"]:
+        assert sensitive not in rendered
+
+
+@pytest.mark.parametrize("mode", ["BATCH", "STREAMING"])
+async def test_start_job_run_preserves_complete_clone_request(mode: str) -> None:
+    source = _clone_source_response()
+    overrides = source["configurationOverrides"]
+    overrides["monitoringConfiguration"]["s3MonitoringConfiguration"]["encryptionKeyArn"] = (
+        "arn:aws:kms:us-east-1:123456789012:key/example"
+    )
+    stub = _StubClient()
+    stub.start_job_run.return_value = {"jobRunId": "jr-clone"}
+    client = EmrServerlessClient(session=_StubSession(stub))  # type: ignore[arg-type]
+    assert (
+        await client.start_job_run(
+            "00abc",
+            execution_role_arn=source["executionRole"],
+            entry_point="s3://b/job.py",
+            entry_point_arguments=("", "a\nb", "  padded  "),
+            spark_submit_parameters="  --conf k=v  ",
+            client_token="clone-intent",
+            configuration_overrides=overrides,
+            execution_timeout_minutes=0,
+            retry_policy=source["retryPolicy"],
+            mode=mode,
+            execution_iam_policy=source["executionIamPolicy"],
+            tags=source["tags"],
+        )
+        == "jr-clone"
+    )
+    kwargs = stub.start_job_run.await_args.kwargs
+    assert kwargs == {
+        "applicationId": "00abc",
+        "executionRoleArn": source["executionRole"],
+        "jobDriver": source["jobDriver"],
+        "clientToken": "clone-intent",
+        "configurationOverrides": overrides,
+        "executionTimeoutMinutes": 0,
+        "retryPolicy": source["retryPolicy"],
+        "mode": mode,
+        "executionIamPolicy": source["executionIamPolicy"],
+        "tags": source["tags"],
+    }
+    kwargs["configurationOverrides"]["applicationConfiguration"][0]["properties"][
+        "spark.executor.instances"
+    ] = "99"
+    kwargs["executionIamPolicy"]["policyArns"].append("changed")
+    kwargs["tags"]["team"] = "changed"
+    assert overrides["applicationConfiguration"][0]["properties"]["spark.executor.instances"] == "4"
+    assert len(source["executionIamPolicy"]["policyArns"]) == 1
+    assert source["tags"] == {"team": "analytics"}
+
+
+@pytest.mark.parametrize("parameters", ["   ", "\n\t", "  --conf key=value\n"])
+async def test_start_job_run_preserves_spark_parameter_whitespace(parameters: str) -> None:
+    stub = _StubClient()
+    stub.start_job_run.return_value = {"jobRunId": "jr-clone"}
+    client = EmrServerlessClient(session=_StubSession(stub))  # type: ignore[arg-type]
+    await client.start_job_run(
+        "00abc",
+        execution_role_arn="role",
+        entry_point="s3://b/job.py",
+        entry_point_arguments=(),
+        spark_submit_parameters=parameters,
+        client_token="clone-intent",
+    )
+    assert (
+        stub.start_job_run.await_args.kwargs["jobDriver"]["sparkSubmit"]["sparkSubmitParameters"]
+        == parameters
+    )
+
+
+@pytest.mark.parametrize(
+    "settings",
+    [
+        {"mode": "FUTURE"},
+        {"execution_timeout_minutes": -1},
+        {"execution_timeout_minutes": True},
+        {"execution_timeout_minutes": "secret-duration"},
+        {"retry_policy": {"maxAttempts": "secret-attempt"}},
+        {
+            "configuration_overrides": {
+                "diskEncryptionConfiguration": {"encryptionKeyArn": "secret-key"}
+            }
+        },
+        {"configuration_overrides": {"monitoringConfiguration": {"unknown": "secret-monitor"}}},
+        {"execution_iam_policy": {"policy": 123}},
+        {"execution_iam_policy": {"unknown": "secret-policy"}},
+        {"tags": {"team": ["secret-tag"]}},
+    ],
+)
+async def test_start_job_run_blocks_unsupported_settings_without_reduced_request(
+    settings: dict,
+) -> None:
+    stub = _StubClient()
+    client = EmrServerlessClient(session=_StubSession(stub))  # type: ignore[arg-type]
+    with pytest.raises(ValidationError) as caught:
+        await client.start_job_run(
+            "00abc",
+            execution_role_arn="role",
+            entry_point="s3://b/job.py",
+            entry_point_arguments=(),
+            spark_submit_parameters=None,
+            client_token="clone-intent",
+            **settings,
+        )
+    stub.start_job_run.assert_not_awaited()
+    assert "secret-" not in str(caught.value)
+    assert "FUTURE" not in str(caught.value)
+
+
+async def test_start_job_run_keeps_explicit_empty_optional_blocks() -> None:
+    stub = _StubClient()
+    stub.start_job_run.return_value = {"jobRunId": "jr-clone"}
+    client = EmrServerlessClient(session=_StubSession(stub))  # type: ignore[arg-type]
+    await client.start_job_run(
+        "00abc",
+        execution_role_arn="role",
+        entry_point="s3://b/job.py",
+        entry_point_arguments=(),
+        spark_submit_parameters=None,
+        client_token="clone-intent",
+        configuration_overrides={},
+        retry_policy={},
+        execution_iam_policy={},
+        tags={},
+    )
+    assert stub.start_job_run.await_args.kwargs == {
+        "applicationId": "00abc",
+        "executionRoleArn": "role",
+        "jobDriver": {"sparkSubmit": {"entryPoint": "s3://b/job.py", "entryPointArguments": []}},
+        "clientToken": "clone-intent",
+        "configurationOverrides": {},
+        "retryPolicy": {},
+        "executionIamPolicy": {},
+        "tags": {},
+    }
+
+
+async def test_demo_clone_preserves_optional_settings_and_monitoring() -> None:
+    source = _clone_source_response()
+    source["configurationOverrides"]["monitoringConfiguration"]["s3MonitoringConfiguration"][
+        "encryptionKeyArn"
+    ] = "arn:aws:kms:us-east-1:123456789012:key/example"
+    fake = _InMemoryEmr()
+    fake.add_application(app_id="00abc", name="etl")
+    try:
+        new_id = await fake.start_job_run(
+            "00abc",
+            execution_role_arn=source["executionRole"],
+            entry_point="s3://b/job.py",
+            entry_point_arguments=("", "a\nb", "  padded  "),
+            spark_submit_parameters="  --conf k=v  ",
+            client_token="clone-intent",
+            configuration_overrides=source["configurationOverrides"],
+            execution_timeout_minutes=0,
+            retry_policy=source["retryPolicy"],
+            mode="STREAMING",
+            execution_iam_policy=source["executionIamPolicy"],
+            tags=source["tags"],
+        )
+        detail = await fake.get_job_run("00abc", new_id)
+        assert detail.job_driver == source["jobDriver"]
+        assert detail.configuration_overrides == source["configurationOverrides"]
+        assert detail.execution_timeout_minutes == 0
+        assert detail.retry_policy == source["retryPolicy"]
+        assert detail.mode == "STREAMING"
+        assert detail.execution_iam_policy == source["executionIamPolicy"]
+        assert detail.tags == source["tags"]
+        assert detail.s3_monitoring_log_uri == "s3://logs/jobs/"
+        source["tags"]["team"] = "changed"
+        assert detail.tags == {"team": "analytics"}
+    finally:
+        fake.dispose()
