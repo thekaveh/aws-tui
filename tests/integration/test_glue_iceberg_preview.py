@@ -18,7 +18,9 @@ worker it is meant to wait for even starts.
 
 from __future__ import annotations
 
+import asyncio
 import contextlib
+from collections.abc import Callable
 from pathlib import Path
 
 import pytest
@@ -27,6 +29,7 @@ from textual.widgets import Button, DataTable, Static
 from aws_tui.app import AwsTuiApp
 from aws_tui.composition import AppContext, build_app_context
 from aws_tui.infra.duckdb import DuckDbOutcome, InMemoryDuckDb
+from aws_tui.ui.widgets.glue.iceberg_view import GlueIcebergView
 from aws_tui.vm.file_manager.pane_vm import PaneState
 from aws_tui.vm.glue.page_vm import GluePageVM
 from tests.helpers import drain_workers, wait_until
@@ -83,13 +86,93 @@ async def _open_iceberg_preview(
         ),
         what="the Iceberg sibling's own detail to load",
     )
-    await pilot.pause()  # type: ignore[attr-defined]
-
     await wait_until(
         lambda: vm.catalog.iceberg.preview.available,
         what="the preview became available for the seeded Iceberg table",
     )
+    tab = app.query_one("#glue-iceberg-tab-preview")
+    # The VM notification queues a widget projection, which in turn queues
+    # layout. Pilot.click captures coordinates before yielding to either one.
+    await wait_until(
+        lambda: (
+            tab.display
+            and tab.region.width > 0
+            and tab.region.height > 0
+            and app.get_widget_at(tab.region.x, tab.region.y)[0] is tab
+        ),
+        what="the Peek tab to be rendered and receive a click at its origin",
+    )
     return vm
+
+
+@pytest.mark.asyncio
+async def test_preview_setup_waits_for_the_tab_to_be_rendered(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    original_refresh = GlueIcebergView._refresh
+    projection_held = asyncio.Event()
+    availability_observed = asyncio.Event()
+    release_projection = False
+    original_wait = wait_until
+
+    async def observe_availability(predicate: Callable[[], bool], *, what: str) -> None:
+        await original_wait(predicate, what=what)
+        if what == "the preview became available for the seeded Iceberg table":
+            availability_observed.set()
+
+    # Observe the old helper's final milestone so the pending-task assertion
+    # cannot pass merely because setup has not reached preview availability.
+    monkeypatch.setattr(f"{__name__}.wait_until", observe_availability)
+
+    def defer_preview_projection(view: GlueIcebergView) -> None:
+        if view._vm.preview.available and not release_projection:
+            projection_held.set()
+            return
+        original_refresh(view)
+
+    monkeypatch.setattr(GlueIcebergView, "_refresh", defer_preview_projection)
+    port = InMemoryDuckDb(columns=("event_id",), rows=(("8821",),))
+    ctx = build_app_context(
+        config_dir=tmp_path / "config",
+        cache_dir=tmp_path / "cache",
+        demo=True,
+        duckdb_port=port,
+    )
+    app = AwsTuiApp(ctx)
+    try:
+        async with app.run_test(size=(120, 40)) as pilot:
+            opening = asyncio.create_task(_open_iceberg_preview(ctx, app, pilot))
+            try:
+                await wait_until(
+                    projection_held.is_set,
+                    what="available preview to reach its deferred widget projection",
+                )
+                await wait_until(
+                    availability_observed.is_set,
+                    what="setup to observe preview availability before checking its tab",
+                )
+                tab = app.query_one("#glue-iceberg-tab-preview")
+                assert tab.region.width == 0
+                assert not opening.done(), "setup returned before the Peek tab was rendered"
+
+                release_projection = True
+                original_refresh(app.query_one(GlueIcebergView))
+                vm = await opening
+                assert await pilot.click("#glue-iceberg-tab-preview")
+                await wait_until(
+                    lambda: vm.catalog.iceberg.preview.state is PaneState.IDLE,
+                    what="rendered Peek tab click to finish its preview scan",
+                )
+                assert len(port.queries) == 1
+            finally:
+                release_projection = True
+                if not opening.done():
+                    opening.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await opening
+    finally:
+        with contextlib.suppress(Exception):
+            ctx.root_vm.dispose()
 
 
 @pytest.mark.asyncio
@@ -109,14 +192,17 @@ async def test_peek_pane_loads_rows_and_reaches_idle(tmp_path: Path) -> None:
         async with app.run_test(size=(120, 40)) as pilot:
             vm = await _open_iceberg_preview(ctx, app, pilot)
 
-            await pilot.click("#glue-iceberg-tab-preview")
+            assert await pilot.click("#glue-iceberg-tab-preview")
             await wait_until(
                 lambda: vm.catalog.iceberg.preview.state is PaneState.IDLE,
                 what="the preview pane reached IDLE",
             )
-            await pilot.pause()
-
             table = app.query_one("#glue-iceberg-table", DataTable)
+            footer = app.query_one("#glue-iceberg-footer", Static)
+            await wait_until(
+                lambda: table.row_count == 2 and str(footer.render()) == "2 rows · limit 100",
+                what="the completed preview to render its two rows and footer",
+            )
             assert table.row_count == 2
 
             assert len(port.queries) == 1
@@ -128,7 +214,6 @@ async def test_peek_pane_loads_rows_and_reaches_idle(tmp_path: Path) -> None:
             assert profile == "demo-dev"
             assert region == "us-east-1"
 
-            footer = app.query_one("#glue-iceberg-footer", Static)
             assert str(footer.render()) == "2 rows · limit 100"
     finally:
         with contextlib.suppress(Exception):
@@ -158,7 +243,7 @@ async def test_peek_more_button_issues_a_second_query_at_the_next_limit(
         async with app.run_test(size=(120, 40)) as pilot:
             vm = await _open_iceberg_preview(ctx, app, pilot)
 
-            await pilot.click("#glue-iceberg-tab-preview")
+            assert await pilot.click("#glue-iceberg-tab-preview")
             await wait_until(
                 lambda: vm.catalog.iceberg.preview.state is PaneState.IDLE,
                 what="the first preview scan finished",
@@ -223,7 +308,7 @@ async def test_peek_pane_shows_the_install_line_when_the_engine_is_missing(
         async with app.run_test(size=(120, 40)) as pilot:
             vm = await _open_iceberg_preview(ctx, app, pilot)
 
-            await pilot.click("#glue-iceberg-tab-preview")
+            assert await pilot.click("#glue-iceberg-tab-preview")
             await wait_until(
                 lambda: vm.catalog.iceberg.preview.state is PaneState.ERROR,
                 what="the preview pane reported the missing engine",
