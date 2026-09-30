@@ -8,7 +8,7 @@
 
 **Tech Stack:** Python 3.11–3.13, botocore/aioboto3, VMx, Textual, pytest and syrupy SVG snapshots.
 
-## Global Constraints
+## 1. Global Constraints
 
 - Preserve absence separately from an explicit empty structure or zero.
 - Only BATCH and STREAMING modes are accepted when present.
@@ -19,7 +19,7 @@
 - Reuse the clean primary checkout on `codex/issue-238-faithful-emr-cloning`.
 - Run tests with AWS config/credentials isolated, using stubs and demo clients.
 
-## Task 1: Preserve source details and explicit request settings
+## 2. Task 1: Preserve source details and explicit request settings
 
 **Files:** `src/aws_tui/domain/emr_serverless.py`, new `src/aws_tui/domain/emr_job_request.py`, `tests/unit/domain/test_emr_serverless.py`.
 
@@ -53,7 +53,7 @@ assert kwargs == {
 }
 ```
 
-## Task 2: VM fidelity, validation, review state and demo parity
+## 3. Task 2: VM fidelity, validation, review state and demo parity
 
 **Files:** `src/aws_tui/vm/emr_serverless/clone_vm.py`, `src/aws_tui/demo/in_memory_emr.py`, `tests/unit/vm/emr_serverless/test_clone_vm.py`, `tests/unit/domain/test_emr_serverless.py`.
 
@@ -79,7 +79,7 @@ settings["mode"] = "BATCH"
 assert vm.settings["mode"] == "STREAMING"
 ```
 
-## Task 3: Bounded edit/review workflow and sensitive errors
+## 4. Task 3: Bounded edit/review workflow and sensitive errors
 
 **Files:** `src/aws_tui/ui/widgets/emr_serverless/clone_modal.py`, `src/aws_tui/ui/widgets/emr_serverless/page.py`, `tests/unit/ui/emr_serverless/test_clone_modal.py`, `tests/integration/test_emr_page.py`.
 
@@ -105,19 +105,19 @@ await modal.action_submit()
 assert fake_start.await_count == 1
 ```
 
-## Task 4: Rendered evidence, docs, review and full delivery
+## 5. Task 4: Rendered evidence, docs, review and full delivery
 
 **Files:** `tests/snapshot/apps/emr_clone_modal.py`, `tests/snapshot/test_emr_clone_modal.py`, affected EMR golden files, `docs/services/emr-serverless.md`, `docs/contract-ledger.md`.
 
-- [ ] Seed rich source configuration and identity in the snapshot harness. Keep all existing theme coverage; add changed review and inherited/unknown review states at 80x24 and 120x40 in Carbon/GitHub Light.
-- [ ] Replace disk-only content guards with live pilot screenshot guards. Assert rendered identity, changed old/new values, inheritance/unknown labels and reachable action footer. Scroll when inspecting the full review.
-- [ ] Generate only intended golden changes, inspect rendered artifacts visually, and verify unchanged snapshots stay unchanged.
-- [ ] Document exact preservation, JSON editing, two-stage review, unsupported driver/settings refusal, inherited/unknown application defaults, privacy and token retry rules. Update the consumed contract ledger to the installed SDK contract.
+- [x] Seed rich source configuration and identity in the snapshot harness. Keep all existing theme coverage; add changed review and inherited/unknown review states at 80x24 and 120x40 in Carbon/GitHub Light.
+- [x] Replace disk-only content guards with live pilot screenshot guards. Assert rendered identity, changed old/new values, inheritance/unknown labels and reachable action footer. Scroll when inspecting the full review.
+- [x] Generate only intended golden changes, inspect rendered artifacts visually, and verify unchanged snapshots stay unchanged.
+- [x] Document exact preservation, JSON editing, two-stage review, unsupported driver/settings refusal, inherited/unknown application defaults, privacy and token retry rules. Update the consumed contract ledger to the installed SDK contract.
 - [ ] Audit every AC against tests and actual behavior. Run lint/type/architecture/docs/build, relevant local suites and independent code review; resolve findings.
 - [ ] Push, create/attach PR into develop using `Refs #238`, pass final required CI and merge normally. Create/attach checked develop-to-main promotion and any history back-merge. Verify final post-merge CI and source parity.
 - [ ] Delete only the completed #238 local/remote feature branch, preserve unrelated work, publish evidence/limitations, close #238 and mark Done. Record promotion evidence and only then begin #244.
 
-## Verification commands
+## 6. Verification commands
 
 Use this prefix for test runs:
 

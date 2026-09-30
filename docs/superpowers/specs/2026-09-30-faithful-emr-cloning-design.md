@@ -1,6 +1,6 @@
 # Faithful EMR Serverless cloning
 
-## Goal and verified baseline
+## 1. Goal and verified baseline
 
 Issue #238 requires preserving the source run's supported submission settings and
 making differences and unknown settings visible before a new run is submitted.
@@ -15,7 +15,7 @@ Current issue description and its owner comment were fetched on 2026-09-30. Ther
 are no declared prerequisite issues or linked implementation PRs. #260 references
 #238 as its own dependency; new-job authoring remains outside this ticket.
 
-## Chosen design
+## 2. Chosen design
 
 Keep the existing domain/client/VM/modal boundaries. Extend JobRunDetail with the
 source driver identity, configuration overrides, execution timeout, retry policy,
@@ -80,7 +80,7 @@ The demo client carries the same settings into the new JobRunDetail and preserve
 its existing idempotency/state transitions. No live AWS calls are needed to verify
 this feature.
 
-## Alternatives considered
+## 3. Alternatives considered
 
 Automatically preserving extra fields without a review would still hide changes
 and unknown defaults. Passing raw response JSON into StartJobRun would include
@@ -89,7 +89,7 @@ every nested monitoring/application property would greatly expand this focused
 workflow. The chosen advanced object plus explicit review preserves arbitrary
 supported nested values while keeping a bounded UI and strict request contract.
 
-## Acceptance-to-evidence mapping
+## 4. Acceptance-to-evidence mapping
 
 | AC | Required evidence |
 | --- | --- |
@@ -108,7 +108,7 @@ round-trip and real keyboard navigation at compact/spacious sizes. Update servic
 docs and contract ledger, review all changed goldens visually, and run required
 lint/type/architecture/docs/build/full CI through protected develop/main promotion.
 
-## Contract references and scope
+## 5. Contract references and scope
 
 - https://docs.aws.amazon.com/emr-serverless/latest/APIReference/API_StartJobRun.html
 - https://docs.aws.amazon.com/emr-serverless/latest/APIReference/API_JobRun.html
