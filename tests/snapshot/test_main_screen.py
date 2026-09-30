@@ -13,6 +13,7 @@ import pytest
 from aws_tui.ui.widgets.dual_pane import DualPane
 from aws_tui.ui.widgets.toast import ToastStack
 from aws_tui.ui.widgets.transfers_overlay import TransfersOverlay
+from tests.helpers import wait_until
 from tests.snapshot.apps.main_screen import MainScreenApp
 from tests.snapshot.conftest import TERMINAL_SIZE, THEMES
 
@@ -58,8 +59,15 @@ def test_main_screen_renders_nav_and_panes(theme: str) -> None:
 async def test_main_screen_harness_mounts_production_overlay_widgets() -> None:
     """The harness includes production overlay widgets even if the SVG layer omits them."""
     app = MainScreenApp(theme="carbon")
-    async with app.run_test() as pilot:
-        await pilot.pause()
+    async with app.run_test():
+        await wait_until(
+            lambda: (
+                len(app.query(ToastStack)) == 1
+                and len(app.query(TransfersOverlay)) == 1
+                and len(app.query(DualPane)) == 1
+            ),
+            what="main screen overlays and panes mounted",
+        )
 
         assert app.query_one(ToastStack) is not None
         dual = app.query_one("#content-dual-pane", DualPane)

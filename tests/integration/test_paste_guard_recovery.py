@@ -109,6 +109,7 @@ async def test_app_goes_deaf_on_the_stock_parser(app_context_factory) -> None:  
             _pump(driver, parser.feed(_HELP_BYTE))
             _pump(driver, parser.tick())
         await pilot.pause()
+        # Deliver parser output before checking that the wedged parser stays silent.
         await pilot.pause()
 
         assert not isinstance(app.screen, HelpModal), (
@@ -136,6 +137,7 @@ async def test_app_answers_a_key_after_the_guard_recovers(app_context_factory) -
         # Still deaf at this point: the clock has not moved, so the guard
         # cannot have fired no matter how slow the runner is.
         _pump(driver, parser.feed(_HELP_BYTE))
+        # Deliver parser output before checking that the wedged parser stays silent.
         await pilot.pause()
         assert not isinstance(app.screen, HelpModal)
         assert parser.guard.recoveries == 0

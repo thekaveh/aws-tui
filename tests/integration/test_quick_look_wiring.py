@@ -12,6 +12,7 @@ from aws_tui.demo.in_memory_fs import InMemoryFS
 from aws_tui.domain.filesystem import PathRef
 from aws_tui.ui.widgets.pane import EntryRow
 from aws_tui.ui.widgets.quick_look import QuickLook
+from tests.helpers import wait_until
 from tests.integration.conftest import AppContextBuilder
 
 
@@ -51,7 +52,10 @@ async def test_space_opens_quick_look(app_context_factory: AppContextBuilder) ->
                 await pilot.pause(0.01)
 
         await pilot.press("space")
-        await pilot.pause()
+        await wait_until(
+            lambda: isinstance(app.screen, QuickLook),
+            what="Quick Look modal to open",
+        )
 
         assert isinstance(app.screen, QuickLook)
         content = app.screen.vm.content
@@ -72,6 +76,7 @@ async def test_quick_look_noop_when_no_file(app_context_factory: AppContextBuild
         await pilot.pause()
 
         app.action_quick_look()
+        # Deliver action callbacks before checking that no modal or crash appeared.
         await pilot.pause()
 
         assert not isinstance(app.screen, QuickLook)

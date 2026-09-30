@@ -21,6 +21,7 @@ from aws_tui.domain.emr_serverless import JobRunState
 from aws_tui.ui.widgets.emr_serverless.job_runs_pane import JobRunsPane
 from aws_tui.vm.emr_serverless.job_runs_vm import JobRunsVM
 from aws_tui.vm.file_manager.pane_vm import PaneState
+from tests.helpers import focus_and_settle, wait_until
 
 
 def _make_vm() -> tuple[JobRunsVM, MessageHub[Message], _InMemoryEmr]:
@@ -51,11 +52,17 @@ async def test_pressing_1_toggles_success_off() -> None:
     async with _PaneApp(vm, hub).run_test() as pilot:
         await pilot.pause()
         pane = pilot.app.query_one(JobRunsPane)
-        pane.focus()
-        await pilot.pause()
+        await focus_and_settle(pane)
+        await wait_until(
+            lambda: pane.has_focus,
+            what="runs pane took focus before digit binding",
+        )
         assert JobRunState.SUCCESS in vm.state_filter
         await pilot.press("1")
-        await pilot.pause()
+        await wait_until(
+            lambda: JobRunState.SUCCESS not in vm.state_filter,
+            what="digit 1 removed SUCCESS from the filter",
+        )
         assert JobRunState.SUCCESS not in vm.state_filter
 
 
@@ -69,10 +76,16 @@ async def test_pressing_1_twice_toggles_success_back_on() -> None:
         pane.focus()
         await pilot.pause()
         await pilot.press("1")
-        await pilot.pause()
+        await wait_until(
+            lambda: JobRunState.SUCCESS not in vm.state_filter,
+            what="first digit 1 removed SUCCESS",
+        )
         assert JobRunState.SUCCESS not in vm.state_filter
         await pilot.press("1")
-        await pilot.pause()
+        await wait_until(
+            lambda: JobRunState.SUCCESS in vm.state_filter,
+            what="second digit 1 restored SUCCESS",
+        )
         assert JobRunState.SUCCESS in vm.state_filter
 
 
@@ -85,7 +98,10 @@ async def test_pressing_2_toggles_running_off() -> None:
         pane.focus()
         await pilot.pause()
         await pilot.press("2")
-        await pilot.pause()
+        await wait_until(
+            lambda: JobRunState.RUNNING not in vm.state_filter,
+            what="digit 2 removed RUNNING from the filter",
+        )
         assert JobRunState.RUNNING not in vm.state_filter
 
 
@@ -104,11 +120,17 @@ async def test_chip_active_class_follows_filter_state() -> None:
         assert "-active" in success_chip.classes
         # Toggle SUCCESS off via the VM (skip key routing).
         vm.toggle_state_filter(JobRunState.SUCCESS)
-        await pilot.pause()
+        await wait_until(
+            lambda: "-active" not in success_chip.classes,
+            what="SUCCESS chip rendered inactive",
+        )
         assert "-active" not in success_chip.classes
         # Toggle back on.
         vm.toggle_state_filter(JobRunState.SUCCESS)
-        await pilot.pause()
+        await wait_until(
+            lambda: "-active" in success_chip.classes,
+            what="SUCCESS chip rendered active",
+        )
         assert "-active" in success_chip.classes
 
 

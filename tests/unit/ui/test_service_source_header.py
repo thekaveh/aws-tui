@@ -9,7 +9,7 @@ from textual.widgets import Static
 from aws_tui.ui.widgets.context_picker import ContextPicker
 from aws_tui.ui.widgets.service_source_header import ServiceSourceHeader
 from aws_tui.vm.service_source_vm import ServiceSourceContext
-from tests.helpers import focus_and_settle
+from tests.helpers import focus_and_settle, wait_until
 
 _DEV = ServiceSourceContext("analytics-dev", "dev-sso", "us-east-1")
 _PROD = ServiceSourceContext("analytics-prod", "prod-sso", "us-west-2")
@@ -62,8 +62,11 @@ async def test_source_header_emits_selected_connection_identity() -> None:
 async def test_source_header_compact_mode_preserves_passive_one_row_identity() -> None:
     header = ServiceSourceHeader(_DEV, selectable=False)
 
-    async with _SourceHost(header).run_test() as pilot:
-        await pilot.pause()
+    async with _SourceHost(header).run_test():
+        await wait_until(
+            lambda: header.region.height == 1,
+            what="compact source header laid out in one row",
+        )
 
         assert not header.can_focus
         assert not header.query(ContextPicker)

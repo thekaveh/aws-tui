@@ -123,6 +123,7 @@ async def test_journey_1_silent_sso(
     app = AwsTuiApp(app_context)
     async with app.run_test(size=(120, 40)) as pilot:
         await _wait_until(lambda: app_context.root_vm.content_host.current is not None)
+        # Deliver startup messages before checking that launch emitted no toast.
         await pilot.pause()
         # No toast was raised on launch.
         assert app_context.root_vm.chrome.toast_stack.count == 0

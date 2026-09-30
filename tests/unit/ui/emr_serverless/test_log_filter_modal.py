@@ -10,6 +10,7 @@ from vmx import MessageHub
 from aws_tui.domain.emr_logs import DEFAULT_LOG_FILTER, FilterMode, LogFilter
 from aws_tui.ui.widgets.emr_serverless.log_filter_modal import LogFilterModal
 from aws_tui.ui.widgets.modal_button import ModalButton
+from tests.helpers import focus_and_settle, wait_until
 
 
 @pytest.mark.asyncio
@@ -114,7 +115,12 @@ async def test_log_filter_modal_apply_dismisses_with_new_filter() -> None:
             await pilot.click(apply_btn)
 
             # The modal should dismiss and we should be back at the app screen
-            await pilot.pause()
+            await wait_until(
+                lambda: (
+                    not isinstance(app.screen, LogFilterModal) and len(captured_dismiss_value) == 1
+                ),
+                what="Apply dismissed the log filter and returned its value",
+            )
             assert not isinstance(app.screen, LogFilterModal)
 
             # Assert the dismissed value is a LogFilter with the form state
@@ -154,7 +160,10 @@ async def test_log_filter_modal_cancel_dismisses_with_none() -> None:
             await pilot.click(cancel_btn)
 
             # The modal should dismiss and we should be back at the app screen
-            await pilot.pause()
+            await wait_until(
+                lambda: not isinstance(app.screen, LogFilterModal),
+                what="Cancel dismissed the log filter",
+            )
             assert not isinstance(app.screen, LogFilterModal)
     finally:
         hub.dispose()
@@ -178,12 +187,18 @@ async def test_log_filter_button_is_keyboard_focusable_and_activates() -> None:
         apply_button = next(
             button for button in modal.query(ModalButton) if button.button_id == "apply"
         )
-        apply_button.focus()
-        await pilot.pause()
+        await focus_and_settle(apply_button)
+        await wait_until(
+            lambda: app.focused is apply_button,
+            what="log filter Apply button took focus",
+        )
         assert app.focused is apply_button
 
         await pilot.press("space")
-        await pilot.pause()
+        await wait_until(
+            lambda: not isinstance(app.screen, LogFilterModal),
+            what="keyboard Apply dismissed the log filter",
+        )
 
         assert not isinstance(app.screen, LogFilterModal)
 
@@ -226,7 +241,15 @@ async def test_log_filter_modal_reset_repopulates_from_defaults() -> None:
             await pilot.click(reset_btn)
 
             # The modal should still be on screen
-            await pilot.pause()
+            await wait_until(
+                lambda: (
+                    modal.query_one("#log-patterns", TextArea).text
+                    == "\n".join(DEFAULT_LOG_FILTER.patterns)
+                    and not modal.query_one("#show-all-switch", Switch).value
+                    and not modal.query_one("#match-case-switch", Switch).value
+                ),
+                what="Reset restored the default log filter form",
+            )
             assert isinstance(app.screen, LogFilterModal)
 
             # The form should now show DEFAULT_LOG_FILTER values

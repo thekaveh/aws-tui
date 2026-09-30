@@ -26,6 +26,7 @@ from aws_tui.vm.chrome.focus_coordinator_vm import FocusCoordinatorVM, FocusSlot
 from aws_tui.vm.messages import ConnectionListChangedMessage
 from aws_tui.vm.nav_menu_vm import NavMenuVM
 from aws_tui.vm.services_protocol import ServiceDescriptor, ServiceRegistry
+from tests.helpers import wait_until
 
 
 def _hub() -> MessageHub[Message]:
@@ -194,7 +195,10 @@ async def test_clicking_settings_executes_switch_service_command(tmp_path: Path)
             await pilot.pause()
             settings_row = next(r for r in nav.query(NavRow) if r.descriptor_id == "settings")
             await pilot.click(settings_row)
-            await pilot.pause()
+            await wait_until(
+                lambda: vm.selected_id == "settings",
+                what="settings selected from nav click",
+            )
             assert vm.selected_id == "settings"
     finally:
         vm.dispose()
@@ -222,8 +226,18 @@ async def test_nav_menu_rebuilds_rows_when_vm_items_change(tmp_path: Path) -> No
             from vmx import PropertyChangedMessage
 
             before = len(rebuild_calls)
+            previous_rows = set(nav.query(NavRow))
+            expected_ids = {item.descriptor.id for item in vm.items}
             hub.send(PropertyChangedMessage.create(vm, vm.name, "items"))
-            await pilot.pause()
+            await wait_until(
+                lambda: (
+                    len(rebuild_calls) > before
+                    and (rows := set(nav.query(NavRow))).isdisjoint(previous_rows)
+                    and {row.descriptor_id for row in rows} == expected_ids
+                    and all(row.is_mounted for row in rows)
+                ),
+                what="replacement nav rows to mount after items notification",
+            )
             assert len(rebuild_calls) > before, (
                 "NavMenu._rebuild_rows must be called after a "
                 "PropertyChangedMessage('items') from the VM."
@@ -273,6 +287,11 @@ async def test_cursor_down_executes_switch_service_command() -> None:
             # default selection is row 0 when nothing is selected
             # yet.
             nav.action_cursor_down()
+            await wait_until(
+                lambda: bool(calls),
+                what="cursor action dispatched service switch",
+            )
+            # Drain queued projections before checking that dispatch did not cascade.
             await pilot.pause()
             assert calls, "action_cursor_down should execute switch_service_command"
             # Sanity: no infinite cascade. One arrow press should
@@ -316,6 +335,8 @@ async def test_cursor_can_reach_settings_row_via_arrow_keys() -> None:
             # yet.
             for _ in range(settings_idx):
                 nav.action_cursor_down()
+                # Selection changes synchronously; deliver queued refocus and
+                # row projections before issuing the next cursor action.
                 await pilot.pause()
             assert vm.selected_id == "settings", (
                 "Arrow-walking down should land on Settings and switch_service_command should fire."
@@ -338,27 +359,42 @@ async def test_active_service_stays_selected_when_focus_moves_into_content() -> 
     try:
         async with app.run_test() as pilot:
             vm.switch_service_command.execute("athena")
-            await pilot.pause()
+            await wait_until(
+                lambda: any(
+                    row.descriptor_id == "athena" and row.has_class("-selected")
+                    for row in nav.query(NavRow)
+                ),
+                what="athena navigation row selected",
+            )
             athena = next(row for row in nav.query(NavRow) if row.descriptor_id == "athena")
             assert athena.has_class("-selected")
 
             coordinator.project_focused_slot(FocusSlot.ATHENA_PRIMARY)
+            # Deliver focus projection before checking selection stayed unchanged.
             await pilot.pause()
 
             assert athena.has_class("-selected")
             assert sum(row.has_class("-selected") for row in nav.query(NavRow)) == 1
 
             vm.switch_service_command.execute("settings")
-            await pilot.pause()
+            await wait_until(
+                lambda: any(
+                    row.descriptor_id == "settings" and row.has_class("-selected")
+                    for row in nav.query(NavRow)
+                ),
+                what="settings navigation row selected",
+            )
             settings = next(row for row in nav.query(NavRow) if row.descriptor_id == "settings")
             assert settings.has_class("-selected")
 
             coordinator.project_focused_slot(FocusSlot.SETTINGS)
+            # Deliver focus projection before checking selection stayed unchanged.
             await pilot.pause()
             assert settings.has_class("-selected")
             assert sum(row.has_class("-selected") for row in nav.query(NavRow)) == 1
 
             coordinator.project_focused_slot(FocusSlot.ATHENA_PRIMARY)
+            # Deliver focus projection before checking selection stayed unchanged.
             await pilot.pause()
 
             assert settings.has_class("-selected")

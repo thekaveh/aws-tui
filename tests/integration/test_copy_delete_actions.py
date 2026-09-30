@@ -19,6 +19,7 @@ from aws_tui.demo.in_memory_fs import InMemoryFS
 from aws_tui.domain.filesystem import EntryKind, FileEntry, PathRef
 from aws_tui.ui.widgets.pane import EntryRow, Pane
 from aws_tui.vm.file_manager.dual_pane_vm import DualPaneVM
+from tests.helpers import wait_until
 from tests.integration.conftest import AppContextBuilder
 
 
@@ -330,7 +331,10 @@ async def test_cursor_fallback_copy_marks_the_row_it_is_acting_on(
         await pilot.press("enter")
         await asyncio.wait_for(fs.read_started.wait(), timeout=2.0)
         await pilot.pause()
-        await pilot.pause()
+        await wait_until(
+            lambda: ("-marked" in target.classes) and ("*" in target.render_line(0).text),
+            what="marked entry to render its marked class",
+        )
 
         assert "-marked" in target.classes, (
             "the cursor-fallback row is not painted as the copy's target"

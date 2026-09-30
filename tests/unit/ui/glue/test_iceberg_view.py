@@ -150,7 +150,10 @@ async def test_iceberg_metadata_region_is_hidden_for_non_iceberg_table() -> None
     await vm.setup()
 
     async with _GlueIcebergApp(vm).run_test() as pilot:
-        await pilot.pause()
+        await wait_until(
+            lambda: not pilot.app.query_one(GlueIcebergView).display,
+            what="non-Iceberg metadata region rendered hidden",
+        )
 
         assert not vm.catalog.iceberg.available
         assert not pilot.app.query_one(GlueIcebergView).display
@@ -208,7 +211,7 @@ async def test_selecting_snapshot_tab_loads_rows_and_enables_time_travel() -> No
         assert inspector.calls == [("snapshots", vm.catalog.table_detail.summary.ref)]
         assert table.row_count == 3
 
-        table.focus()
+        await focus_and_settle(table)
         await wait_until(
             lambda: (
                 vm.catalog.iceberg.active_view == "snapshots"
@@ -224,7 +227,13 @@ async def test_selecting_snapshot_tab_loads_rows_and_enables_time_travel() -> No
             lambda: table.cursor_row == 0,
             what="the cursor settled on row 0",
         )
-        await pilot.pause()
+        await wait_until(
+            lambda: (
+                vm.catalog.iceberg.selected_snapshot_id == 43
+                and not pilot.app.query_one("#glue-iceberg-time-travel", Button).disabled
+            ),
+            what="snapshot highlight selected 43 and enabled time travel",
+        )
 
         assert vm.catalog.iceberg.selected_snapshot_id == 43
         assert not pilot.app.query_one("#glue-iceberg-time-travel", Button).disabled
@@ -240,7 +249,10 @@ async def test_time_travel_button_dispatches_the_registry_action_once() -> None:
         await pilot.pause()
 
         await pilot.click("#glue-iceberg-time-travel")
-        await pilot.pause()
+        await wait_until(
+            lambda: pilot.app.action_ids == ["glue.time_travel_in_athena"],
+            what="time-travel button dispatched its registry action",
+        )
 
         assert pilot.app.action_ids == ["glue.time_travel_in_athena"]
 
@@ -277,7 +289,6 @@ async def test_time_travel_async_dispatch_is_created_and_completed_by_its_worker
 
         release.set()
         await pilot.app.workers.wait_for_complete()
-        await pilot.pause()
 
         assert pilot.app.action_ids == ["glue.time_travel_in_athena"]
         assert len(created_by) == 1
@@ -347,6 +358,7 @@ async def test_replaced_time_travel_async_dispatch_cancels_only_the_superseded_w
             lambda: completed == ["glue.time_travel_in_athena"],
             what="the second handoff completed",
         )
+        # Second handoff completion is already awaited; drain callbacks to detect extra dispatch or coroutine warnings.
         await pilot.pause()
 
         assert pilot.app.action_ids == [
@@ -380,7 +392,13 @@ async def test_switching_metadata_tabs_preserves_loaded_pane_and_focus_targets()
         await pilot.click("#glue-iceberg-tab-refs")
         await pilot.pause()
         await pilot.click("#glue-iceberg-tab-snapshots")
-        await pilot.pause()
+        await wait_until(
+            lambda: (
+                [call[0] for call in inspector.calls] == ["refs", "files", "snapshots"]
+                and not pilot.app.query_one("#glue-iceberg-time-travel", Button).disabled
+            ),
+            what="snapshot tab loaded after cached metadata tabs and enabled time travel",
+        )
 
         assert [call[0] for call in inspector.calls] == ["refs", "files", "snapshots"]
         iceberg = pilot.app.query_one(GlueIcebergView)
@@ -441,7 +459,6 @@ async def test_enter_and_space_activate_focused_iceberg_tab(key: str) -> None:
             lambda: len(inspector.calls) == 1,
             what="the history tab issued its inspector call",
         )
-        await pilot.pause()
 
         assert vm.catalog.iceberg.active_view == "history"
         assert inspector.calls == [("history", vm.catalog.table_detail.summary.ref)]
@@ -473,7 +490,10 @@ async def test_enter_and_space_press_all_enabled_iceberg_buttons(key: str) -> No
             lambda: len(vm.catalog.iceberg.snapshots) == 1,
             what="the retry loaded the first snapshot page",
         )
-        await pilot.pause()
+        await wait_until(
+            lambda: not pilot.app.query_one("#glue-iceberg-more", Button).disabled,
+            what="retried snapshots rendered an enabled pager",
+        )
         assert len(vm.catalog.iceberg.snapshots) == 1
 
         more = pilot.app.query_one("#glue-iceberg-more", Button)
@@ -484,14 +504,20 @@ async def test_enter_and_space_press_all_enabled_iceberg_buttons(key: str) -> No
             lambda: len(vm.catalog.iceberg.snapshots) == 2,
             what="the pager loaded the second snapshot page",
         )
-        await pilot.pause()
+        await wait_until(
+            lambda: not pilot.app.query_one("#glue-iceberg-time-travel", Button).disabled,
+            what="paged snapshots rendered time travel enabled",
+        )
         assert len(vm.catalog.iceberg.snapshots) == 2
 
         time_travel = pilot.app.query_one("#glue-iceberg-time-travel", Button)
         assert not time_travel.disabled
         await focus_and_settle(time_travel)
         await pilot.press(key)
-        await pilot.pause()
+        await wait_until(
+            lambda: pilot.app.action_ids == ["glue.time_travel_in_athena"],
+            what="keyboard time travel dispatched its registry action",
+        )
         assert pilot.app.action_ids == ["glue.time_travel_in_athena"]
 
 
@@ -526,7 +552,14 @@ async def test_switching_from_snapshots_disables_time_travel_control() -> None:
         assert not button.disabled
 
         await pilot.click("#glue-iceberg-tab-history")
-        await pilot.pause()
+        await wait_until(
+            lambda: (
+                vm.catalog.iceberg.active_view == "history"
+                and vm.catalog.iceberg.selected_snapshot_id is None
+                and button.disabled
+            ),
+            what="history tab cleared snapshot selection and disabled time travel",
+        )
 
         assert vm.catalog.iceberg.selected_snapshot_id is None
         assert not vm.catalog.iceberg.can_time_travel_in_athena
@@ -662,13 +695,24 @@ async def test_retry_and_load_more_buttons_run_current_view_actions() -> None:
 
         inspector.errors.pop("snapshots")
         await pilot.click("#glue-iceberg-retry")
-        await pilot.pause()
+        await wait_until(
+            lambda: (
+                vm.catalog.iceberg.state.name == "IDLE"
+                and len(vm.catalog.iceberg.snapshots) == 1
+                and pilot.app.query_one("#glue-iceberg-more", Button)
+                in pilot.app.screen.focus_chain
+            ),
+            what="snapshot retry loaded rows and exposed its pager",
+        )
         assert vm.catalog.iceberg.state.name == "IDLE"
         assert len(vm.catalog.iceberg.snapshots) == 1
         assert pilot.app.query_one("#glue-iceberg-more", Button) in pilot.app.screen.focus_chain
 
         await pilot.click("#glue-iceberg-more")
-        await pilot.pause()
+        await wait_until(
+            lambda: len(vm.catalog.iceberg.snapshots) == 2,
+            what="snapshot load-more appended its second page",
+        )
         assert len(vm.catalog.iceberg.snapshots) == 2
 
 
@@ -710,7 +754,10 @@ async def test_peek_tab_is_hidden_without_an_aws_profile() -> None:
     await vm.setup()
 
     async with _GlueIcebergApp(vm).run_test(size=(100, 30)) as pilot:
-        await pilot.pause()
+        await wait_until(
+            lambda: not pilot.app.query_one("#glue-iceberg-tab-preview").display,
+            what="Peek tab rendered hidden without an AWS profile",
+        )
 
         assert vm.catalog.iceberg.available
         assert not vm.catalog.iceberg.preview.available
@@ -878,7 +925,13 @@ async def test_peek_more_button_reruns_the_query_at_the_next_row_limit() -> None
             lambda: vm.catalog.iceberg.preview.state is PaneState.IDLE,
             what="the second preview scan finished",
         )
-        await pilot.pause()
+        await wait_until(
+            lambda: (
+                len(port.queries) == 2
+                and pilot.app.query_one("#glue-iceberg-more", Button).disabled
+            ),
+            what="second Peek scan rendered the exhausted pager",
+        )
 
         assert [sql.endswith("LIMIT 100") for sql, _profile, _region in port.queries] == [
             True,
@@ -981,7 +1034,6 @@ async def test_peek_load_more_keeps_the_pinned_snapshot() -> None:
             lambda: vm.catalog.iceberg.preview.state is PaneState.IDLE,
             what="the second preview scan finished",
         )
-        await pilot.pause()
 
         assert len(port.queries) == 2
         assert "snapshot_from_id := 42" in port.queries[1][0]
@@ -1028,7 +1080,6 @@ async def test_peek_retry_keeps_the_pinned_snapshot() -> None:
             lambda: len(error_port.queries) == 2,
             what="retry re-ran the scan",
         )
-        await pilot.pause()
 
         assert "snapshot_from_id := 42" in error_port.queries[1][0]
 

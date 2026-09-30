@@ -28,6 +28,7 @@ from aws_tui.ui.widgets.emr_serverless.page import EmrServerlessPage
 from aws_tui.ui.widgets.nav_menu import NavMenu
 from aws_tui.ui.widgets.service_source_header import ServiceSourceHeader
 from aws_tui.vm.chrome.focus_coordinator_vm import FocusSlot
+from tests.helpers import wait_until
 
 
 def _prep(tmp_path: Path, toml_text: str) -> Path:
@@ -177,19 +178,28 @@ async def test_emr_page_tab_cycle_includes_source_application_and_panes(
             application = pilot.app.query_one(ApplicationPicker)
 
             # The page lands focus on the LEFT pane on mount.
-            await pilot.pause()
+            await wait_until(
+                lambda: left.has_focus or left.has_focus_within,
+                what="EMR runs pane to receive initial focus",
+            )
             assert left.has_focus or left.has_focus_within
 
             # LEFT → DETAIL.
             await pilot.press("tab")
-            await pilot.pause()
+            await wait_until(
+                lambda: right_detail.has_focus or right_detail.has_focus_within,
+                what="Tab to focus EMR detail",
+            )
             assert right_detail.has_focus or right_detail.has_focus_within, (
                 f"Tab on LEFT should move to DETAIL; got {pilot.app.focused!r}."
             )
 
             # DETAIL → LOGS.
             await pilot.press("tab")
-            await pilot.pause()
+            await wait_until(
+                lambda: right_logs.has_focus or right_logs.has_focus_within,
+                what="Tab to focus EMR logs",
+            )
             assert right_logs.has_focus or right_logs.has_focus_within, (
                 f"Tab on DETAIL should move to LOGS; got {pilot.app.focused!r}."
             )
@@ -197,20 +207,32 @@ async def test_emr_page_tab_cycle_includes_source_application_and_panes(
             # LOGS → NAV (wraps to nav menu — the post-PR-#94
             # contract adds NavMenu as a real cycle slot).
             await pilot.press("tab")
-            await pilot.pause()
+            await wait_until(
+                lambda: nav.has_focus_within,
+                what="Tab to focus navigation",
+            )
             assert nav.has_focus_within, (
                 f"Tab on LOGS should move to NAV; got {pilot.app.focused!r}."
             )
 
             # NAV → SOURCE → APPLICATION → RUNS.
             await pilot.press("tab")
-            await pilot.pause()
+            await wait_until(
+                lambda: source.has_focus or source.has_focus_within,
+                what="Tab to focus EMR source",
+            )
             assert source.has_focus or source.has_focus_within
             await pilot.press("tab")
-            await pilot.pause()
+            await wait_until(
+                lambda: application.has_focus or application.has_focus_within,
+                what="Tab to focus EMR application",
+            )
             assert application.has_focus or application.has_focus_within
             await pilot.press("tab")
-            await pilot.pause()
+            await wait_until(
+                lambda: left.has_focus or left.has_focus_within,
+                what="Tab to return focus to EMR runs",
+            )
             assert left.has_focus or left.has_focus_within
     finally:
         with contextlib.suppress(Exception):
@@ -245,12 +267,24 @@ async def test_emr_focus_projects_bidirectionally_through_coordinator(tmp_path: 
             assert ctx.focus_coordinator.focused_slot is FocusSlot.EMR_APPLICATION
 
             app._project_focus_slot(FocusSlot.EMR_DETAIL)
-            await pilot.pause()
+            await wait_until(
+                lambda: (
+                    (app.query_one(JobRunDetailPane).has_focus_within)
+                    and (ctx.focus_coordinator.focused_slot is FocusSlot.EMR_DETAIL)
+                ),
+                what="projected EMR detail focus and coordinator slot to agree",
+            )
             assert app.query_one(JobRunDetailPane).has_focus_within
             assert ctx.focus_coordinator.focused_slot is FocusSlot.EMR_DETAIL
 
             app.focus_active_service_pane()
-            await pilot.pause()
+            await wait_until(
+                lambda: (
+                    (app.query_one(JobRunsPane).has_focus_within)
+                    and (ctx.focus_coordinator.focused_slot is FocusSlot.EMR_RUNS)
+                ),
+                what="explicit EMR entry to focus runs and update its slot",
+            )
             assert app.query_one(JobRunsPane).has_focus_within
             assert ctx.focus_coordinator.focused_slot is FocusSlot.EMR_RUNS
     finally:
@@ -312,7 +346,10 @@ async def test_emr_left_pane_auto_focuses_and_arrow_keys_move_cursor(tmp_path: P
             # cursor index starts at 0; Down should advance to 1.
             initial_cursor = left._cursor_index()  # type: ignore[attr-defined]
             await pilot.press("down")
-            await pilot.pause()
+            await wait_until(
+                lambda: left._cursor_index() == initial_cursor + 1,
+                what="Down to advance the EMR runs cursor",
+            )
             assert left._cursor_index() == initial_cursor + 1, (  # type: ignore[attr-defined]
                 f"Down arrow on EMR LEFT pane did not advance the cursor — "
                 f"App-level priority binding hijacked the keystroke. "
@@ -321,7 +358,10 @@ async def test_emr_left_pane_auto_focuses_and_arrow_keys_move_cursor(tmp_path: P
 
             # And Up moves it back.
             await pilot.press("up")
-            await pilot.pause()
+            await wait_until(
+                lambda: left._cursor_index() == initial_cursor,
+                what="Up to restore the EMR runs cursor",
+            )
             assert left._cursor_index() == initial_cursor, (  # type: ignore[attr-defined]
                 f"Up arrow did not retract the cursor. Got "
                 f"{left._cursor_index()!r}, expected {initial_cursor}."  # type: ignore[attr-defined]
@@ -357,17 +397,26 @@ async def test_emr_public_routing_delegates_to_focused_panes(
             monkeypatch.setattr(logs, "action_load", lambda: calls.append("logs-enter"))
 
             left.focus()
-            await pilot.pause()
+            await wait_until(
+                lambda: left.has_focus or left.has_focus_within,
+                what="EMR runs pane to receive routed input focus",
+            )
             assert page.move_focused(1)
             assert page.activate_focused()
 
             detail.focus()
-            await pilot.pause()
+            await wait_until(
+                lambda: detail.has_focus or detail.has_focus_within,
+                what="EMR detail pane to receive routed input focus",
+            )
             assert page.move_focused(1)
             assert page.activate_focused()
 
             logs.focus()
-            await pilot.pause()
+            await wait_until(
+                lambda: logs.has_focus or logs.has_focus_within,
+                what="EMR logs pane to receive routed input focus",
+            )
             assert page.move_focused(1)
             assert page.activate_focused()
 
@@ -459,7 +508,14 @@ async def test_emr_left_pane_click_selects_and_repoints_detail(tmp_path: Path) -
             target = next(r for r in rows if r.run_id == "r-002")
             await pilot.click(target)
             await app.workers.wait_for_complete(list(app.workers._workers))  # type: ignore[attr-defined]
-            await pilot.pause()
+            await wait_until(
+                lambda: (
+                    left._cursor_index() == 1
+                    and ctx.root_vm.content_host.current.job_run_detail.detail is not None
+                    and ctx.root_vm.content_host.current.job_run_detail.detail.job_run_id == "r-002"
+                ),
+                what="clicked EMR run r-002 to become the cursor and detail selection",
+            )
 
             # Cursor moved to row 1 + detail flipped to r-002.
             assert left._cursor_index() == 1, (  # type: ignore[attr-defined]
@@ -515,7 +571,10 @@ async def test_emr_application_picker_closes_on_outside_click(tmp_path: Path) ->
 
             source_picker = app.query_one("#emr-source-header-picker", ContextPicker)
             await pilot.click(source_picker)
-            await pilot.pause()
+            await wait_until(
+                lambda: (not picker.is_open) and (source_picker.is_open),
+                what="EMR source picker to open and close the application picker",
+            )
 
             assert not picker.is_open
             assert source_picker.is_open
@@ -549,10 +608,12 @@ async def test_emr_application_picker_overlay_preserves_global_geometry(tmp_path
             picker = app.query_one(ApplicationPicker)
 
             picker.toggle_open()
+            # Run overlay layout callbacks before checking that geometry is unchanged.
             await pilot.pause()
             assert tuple(widget.region for widget in widgets) == closed_regions
 
             await pilot.press("escape")
+            # Run close layout callbacks before checking that geometry is unchanged.
             await pilot.pause()
             assert tuple(widget.region for widget in widgets) == closed_regions
     finally:
@@ -584,7 +645,10 @@ async def test_switching_away_from_emr_closes_open_application_picker(tmp_path: 
 
             ctx.root_vm.services_menu.switch_service_command.execute("s3")
             await app.workers.wait_for_complete(list(app.workers._workers))  # type: ignore[attr-defined]
-            await pilot.pause()
+            await wait_until(
+                lambda: (not picker.is_open) and (not picker.is_running) and (refocus_calls == 0),
+                what="EMR application picker to close and unmount after service switch",
+            )
 
             assert not picker.is_open
             assert not picker.is_running
@@ -711,7 +775,13 @@ async def test_emr_picker_commit_cascades_to_runs_pane(tmp_path: Path) -> None:
                     break
             picker.action_commit()
             await app.workers.wait_for_complete(list(app.workers._workers))  # type: ignore[attr-defined]
-            await pilot.pause()
+            await wait_until(
+                lambda: (
+                    (page_vm.applications.selected_id == other_app_id)
+                    and (page_vm.job_runs.application_id == other_app_id)
+                ),
+                what="selected EMR application to propagate to the runs model",
+            )
 
             # The cascade ran: picker's ``selected_id`` AND the
             # ``JobRunsVM.application_id`` both flipped to the new app.
@@ -813,7 +883,10 @@ async def test_emr_shift_s_switches_profile_and_shift_a_cycles_application(
 
             await pilot.press("A")
             await app.workers.wait_for_complete(list(app.workers._workers))  # type: ignore[attr-defined]
-            await pilot.pause()
+            await wait_until(
+                lambda: page.applications.selected_id != selected_after_source_switch,
+                what="application-cycle shortcut to change the selected EMR application",
+            )
 
             assert page.applications.selected_id != selected_after_source_switch
     finally:
@@ -846,27 +919,48 @@ async def test_emr_tab_cycle_visits_detail_now_part_of_ring(tmp_path: Path) -> N
 
             # Focus the LEFT pane (the page auto-focuses it on mount).
             left.focus()
-            await pilot.pause()
+            await wait_until(
+                lambda: left.has_focus or left.has_focus_within,
+                what="EMR runs pane to receive focus",
+            )
             assert left.has_focus or left.has_focus_within
 
             # RUNS → DETAIL → LOGS → NAV → SOURCE → APPLICATION → RUNS.
             await pilot.press("tab")
-            await pilot.pause()
+            await wait_until(
+                lambda: right_detail.has_focus or right_detail.has_focus_within,
+                what="Tab to focus EMR detail",
+            )
             assert right_detail.has_focus or right_detail.has_focus_within
             await pilot.press("tab")
-            await pilot.pause()
+            await wait_until(
+                lambda: right_logs.has_focus or right_logs.has_focus_within,
+                what="Tab to focus EMR logs",
+            )
             assert right_logs.has_focus or right_logs.has_focus_within
             await pilot.press("tab")
-            await pilot.pause()
+            await wait_until(
+                lambda: nav.has_focus_within,
+                what="Tab to focus navigation",
+            )
             assert nav.has_focus_within
             await pilot.press("tab")
-            await pilot.pause()
+            await wait_until(
+                lambda: source.has_focus or source.has_focus_within,
+                what="Tab to focus EMR source",
+            )
             assert source.has_focus or source.has_focus_within
             await pilot.press("tab")
-            await pilot.pause()
+            await wait_until(
+                lambda: application.has_focus or application.has_focus_within,
+                what="Tab to focus EMR application",
+            )
             assert application.has_focus or application.has_focus_within
             await pilot.press("tab")
-            await pilot.pause()
+            await wait_until(
+                lambda: left.has_focus or left.has_focus_within,
+                what="full Tab cycle to return focus to EMR runs",
+            )
             assert left.has_focus or left.has_focus_within, (
                 f"Full Tab rotation should return to LEFT; got {pilot.app.focused!r}."
             )
@@ -902,11 +996,15 @@ async def test_emr_detail_focus_swallows_cursor_keys(tmp_path: Path) -> None:
             cursor_before = left._cursor_index()  # type: ignore[attr-defined]
 
             right_detail.focus()
-            await pilot.pause()
+            await wait_until(
+                lambda: right_detail.has_focus or right_detail.has_focus_within,
+                what="EMR detail pane to receive focus",
+            )
             assert right_detail.has_focus or right_detail.has_focus_within
 
             await pilot.press("down")
             await app.workers.wait_for_complete(list(app.workers._workers))  # type: ignore[attr-defined]
+            # Deliver the cursor key before checking that detail focus contained it.
             await pilot.pause()
 
             assert left._cursor_index() == cursor_before  # type: ignore[attr-defined]
@@ -946,12 +1044,18 @@ async def test_emr_detail_focus_refreshes_detail_pane(tmp_path: Path) -> None:
                 entry_point="s3://bucket/refreshed.py",
             )
             right_detail.focus()
-            await pilot.pause()
+            await wait_until(
+                lambda: right_detail.has_focus or right_detail.has_focus_within,
+                what="EMR detail pane to receive focus before refresh",
+            )
             assert right_detail.has_focus or right_detail.has_focus_within
 
             await pilot.press("r")
             await app.workers.wait_for_complete(list(app.workers._workers))  # type: ignore[attr-defined]
-            await pilot.pause()
+            await wait_until(
+                lambda: page_vm.job_run_detail.detail.entry_point == "s3://bucket/refreshed.py",
+                what="EMR detail refresh to load the updated entry point",
+            )
 
             assert page_vm.job_run_detail.detail.entry_point == "s3://bucket/refreshed.py"
     finally:

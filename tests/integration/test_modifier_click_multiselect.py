@@ -17,6 +17,7 @@ from aws_tui.app import AwsTuiApp
 from aws_tui.demo.in_memory_fs import InMemoryFS
 from aws_tui.domain.filesystem import PathRef
 from aws_tui.ui.widgets.pane import Pane
+from tests.helpers import wait_until
 from tests.integration.conftest import AppContextBuilder
 
 
@@ -93,7 +94,14 @@ async def test_shift_arrow_toggles_only_the_row_being_left(
         # Shift+Down on an unmarked row: that row becomes marked, the
         # row we moved INTO must stay untouched (still unmarked here).
         await pilot.press("shift+down")
-        await pilot.pause()
+        await wait_until(
+            lambda: (
+                (start_entry.is_marked is True)
+                and (below_entry.is_marked is False)
+                and (vm.cursor_index == start_cursor + 1)
+            ),
+            what="Shift+Down to mark the departed row and advance the cursor",
+        )
         assert start_entry.is_marked is True, "row we left should be marked"
         assert below_entry.is_marked is False, "row we moved into must NOT be marked by shift+arrow"
         assert vm.cursor_index == start_cursor + 1
@@ -102,7 +110,14 @@ async def test_shift_arrow_toggles_only_the_row_being_left(
         # row: toggles the SECOND row (the one we're leaving). The
         # first row is the target and must NOT be toggled again.
         await pilot.press("shift+up")
-        await pilot.pause()
+        await wait_until(
+            lambda: (
+                (below_entry.is_marked is True)
+                and (start_entry.is_marked is True)
+                and (vm.cursor_index == start_cursor)
+            ),
+            what="Shift+Up to mark the departed row and restore the cursor",
+        )
         assert below_entry.is_marked is True, "row we left on the way back up should now be marked"
         assert start_entry.is_marked is True, (
             "shift+up must not toggle the target row (still marked from before)"
@@ -112,7 +127,10 @@ async def test_shift_arrow_toggles_only_the_row_being_left(
         # Shift+Down again at the marked first row: it toggles OFF
         # (the row is marked → toggle → unmarked). Target untouched.
         await pilot.press("shift+down")
-        await pilot.pause()
+        await wait_until(
+            lambda: (start_entry.is_marked is False) and (below_entry.is_marked is True),
+            what="Shift+Down to unmark the departed row",
+        )
         assert start_entry.is_marked is False, (
             "shift+arrow on a marked row should unmark it (toggle, not extend)"
         )

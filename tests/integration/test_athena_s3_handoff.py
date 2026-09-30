@@ -30,6 +30,7 @@ from aws_tui.vm.athena.page_vm import AthenaPageSnapshot, AthenaPageVM
 from aws_tui.vm.file_manager.dual_pane_vm import DualPaneVM
 from aws_tui.vm.file_manager.pane_vm import PaneState, PaneVM
 from aws_tui.vm.messages import OpenS3LocationRequest
+from tests.helpers import wait_until
 
 _HOSTILE_S3_URIS = [
     pytest.param(
@@ -254,7 +255,10 @@ async def test_pruning_history_view_ignores_queued_refresh(
             removal = option_list.remove()
             history._vm._notify("items")
             await removal
-            await pilot.pause()
+            await wait_until(
+                lambda: refreshes == 1,
+                what="pruned history view to process its refresh",
+            )
 
             assert history.is_mounted
             assert listing.is_mounted
@@ -336,6 +340,7 @@ async def test_loading_history_results_never_automatically_hands_off_to_s3(
             await page.select_history_execution("q-dev-succeeded")
 
             await page.open_history_results()
+            # Deliver results notifications before checking that no S3 handoff occurred.
             await pilot.pause()
 
             assert ctx.root_vm.content_host.current_id == "athena"

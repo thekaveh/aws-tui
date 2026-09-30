@@ -33,6 +33,7 @@ from aws_tui.domain.filesystem import (
     ProviderUnreachableError,
 )
 from aws_tui.vm.file_manager.pane_vm import PaneState, PaneVM
+from tests.helpers import wait_until
 
 
 class _UnreachableFS(FileSystemProvider):
@@ -143,19 +144,26 @@ async def test_hub_subscription_marks_unreachable_via_pane_state(
     real_msg = PropertyChangedMessage.create(pane, pane.name, "state")
 
     async with app.run_test(size=(100, 30)) as pilot:
+        # Drain mount notifications before checking the initial unreachable set.
         await pilot.pause()
 
         # Verify the real MessageHub subscription routes it to mark the connection.
         assert ("s3-compatible", "target") not in ctx.unreachable_connections
         hub.send(real_msg)
-        await pilot.pause()
+        await wait_until(
+            lambda: ("s3-compatible", "target") in ctx.unreachable_connections,
+            what="target connection to be marked unreachable",
+        )
         assert ("s3-compatible", "target") in ctx.unreachable_connections
 
         # Now simulate recovery: pane transitions to IDLE.
         pane._state = PaneState.IDLE
         recovery_msg = PropertyChangedMessage.create(pane, pane.name, "state")
         hub.send(recovery_msg)
-        await pilot.pause()
+        await wait_until(
+            lambda: ("s3-compatible", "target") not in ctx.unreachable_connections,
+            what="target connection to recover",
+        )
         assert ("s3-compatible", "target") not in ctx.unreachable_connections
 
     # Cleanup.

@@ -55,7 +55,7 @@ from aws_tui.app import AwsTuiApp
 from aws_tui.demo.in_memory_fs import InMemoryFS
 from aws_tui.domain.filesystem import PathRef
 from aws_tui.ui.widgets.pane import EntryRow, Pane
-from tests.helpers import drain_workers
+from tests.helpers import drain_workers, wait_until
 from tests.integration.conftest import AppContextBuilder
 
 # Enough entries that the pane body overflows its 18-row viewport and Textual
@@ -128,7 +128,10 @@ async def _grab_scrollbar(app: AwsTuiApp, pilot) -> ScrollBar:  # type: ignore[n
     scrollbar = _pane_body(app).vertical_scrollbar
     assert scrollbar.display, "precondition: the pane body must actually overflow"
     scrollbar.action_grab()
-    await pilot.pause()
+    await wait_until(
+        lambda: app.mouse_captured is scrollbar and scrollbar.grabbed is not None,
+        what="scrollbar to process mouse capture and begin dragging",
+    )
     assert app.mouse_captured is scrollbar, "precondition: the drag must hold the capture"
     return scrollbar
 
@@ -152,7 +155,10 @@ async def test_app_blur_clears_a_showing_tooltip(
 
         app.post_message(events.AppBlur())
         await pilot.pause()
-        await pilot.pause()
+        await wait_until(
+            lambda: tooltip.display is False,
+            what="AppBlur to hide the tooltip",
+        )
 
         assert tooltip.display is False
 
@@ -160,6 +166,7 @@ async def test_app_blur_clears_a_showing_tooltip(
         # merely deferring it.
         app.post_message(events.AppFocus())
         await pilot.pause()
+        # Deliver AppFocus before checking that the tooltip does not reappear.
         await pilot.pause()
         assert tooltip.display is False
 
@@ -182,7 +189,10 @@ async def test_app_blur_releases_an_orphaned_mouse_capture(
 
         app.post_message(events.AppBlur())
         await pilot.pause()
-        await pilot.pause()
+        await wait_until(
+            lambda: (app.mouse_captured is None) and (scrollbar.grabbed is None),
+            what="AppBlur to release mouse capture and scrollbar grab",
+        )
 
         assert app.mouse_captured is None
         # ``capture_mouse(None)`` posts the ``MouseRelease`` the interrupted
@@ -221,7 +231,10 @@ async def test_app_blur_balances_the_realtime_animation_count(
 
         app.post_message(events.AppBlur())
         await pilot.pause()
-        await pilot.pause()
+        await wait_until(
+            lambda: app._realtime_animation_count == baseline,
+            what="AppBlur to balance the realtime animation count",
+        )
 
         assert app._realtime_animation_count == baseline
 
@@ -247,6 +260,7 @@ async def test_app_blur_is_harmless_with_nothing_to_clean_up(
             app.post_message(events.AppBlur())
             app.post_message(events.AppFocus())
         await pilot.pause()
+        # Deliver all blur/focus events before checking that cleanup remained harmless.
         await pilot.pause()
 
         assert app.is_running

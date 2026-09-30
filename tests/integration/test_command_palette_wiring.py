@@ -87,7 +87,10 @@ async def test_colon_opens_command_palette(app_context_factory) -> None:  # type
     async with app.run_test(size=(120, 40)) as pilot:
         await pilot.pause()
         await pilot.press("colon")  # ":" arrives as key "colon"
-        await pilot.pause()
+        await wait_until(
+            lambda: isinstance(app.screen, CommandPalette),
+            what="colon to open the command palette",
+        )
         assert isinstance(app.screen, CommandPalette)
         labels = {entry.label for entry in app._app_ctx.command_palette_vm.filtered_entries}
         assert labels == _GLOBAL | _SOURCE | _PANE
@@ -100,7 +103,10 @@ async def test_ctrl_k_opens_command_palette(app_context_factory) -> None:  # typ
     async with app.run_test(size=(120, 40)) as pilot:
         await pilot.pause()
         await pilot.press("ctrl+k")
-        await pilot.pause()
+        await wait_until(
+            lambda: isinstance(app.screen, CommandPalette),
+            what="Ctrl+K to open the command palette",
+        )
         assert isinstance(app.screen, CommandPalette)
 
 
@@ -111,10 +117,14 @@ async def test_enter_with_zero_matches_keeps_palette_open(app_context_factory) -
         await pilot.pause()
         await pilot.press("ctrl+k")
         await pilot.press(*"no command can match this value")
-        await pilot.pause()
+        await wait_until(
+            lambda: app._app_ctx.command_palette_vm.filtered_entries == (),
+            what="palette query to filter out all entries",
+        )
         assert app._app_ctx.command_palette_vm.filtered_entries == ()
 
         await pilot.press("enter")
+        # Deliver Enter before checking that an empty palette stays open.
         await pilot.pause()
 
         assert isinstance(app.screen, CommandPalette)
@@ -128,11 +138,18 @@ async def test_repeated_ctrl_k_does_not_stack_palettes(app_context_factory) -> N
         await pilot.pause()
         await pilot.press("ctrl+k")
         await pilot.press("ctrl+k")
+        # Deliver the repeated shortcut before checking that no second palette was pushed.
         await pilot.pause()
 
         assert sum(isinstance(screen, CommandPalette) for screen in app.screen_stack) == 1
         await pilot.press("escape")
-        await pilot.pause()
+        await wait_until(
+            lambda: (
+                (not isinstance(app.screen, CommandPalette))
+                and (not app._app_ctx.command_palette_vm.is_open)
+            ),
+            what="Escape to close the command palette and its model",
+        )
         assert not isinstance(app.screen, CommandPalette)
         assert not app._app_ctx.command_palette_vm.is_open
 
@@ -161,12 +178,18 @@ async def test_enter_executes_filtered_palette_entry_with_production_bindings(
         calls: list[str] = []
         app._actions.register("app.cycle_theme", lambda: calls.append("cycle"))
         await pilot.press("colon")
-        await pilot.pause()
+        await wait_until(
+            lambda: isinstance(app.screen, CommandPalette),
+            what="command palette to open before filtering",
+        )
         assert isinstance(app.screen, CommandPalette)
         await pilot.press(*"Cycle theme")
         await pilot.pause()
         await pilot.press("enter")
-        await pilot.pause()
+        await wait_until(
+            lambda: (calls == ["cycle"]) and (not isinstance(app.screen, CommandPalette)),
+            what="Cycle theme palette entry to dispatch and close",
+        )
 
         assert calls == ["cycle"]
         assert not isinstance(app.screen, CommandPalette)
@@ -200,7 +223,10 @@ async def test_palette_is_the_discoverability_route_for_the_path_copies(
         expected = dual.focused_pane.viewmodel.copy_path
 
         await pilot.press("colon")
-        await pilot.pause()
+        await wait_until(
+            lambda: isinstance(app.screen, CommandPalette),
+            what="command palette to open for pane-path copy",
+        )
         assert isinstance(app.screen, CommandPalette)
         await pilot.press(*"Copy pane path")
         await pilot.pause()
@@ -210,7 +236,10 @@ async def test_palette_is_the_discoverability_route_for_the_path_copies(
         await pilot.press("enter")
         await pilot.pause()
         await drain_workers(app)
-        await pilot.pause()
+        await wait_until(
+            lambda: (port.writes == [expected]) and (not isinstance(app.screen, CommandPalette)),
+            what="pane-path copy to write the expected path and close the palette",
+        )
 
         assert port.writes == [expected]
         assert not isinstance(app.screen, CommandPalette)
@@ -246,7 +275,7 @@ async def test_glue_handoff_disabled_state_tracks_table_and_snapshot_selection(
     await vm.setup()
     app = AwsTuiApp(ctx)
     try:
-        async with app.run_test(size=(120, 40)) as pilot:
+        async with app.run_test(size=(120, 40)) as _pilot:
             host = app.query_one("#content-host", Container)
             await host.remove_children()
             await host.mount(
@@ -272,7 +301,18 @@ async def test_glue_handoff_disabled_state_tracks_table_and_snapshot_selection(
                 return {hint.action_id for hint in legend.actions if not hint.enabled}
 
             await vm.select_view("jobs")
-            await pilot.pause()
+            await wait_until(
+                lambda: (
+                    disabled_actions()
+                    == {
+                        "glue.copy_table_ref",
+                        "glue.query_in_athena",
+                        "glue.time_travel_in_athena",
+                        "glue.load_more",
+                    }
+                ),
+                what="Glue jobs view to disable catalog handoffs",
+            )
             assert disabled_actions() == {
                 "glue.copy_table_ref",
                 "glue.query_in_athena",
@@ -281,13 +321,27 @@ async def test_glue_handoff_disabled_state_tracks_table_and_snapshot_selection(
             }
 
             await vm.select_view("catalog")
-            await pilot.pause()
+            await wait_until(
+                lambda: disabled_actions() == {"glue.time_travel_in_athena", "glue.load_more"},
+                what="Glue catalog to restore available table handoffs",
+            )
             assert disabled_actions() == {"glue.time_travel_in_athena", "glue.load_more"}
 
             fake.add_database("empty")
             await vm.catalog.refresh_databases()
             await vm.select_database("empty")
-            await pilot.pause()
+            await wait_until(
+                lambda: (
+                    disabled_actions()
+                    == {
+                        "glue.copy_table_ref",
+                        "glue.query_in_athena",
+                        "glue.time_travel_in_athena",
+                        "glue.load_more",
+                    }
+                ),
+                what="empty Glue database to disable table handoffs",
+            )
             assert disabled_actions() == {
                 "glue.copy_table_ref",
                 "glue.query_in_athena",
@@ -310,22 +364,48 @@ async def test_glue_handoff_disabled_state_tracks_table_and_snapshot_selection(
                 what="the snapshots pane to load for the re-selected table",
             )
             assert vm.catalog.iceberg.select_snapshot(43)
-            await pilot.pause()
+            await wait_until(
+                lambda: disabled_actions() == {"glue.load_more"},
+                what="selected Iceberg snapshot to enable time travel",
+            )
             assert disabled_actions() == {"glue.load_more"}
 
             projections.clear()
             assert await vm.catalog.iceberg.load_more()
-            await pilot.pause()
+            await wait_until(
+                lambda: (
+                    (frozenset({"glue.load_more"}) in projections)
+                    and (disabled_actions() == {"glue.load_more"})
+                ),
+                what="load-more to project refreshed handoff availability",
+            )
             assert frozenset({"glue.load_more"}) in projections
             assert disabled_actions() == {"glue.load_more"}
 
             assert await vm.catalog.iceberg.select_view("history")
-            await pilot.pause()
+            await wait_until(
+                lambda: disabled_actions() == {"glue.time_travel_in_athena", "glue.load_more"},
+                what="Iceberg history to disable snapshot time travel",
+            )
             assert disabled_actions() == {"glue.time_travel_in_athena", "glue.load_more"}
 
             projections.clear()
             await vm.shutdown()
-            await pilot.pause()
+            await wait_until(
+                lambda: (
+                    (projections)
+                    and (
+                        disabled_actions()
+                        == {
+                            "glue.copy_table_ref",
+                            "glue.query_in_athena",
+                            "glue.time_travel_in_athena",
+                            "glue.load_more",
+                        }
+                    )
+                ),
+                what="Glue shutdown to project all handoffs disabled",
+            )
             assert projections
             assert disabled_actions() == {
                 "glue.copy_table_ref",
@@ -370,7 +450,7 @@ async def test_direct_glue_page_disposal_disables_handoffs_without_advisory_toas
     await vm.setup()
     app = AwsTuiApp(ctx)
     try:
-        async with app.run_test(size=(120, 40)) as pilot:
+        async with app.run_test(size=(120, 40)) as _pilot:
             host = app.query_one("#content-host", Container)
             await host.remove_children()
             await host.mount(
@@ -389,11 +469,25 @@ async def test_direct_glue_page_disposal_disables_handoffs_without_advisory_toas
 
             assert await vm.catalog.iceberg.select_view("snapshots")
             assert vm.catalog.iceberg.select_snapshot(43)
-            await pilot.pause()
+            await wait_until(
+                lambda: disabled_actions() == {"glue.load_more"},
+                what="selected snapshot to enable handoffs before disposal",
+            )
             assert disabled_actions() == {"glue.load_more"}
 
             vm.dispose()
-            await pilot.pause()
+            await wait_until(
+                lambda: (
+                    disabled_actions()
+                    == {
+                        "glue.copy_table_ref",
+                        "glue.query_in_athena",
+                        "glue.time_travel_in_athena",
+                        "glue.load_more",
+                    }
+                ),
+                what="Glue disposal to disable all handoffs",
+            )
             assert disabled_actions() == {
                 "glue.copy_table_ref",
                 "glue.query_in_athena",

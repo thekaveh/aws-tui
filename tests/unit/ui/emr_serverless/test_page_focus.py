@@ -14,7 +14,7 @@ from aws_tui.ui.widgets.emr_serverless.job_runs_pane import JobRunsPane
 from aws_tui.ui.widgets.emr_serverless.page import EmrServerlessPage
 from aws_tui.ui.widgets.service_source_header import ServiceSourceHeader
 from aws_tui.vm.chrome.focus_coordinator_vm import FocusSlot
-from tests.helpers import wait_until
+from tests.helpers import focus_and_settle, wait_until
 from tests.snapshot.apps.emr import EmrPageApp, EmrPageOpenSourcePickerApp
 
 
@@ -80,7 +80,10 @@ async def test_tab_cycle_closes_departed_application_picker(
         assert isinstance(app.focused, OptionList)
 
         page.action_cycle_panes_forward()
-        await pilot.pause()
+        await wait_until(
+            lambda: not picker.has_class("-open") and app.query_one("#emr-runs-pane").has_focus,
+            what="forward pane cycle closed application picker and focused runs",
+        )
 
         assert not picker.has_class("-open")
         assert app.query_one("#emr-runs-pane").has_focus
@@ -112,6 +115,7 @@ async def test_reprojecting_the_application_slot_leaves_its_picker_open(
         assert app.focused is overlay
 
         page.project_focus_slot(FocusSlot.EMR_APPLICATION)
+        # Drain focus projection events before asserting the open overlay retained focus.
         await pilot.pause()
 
         assert picker.is_open
@@ -133,6 +137,7 @@ async def test_reprojecting_the_source_slot_leaves_its_picker_open() -> None:
         )
 
         page.project_focus_slot(FocusSlot.EMR_SOURCE)
+        # Drain source projection events before asserting the open overlay retained focus.
         await pilot.pause()
 
         assert source_picker.is_open
@@ -157,12 +162,20 @@ async def test_application_picker_overlay_preserves_page_geometry_through_escape
         closed_regions = tuple(widget.region for widget in widgets)
 
         picker.toggle_open()
+        await wait_until(
+            lambda: picker.is_open and app.focused is picker.query_one(OptionList),
+            what="application overlay opened before geometry comparison",
+        )
+        # Drain layout after opening the overlay before checking geometry remained unchanged.
         await pilot.pause()
 
         assert tuple(widget.region for widget in widgets) == closed_regions
 
         await pilot.press("escape")
-        await pilot.pause()
+        await wait_until(
+            lambda: not picker.is_open,
+            what="Escape closed the application overlay",
+        )
 
         assert not picker.is_open
         assert tuple(widget.region for widget in widgets) == closed_regions
@@ -199,6 +212,7 @@ async def test_source_picker_overlay_preserves_every_page_region(
         assert tuple(widget.region for widget in widgets) == closed_regions
 
         source_picker.close()
+        # Drain close/refocus layout before checking page geometry remained unchanged.
         await pilot.pause()
         assert not source_picker.is_open
         assert tuple(widget.region for widget in widgets) == closed_regions
@@ -219,10 +233,14 @@ async def test_application_picker_removal_closes_without_deferred_refocus() -> N
 
         picker._refocus = record_refocus  # type: ignore[method-assign]
         picker.toggle_open()
-        await pilot.pause()
+        await wait_until(
+            lambda: picker.is_open and picker.has_focus_within,
+            what="application picker opened before removal",
+        )
         assert picker.is_open
 
         await picker.remove()
+        # Awaited removal completes teardown; drain queued callbacks to detect forbidden refocus.
         await pilot.pause()
 
         assert not picker.is_open
@@ -235,14 +253,17 @@ async def test_application_picker_overlay_closes_when_focus_leaves(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     app = EmrPageApp(theme="carbon")
-    async with app.run_test() as pilot:
+    async with app.run_test():
         picker = app.query_one(ApplicationPicker)
         focus_complete = _track_picker_focus(picker, monkeypatch)
         picker.toggle_open()
         await _wait_for_completions(focus_complete)
 
-        app.query_one(JobRunsPane).focus()
-        await pilot.pause()
+        await focus_and_settle(app.query_one(JobRunsPane))
+        await wait_until(
+            lambda: not picker.is_open and app.query_one(JobRunsPane).has_focus,
+            what="leaving the application overlay closed it",
+        )
 
         assert not picker.is_open
 
@@ -285,11 +306,17 @@ async def test_keyboard_opening_application_picker_closes_source_picker(
         source_picker = await _opened_source_picker(pilot, app)
         application_picker = app.query_one(ApplicationPicker)
         app.set_focus(source_picker.query_one(OptionList))
-        await pilot.pause()
+        await wait_until(
+            lambda: app.focused is source_picker.query_one(OptionList),
+            what="source options took focus",
+        )
         assert app.focused is source_picker.query_one(OptionList)
 
         page.action_cycle_panes_forward()
-        await pilot.pause()
+        await wait_until(
+            lambda: app.focused is application_picker and not source_picker.is_open,
+            what="pane cycle focused application and closed source",
+        )
         assert app.focused is application_picker
         assert not source_picker.is_open
 
@@ -375,6 +402,7 @@ async def test_page_removal_closes_every_picker_without_refocus() -> None:
         await pilot.pause()
 
         await page.remove()
+        # Awaited page removal completes teardown; drain callbacks before checking no picker reopened.
         await pilot.pause()
 
         assert not source.is_open
@@ -397,7 +425,10 @@ async def test_shift_tab_cycle_closes_departed_application_picker(
         assert picker.has_class("-open")
 
         page.action_cycle_panes_back()
-        await pilot.pause()
+        await wait_until(
+            lambda: not picker.has_class("-open") and app.query_one("#emr-source-header").has_focus,
+            what="reverse pane cycle closed application picker and focused source",
+        )
 
         assert not picker.has_class("-open")
         assert app.query_one("#emr-source-header").has_focus
@@ -415,7 +446,10 @@ async def test_tab_cycle_closes_departed_source_picker() -> None:
         await pilot.pause()
 
         page.action_cycle_panes_forward()
-        await pilot.pause()
+        await wait_until(
+            lambda: not picker.is_open and app.query_one(ApplicationPicker).has_focus,
+            what="pane cycle closed source picker and focused application",
+        )
 
         assert not picker.is_open
         assert app.query_one(ApplicationPicker).has_focus
