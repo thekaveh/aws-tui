@@ -104,7 +104,7 @@ at both pagination-dependent width boundaries. Documentation contracts passed
 content and metadata checks passed. Hosted CI and the protected promotion cycle
 remain required before issue closure.
 
-### Promotion follow-up: initial layout notification
+### 6.1. Promotion follow-up: initial layout notification
 
 Promotion PR #304 exposed the compact error-detail timeout in Linux coverage and
 Windows Python 3.12. A controlled regression reproduces the failure by reading
