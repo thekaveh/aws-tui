@@ -40,18 +40,48 @@ separately, keeping mounted widget count bounded as logs grow.
 
 ## 3. Clone workflow
 
-Pressing `c` on a selected run opens a form prefilled with the run name, role,
-entry point, arguments, and Spark parameters. Save calls the public EMR
-Serverless `StartJobRun` API through `EmrServerlessClient`; validation and
-provider errors keep the modal open with actionable feedback. The service does
-not currently expose a blank submit form or cancellation command.
+Press `c` on a selected Spark run to open a prefilled form. Hive, missing or
+unsupported job drivers are refused before the Spark form opens. The form
+preserves the source name, execution role, entry point, arguments and Spark
+parameters. Arguments use a JSON array of strings, preserving empty strings,
+embedded newlines and whitespace; `null` omits the argument field and `[]` sends
+an explicit empty array. Spark parameters use a JSON string or `null` to omit
+them. JSON escapes preserve mixed line endings and Unicode separators exactly
+through editing and review.
+
+The advanced JSON object carries the source's `configurationOverrides`
+(application and monitoring configuration), `executionTimeoutMinutes`,
+`retryPolicy`, `mode`, `executionIamPolicy` and `tags`. Both `BATCH` and
+`STREAMING` are supported. Remove a key to omit it; explicit empty objects and
+zero timeouts remain distinct from omission. Unsupported keys or values are
+refused with a reason rather than silently dropped. The installed SDK model
+defines supported nested settings.
+
+Choose **Review** (or press Enter in a single-line field) before **Submit**.
+Review identifies the source run, connection, profile, region, application and
+execution role. It lists preserved settings and every changed source/proposed
+value. Application release, network, image and worker settings are inherited
+from the current application; equality with the source run is unknown. Hidden
+application defaults are also unknown. Run identifiers, status, timestamps,
+attempts and resource usage are read-only outputs and are not copied. Scroll
+through the review; Tab reaches the fixed Back, Cancel and Submit buttons even
+at 80×24. Back preserves the form; further edits require a fresh review.
+
+Submit calls the public EMR Serverless `StartJobRun` API. Validation and provider
+errors keep the modal open with category-specific recovery guidance. Submission
+errors and observable diagnostics exclude argument, policy and credential
+values. A source change invalidates the open clone. The service does not expose
+a blank submit form or an AWS job cancellation command. During submission,
+**Close** dismisses the form; it does not cancel a job AWS may have accepted.
 
 Submission carries an app-owned `clientToken`. The token is minted when the
-clone form opens and reused if a submit attempt fails before a response
-arrives, so pressing submit again after a timeout, while the clone form stays
-open, returns the run AWS already created instead of starting a second,
-separately billed job. Editing any field or a successful submit starts a new
-intent with a new token.
+clone form opens and reused after an ambiguous failure if the request remains
+unchanged. Retry that unchanged review after a lost response to let AWS resolve
+the same request instead of creating a second job. Every request-affecting edit,
+including advanced nested settings, rotates the token; reapplying equal values
+does not. Successful submission or closing and reopening the form starts a new
+intent. Before reopening after an uncertain outcome, inspect the application's
+runs because the earlier request may already have succeeded.
 
 ## 4. Architecture
 

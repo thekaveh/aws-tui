@@ -8,6 +8,7 @@ silently dismiss and the user would assume the run was submitted."""
 
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import UTC, datetime
 
 import pytest
@@ -18,6 +19,7 @@ from aws_tui.demo.in_memory_emr import InMemoryEmr as _InMemoryEmr
 from aws_tui.domain.emr_serverless import JobRunDetail, JobRunState
 from aws_tui.domain.filesystem import ProviderUnreachableError, ValidationError
 from aws_tui.vm.emr_serverless.clone_vm import JobRunCloneVM
+from aws_tui.vm.service_source_vm import ServiceSourceContext
 
 
 def _detail() -> JobRunDetail:
@@ -34,6 +36,7 @@ def _detail() -> JobRunDetail:
         execution_role_arn="arn:aws:iam::123456789012:role/EmrJobRole",
         duration_ms=240_000,
         s3_monitoring_log_uri=None,
+        job_driver={"sparkSubmit": {"entryPoint": "s3://b/job.py"}},
     )
 
 
@@ -231,3 +234,244 @@ async def test_successful_submit_rotates_the_client_token() -> None:
     await vm.submit()
     assert vm.client_token != before
     vm.dispose()
+
+
+_SETTINGS = [
+    (
+        "configurationOverrides",
+        {
+            "applicationConfiguration": [
+                {"classification": "spark-defaults", "properties": {"k": "one"}}
+            ]
+        },
+        {
+            "applicationConfiguration": [
+                {"classification": "spark-defaults", "properties": {"k": "two"}}
+            ]
+        },
+    ),
+    ("executionTimeoutMinutes", 0, 60),
+    ("retryPolicy", {"maxAttempts": 2}, {"maxAttempts": 3}),
+    ("mode", "STREAMING", "BATCH"),
+    ("executionIamPolicy", {"policy": '{"Statement": []}'}, {}),
+    ("tags", {"team": "analytics"}, {"team": "platform"}),
+]
+
+
+@pytest.mark.parametrize(("key", "value", "edited"), _SETTINGS)
+async def test_retry_and_edit_intent_include_each_new_setting(
+    key: str, value: object, edited: object
+) -> None:
+    vm, fake = _make()
+    try:
+        before = vm.client_token
+        vm.apply_settings({key: value})
+        assert vm.client_token != before
+        intent = vm.client_token
+        vm.apply_settings({key: value})
+        assert vm.client_token == intent
+        fake.start_job_run_exc = ProviderUnreachableError("ambiguous")
+        with pytest.raises(ProviderUnreachableError):
+            await vm.submit()
+        assert vm.client_token == intent
+        fake.start_job_run_exc = None
+        await vm.submit()
+        calls = [c[1] for c in fake.calls if c[0] == "start_job_run"]
+        assert len(calls) == 2
+        assert calls[0][6] == calls[1][6] == intent
+        assert calls[0][7] == calls[1][7]
+        assert calls[0][7][key] == value
+        assert vm.client_token != intent
+        current = vm.client_token
+        vm.apply_settings({key: edited})
+        assert vm.client_token != current
+        current = vm.client_token
+        vm.apply_settings({})
+        assert vm.client_token != current
+    finally:
+        vm.dispose()
+        fake.dispose()
+
+
+def test_settings_and_source_are_defensive_snapshots() -> None:
+    source = replace(
+        _detail(),
+        mode="STREAMING",
+        tags={"team": "source"},
+        configuration_overrides={
+            "monitoringConfiguration": {"s3MonitoringConfiguration": {"logUri": "s3://logs/source"}}
+        },
+    )
+    fake = _InMemoryEmr()
+    vm = JobRunCloneVM(source, client=fake, hub=MessageHub(), dispatcher=NULL_DISPATCHER)
+    try:
+        assert vm.settings["mode"] == "STREAMING"
+        source.tags["team"] = "mutated"
+        assert vm.settings["tags"] == {"team": "source"}
+        assert vm.source_detail.tags == {"team": "source"}
+        exposed_source = vm.source_detail
+        exposed_source.tags["team"] = "also mutated"
+        assert vm.source_detail.tags == {"team": "source"}
+        settings = {"tags": {"team": "new"}}
+        vm.apply_settings(settings)
+        token = vm.client_token
+        settings["tags"]["team"] = "caller mutation"
+        exposed = vm.settings
+        exposed["tags"]["team"] = "getter mutation"
+        assert vm.settings == {"tags": {"team": "new"}}
+        assert vm.client_token == token
+    finally:
+        vm.dispose()
+
+
+@pytest.mark.parametrize(
+    "driver",
+    [
+        None,
+        {},
+        {"hive": {"query": "s3://b/q.hql"}},
+        {"future": {}},
+        {"sparkSubmit": {"entryPoint": "s3://b/job.py"}, "hive": {}},
+        {"sparkSubmit": {"entryPoint": "s3://b/job.py", "unsupported": "secret-value"}},
+    ],
+)
+async def test_unsupported_driver_cannot_submit_even_after_spark_field_edits(
+    driver: dict | None,
+) -> None:
+    fake = _InMemoryEmr()
+    vm = JobRunCloneVM(
+        replace(_detail(), job_driver=driver),
+        client=fake,
+        hub=MessageHub(),
+        dispatcher=NULL_DISPATCHER,
+    )
+    try:
+        vm.apply_field("entry_point", "s3://b/new.py")
+        valid, reason = vm.is_valid()
+        assert not valid
+        assert "driver" in reason.lower()
+        assert "secret-value" not in reason
+        with pytest.raises(ValidationError, match="driver"):
+            await vm.submit()
+        assert not fake.calls
+    finally:
+        vm.dispose()
+
+
+@pytest.mark.parametrize("action", ["cancel", "dispose"])
+async def test_inactive_clone_cannot_submit(action: str) -> None:
+    vm, fake = _make()
+    getattr(vm, action)()
+    with pytest.raises(ValidationError):
+        await vm.submit()
+    assert not fake.calls
+    vm.dispose()
+
+
+def test_invalid_settings_do_not_change_current_intent() -> None:
+    vm, _ = _make()
+    token = vm.client_token
+    try:
+        with pytest.raises(ValidationError):
+            vm.apply_settings({"mode": "secret-future-mode"})
+        assert vm.settings == {}
+        assert vm.client_token == token
+    finally:
+        vm.dispose()
+
+
+def test_review_names_identity_differences_and_unknown_inheritance() -> None:
+    detail = replace(
+        _detail(),
+        mode="BATCH",
+        execution_timeout_minutes=30,
+        source_application_settings={
+            "releaseLabel": "emr-7.10.0",
+            "networkConfiguration": {"subnetIds": ["subnet-source"]},
+        },
+    )
+    vm = JobRunCloneVM(
+        detail,
+        client=_InMemoryEmr(),
+        hub=MessageHub(),
+        dispatcher=NULL_DISPATCHER,
+        source=ServiceSourceContext("analytics", "production", "us-east-1"),
+    )
+    try:
+        vm.apply_field("name", "edited-job")
+        vm.apply_settings({"mode": "STREAMING", "executionTimeoutMinutes": 0})
+        review = vm.review_text
+        for value in [
+            "r-001",
+            "analytics",
+            "production",
+            "us-east-1",
+            "00abc",
+            detail.execution_role_arn,
+            "nightly",
+            "edited-job",
+            "BATCH",
+            "STREAMING",
+            "30",
+            "0",
+            "Changed",
+            "Inherited",
+            "unknown",
+            "emr-7.10.0",
+            "subnet-source",
+        ]:
+            assert value in review
+        assert "imageConfiguration" in review
+        assert "workerTypeSpecifications" in review
+        assert "executionIamPolicy" in review
+    finally:
+        vm.dispose()
+
+
+async def test_source_change_invalidates_clone_before_client_call() -> None:
+    active = True
+    fake = _InMemoryEmr()
+    vm = JobRunCloneVM(
+        _detail(),
+        client=fake,
+        hub=MessageHub(),
+        dispatcher=NULL_DISPATCHER,
+        source_is_current=lambda: active,
+    )
+    try:
+        assert vm.is_valid() == (True, None)
+        active = False
+        with pytest.raises(ValidationError, match="source"):
+            await vm.submit()
+        assert not fake.calls
+    finally:
+        vm.dispose()
+
+
+def test_clone_change_notifications_do_not_log_sensitive_values(caplog) -> None:
+    import logging
+
+    from aws_tui.infra.log_sink import _JsonLineFormatter
+
+    argument = "PRIVATE_SPARK_ARGUMENT_238"
+    credential = "PRIVATE_CREDENTIAL_238"
+    hub = MessageHub()
+    vm = JobRunCloneVM(_detail(), client=_InMemoryEmr(), hub=hub, dispatcher=NULL_DISPATCHER)
+
+    def failing_observer(message: object) -> None:
+        raise RuntimeError(f"{argument} {credential}")
+
+    subscription = hub.messages.subscribe(failing_observer)
+    try:
+        with caplog.at_level(logging.ERROR):
+            vm.apply_field("entry_point_arguments", (argument,))
+            vm.apply_field("spark_submit_parameters", credential)
+            vm.apply_settings({"executionIamPolicy": {"policy": credential}})
+        assert caplog.records
+        diagnostics = "\n".join(_JsonLineFormatter().format(record) for record in caplog.records)
+        for secret in (argument, credential):
+            assert secret not in diagnostics
+            assert secret not in caplog.text
+    finally:
+        subscription.dispose()
+        vm.dispose()

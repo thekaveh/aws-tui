@@ -137,6 +137,7 @@ class EmrServerlessPage(DeferredWorkerMixin, Widget):
     ) -> None:
         super().__init__(id=id, classes=classes)
         self._vm: EmrServerlessPageVM = vm
+        self._clone_active = False
         self._hub: MessageHub[Message] = hub
         self._keymap = keymap or KeymapStore()
         self._source_candidates = source_candidates
@@ -227,6 +228,7 @@ class EmrServerlessPage(DeferredWorkerMixin, Widget):
             self.call_after_refresh(self._maybe_focus_left)
 
     def on_unmount(self) -> None:
+        self._clone_active = False
         self._picker_open_intent.cancel()
         if self._source_header is not None:
             self._source_header.picker.close(refocus=False)
@@ -451,6 +453,20 @@ class EmrServerlessPage(DeferredWorkerMixin, Widget):
         return self._right_detail is not None and self._is_within(focused, self._right_detail)
 
     async def action_clone_selected_run(self) -> None:
+        """Start one lifecycle-owned worker; push_screen_wait requires one."""
+        if self._clone_active:
+            return
+        self._clone_active = True
+
+        async def clone() -> None:
+            try:
+                await self._clone_selected_run()
+            finally:
+                self._clone_active = False
+
+        self._run_lifecycle_worker(clone, group="emr-clone", exclusive=False)
+
+    async def _clone_selected_run(self) -> None:
         """Open the clone modal pre-populated from the currently-
         selected job-run detail.
 
@@ -468,8 +484,18 @@ class EmrServerlessPage(DeferredWorkerMixin, Widget):
             client=self._vm.client,
             hub=self._hub,
             dispatcher=self._vm.dispatcher,
+            source=self._vm.source,
+            source_is_current=lambda: (
+                self.is_attached
+                and self._vm.can_clone_source(detail.application_id, detail.job_run_id)
+            ),
         )
         clone_vm.construct()
+        unsupported = clone_vm.unsupported_driver_reason
+        if unsupported is not None:
+            self._post_advisory_toast("Job", unsupported)
+            clone_vm.dispose()
+            return
         modal = JobRunCloneModal(clone_vm, hub=self._hub)
         # Unified try/finally so cancellation (CancelledError is a
         # BaseException, NOT an Exception) disposes the VM too.
@@ -482,21 +508,29 @@ class EmrServerlessPage(DeferredWorkerMixin, Widget):
         try:
             try:
                 new_id = await self.app.push_screen_wait(modal)
-            except Exception as exc:
+            except Exception:
                 # The modal raised after dismiss (extremely rare —
                 # e.g. the test harness disposed the app mid-flight).
                 # Surface an advisory toast and bail.
-                self._post_advisory_toast("Job", f"clone aborted ({exc})")
+                self._post_advisory_toast(
+                    "Job", "Clone form closed unexpectedly; reopen it from the source run"
+                )
                 return
             if new_id is None:
                 # User cancelled — silent (Cancel is intentional UX,
                 # not an error to advertise).
+                return
+            if not self.is_attached or not self._vm.can_clone_source(
+                detail.application_id, detail.job_run_id
+            ):
                 return
             self._post_clone_success_toast(new_id)
             # Re-fresh the runs list so the new SUBMITTED row appears
             # immediately rather than waiting for the next 60-s tick.
             self._run_lifecycle_worker(self._vm.refresh_job_runs, group="emr-poll-runs")
         finally:
+            if modal.is_attached and modal.is_active:
+                modal.action_cancel()
             clone_vm.dispose()
 
     def open_focused_log_filter(self) -> bool:
