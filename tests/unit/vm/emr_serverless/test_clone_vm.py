@@ -426,3 +426,52 @@ def test_review_names_identity_differences_and_unknown_inheritance() -> None:
         assert "executionIamPolicy" in review
     finally:
         vm.dispose()
+
+
+async def test_source_change_invalidates_clone_before_client_call() -> None:
+    active = True
+    fake = _InMemoryEmr()
+    vm = JobRunCloneVM(
+        _detail(),
+        client=fake,
+        hub=MessageHub(),
+        dispatcher=NULL_DISPATCHER,
+        source_is_current=lambda: active,
+    )
+    try:
+        assert vm.is_valid() == (True, None)
+        active = False
+        with pytest.raises(ValidationError, match="source"):
+            await vm.submit()
+        assert not fake.calls
+    finally:
+        vm.dispose()
+
+
+def test_clone_change_notifications_do_not_log_sensitive_values(caplog) -> None:
+    import logging
+
+    from aws_tui.infra.log_sink import _JsonLineFormatter
+
+    argument = "PRIVATE_SPARK_ARGUMENT_238"
+    credential = "PRIVATE_CREDENTIAL_238"
+    hub = MessageHub()
+    vm = JobRunCloneVM(_detail(), client=_InMemoryEmr(), hub=hub, dispatcher=NULL_DISPATCHER)
+
+    def failing_observer(message: object) -> None:
+        raise RuntimeError(f"{argument} {credential}")
+
+    subscription = hub.messages.subscribe(failing_observer)
+    try:
+        with caplog.at_level(logging.ERROR):
+            vm.apply_field("entry_point_arguments", (argument,))
+            vm.apply_field("spark_submit_parameters", credential)
+            vm.apply_settings({"executionIamPolicy": {"policy": credential}})
+        assert caplog.records
+        diagnostics = "\n".join(_JsonLineFormatter().format(record) for record in caplog.records)
+        for secret in (argument, credential):
+            assert secret not in diagnostics
+            assert secret not in caplog.text
+    finally:
+        subscription.dispose()
+        vm.dispose()

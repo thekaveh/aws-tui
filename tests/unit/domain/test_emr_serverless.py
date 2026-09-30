@@ -1059,3 +1059,55 @@ async def test_demo_seed_records_spark_driver_and_source_monitoring() -> None:
     assert detail.configuration_overrides == {
         "monitoringConfiguration": {"s3MonitoringConfiguration": {"logUri": "s3://logs/source/"}}
     }
+
+
+@pytest.mark.parametrize("kind", ["validation", "credentials", "transport", "unexpected"])
+async def test_clone_failures_do_not_expose_argument_values_in_logs_or_diagnostics(
+    kind: str, caplog
+) -> None:
+    import logging
+
+    from aws_tui.infra.log_sink import _JsonLineFormatter
+
+    argument = "ARG_SENTINEL_238_PRIVATE"
+    credential = "CREDENTIAL_SENTINEL_238_PRIVATE"
+    echoed = f"request failed with {argument} and {credential}"
+    errors = {
+        "validation": botocore.exceptions.ClientError(
+            {"Error": {"Code": "ValidationException", "Message": echoed}}, "StartJobRun"
+        ),
+        "credentials": botocore.exceptions.CredentialRetrievalError(
+            provider="process", error_msg=echoed
+        ),
+        "transport": botocore.exceptions.EndpointConnectionError(
+            endpoint_url=f"https://{argument}.example/{credential}"
+        ),
+        "unexpected": RuntimeError(echoed),
+    }
+    stub = _StubClient()
+    stub.start_job_run.side_effect = errors[kind]
+    client = EmrServerlessClient(session=_StubSession(stub))  # type: ignore[arg-type]
+    logger = logging.getLogger("aws_tui.tests.clone_diagnostics")
+    with caplog.at_level(logging.DEBUG):
+        try:
+            await client.start_job_run(
+                "00abc",
+                execution_role_arn="role",
+                entry_point="s3://b/job.py",
+                entry_point_arguments=(argument,),
+                spark_submit_parameters=credential,
+                client_token="clone-intent",
+            )
+        except ProviderError as exc:
+            logger.error("clone submission failed", exc_info=True)
+            message = str(exc)
+        else:
+            pytest.fail("the simulated provider error must propagate")
+    assert argument not in message
+    assert credential not in message
+    assert caplog.records
+    diagnostics = "\n".join(_JsonLineFormatter().format(record) for record in caplog.records)
+    assert argument not in diagnostics
+    assert credential not in diagnostics
+    assert argument not in caplog.text
+    assert credential not in caplog.text

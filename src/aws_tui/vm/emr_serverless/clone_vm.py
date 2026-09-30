@@ -13,6 +13,7 @@ plain Python attributes + ``apply_field`` / ``submit`` / ``cancel``."""
 from __future__ import annotations
 
 import json
+from collections.abc import Callable
 from copy import deepcopy
 from typing import Any
 from uuid import uuid4
@@ -58,11 +59,13 @@ class JobRunCloneVM:
         hub: MessageHub[Message],
         dispatcher: Dispatcher,
         source: ServiceSourceContext | None = None,
+        source_is_current: Callable[[], bool] | None = None,
     ) -> None:
         self._client = client
         self._hub: MessageHub[Message] = hub
         self._source_detail = deepcopy(detail)
         self._source = source
+        self._source_is_current = source_is_current
         self._settings: dict[str, Any] = {
             key: deepcopy(value)
             for key, value in {
@@ -293,6 +296,8 @@ class JobRunCloneVM:
         """
         if self._disposed or self._cancelled:
             return False, "clone is no longer active"
+        if self._source_is_current is not None and not self._source_is_current():
+            return False, "The source changed. Reopen the clone from the current source"
         unsupported = self.unsupported_driver_reason
         if unsupported is not None:
             return False, unsupported

@@ -639,3 +639,23 @@ async def test_refresh_job_runs_clears_detail_and_logs_when_all_runs_disappear()
     assert page.job_run_detail.detail is None
     assert page.job_run_logs.application_id is None
     assert page.job_run_logs.job_run_id is None
+
+
+async def test_clone_source_guard_tracks_selection_and_disposal() -> None:
+    page, fake = _make()
+    fake.add_application(app_id="a1", name="first")
+    fake.add_application(app_id="a2", name="second")
+    fake.add_job_run_detail(application_id="a1", job_run_id="r1")
+    try:
+        await page.setup()
+        assert page.can_clone_source("a1", "r1")
+        assert not page.can_clone_source("a1", "different")
+        await page.select_application("a2")
+        assert not page.can_clone_source("a1", "r1")
+        await page.select_application("a1")
+        assert page.can_clone_source("a1", "r1")
+        page.dispose()
+        assert not page.can_clone_source("a1", "r1")
+    finally:
+        page.dispose()
+        fake.dispose()

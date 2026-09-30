@@ -555,6 +555,15 @@ class EmrServerlessClient:
                 return cast(str, resp["jobRunId"])
         except Exception as exc:
             mapped = _map_boto_error(exc)
-            if mapped is None:
-                raise
-            raise mapped from exc
+            category = type(mapped) if mapped is not None else ProviderError
+            messages = {
+                AuthRequiredError: "Authentication required; reauthenticate the selected profile",
+                PermissionDeniedError: "Access denied; check the execution role and StartJobRun permission",
+                ProviderUnreachableError: "No response from AWS; retry the unchanged request with the same client token",
+                ThrottledError: "AWS throttled the request; retry after waiting",
+                ValidationError: "AWS rejected the job settings; review the role, entry point and configuration",
+                NotFoundError: "The source application is no longer available",
+            }
+            # Provider messages and chained SDK exceptions can contain arbitrary
+            # Spark arguments, policies or credential-process output.
+            raise category(messages.get(category, "EMR job submission failed")) from None

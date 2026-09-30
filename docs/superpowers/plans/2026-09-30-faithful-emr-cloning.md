@@ -85,12 +85,12 @@ assert vm.settings["mode"] == "STREAMING"
 
 **Interfaces:** The page passes the exact `ServiceSourceContext` to the clone VM. Unsupported source drivers produce an advisory and no form. The modal uses edit/review stages, fixed reachable footer, scrollable content, JSON arguments and advanced settings, and a reviewed-intent guard.
 
-- [ ] Write pilot regressions showing Enter on edit opens review without calling StartJobRun, changed values/source identity appear in review, Back preserves values, subsequent edits require fresh review, and double submit makes one call.
-- [ ] Add empty/newline argument round-trip, invalid JSON, unsupported settings and compact 80x24 keyboard/scroll tests. Verify cancellation and stale source handling without a live client.
-- [ ] Implement edit/review composition using existing widgets, markup disabled for external values. Display source id/profile/region/application/role; show source and target values, unchanged/changed states, inherited application settings and unknown read-only outputs/defaults. Avoid claiming inherited equality.
-- [ ] On parse/validation/provider/unexpected errors, retain the form and show category-specific recovery guidance without echoed request values or unsafe exception chains. Preserve retry token when the request did not change.
-- [ ] Capture emitted logs and diagnostic formatting with distinctive values in arguments, Spark parameters, policies and credentials. Test success and each error path; inspect both messages and extras/traceback content.
-- [ ] Run affected UI/integration and privacy tests, then commit the workflow after review.
+- [x] Write pilot regressions showing Enter on edit opens review without calling StartJobRun, changed values/source identity appear in review, Back preserves values, subsequent edits require fresh review, and double submit makes one call.
+- [x] Add empty/newline argument round-trip, invalid JSON, unsupported settings and compact 80x24 keyboard/scroll tests. Verify cancellation and stale source handling without a live client.
+- [x] Implement edit/review composition using existing widgets, markup disabled for external values. Display source id/profile/region/application/role; show source and target values, unchanged/changed states, inherited application settings and unknown read-only outputs/defaults. Avoid claiming inherited equality.
+- [x] On parse/validation/provider/unexpected errors, retain the form and show category-specific recovery guidance without echoed request values or unsafe exception chains. Preserve retry token when the request did not change.
+- [x] Capture emitted logs and diagnostic formatting with distinctive values in arguments, Spark parameters, policies and credentials. Test success and each error path; inspect both messages and extras/traceback content.
+- [x] Run affected UI/integration and privacy tests, then commit the workflow after review.
 
 Pilot submission invariant:
 
