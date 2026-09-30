@@ -83,13 +83,16 @@ async def test_full_app_athena_editor_has_usable_height(size: tuple[int, int]) -
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("deferred_layout", [False, True])
 async def test_compact_athena_survives_geometry_read_before_initial_layout(
     monkeypatch: pytest.MonkeyPatch,
+    deferred_layout: bool,
 ) -> None:
     original_refresh_layout = Screen._refresh_layout
     original_resize = AthenaQueryView.on_resize
     geometry_read = False
     resize_seen = False
+    layout_released = not deferred_layout
 
     def record_resize(view: AthenaQueryView, event: events.Resize) -> None:
         nonlocal resize_seen
@@ -101,6 +104,12 @@ async def test_compact_athena_survives_geometry_read_before_initial_layout(
     ) -> None:
         nonlocal geometry_read
         views = list(screen.query(AthenaQueryView))
+        if views and not layout_released:
+            # A region lookup can build the geometry map before the screen's
+            # scheduled layout runs. Hold that layout until _open_athena has
+            # returned to exercise this ordering without relying on timing.
+            screen._compositor.update_widgets({views[0]})
+            return
         if not geometry_read and views and views[0].is_mounted:
             view = views[0]
             # Textual 8.2.8 can rebuild its lazy geometry map before the normal
@@ -118,6 +127,15 @@ async def test_compact_athena_survives_geometry_read_before_initial_layout(
     try:
         async with app.run_test(size=(80, 24)) as pilot:
             page = await _open_athena(app)
+            if deferred_layout:
+                assert not geometry_read
+                assert not resize_seen
+                layout_released = True
+                app.screen.refresh(layout=True)
+            await wait_until(
+                lambda: geometry_read,
+                what="early geometry read exercised before initial Athena layout",
+            )
             assert geometry_read
             page.vm.query.set_sql("SELECT 12345")
             await page.vm.query.execute()
