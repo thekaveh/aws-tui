@@ -521,7 +521,25 @@ async def test_glue_source_picker_event_rebuilds_exact_selected_target(
 
             ctx.aws_session.probe_token = probe  # type: ignore[method-assign]
             await focus_and_settle(picker)
-            await pilot.press("enter", "down", "enter")
+            await pilot.press("enter")
+            await wait_until(
+                lambda: picker.is_open and picker.query_one(OptionList).has_focus,
+                what="Glue source picker options to receive focus",
+            )
+            await pilot.press("down")
+            await wait_until(
+                lambda: picker.query_one(OptionList).highlighted == 1,
+                what="Glue source picker to highlight its second option",
+            )
+            await pilot.press("enter")
+            await wait_until(
+                lambda: (
+                    ctx.root_vm.content_host.current is not None
+                    and ctx.root_vm.content_host.current.source.connection_key
+                    == ("dev", "us-east-1")
+                ),
+                what="Glue source switch to commit the selected target",
+            )
             await _await_service_mount(pilot, app)
 
             current = ctx.root_vm.content_host.current
