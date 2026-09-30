@@ -59,11 +59,11 @@ assert kwargs == {
 
 **Interfaces:** VM construction accepts source context, retains a private source snapshot, exposes copied advanced settings, and validates unsupported driver/settings in `is_valid` and `submit`. `apply_settings(settings: dict[str, Any])` atomically replaces the optional wire-named settings; `settings` returns a deep copy. Existing `apply_field` and token properties remain.
 
-- [ ] Extend the token regression tests to all six optional setting fields, nested edits, equal reapplication, omission and empty values. Assert two ambiguous attempts carry identical tokens and payloads.
-- [ ] Add failing tests for source immutability, settings aliasing, unsupported-driver direct submit, disposed/cancelled VM submit, and source/target comparison content.
-- [ ] Implement the VM changes. Intent equality includes all settings; copies prevent mutation without token rotation. Submit captures the intended payload/token once and checks validity before calling the client. Use value-free observable notifications.
-- [ ] Extend demo submission with the same optional settings and materialize them in JobRunDetail. Preserve token replay behavior and existing call tuple offsets while recording new fields after them. Derive S3 monitoring from carried overrides.
-- [ ] Verify success, ambiguous retry, edit rotation, failure/cancel/disposal and exact demo round-trip. Commit the VM/demo change after relevant tests and hooks pass.
+- [x] Extend the token regression tests to all six optional setting fields, nested edits, equal reapplication, omission and empty values. Assert two ambiguous attempts carry identical tokens and payloads.
+- [x] Add failing tests for source immutability, settings aliasing, unsupported-driver direct submit, disposed/cancelled VM submit, and source/target comparison content.
+- [x] Implement the VM changes. Intent equality includes all settings; copies prevent mutation without token rotation. Submit captures the intended payload/token once and checks validity before calling the client. Use value-free observable notifications.
+- [x] Extend demo submission with the same optional settings and materialize them in JobRunDetail. Preserve token replay behavior and existing call tuple offsets while recording new fields after them. Derive S3 monitoring from carried overrides.
+- [x] Verify success, ambiguous retry, edit rotation, failure/cancel/disposal and exact demo round-trip. Commit the VM/demo change after relevant tests and hooks pass.
 
 Core token regression:
 

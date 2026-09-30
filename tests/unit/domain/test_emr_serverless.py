@@ -1036,3 +1036,26 @@ async def test_demo_clone_preserves_optional_settings_and_monitoring() -> None:
         assert detail.tags == {"team": "analytics"}
     finally:
         fake.dispose()
+
+
+async def test_demo_seed_records_spark_driver_and_source_monitoring() -> None:
+    fake = _InMemoryEmr()
+    fake.add_application(app_id="00abc", name="etl")
+    detail = fake.add_job_run_detail(
+        application_id="00abc",
+        job_run_id="r-source",
+        entry_point="s3://b/job.py",
+        entry_point_arguments=("", "arg"),
+        spark_submit_parameters="  --conf k=v  ",
+        s3_monitoring_log_uri="s3://logs/source/",
+    )
+    assert detail.job_driver == {
+        "sparkSubmit": {
+            "entryPoint": "s3://b/job.py",
+            "entryPointArguments": ["", "arg"],
+            "sparkSubmitParameters": "  --conf k=v  ",
+        }
+    }
+    assert detail.configuration_overrides == {
+        "monitoringConfiguration": {"s3MonitoringConfiguration": {"logUri": "s3://logs/source/"}}
+    }

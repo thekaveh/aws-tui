@@ -47,6 +47,7 @@ def _detail() -> JobRunDetail:
         execution_role_arn="arn:aws:iam::123456789012:role/EmrJobRole",
         duration_ms=240_000,
         s3_monitoring_log_uri=None,
+        job_driver={"sparkSubmit": {"entryPoint": "s3://my-bucket/jobs/etl.py"}},
     )
 
 

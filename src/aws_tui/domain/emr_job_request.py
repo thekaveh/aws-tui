@@ -73,6 +73,16 @@ def validate_clone_settings(settings: dict[str, Any]) -> None:
             ) from None
 
 
+def validate_spark_driver(driver: dict[str, Any] | None) -> None:
+    """Refuse a reduced Spark request for an unsupported source union."""
+    if not isinstance(driver, dict) or set(driver) != {"sparkSubmit"}:
+        raise ValidationError("Unsupported job driver; only Spark sources can be cloned")
+    try:
+        validate_parameters(driver, _request_shape().members["jobDriver"])
+    except (ParamValidationError, ValueError, TypeError):
+        raise ValidationError("Unsupported or invalid Spark job driver settings") from None
+
+
 def build_start_job_run_request(
     application_id: str,
     *,

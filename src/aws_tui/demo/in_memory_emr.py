@@ -217,6 +217,21 @@ class InMemoryEmr:
         summary = self._runs.get(application_id, {}).get(job_run_id)
         if summary is None:
             summary = self.add_job_run(application_id=application_id, job_run_id=job_run_id)
+        spark: dict[str, Any] = {
+            "entryPoint": entry_point,
+            "entryPointArguments": list(entry_point_arguments),
+        }
+        if spark_submit_parameters is not None:
+            spark["sparkSubmitParameters"] = spark_submit_parameters
+        overrides = (
+            {
+                "monitoringConfiguration": {
+                    "s3MonitoringConfiguration": {"logUri": s3_monitoring_log_uri},
+                }
+            }
+            if s3_monitoring_log_uri is not None
+            else None
+        )
         d = JobRunDetail(
             application_id=application_id,
             job_run_id=job_run_id,
@@ -230,6 +245,8 @@ class InMemoryEmr:
             execution_role_arn=execution_role_arn,
             duration_ms=duration_ms,
             s3_monitoring_log_uri=s3_monitoring_log_uri,
+            job_driver={"sparkSubmit": spark},
+            configuration_overrides=overrides,
         )
         self._details[(application_id, job_run_id)] = d
         self._observe_timestamp(d.updated_at)
