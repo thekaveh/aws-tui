@@ -24,7 +24,7 @@ from aws_tui.ui.widgets.crash_modal import CrashModal
 from aws_tui.ui.widgets.emr_serverless.log_filter_modal import LogFilterModal
 from aws_tui.vm.chrome.crash_vm import CrashChoice, CrashReport, CrashVM
 from aws_tui.vm.chrome.focus_coordinator_vm import FocusSlot
-from tests.helpers import focus_and_settle, wait_until
+from tests.helpers import drain_workers, focus_and_settle, wait_until
 from tests.integration.conftest import AppContextBuilder
 
 
@@ -76,11 +76,10 @@ async def test_enter_on_copy_confirm_modal_runs_copy(
         assert not ctx.confirm_vm.is_open
         dual = ctx.root_vm.content_host.current
         assert dual is not None
-        for _ in range(40):
-            names = [entry.name for entry in await dual.right.provider.list(PathRef(()))]
-            if "alpha.txt" in names:
-                break
-            await pilot.pause()
+        # Confirmation spawns the copy worker; await that whole chain before
+        # reading the destination instead of budgeting scheduler yields.
+        await drain_workers(app)
+        names = [entry.name for entry in await dual.right.provider.list(PathRef(()))]
         assert "alpha.txt" in names
         assert app._crash_report is None  # type: ignore[attr-defined]
 

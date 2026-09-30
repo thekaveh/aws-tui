@@ -335,6 +335,8 @@ async def test_cursor_can_reach_settings_row_via_arrow_keys() -> None:
             # yet.
             for _ in range(settings_idx):
                 nav.action_cursor_down()
+                # Selection changes synchronously; deliver queued refocus and
+                # row projections before issuing the next cursor action.
                 await pilot.pause()
             assert vm.selected_id == "settings", (
                 "Arrow-walking down should land on Settings and switch_service_command should fire."

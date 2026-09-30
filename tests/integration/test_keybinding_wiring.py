@@ -383,6 +383,8 @@ async def test_config_overlay_dispatches_the_registered_action_once(
 
     async with app.run_test(size=(100, 30)) as pilot:
         await pilot.press("ctrl+y")
+        # The spy appends synchronously during key dispatch; deliver any extra
+        # messages before checking that it ran exactly once after teardown.
         await pilot.pause()
 
     assert calls == ["copy"]
@@ -400,5 +402,7 @@ async def test_priority_tab_binding_fires_at_runtime(app_context_factory) -> Non
         await pilot.pause()
         app._actions.register("pane.switch_focus", lambda: calls.append("tab"))
         await pilot.press("tab")
+        # The spy appends synchronously during key dispatch; deliver any extra
+        # messages before checking that it ran exactly once after teardown.
         await pilot.pause()
     assert calls == ["tab"]
