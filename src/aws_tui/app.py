@@ -650,6 +650,11 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
     BrandBanner {
         margin: 1 1 0 1;
     }
+    Screen.-compact-height BrandBanner {
+        height: 1;
+        margin: 0 1;
+        border: none;
+    }
     #content-host {
         height: 1fr;
         width: 1fr;
@@ -878,6 +883,7 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
             theme_name=ctx.initial_theme,
             hub=ctx.hub,
             demo=ctx.demo,
+            identity=self._compact_identity,
             id="brand-banner",
         )
         with Horizontal(id="main-area"):
@@ -895,6 +901,31 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
         yield HintLegend(ctx.root_vm.chrome.hint_legend, hub=ctx.hub, id="hint-legend")
         yield ToastStack(ctx.root_vm.chrome.toast_stack, hub=ctx.hub, id="toast-stack")
         yield TransfersOverlay(ctx.transfers_vm, hub=ctx.hub, id="transfers-overlay")
+
+    def on_resize(self, event: events.Resize) -> None:
+        self._sync_compact_chrome(event.size.height)
+
+    def _compact_identity(self) -> str:
+        ctx = self._app_ctx
+        service_id = ctx.root_vm.content_host.current_id
+        parts: list[str] = []
+        if service_id == SETTINGS_NAV_ID:
+            parts.append("Settings")
+        elif service_id is not None:
+            parts.append(ctx.registry.get(service_id).descriptor.label)
+        connection = ctx.root_vm.active_connection
+        if connection is not None:
+            parts.extend((connection.name, connection.region))
+        return " · ".join(parts)
+
+    def _sync_compact_chrome(self, height: int) -> None:
+        # Below 34 rows the banner, context and query controls leave fewer
+        # than three rows for SQL. Keep the existing page and editor mounted.
+        compact = height < 34
+        for screen in self.screen_stack:
+            screen.set_class(compact, "-compact-height")
+            for banner in screen.query(BrandBanner):
+                banner.compact = compact
 
     async def on_mount(self) -> None:
         ctx = self._app_ctx
@@ -916,6 +947,7 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
             _raise_config_risk_toasts(ctx)
 
         self._apply_initial_theme()
+        self._sync_compact_chrome(self.size.height)
 
         # Subscribe to PaneVM state transitions BEFORE switch_service so the
         # initial UNREACHABLE state-change (if the connection is offline) is

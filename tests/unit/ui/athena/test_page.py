@@ -98,7 +98,7 @@ def _cycle_athena_target_ids(
 @pytest.mark.parametrize(
     ("view", "surface_ids"),
     [
-        ("query", ("athena-editor", "athena-query-detail")),
+        ("query", ("athena-editor", "athena-query-status", "athena-query-detail")),
         (
             "history",
             (
@@ -373,15 +373,15 @@ async def test_athena_refresh_falls_back_to_the_nearest_available_slot() -> None
         await wait_until(
             lambda: (
                 cancel.disabled
-                and app.focus_coordinator.focused_slot is FocusSlot.ATHENA_DETAIL
-                and app.query_one("#athena-query-detail").has_focus
+                and app.focus_coordinator.focused_slot is FocusSlot.ATHENA_STATUS
+                and app.query_one("#athena-query-status").has_focus
             ),
-            what="disabled Athena cancel reconciled focus to query detail",
+            what="disabled Athena cancel reconciled focus to query status",
         )
 
         assert cancel.disabled
-        assert app.focus_coordinator.focused_slot is FocusSlot.ATHENA_DETAIL
-        assert app.query_one("#athena-query-detail").has_focus
+        assert app.focus_coordinator.focused_slot is FocusSlot.ATHENA_STATUS
+        assert app.query_one("#athena-query-status").has_focus
 
 
 @pytest.mark.asyncio

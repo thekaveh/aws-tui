@@ -14,14 +14,16 @@ rounded border via the parent screen's layout.
 from __future__ import annotations
 
 import colorsys
+from collections.abc import Callable
 
 from reactivex.abc import DisposableBase
 from rich.text import Text
+from textual.reactive import reactive
 from textual.widget import Widget
-from vmx import Message, MessageHub
+from vmx import Message, MessageHub, PropertyChangedMessage
 
 from aws_tui.version import __version__
-from aws_tui.vm.messages import ThemeChangedMessage
+from aws_tui.vm.messages import ConnectionChangedMessage, ThemeChangedMessage
 
 # Project tagline (top-left of the banner's border) and pedigree
 # (bottom-right). Match the visual treatment of the genai-vanilla
@@ -245,6 +247,8 @@ class BrandBanner(Widget):
     """
 
     DEFAULT_CLASSES = "brand-banner"
+    compact: reactive[bool] = reactive(False, layout=True)
+    compact_identity: reactive[str] = reactive("")
 
     def __init__(
         self,
@@ -252,10 +256,13 @@ class BrandBanner(Widget):
         theme_name: str = "carbon",
         hub: MessageHub[Message] | None = None,
         demo: bool = False,
+        identity: Callable[[], str] | None = None,
         id: str | None = None,
         classes: str | None = None,
     ) -> None:
         super().__init__(id=id, classes=classes)
+        self._demo = demo
+        self._identity = identity
         self._rows: tuple[str, ...] = _build_rows()
         self._palette: tuple[str, ...] = _palette_for(theme_name)
         self._hub: MessageHub[Message] | None = hub
@@ -290,6 +297,8 @@ class BrandBanner(Widget):
         return self._palette
 
     def on_mount(self) -> None:
+        if self._identity is not None:
+            self.compact_identity = self._identity()
         if self._hub is not None:
             self._sub = self._hub.messages.subscribe(on_next=self._on_hub_message)
 
@@ -299,11 +308,14 @@ class BrandBanner(Widget):
             self._sub = None
 
     def _on_hub_message(self, msg: object) -> None:
-        """React to a hub-broadcast theme change so the banner stays in
-        sync with the rest of the chrome without the app reaching in
-        per widget type."""
+        """Keep theme and committed identity in sync with the shared chrome."""
         if isinstance(msg, ThemeChangedMessage):
             self.set_theme(msg.name)
+        elif self._identity is not None and (
+            isinstance(msg, ConnectionChangedMessage)
+            or (isinstance(msg, PropertyChangedMessage) and msg.property_name == "current")
+        ):
+            self.compact_identity = self._identity()
 
     def set_theme(self, theme_name: str) -> None:
         """Swap to the theme's color family. Idempotent; called from
@@ -316,6 +328,13 @@ class BrandBanner(Widget):
         self.refresh()
 
     def render(self) -> Text:
+        if self.compact:
+            label = "aws-tui"
+            if self._demo:
+                label += " · DEMO MODE"
+            if self.compact_identity:
+                label += f" · {self.compact_identity}"
+            return Text(label, style=f"bold {self._palette[0]}", justify="left")
         out = Text(justify="center")
         for i, row in enumerate(self._rows):
             if i > 0:
