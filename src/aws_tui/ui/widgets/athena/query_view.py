@@ -7,6 +7,7 @@ from textual import events
 from textual.app import ComposeResult
 from textual.binding import Binding, BindingType
 from textual.containers import Horizontal, VerticalScroll
+from textual.screen import Screen
 from textual.widget import Widget
 from textual.widgets import Button, Static, TextArea
 
@@ -83,6 +84,7 @@ class AthenaQueryView(DeferredWorkerMixin, Widget):
         self._vm = vm.query
         self._sub: DisposableBase | None = None
         self._syncing_editor = False
+        self._layout_screen: Screen[object] | None = None
 
     def compose(self) -> ComposeResult:
         with Horizontal(id="athena-query-controls"):
@@ -118,9 +120,21 @@ class AthenaQueryView(DeferredWorkerMixin, Widget):
             yield Static("", id="athena-query-detail-text", markup=False)
 
     def on_resize(self, event: events.Resize) -> None:
-        self.set_class(event.size.height < 15, "-compact")
+        self._sync_compact_height(event.size.height)
+
+    def _on_screen_layout(self, _screen: Screen[object]) -> None:
+        self._sync_compact_height(self.size.height)
+
+    def _sync_compact_height(self, height: int) -> None:
+        if height > 0:
+            self.set_class(height < 15, "-compact")
 
     def on_mount(self) -> None:
+        # An early geometry read can consume Textual's size change before it
+        # emits Resize. Reconcile after layouts too, with deferred delivery so
+        # the screen has finished clearing its pending-layout flag.
+        self._layout_screen = self.screen
+        self._layout_screen.screen_layout_refresh_signal.subscribe(self, self._on_screen_layout)
         self.query_one("#athena-editor", TextArea).border_title = "query editor"
         self.query_one("#athena-query-controls").border_title = "query controls"
         self.query_one("#athena-query-detail").border_title = "execution detail"
@@ -128,6 +142,9 @@ class AthenaQueryView(DeferredWorkerMixin, Widget):
         self._sub = self._vm.on_property_changed.subscribe(on_next=self._on_vm_changed)
 
     def on_unmount(self) -> None:
+        if self._layout_screen is not None:
+            self._layout_screen.screen_layout_refresh_signal.unsubscribe(self)
+            self._layout_screen = None
         if self._sub is not None:
             self._sub.dispose()
             self._sub = None

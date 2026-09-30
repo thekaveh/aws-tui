@@ -103,3 +103,26 @@ at both pagination-dependent width boundaries. Documentation contracts passed
 177 tests; the strict site build, 10 end-to-end tests, and local wheel/sdist
 content and metadata checks passed. Hosted CI and the protected promotion cycle
 remain required before issue closure.
+
+### 6.1. Promotion follow-up: initial layout notification
+
+Promotion PR #304 exposed the compact error-detail timeout in Linux coverage and
+Windows Python 3.12. A controlled regression reproduces the failure by reading
+the editor's geometry after Textual invalidates its compositor map and before
+the first normal Athena reflow. Textual 8.2.8 lazily replaces that map without
+emitting Resize; the next reflow then sees no changed size. The query view remains
+13 rows tall with the spacious 5/1/7 tracks, leaving a one-row editor and a detail
+panel that does not overflow.
+
+The query view now also reconciles compact sizing from the screen's completed
+layout signal. Delivery stays deferred so the new layout request cannot be
+overwritten by the screen clearing its current layout flag. Resize handling
+remains for the first application layout, and the signal subscription is removed
+on unmount. The regression verifies the geometry read preceded Resize, rendered
+SQL, usable editor height, detail overflow, keyboard scrolling, and resizing.
+It fails before the fix without suppressing messages or extending timeouts.
+
+This mechanism also explains how the historical snapshot's editor-height guard
+could fail, but that run did not capture geometry; its exact cause remains
+unconfirmed under the user's accepted limitation. The new promotion failures
+require the correction and fresh protected checks before merging.

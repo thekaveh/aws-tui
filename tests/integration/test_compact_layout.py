@@ -8,8 +8,11 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 
 import pytest
+from textual import events
 from textual.containers import VerticalScroll
+from textual.geometry import Size
 from textual.pilot import Pilot
+from textual.screen import Screen
 from textual.widgets import Button, TextArea
 
 from aws_tui.composition import build_app_context
@@ -17,6 +20,7 @@ from aws_tui.demo.in_memory_athena import InMemoryAthena
 from aws_tui.domain.query import QueryContext, QueryExecutionRef, QueryState
 from aws_tui.services.athena.service import AthenaService
 from aws_tui.ui.widgets.athena.page import AthenaPage
+from aws_tui.ui.widgets.athena.query_view import AthenaQueryView
 from aws_tui.ui.widgets.brand_banner import BrandBanner
 from aws_tui.ui.widgets.context_picker import ContextPicker
 from tests.helpers import drain_workers, focus_and_settle, wait_until
@@ -74,6 +78,76 @@ async def test_full_app_athena_editor_has_usable_height(size: tuple[int, int]) -
                 what="full-app Athena editor has at least three rows",
             )
             assert editor.region.height >= 3
+    finally:
+        app.app_ctx.root_vm.dispose()
+
+
+@pytest.mark.asyncio
+async def test_compact_athena_survives_geometry_read_before_initial_layout(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    original_refresh_layout = Screen._refresh_layout
+    original_resize = AthenaQueryView.on_resize
+    geometry_read = False
+    resize_seen = False
+
+    def record_resize(view: AthenaQueryView, event: events.Resize) -> None:
+        nonlocal resize_seen
+        resize_seen = True
+        original_resize(view, event)
+
+    def read_geometry_before_layout(
+        screen: Screen[object], size: Size | None = None, scroll: bool = False
+    ) -> None:
+        nonlocal geometry_read
+        views = list(screen.query(AthenaQueryView))
+        if not geometry_read and views and views[0].is_mounted:
+            view = views[0]
+            # Textual 8.2.8 can rebuild its lazy geometry map before the normal
+            # reflow. That reflow then sees no size change and sends no Resize.
+            # Exercise the real map update/read rather than dropping messages.
+            screen._compositor.update_widgets({view})
+            geometry_read = view.query_one("#athena-editor").region.height > 0
+            if geometry_read:
+                assert not resize_seen
+        original_refresh_layout(screen, size, scroll)
+
+    monkeypatch.setattr(Screen, "_refresh_layout", read_geometry_before_layout)
+    monkeypatch.setattr(AthenaQueryView, "on_resize", record_resize)
+    app = DemoModeApp(theme="carbon")
+    try:
+        async with app.run_test(size=(80, 24)) as pilot:
+            page = await _open_athena(app)
+            assert geometry_read
+            page.vm.query.set_sql("SELECT 12345")
+            await page.vm.query.execute()
+            assert page.vm.query.error_text == "Athena rejected the request"
+            editor = app.query_one("#athena-editor", TextArea)
+            detail = app.query_one("#athena-query-detail", VerticalScroll)
+            await wait_until(
+                lambda: (
+                    editor.region.height >= 3
+                    and detail.max_scroll_y > 0
+                    and "12345" in app.export_screenshot()
+                ),
+                what="rendered SQL, usable editor and scrollable detail after early geometry read",
+            )
+            assert "12345" in app.export_screenshot()
+            await focus_and_settle(detail)
+            await pilot.press(*(["down"] * 10))
+            assert detail.scroll_y > 0
+            assert "Workgroup output" in unescape(app.export_screenshot()).replace("\xa0", " ")
+            await pilot.resize_terminal(120, 40)
+            await wait_until(
+                lambda: detail.region.height == 7,
+                what="execution detail expands in the roomy layout",
+            )
+            await pilot.resize_terminal(80, 24)
+            await wait_until(
+                lambda: editor.region.height >= 3 and detail.max_scroll_y > 0,
+                what="compact layout restored after terminal resize",
+            )
+            assert editor.text == "SELECT 12345"
     finally:
         app.app_ctx.root_vm.dispose()
 
