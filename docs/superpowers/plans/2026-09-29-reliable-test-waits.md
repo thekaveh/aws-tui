@@ -67,13 +67,13 @@ assert widget.has_focus
 - [x] Reconcile the census, retained-site explanations and assertion comparison.
 - [x] Run lint, formatting, typing, layer checks, documentation checks and the full unit/in-process integration suite.
 - [x] Obtain independent diff review; correct substantive findings and verify the affected scope.
-- [ ] Commit and push; open a develop PR referencing #282 without auto-closing it.
+- [x] Commit and push; open a develop PR referencing #282 without auto-closing it.
 - [ ] Verify and merge the implementation, promotion and required back-merge PRs with protections intact.
 - [ ] Verify post-merge CI and source parity; clean this ticket's branches/worktrees; publish conclusions, close the issue and mark its board entry Done.
 
 ## 7. Local review evidence
 
-The reviewed test sweep reduces bare pauses from 1,059 to 667 and immediate sibling pause/assert sites from 411 to 88. Retained sites have inline explanations for event delivery, unchanged geometry, stale-callback rejection or exact callback counts. An AST comparison preserves all 2,190 original assertions across the 48 edited test files.
+The reviewed test sweep reduces bare pauses from 1,059 to 667 and immediate sibling pause/assert sites from 411 to 88. Retained sites have inline explanations for event delivery, unchanged geometry, stale-callback rejection or exact callback counts. An AST comparison preserves all 2,292 original assertions across the 49 edited existing test files (final comparison against the develop base).
 
 Independent review found and corrected three sequencing mistakes: the Quick Look no-op check needed an event-delivery barrier; the navigation cascade guard needed to drain queued projections; and navigation rebuilding needed to observe mounted replacement rows rather than merely the rebuild method call. The two affected modules pass all 11 tests after these corrections.
 
@@ -103,3 +103,11 @@ These are fixes before a new commit/run, not reruns of unchanged failing jobs. T
 
 
 The delayed macOS Python 3.12 result also exposed a teardown measurement boundary: the pane's render counter recorded a callback queued before removal after the counter had been reset. The subscription observer count and post-removal notification count were already correct. A documented event-delivery barrier after removal, before resetting counters, separates that earlier work from the new detached navigation. All 25 pane-widget tests, strict mypy, Ruff and independent review pass, with all 123 original assertions unchanged. The final census includes 88 retained original barriers plus two in the new projection regression tests.
+
+## 10. Corrected hosted run: persistence observation
+
+Run `36646660991` on head `522cf540` passed all Ubuntu legs, Windows Python 3.11/3.12, both snapshot jobs and coverage. Windows Python 3.13 exposed the existing add-connection file-polling failure described in #274: the test timed out waiting for the saved entry. The handler awaits an AnyIO thread rather than a Textual worker, so its `drain_workers` does not establish persistence completion. Reopening the target file in the wait predicate can overlap the writer's atomic replace on Windows.
+
+A diagnostic scheduling probe held the add operation pending and rejected event-loop config reads during that interval. The unchanged test failed at its file-polling predicate. The corrected wait observes the form losing its open class, which the handler does only after successful persistence; errors retain the open form. An explicit open-state assertion prevents an already-satisfied predicate. The 120 original assertions and the existing 30-second budget are unchanged. Independent review found no substantive issues. The probe proves removal of concurrent test reads; it does not establish the exact scheduling of the hosted failure. Final hosted acceptance remains outstanding.
+
+All 28 Settings integration tests pass with the same overlap-detecting probe enabled (74.20 seconds), including the previously failing add test. Ruff, formatting and the assertion-preservation check pass.

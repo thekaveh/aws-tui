@@ -318,26 +318,17 @@ async def test_add_inline_form_persists_to_toml(
                 force_path_style=True,
                 verify_tls=True,
             )
+            assert form.has_class("-open")
             form.post_message(
                 ConnectionFormSubmitted(form=form_obj, mode="add", original_name=None)
             )
-            # Same worker-thread persistence as the delete path below, so the
-            # same completion contract: drain, then confirm.
-            await drain_workers(app)
+            # The async message handler closes the form only after persistence
+            # succeeds. It uses an AnyIO thread, not a Textual worker, so
+            # drain_workers cannot await it. Polling config.toml here can hold
+            # a read handle across the writer's atomic replace on Windows.
             await wait_until(
-                lambda: (
-                    (found := _toml_connections(config_dir / "config.toml")) is not None
-                    and "minio-test" in found
-                ),
-                what="the added connection landed in config.toml",
-                # The integration tier keeps the 30s budget this wait had
-                # before #235 consolidated it onto the shared helper, whose
-                # 15s default is sized for in-process UI-tier waits. Halving
-                # it here was an unintended regression: this path writes
-                # `config.toml` through a worker thread on a loaded
-                # windows-latest runner, and it is the suite's most frequent
-                # flake (#274). Only one wait runs in this test, so 30s stays
-                # inside pytest's own 60s per-test kill.
+                lambda: not form.has_class("-open"),
+                what="the connection form to close after successful persistence",
                 timeout=DEFAULT_DRAIN_TIMEOUT_SECONDS,
             )
     finally:
