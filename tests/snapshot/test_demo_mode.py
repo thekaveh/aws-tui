@@ -15,9 +15,11 @@ from textual.worker import WorkerCancelled
 from aws_tui.domain.data_catalog import TableRef
 from aws_tui.infra.aws_session import TokenState
 from aws_tui.ui.widgets.pane import Pane
+from aws_tui.ui.widgets.toast import Toast
 from aws_tui.vm.file_manager.pane_vm import PaneState
 from aws_tui.vm.glue.iceberg_vm import GlueIcebergVM, IcebergView
 from aws_tui.vm.glue.page_vm import GluePageVM
+from tests.helpers import wait_until
 from tests.snapshot.apps.demo_mode import DemoModeApp
 from tests.snapshot.conftest import THEMES
 
@@ -160,6 +162,16 @@ async def _dismiss_demo_startup_advisory(pilot) -> None:  # type: ignore[no-unty
     await _drain_workers(pilot)
     assert not any(_DEMO_STARTUP_ADVISORY in toast.model.text for toast in toast_stack.toasts), (
         "startup demo advisory did not dismiss"
+    )
+    # Dismissal updates the model synchronously, but ToastStack queues its
+    # widget rebuild after refresh and widget removal is asynchronous too.
+    await wait_until(
+        lambda: (
+            not any(
+                toast.toast_vm.model.id == matching[0].model.id for toast in pilot.app.query(Toast)
+            )
+        ),
+        what="dismissed demo startup advisory to leave the rendered widget tree",
     )
 
 
