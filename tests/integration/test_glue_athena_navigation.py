@@ -453,8 +453,10 @@ async def test_glue_handoff_explicitly_projects_starter_sql_after_revisiting_ath
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("deferred_layout", [False, True])
 async def test_clicking_glue_athena_hint_uses_the_registered_handoff_action(
     tmp_path: Path,
+    deferred_layout: bool,
 ) -> None:
     ctx = build_app_context(
         config_dir=tmp_path / "config",
@@ -467,13 +469,44 @@ async def test_clicking_glue_athena_hint_uses_the_registered_handoff_action(
             glue = await _open_service(ctx, app, pilot, "glue")
             assert isinstance(glue, GluePageVM)
             legend = app.query_one(HintLegend)
-            chip = next(
-                candidate
-                for candidate in legend.query(".hint-chip")
-                if candidate.action.action_id == "glue.query_in_athena"
-            )
+            if deferred_layout:
+                # A deferred legend rebuild mounts replacements before their
+                # next layout. Reproduce that legal scheduling boundary.
+                await legend._rebuild_chips()
+                chip = next(
+                    candidate
+                    for candidate in legend.query(".hint-chip")
+                    if candidate.action.action_id == "glue.query_in_athena"
+                )
+                assert chip.region.width == 0
 
-            await pilot.click(chip)
+            def ready_key() -> Static | None:
+                # Re-query: the captured chip may be retired by another refresh.
+                for candidate in legend.query(".hint-chip"):
+                    if candidate.action.action_id != "glue.query_in_athena":
+                        continue
+                    if not candidate.action.enabled or not candidate.is_attached:
+                        continue
+                    key = candidate.query_one(".hint-key", Static)
+                    if not key.region.width or not key.region.height:
+                        continue
+                    if key.region.offset not in app.screen.size.region:
+                        continue
+                    if app.get_widget_at(*key.region.offset)[0] is key:
+                        return key
+                return None
+
+            await wait_until(
+                lambda: ready_key() is not None,
+                what="enabled Glue-to-Athena hint key to be laid out and hit-testable",
+            )
+            key = ready_key()
+            assert key is not None
+            assert await pilot.click(key), "the Glue-to-Athena click missed its rendered key"
+            await wait_until(
+                lambda: isinstance(ctx.root_vm.content_host.current, AthenaPageVM),
+                what="hint click to switch the active service to Athena",
+            )
             await _wait_for_service_setup(ctx, app, pilot)
 
             page = ctx.root_vm.content_host.current
