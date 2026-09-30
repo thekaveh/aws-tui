@@ -108,23 +108,26 @@ class JobRunCloneModal(DeferredWorkerMixin, ModalScreen[str | None]):
                 yield Static("Entry point (s3:// URL)", classes="modal-field-label")
                 yield Input(value=self._vm.entry_point, id="clone-entry")
                 yield Static(
-                    "Entry point arguments (JSON array of strings)", classes="modal-field-label"
+                    "Entry point arguments (JSON array; null to omit)", classes="modal-field-label"
                 )
                 yield TextArea(
-                    json.dumps(self._vm.entry_point_arguments, ensure_ascii=False, indent=2),
+                    json.dumps(self._vm.entry_point_arguments, ensure_ascii=True, indent=2),
                     id="clone-args",
                 )
                 yield Static(
-                    "Spark submit parameters (optional, preserved exactly)",
+                    "Spark submit parameters (JSON string; null to omit)",
                     classes="modal-field-label",
                 )
-                yield TextArea(self._vm.spark_submit_parameters or "", id="clone-spark")
+                yield TextArea(
+                    json.dumps(self._vm.spark_submit_parameters, ensure_ascii=True),
+                    id="clone-spark",
+                )
                 yield Static(
                     "Advanced settings (JSON object; remove a key to omit it)",
                     classes="modal-field-label",
                 )
                 yield TextArea(
-                    json.dumps(self._vm.settings, ensure_ascii=False, indent=2), id="clone-settings"
+                    json.dumps(self._vm.settings, ensure_ascii=True, indent=2), id="clone-settings"
                 )
             with VerticalScroll(id="clone-review-scroll") as review:
                 review.display = False
@@ -158,13 +161,23 @@ class JobRunCloneModal(DeferredWorkerMixin, ModalScreen[str | None]):
         )
 
     def _sync_form_to_vm(self) -> None:
-        # Parse and validate both JSON editors before changing any intent field.
+        # Parse and validate all JSON editors before changing any intent field.
         try:
             args = json.loads(self.query_one("#clone-args", TextArea).text)
         except (ValueError, TypeError):
-            raise ValidationError("Arguments must be a valid JSON array of strings") from None
-        if not isinstance(args, list) or not all(isinstance(arg, str) for arg in args):
-            raise ValidationError("Arguments must be a JSON array containing only strings")
+            raise ValidationError(
+                "Arguments must be a valid JSON array of strings or null"
+            ) from None
+        if args is not None and (
+            not isinstance(args, list) or not all(isinstance(arg, str) for arg in args)
+        ):
+            raise ValidationError("Arguments must be a JSON array containing only strings or null")
+        try:
+            spark = json.loads(self.query_one("#clone-spark", TextArea).text)
+        except (ValueError, TypeError):
+            raise ValidationError("Spark parameters must be a valid JSON string or null") from None
+        if spark is not None and (not isinstance(spark, str) or not spark):
+            raise ValidationError("Spark parameters must be a nonempty JSON string or null")
         try:
             settings = json.loads(self.query_one("#clone-settings", TextArea).text)
         except (ValueError, TypeError):
@@ -175,10 +188,8 @@ class JobRunCloneModal(DeferredWorkerMixin, ModalScreen[str | None]):
         self._vm.apply_field("name", self.query_one("#clone-name", Input).value)
         self._vm.apply_field("execution_role_arn", self.query_one("#clone-role", Input).value)
         self._vm.apply_field("entry_point", self.query_one("#clone-entry", Input).value)
-        self._vm.apply_field("entry_point_arguments", tuple(args))
-        self._vm.apply_field(
-            "spark_submit_parameters", self.query_one("#clone-spark", TextArea).text
-        )
+        self._vm.apply_field("entry_point_arguments", None if args is None else tuple(args))
+        self._vm.apply_field("spark_submit_parameters", spark)
         self._vm.apply_settings(settings)
 
     def _set_stage(self, review: bool) -> None:

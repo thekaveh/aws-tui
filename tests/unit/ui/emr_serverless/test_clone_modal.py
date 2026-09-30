@@ -295,6 +295,9 @@ async def test_review_preserves_empty_newline_arguments_and_spark_whitespace() -
     ("selector", "text"),
     [
         ("#clone-args", "[secret-argument"),
+        ("#clone-spark", "secret-unquoted-parameter"),
+        ("#clone-spark", '["secret-wrong-shape"]'),
+        ("#clone-spark", '""'),
         ("#clone-args", '["valid", 123]'),
         ("#clone-settings", '{"mode":"secret-mode"}'),
         ("#clone-settings", '["secret-setting"]'),
@@ -474,3 +477,83 @@ async def test_escape_remains_responsive_during_submission() -> None:
                 release.set()
     finally:
         vm.dispose()
+
+
+@pytest.mark.parametrize("kind", ["arguments", "spark", "settings"])
+async def test_review_preserves_unicode_separators_and_mixed_line_endings(kind: str) -> None:
+    special = "first\u2028second\u2029third\r\nfourth\nfifth"
+    detail = replace(
+        _detail(),
+        entry_point_arguments=(special,) if kind == "arguments" else ("ordinary",),
+        spark_submit_parameters=special if kind == "spark" else "--conf k=v",
+        configuration_overrides={
+            "applicationConfiguration": [
+                {"classification": "spark-defaults", "properties": {"spark.example": special}}
+            ]
+        }
+        if kind == "settings"
+        else None,
+    )
+    fake = _InMemoryEmr()
+    hub = MessageHub()
+    vm = JobRunCloneVM(detail, client=fake, hub=hub, dispatcher=NULL_DISPATCHER)
+    token = vm.client_token
+    try:
+        async with _CloneModalHostApp(vm, hub).run_test() as pilot:
+            modal = pilot.app.screen
+            modal.action_review()
+            assert modal.reviewing
+            assert vm.entry_point_arguments == detail.entry_point_arguments
+            assert vm.spark_submit_parameters == detail.spark_submit_parameters
+            assert vm.settings.get("configurationOverrides") == detail.configuration_overrides
+            assert vm.client_token == token
+            await modal.action_submit()
+            request = next(c[1][7] for c in fake.calls if c[0] == "start_job_run")
+            assert request["jobDriver"]["sparkSubmit"]["entryPointArguments"] == list(
+                detail.entry_point_arguments
+            )
+            assert (
+                request["jobDriver"]["sparkSubmit"]["sparkSubmitParameters"]
+                == detail.spark_submit_parameters
+            )
+            assert request.get("configurationOverrides") == detail.configuration_overrides
+    finally:
+        vm.dispose()
+        fake.dispose()
+
+
+async def test_argument_null_review_omission_and_empty_edit_rotate_token() -> None:
+    fake = _InMemoryEmr()
+    hub = MessageHub()
+    vm = JobRunCloneVM(
+        replace(_detail(), entry_point_arguments=None),
+        client=fake,
+        hub=hub,
+        dispatcher=NULL_DISPATCHER,
+    )
+    try:
+        async with _CloneModalHostApp(vm, hub).run_test() as pilot:
+            modal = pilot.app.screen
+            token = vm.client_token
+            modal.action_review()
+            assert modal.reviewing
+            assert vm.client_token == token
+            assert "Arguments: unknown / not supplied; omitted" in vm.review_text
+            modal.action_back()
+            modal.query_one("#clone-args", TextArea).load_text("[]")
+            modal.action_review()
+            assert vm.client_token != token
+            assert vm.entry_point_arguments == ()
+            assert "Arguments — Changed\nSource: null\nProposed: []" in vm.review_text
+            empty_token = vm.client_token
+            modal.action_back()
+            modal.query_one("#clone-args", TextArea).load_text("null")
+            modal.action_review()
+            assert vm.client_token != empty_token
+            assert vm.entry_point_arguments is None
+            await modal.action_submit()
+            request = next(c[1][7] for c in fake.calls if c[0] == "start_job_run")
+            assert "entryPointArguments" not in request["jobDriver"]["sparkSubmit"]
+    finally:
+        vm.dispose()
+        fake.dispose()

@@ -38,6 +38,9 @@ show the reason without opening a Spark form for a non-Spark source.
 
 The five existing fields remain editable. Represent the arguments as a JSON array
 of strings so empty strings, embedded newlines and whitespace round-trip exactly.
+Use JSON `null` to distinguish omitted arguments from an explicit empty array.
+Spark parameters use a JSON string or `null`; escape Unicode separators in every
+JSON editor to preserve mixed line endings and values through TextArea editing.
 Do not trim Spark parameters. An advanced JSON object edits the optional request
 settings: configurationOverrides, executionTimeoutMinutes, retryPolicy, mode,
 executionIamPolicy and tags. Parse it with explicit field/type validation and

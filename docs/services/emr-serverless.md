@@ -44,7 +44,10 @@ Press `c` on a selected Spark run to open a prefilled form. Hive, missing or
 unsupported job drivers are refused before the Spark form opens. The form
 preserves the source name, execution role, entry point, arguments and Spark
 parameters. Arguments use a JSON array of strings, preserving empty strings,
-embedded newlines and whitespace. Spark parameters preserve supplied whitespace.
+embedded newlines and whitespace; `null` omits the argument field and `[]` sends
+an explicit empty array. Spark parameters use a JSON string or `null` to omit
+them. JSON escapes preserve mixed line endings and Unicode separators exactly
+through editing and review.
 
 The advanced JSON object carries the source's `configurationOverrides`
 (application and monitoring configuration), `executionTimeoutMinutes`,

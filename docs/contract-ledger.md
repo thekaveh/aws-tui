@@ -323,7 +323,7 @@ rendering tests. `GetJobRun` retains the full driver discriminator and optional
 `configurationOverrides` (application and monitoring configuration),
 `executionTimeoutMinutes`, `retryPolicy`, `mode`, `executionIamPolicy` and
 `tags`. The explicit `StartJobRun` builder forwards only modeled request fields,
-preserves supplied strings, empty containers and zero separately from omission,
+preserves supplied strings, omitted versus empty arguments, empty containers and zero separately from omission,
 and deep-copies nested values. Only Spark drivers and BATCH/STREAMING modes are
 accepted. Unknown or unsupported nested settings fail closed; newer AWS API
 fields absent from this installed model are not silently discarded.
@@ -331,7 +331,9 @@ fields absent from this installed model are not silently discarded.
 Source application release/network/image/worker values are review context only.
 The clone inherits current application settings and discloses unknown equality
 and hidden defaults; response identifiers, state and resource usage are never
-resubmitted. The review shows source identity and old/new values before Submit.
+resubmitted. The review shows source identity and old/new values before Submit. JSON editors
+escape Unicode separators; arguments accept `null` for omission and Spark
+parameters use a JSON string or `null` to preserve mixed line endings.
 Every request-affecting edit rotates the intent token; equal reapplication and
 unchanged ambiguous retries retain it. Submission errors suppress raw SDK text
 and exception chains so diagnostics cannot echo request values.

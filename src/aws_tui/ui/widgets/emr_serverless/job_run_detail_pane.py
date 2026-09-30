@@ -199,7 +199,7 @@ class JobRunDetailPane(Widget, can_focus=True):
         # on the EMR right pane, so each argument and each
         # ``--conf k=v`` gets its own indented line below a single
         # key header.
-        for line in _multiline_kv("Args", _pair_args(list(d.entry_point_arguments))):
+        for line in _multiline_kv("Args", _pair_args(list(d.entry_point_arguments or ()))):
             body.mount(Static(line, classes="detail-row", markup=False))
         for line in _multiline_kv("Spark", _split_spark_params(d.spark_submit_parameters)):
             body.mount(Static(line, classes="detail-row", markup=False))

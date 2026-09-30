@@ -208,7 +208,7 @@ class InMemoryEmr:
         application_id: str,
         job_run_id: str,
         entry_point: str | None = "s3://example/job.py",
-        entry_point_arguments: tuple[str, ...] = (),
+        entry_point_arguments: tuple[str, ...] | None = (),
         spark_submit_parameters: str | None = None,
         execution_role_arn: str = "arn:aws:iam::123456789012:role/EmrJobRole",
         duration_ms: int | None = None,
@@ -219,8 +219,9 @@ class InMemoryEmr:
             summary = self.add_job_run(application_id=application_id, job_run_id=job_run_id)
         spark: dict[str, Any] = {
             "entryPoint": entry_point,
-            "entryPointArguments": list(entry_point_arguments),
         }
+        if entry_point_arguments is not None:
+            spark["entryPointArguments"] = list(entry_point_arguments)
         if spark_submit_parameters is not None:
             spark["sparkSubmitParameters"] = spark_submit_parameters
         overrides = (
@@ -318,7 +319,7 @@ class InMemoryEmr:
         *,
         execution_role_arn: str,
         entry_point: str,
-        entry_point_arguments: tuple[str, ...],
+        entry_point_arguments: tuple[str, ...] | None,
         spark_submit_parameters: str | None,
         client_token: str,
         name: str | None = None,

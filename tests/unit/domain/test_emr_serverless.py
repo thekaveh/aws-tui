@@ -1111,3 +1111,27 @@ async def test_clone_failures_do_not_expose_argument_values_in_logs_or_diagnosti
     assert credential not in diagnostics
     assert argument not in caplog.text
     assert credential not in caplog.text
+
+
+@pytest.mark.parametrize("present", [False, True])
+async def test_clone_distinguishes_omitted_and_empty_arguments(present: bool) -> None:
+    source = _clone_source_response()
+    spark = {"entryPoint": "s3://b/job.py"}
+    if present:
+        spark["entryPointArguments"] = []
+    source["jobDriver"] = {"sparkSubmit": spark}
+    stub = _StubClient()
+    stub.get_job_run.return_value = {"jobRun": source}
+    stub.start_job_run.return_value = {"jobRunId": "jr-clone"}
+    client = EmrServerlessClient(session=_StubSession(stub))
+    detail = await client.get_job_run("00abc", "r-001")
+    assert detail.entry_point_arguments == (() if present else None)
+    await client.start_job_run(
+        "00abc",
+        execution_role_arn=source["executionRole"],
+        entry_point=detail.entry_point,
+        entry_point_arguments=detail.entry_point_arguments,
+        spark_submit_parameters=detail.spark_submit_parameters,
+        client_token="omission-intent",
+    )
+    assert stub.start_job_run.await_args.kwargs["jobDriver"] == source["jobDriver"]

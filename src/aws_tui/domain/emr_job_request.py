@@ -88,7 +88,7 @@ def build_start_job_run_request(
     *,
     execution_role_arn: str,
     entry_point: str,
-    entry_point_arguments: tuple[str, ...],
+    entry_point_arguments: tuple[str, ...] | None,
     spark_submit_parameters: str | None,
     client_token: str,
     name: str | None = None,
@@ -114,8 +114,9 @@ def build_start_job_run_request(
     validate_clone_settings(settings)
     spark: dict[str, Any] = {
         "entryPoint": entry_point,
-        "entryPointArguments": list(entry_point_arguments),
     }
+    if entry_point_arguments is not None:
+        spark["entryPointArguments"] = list(entry_point_arguments)
     if spark_submit_parameters is not None:
         spark["sparkSubmitParameters"] = spark_submit_parameters
     request: dict[str, Any] = {

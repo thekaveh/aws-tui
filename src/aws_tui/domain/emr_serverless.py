@@ -126,7 +126,7 @@ class JobRunDetail:
     created_at: datetime
     updated_at: datetime
     entry_point: str | None = field(repr=False)
-    entry_point_arguments: tuple[str, ...] = field(repr=False)
+    entry_point_arguments: tuple[str, ...] | None = field(repr=False)
     spark_submit_parameters: str | None = field(repr=False)
     execution_role_arn: str
     duration_ms: int | None
@@ -185,7 +185,7 @@ class EmrServerlessClientProtocol(Protocol):
         *,
         execution_role_arn: str,
         entry_point: str,
-        entry_point_arguments: tuple[str, ...],
+        entry_point_arguments: tuple[str, ...] | None,
         spark_submit_parameters: str | None,
         client_token: str,
         name: str | None = None,
@@ -473,7 +473,11 @@ class EmrServerlessClient:
                     created_at=r["createdAt"],
                     updated_at=r["updatedAt"],
                     entry_point=spark.get("entryPoint"),
-                    entry_point_arguments=tuple(spark.get("entryPointArguments", ())),
+                    entry_point_arguments=(
+                        tuple(spark["entryPointArguments"])
+                        if "entryPointArguments" in spark
+                        else None
+                    ),
                     spark_submit_parameters=spark.get("sparkSubmitParameters"),
                     execution_role_arn=r.get("executionRole", ""),
                     duration_ms=(duration_seconds * 1000) if duration_seconds is not None else None,
@@ -508,7 +512,7 @@ class EmrServerlessClient:
         *,
         execution_role_arn: str,
         entry_point: str,
-        entry_point_arguments: tuple[str, ...],
+        entry_point_arguments: tuple[str, ...] | None,
         spark_submit_parameters: str | None,
         client_token: str,
         name: str | None = None,

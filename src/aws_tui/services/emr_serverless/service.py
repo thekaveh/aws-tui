@@ -111,7 +111,7 @@ class _FailedEmrClient:
         *,
         execution_role_arn: str,
         entry_point: str,
-        entry_point_arguments: tuple[str, ...],
+        entry_point_arguments: tuple[str, ...] | None,
         spark_submit_parameters: str | None,
         client_token: str,
         name: str | None = None,

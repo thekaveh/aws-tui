@@ -85,7 +85,7 @@ class JobRunCloneVM:
         self._name: str | None = detail.name
         self._execution_role_arn: str = detail.execution_role_arn
         self._entry_point: str = detail.entry_point or ""
-        self._entry_point_arguments: tuple[str, ...] = detail.entry_point_arguments
+        self._entry_point_arguments: tuple[str, ...] | None = detail.entry_point_arguments
         self._spark_submit_parameters: str | None = detail.spark_submit_parameters
         # One idempotency token per form intent. Reused verbatim when a
         # submit attempt raises (the ambiguous-retry case AWS's clientToken
@@ -122,7 +122,7 @@ class JobRunCloneVM:
         return self._entry_point
 
     @property
-    def entry_point_arguments(self) -> tuple[str, ...]:
+    def entry_point_arguments(self) -> tuple[str, ...] | None:
         return self._entry_point_arguments
 
     @property
@@ -250,11 +250,11 @@ class JobRunCloneVM:
 
     # ── Form API ────────────────────────────────────────────────────────────
 
-    def apply_field(self, field_name: str, value: str | tuple[str, ...]) -> None:
+    def apply_field(self, field_name: str, value: str | tuple[str, ...] | None) -> None:
         """Update ``field_name`` to ``value``.
 
-        ``entry_point_arguments`` accepts ``tuple[str, ...]`` only;
-        all other fields accept ``str``. ``name`` and
+        ``entry_point_arguments`` accepts ``tuple[str, ...]`` or ``None`` for omission;
+        Spark parameters also accept ``None``; the other fields accept ``str``. ``name`` and
         ``spark_submit_parameters`` are optional — an empty string
         normalises to ``None`` so the boto3 call omits them.
 
@@ -266,9 +266,13 @@ class JobRunCloneVM:
             raise KeyError(f"unknown field {field_name!r}; valid: {_FIELDS}")
         before = self._intent()
         if field_name == "entry_point_arguments":
-            if not isinstance(value, tuple):
-                raise TypeError("entry_point_arguments must be a tuple[str, ...]")
+            if value is not None and (
+                not isinstance(value, tuple) or not all(isinstance(arg, str) for arg in value)
+            ):
+                raise TypeError("entry_point_arguments must be a tuple[str, ...] or None")
             self._entry_point_arguments = value
+        elif field_name == "spark_submit_parameters" and value is None:
+            self._spark_submit_parameters = None
         else:
             if not isinstance(value, str):
                 raise TypeError(f"{field_name} must be a str")
