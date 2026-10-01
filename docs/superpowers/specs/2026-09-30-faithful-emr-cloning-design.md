@@ -139,3 +139,15 @@ focus entirely would break immediate arrow navigation. A narrow callback guard
 preserves both contracts. Validate delayed callbacks before and after picker
 opening, other focus targets, loading focus, and the existing default-navigation,
 modal, and snapshot regressions. This is a routine authorized delivery repair.
+
+## 7. Delivery correction: queued pane refresh after unmount
+
+Windows Python 3.11 in CI36797833782 exposed a queued pane refresh running after
+its subscription was correctly disposed. Textual's screen retains callbacks
+independently of their sending widget. A held mounted filter refresh released
+through the screen after removal reproduces the detached-pane render assertion.
+Clear the refresh-pending latch, then return if the pane is no longer attached,
+before reading its view model or invoking chrome/body rendering. Subscription
+cleanup remains mandatory and unchanged. Waiting longer in the test would leave
+stale work able to reach the detached pane. The regression retains the positive
+mounted control, zero observer count, zero later notifications and zero renders.

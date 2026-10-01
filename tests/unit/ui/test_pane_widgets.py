@@ -955,7 +955,11 @@ async def test_a_row_releases_its_binding_when_it_unmounts(
 
 
 @pytest.mark.asyncio
-async def test_the_pane_releases_its_binding_when_it_unmounts() -> None:
+@pytest.mark.parametrize("delayed_refresh", [False, True], ids=["normal", "queued-refresh"])
+async def test_the_pane_releases_its_binding_when_it_unmounts(
+    monkeypatch: pytest.MonkeyPatch,
+    delayed_refresh: bool,
+) -> None:
     """``on_unmount`` must dispose the subscription ``on_mount`` opened.
 
     ``Pane`` used to inherit ``HubSubscriberMixin``, which deliberately
@@ -1005,6 +1009,23 @@ async def test_the_pane_releases_its_binding_when_it_unmounts() -> None:
             assert pane.body_notifies > 0
             assert pane.render_log
 
+            refresh_all = pane._refresh_all
+            held_refresh = False
+            if delayed_refresh:
+                await wait_until(
+                    lambda: not pane._body_refresh_pending and pane.render_log[-1][0] == "IDLE",
+                    what="mounted navigation finished before queuing a delayed refresh",
+                )
+
+                def hold_refresh() -> None:
+                    nonlocal held_refresh
+                    held_refresh = True
+
+                monkeypatch.setattr(pane, "_refresh_all", hold_refresh)
+                vm.set_filter_command.execute("one")
+                await wait_until(lambda: held_refresh, what="mounted filter refresh held")
+                assert pane._body_refresh_pending
+
             await pane.remove()
             await wait_until(
                 lambda: len(app.query(Pane)) == 0,
@@ -1022,6 +1043,19 @@ async def test_the_pane_releases_its_binding_when_it_unmounts() -> None:
             pane.render_log.clear()
             pane.body_notifies = 0
             await vm.navigate_to(PathRef(()))
+            if delayed_refresh:
+                delivered = False
+
+                def deliver_queued_refresh() -> None:
+                    nonlocal delivered
+                    refresh_all()
+                    delivered = True
+
+                # The screen retains callbacks even after their sending widget
+                # leaves the DOM. Release the mounted refresh after removal and
+                # a later navigation, through the real screen callback queue.
+                app.screen.call_after_refresh(deliver_queued_refresh)
+                await wait_until(lambda: delivered, what="pre-unmount refresh callback delivered")
             # Drain navigation notifications before asserting the detached pane stayed silent.
             await pilot.pause()
 

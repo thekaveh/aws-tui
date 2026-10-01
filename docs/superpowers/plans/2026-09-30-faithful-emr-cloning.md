@@ -138,3 +138,14 @@ Target suites: `tests/unit/domain/test_emr_serverless.py`, `tests/unit/vm/emr_se
    EMR integration and snapshots plus normal hooks.
 4. Update PR312 and its evidence, then continue the existing protected delivery
    sequence. Do not waive CI failures or close #238 before promotion validation.
+
+## 8. Task 4 delivery follow-up: reject detached pane refreshes
+
+1. Hold a real mounted filter refresh and release it through the screen after
+   removal and a later navigation; verify the original detached-render assertion
+   fails while the ordinary-order control passes.
+2. Clear `_body_refresh_pending` and guard `_refresh_all` with `is_attached`.
+3. Run both regression cases and affected pane/VM/compact/snapshot suites,
+   source and selected-test typing, normal hooks and strict documentation checks.
+4. Update PR312 and continue the existing protected delivery gates on its new
+   head. Preserve failed Windows evidence for #283; do not rerun the failed run.
