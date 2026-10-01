@@ -101,6 +101,19 @@ class EmrServerlessPageVM:
         as :attr:`dispatcher`."""
         return self._hub
 
+    def can_clone_source(self, application_id: str, job_run_id: str) -> bool:
+        detail = self.job_run_detail.detail
+        return (
+            not self._disposed
+            and not self._shutdown_started
+            and self.applications.selected_id == application_id
+            and self.job_runs.application_id == application_id
+            and self.job_runs.selected_id == job_run_id
+            and detail is not None
+            and detail.application_id == application_id
+            and detail.job_run_id == job_run_id
+        )
+
     # ── Lifecycle ───────────────────────────────────────────────────────────
 
     def construct(self) -> None:

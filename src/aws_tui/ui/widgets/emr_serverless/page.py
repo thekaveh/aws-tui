@@ -137,6 +137,7 @@ class EmrServerlessPage(DeferredWorkerMixin, Widget):
     ) -> None:
         super().__init__(id=id, classes=classes)
         self._vm: EmrServerlessPageVM = vm
+        self._clone_active = False
         self._hub: MessageHub[Message] = hub
         self._keymap = keymap or KeymapStore()
         self._source_candidates = source_candidates
@@ -211,22 +212,13 @@ class EmrServerlessPage(DeferredWorkerMixin, Widget):
         self.set_interval(apps_cadence, self._tick_applications, name="emr-poll-apps")
         self.set_interval(runs_cadence, self._tick_runs, name="emr-poll-runs")
         self.set_interval(detail_cadence, self._tick_detail, name="emr-poll-detail")
-        # Land Textual focus on the LEFT pane so the user gets the
-        # same "arrow keys move the cursor immediately" UX as the S3
-        # page. Without this, neither pane shows the
-        # ``:focus-within`` accent border and the user has to press
-        # Tab once before arrows do anything. EXCEPT: if NavMenu (or
-        # any widget outside this page) already owns focus when the
-        # auto-focus runs, do not steal — the user is mid-arrow-walk
-        # on the rail and the page swap was a side-effect of cursor
-        # navigation, not an intent to enter the runs pane. User
-        # feedback (post-PR-#98): "when I use [arrow] keys to move
-        # onto the emr service, it automatically focuses into the job
-        # runs and meaningless focus".
+        # Supply an initial runs-pane focus only if no later focus request
+        # has landed when this deferred callback runs.
         if self._left is not None:
             self.call_after_refresh(self._maybe_focus_left)
 
     def on_unmount(self) -> None:
+        self._clone_active = False
         self._picker_open_intent.cancel()
         if self._source_header is not None:
             self._source_header.picker.close(refocus=False)
@@ -234,37 +226,17 @@ class EmrServerlessPage(DeferredWorkerMixin, Widget):
             self._picker.close(refocus=False)
 
     def _maybe_focus_left(self) -> None:
-        """Auto-focus the LEFT pane on initial page mount UNLESS a
-        widget outside this page (typically the NavMenu rail) already
-        owns Textual focus.
-
-        Round-3 directive §9.bis.11 / PR #99(a) closure: when a
-        :class:`FocusCoordinatorVM` is wired, the rail-walk gate
-        reads from `focused_slot == NAV_MENU` AND requires Textual
-        focus to actually exist on the rail — the coordinator's
-        VM-owned slot becomes the authoritative answer to "is the
-        user arrow-walking the menu?". When no coordinator is
-        wired, or when Textual focus is unset (programmatic
-        service-switch in tests), the legacy "focus left when
-        nothing else holds focus" semantics still apply.
-        """
-        if self._left is None:
+        """Supply default runs focus without replacing a newer focus choice."""
+        if self._left is None or not is_on_active_screen(self):
             return
-        textual_focused = self.app.focused
-        if (
-            self._focus_coordinator is not None
-            and textual_focused is not None
-            and not self.has_focus_within
-        ):
-            slot = self._focus_coordinator.focused_slot
-            if slot is FocusSlot.NAV_MENU:
-                # Rail-walk in progress: VM-owned slot agrees AND
-                # Textual focus is on the rail. Leave it alone.
-                return
-        if textual_focused is None or self.has_focus_within:
-            if self._focus_coordinator is not None:
-                self._focus_coordinator.project_focused_slot(FocusSlot.EMR_RUNS)
-            self._left.focus()
+        # App.focused hides loading widgets; they still own focus and must not
+        # lose it to this deferred mount callback. Picker overlays and the
+        # navigation rail likewise retain any focus established since mount.
+        if self.screen.focused is not None:
+            return
+        # Project synchronously so another deferred focus call cannot outlive
+        # the no-focus check above.
+        self._project_focus_slot(FocusSlot.EMR_RUNS)
 
     def on_descendant_focus(self, event: events.DescendantFocus) -> None:
         if event.widget is self.app.focused:
@@ -451,6 +423,20 @@ class EmrServerlessPage(DeferredWorkerMixin, Widget):
         return self._right_detail is not None and self._is_within(focused, self._right_detail)
 
     async def action_clone_selected_run(self) -> None:
+        """Start one lifecycle-owned worker; push_screen_wait requires one."""
+        if self._clone_active:
+            return
+        self._clone_active = True
+
+        async def clone() -> None:
+            try:
+                await self._clone_selected_run()
+            finally:
+                self._clone_active = False
+
+        self._run_lifecycle_worker(clone, group="emr-clone", exclusive=False)
+
+    async def _clone_selected_run(self) -> None:
         """Open the clone modal pre-populated from the currently-
         selected job-run detail.
 
@@ -468,8 +454,18 @@ class EmrServerlessPage(DeferredWorkerMixin, Widget):
             client=self._vm.client,
             hub=self._hub,
             dispatcher=self._vm.dispatcher,
+            source=self._vm.source,
+            source_is_current=lambda: (
+                self.is_attached
+                and self._vm.can_clone_source(detail.application_id, detail.job_run_id)
+            ),
         )
         clone_vm.construct()
+        unsupported = clone_vm.unsupported_driver_reason
+        if unsupported is not None:
+            self._post_advisory_toast("Job", unsupported)
+            clone_vm.dispose()
+            return
         modal = JobRunCloneModal(clone_vm, hub=self._hub)
         # Unified try/finally so cancellation (CancelledError is a
         # BaseException, NOT an Exception) disposes the VM too.
@@ -482,21 +478,29 @@ class EmrServerlessPage(DeferredWorkerMixin, Widget):
         try:
             try:
                 new_id = await self.app.push_screen_wait(modal)
-            except Exception as exc:
+            except Exception:
                 # The modal raised after dismiss (extremely rare —
                 # e.g. the test harness disposed the app mid-flight).
                 # Surface an advisory toast and bail.
-                self._post_advisory_toast("Job", f"clone aborted ({exc})")
+                self._post_advisory_toast(
+                    "Job", "Clone form closed unexpectedly; reopen it from the source run"
+                )
                 return
             if new_id is None:
                 # User cancelled — silent (Cancel is intentional UX,
                 # not an error to advertise).
+                return
+            if not self.is_attached or not self._vm.can_clone_source(
+                detail.application_id, detail.job_run_id
+            ):
                 return
             self._post_clone_success_toast(new_id)
             # Re-fresh the runs list so the new SUBMITTED row appears
             # immediately rather than waiting for the next 60-s tick.
             self._run_lifecycle_worker(self._vm.refresh_job_runs, group="emr-poll-runs")
         finally:
+            if modal.is_attached and modal.is_active:
+                modal.action_cancel()
             clone_vm.dispose()
 
     def open_focused_log_filter(self) -> bool:

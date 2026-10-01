@@ -955,7 +955,11 @@ async def test_a_row_releases_its_binding_when_it_unmounts(
 
 
 @pytest.mark.asyncio
-async def test_the_pane_releases_its_binding_when_it_unmounts() -> None:
+@pytest.mark.parametrize("delayed_refresh", [False, True], ids=["normal", "queued-refresh"])
+async def test_the_pane_releases_its_binding_when_it_unmounts(
+    monkeypatch: pytest.MonkeyPatch,
+    delayed_refresh: bool,
+) -> None:
     """``on_unmount`` must dispose the subscription ``on_mount`` opened.
 
     ``Pane`` used to inherit ``HubSubscriberMixin``, which deliberately
@@ -1005,6 +1009,23 @@ async def test_the_pane_releases_its_binding_when_it_unmounts() -> None:
             assert pane.body_notifies > 0
             assert pane.render_log
 
+            refresh_all = pane._refresh_all
+            held_refresh = False
+            if delayed_refresh:
+                await wait_until(
+                    lambda: not pane._body_refresh_pending and pane.render_log[-1][0] == "IDLE",
+                    what="mounted navigation finished before queuing a delayed refresh",
+                )
+
+                def hold_refresh() -> None:
+                    nonlocal held_refresh
+                    held_refresh = True
+
+                monkeypatch.setattr(pane, "_refresh_all", hold_refresh)
+                vm.set_filter_command.execute("one")
+                await wait_until(lambda: held_refresh, what="mounted filter refresh held")
+                assert pane._body_refresh_pending
+
             await pane.remove()
             await wait_until(
                 lambda: len(app.query(Pane)) == 0,
@@ -1022,6 +1043,19 @@ async def test_the_pane_releases_its_binding_when_it_unmounts() -> None:
             pane.render_log.clear()
             pane.body_notifies = 0
             await vm.navigate_to(PathRef(()))
+            if delayed_refresh:
+                delivered = False
+
+                def deliver_queued_refresh() -> None:
+                    nonlocal delivered
+                    refresh_all()
+                    delivered = True
+
+                # The screen retains callbacks even after their sending widget
+                # leaves the DOM. Release the mounted refresh after removal and
+                # a later navigation, through the real screen callback queue.
+                app.screen.call_after_refresh(deliver_queued_refresh)
+                await wait_until(lambda: delivered, what="pre-unmount refresh callback delivered")
             # Drain navigation notifications before asserting the detached pane stayed silent.
             await pilot.pause()
 
@@ -1147,11 +1181,14 @@ async def test_marking_an_entry_flips_marked_and_repaints_the_mark_glyph() -> No
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "defer_scrollbar_layout", [False, True], ids=["normal", "delayed-scrollbar"]
+    ("defer_scrollbar_layout", "defer_initial_tick"),
+    [(False, False), (True, False), (True, True)],
+    ids=["normal", "delayed-scrollbar", "delayed-tick"],
 )
 async def test_cursor_move_repaints_only_the_two_affected_rows(
     monkeypatch: pytest.MonkeyPatch,
     defer_scrollbar_layout: bool,
+    defer_initial_tick: bool,
 ) -> None:
     """One keystroke must repaint two rows, whatever the listing size.
 
@@ -1187,6 +1224,19 @@ async def test_cursor_move_repaints_only_the_two_affected_rows(
     layout_released = not defer_scrollbar_layout
     layout_deferred = False
     original_layout = Screen._refresh_layout
+    original_timer_update = Screen._on_timer_update
+    timer_budget = 0 if defer_initial_tick else None
+
+    def _defer_timer_update(self: Screen[Any]) -> None:
+        nonlocal timer_budget
+        if len(self.query(EntryRow)) == 60 and timer_budget is not None:
+            if timer_budget == 0:
+                return
+            timer_budget -= 1
+        original_timer_update(self)
+
+    if defer_initial_tick:
+        monkeypatch.setattr(Screen, "_on_timer_update", _defer_timer_update)
 
     def _defer_followup_layout(self: Screen[Any], *args: Any, **kwargs: Any) -> Any:
         nonlocal layout_deferred
@@ -1215,9 +1265,21 @@ async def test_cursor_move_repaints_only_the_two_affected_rows(
             assert len(app.query(EntryRow)) == 60
             # The initial mount paints everything; only the steady state is
             # under test, so start counting from here.
+            if defer_initial_tick:
+                # One tick can perform the initial layout without performing
+                # its scrollbar follow-up before the pilot barrier returns.
+                timer_budget = 1
             await pilot.pause()  # Drain mount refresh messages before resetting the counter.
+            if defer_initial_tick:
+                assert not layout_deferred
+                timer_budget = None
+                app.screen._update_timer.resume()
             body = app.query_one("#pane-body", VerticalScroll)
             if defer_scrollbar_layout:
+                await wait_until(
+                    lambda: layout_deferred,
+                    what="scrollbar follow-up layout held after initial row geometry",
+                )
                 assert layout_deferred, "the regression must hold a real follow-up layout"
                 assert any(
                     row.size.width != body.scrollable_content_region.width

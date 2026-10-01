@@ -7,6 +7,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 from collections.abc import Callable
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -709,6 +710,9 @@ async def test_emr_page_c_key_pushes_clone_modal(tmp_path: Path) -> None:
             assert modal.vm.entry_point == "s3://b/job.py"
             assert modal.vm.entry_point_arguments == ("--in", "s3://b/in/")
             assert modal.vm.spark_submit_parameters == "--conf spark.executor.instances=4"
+            assert modal.vm.is_valid() == (True, None)
+            assert "Profile: dev" in modal.vm.review_text
+            assert "Region: us-east-1" in modal.vm.review_text
             # Dismiss to leave the test in a clean state.
             modal.dismiss(None)
             await pilot.pause()
@@ -1128,3 +1132,105 @@ async def test_emr_logs_pane_starts_idle_on_run_select(tmp_path: Path) -> None:
     finally:
         with contextlib.suppress(Exception):
             ctx.root_vm.dispose()
+
+
+@pytest.mark.parametrize("driver", [{"hive": {"query": "s3://b/q.hql"}}, {"future": {}}, None])
+async def test_non_spark_source_never_opens_clone_form(tmp_path: Path, driver: dict | None) -> None:
+    config_dir = _prep(tmp_path, _AWS_TOML)
+    ctx, fake = _make_ctx_with_emr_fake(config_dir, tmp_path / "cache")
+    detail = fake.add_job_run_detail(application_id="00emr", job_run_id="r-001")
+    fake._details[("00emr", "r-001")] = replace(detail, job_driver=driver)
+    app = AwsTuiApp(ctx)
+    try:
+        async with app.run_test() as pilot:
+            await app.workers.wait_for_complete(list(app.workers._workers))
+            ctx.root_vm.services_menu.switch_service_command.execute("emr-serverless")
+            await _await_emr_mount(pilot, app)
+            page = app.query_one(EmrServerlessPage)
+            reasons = []
+            page._post_advisory_toast = lambda title, text: reasons.append(text)
+            await pilot.press("c")
+            await wait_until(
+                lambda: (
+                    bool(reasons)
+                    or any(isinstance(screen, JobRunCloneModal) for screen in app.screen_stack)
+                ),
+                what="unsupported clone refusal or form",
+            )
+            assert reasons
+            assert "driver" in reasons[0]
+            assert not any(isinstance(screen, JobRunCloneModal) for screen in app.screen_stack)
+            assert not [call for call in fake.calls if call[0] == "start_job_run"]
+    finally:
+        ctx.root_vm.dispose()
+
+
+@pytest.mark.parametrize("outcome", ["submit", "cancel", "source-change", "page-removal"])
+async def test_full_app_clone_review_lifecycle(tmp_path: Path, outcome: str) -> None:
+    from textual.widgets import Static, TextArea
+
+    from tests.helpers import focus_and_settle
+
+    config_dir = _prep(tmp_path, _AWS_TOML)
+    ctx, fake = _make_ctx_with_emr_fake(config_dir, tmp_path / "cache")
+    fake.add_job_run_detail(application_id="00emr", job_run_id="r-source")
+    app = AwsTuiApp(ctx)
+    try:
+        async with app.run_test(size=(80, 24)) as pilot:
+            await app.workers.wait_for_complete(list(app.workers._workers))
+            ctx.root_vm.services_menu.switch_service_command.execute("emr-serverless")
+            await _await_emr_mount(pilot, app)
+            page = app.query_one(EmrServerlessPage)
+            await pilot.press("c")
+            await wait_until(
+                lambda: isinstance(app.screen, JobRunCloneModal), what="active clone modal"
+            )
+            modal = app.screen
+            clone_vm = modal.vm
+            await page.action_clone_selected_run()
+            assert (
+                len([screen for screen in app.screen_stack if isinstance(screen, JobRunCloneModal)])
+                == 1
+            )
+            modal.query_one("#clone-settings", TextArea).load_text(
+                '{"mode":"STREAMING","executionTimeoutMinutes":0}'
+            )
+            modal.query_one("#clone-args", TextArea).load_text('["", "PRIVATE_JOB_ARG_238"]')
+            modal.action_review()
+            await pilot.pause()
+            assert modal.reviewing
+            assert "Profile: dev" in clone_vm.review_text
+            assert not [call for call in fake.calls if call[0] == "start_job_run"]
+            if outcome == "submit":
+                await focus_and_settle(modal.query_one("#clone-submit"))
+                await pilot.press("enter")
+                await wait_until(
+                    lambda: not isinstance(app.screen, JobRunCloneModal),
+                    what="submitted clone dismissed",
+                )
+                calls = [call[1] for call in fake.calls if call[0] == "start_job_run"]
+                assert len(calls) == 1
+                assert calls[0][3] == ("", "PRIVATE_JOB_ARG_238")
+                assert calls[0][7]["mode"] == "STREAMING"
+                assert calls[0][7]["executionTimeoutMinutes"] == 0
+            elif outcome == "source-change":
+                page._vm.dispose()
+                await modal.action_submit()
+                assert "source" in str(modal.query_one("#clone-error", Static).content).lower()
+                await pilot.press("escape")
+            elif outcome == "page-removal":
+                await page.remove()
+            else:
+                await pilot.press("escape")
+            await wait_until(
+                lambda: not isinstance(app.screen, JobRunCloneModal),
+                what="clone closed after outcome",
+            )
+            await wait_until(lambda: clone_vm._disposed, what="clone VM disposal")
+            if outcome != "submit":
+                assert not [call for call in fake.calls if call[0] == "start_job_run"]
+            ctx.log_sink.flush()
+            assert "PRIVATE_JOB_ARG_238" not in ctx.log_sink.path.read_text()
+    finally:
+        ctx.root_vm.dispose()
+        fake.dispose()

@@ -7,7 +7,8 @@ the viewmodels; generic submission and cancellation remain deferred."""
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from copy import deepcopy
+from dataclasses import dataclass, field
 from datetime import datetime
 from enum import StrEnum
 from typing import TYPE_CHECKING, Any, Protocol, cast
@@ -17,6 +18,7 @@ from botocore.config import Config as BotoConfig
 
 from aws_tui.domain.aws_auth import AWS_AUTH_ERROR_CODES, AWS_CREDENTIAL_EXCEPTIONS
 from aws_tui.domain.aws_transport import AWS_TRANSPORT_EXCEPTIONS
+from aws_tui.domain.emr_job_request import build_start_job_run_request
 from aws_tui.domain.filesystem import (
     AuthRequiredError,
     NotFoundError,
@@ -123,9 +125,9 @@ class JobRunDetail:
     state: JobRunState
     created_at: datetime
     updated_at: datetime
-    entry_point: str | None
-    entry_point_arguments: tuple[str, ...]
-    spark_submit_parameters: str | None
+    entry_point: str | None = field(repr=False)
+    entry_point_arguments: tuple[str, ...] | None = field(repr=False)
+    spark_submit_parameters: str | None = field(repr=False)
     execution_role_arn: str
     duration_ms: int | None
     # Parsed from response ``configurationOverrides
@@ -135,6 +137,27 @@ class JobRunDetail:
     # block within it). The logs pane shows the NO_LOG_CONFIG
     # placeholder in that case.
     s3_monitoring_log_uri: str | None
+    job_driver: dict[str, Any] | None = field(default=None, repr=False)
+    configuration_overrides: dict[str, Any] | None = field(default=None, repr=False)
+    execution_timeout_minutes: int | None = None
+    retry_policy: dict[str, Any] | None = field(default=None, repr=False)
+    mode: str | None = None
+    execution_iam_policy: dict[str, Any] | None = field(default=None, repr=False)
+    tags: dict[str, str] | None = field(default=None, repr=False)
+    source_application_settings: dict[str, Any] = field(default_factory=dict, repr=False)
+
+    def __post_init__(self) -> None:
+        # A source response or fixture must not retain mutable aliases into
+        # this snapshot. VM/request boundaries take their own copies too.
+        for name in (
+            "job_driver",
+            "configuration_overrides",
+            "retry_policy",
+            "execution_iam_policy",
+            "tags",
+            "source_application_settings",
+        ):
+            object.__setattr__(self, name, deepcopy(getattr(self, name)))
 
 
 class EmrServerlessClientProtocol(Protocol):
@@ -162,10 +185,16 @@ class EmrServerlessClientProtocol(Protocol):
         *,
         execution_role_arn: str,
         entry_point: str,
-        entry_point_arguments: tuple[str, ...],
+        entry_point_arguments: tuple[str, ...] | None,
         spark_submit_parameters: str | None,
         client_token: str,
         name: str | None = None,
+        configuration_overrides: dict[str, Any] | None = None,
+        execution_timeout_minutes: int | None = None,
+        retry_policy: dict[str, Any] | None = None,
+        mode: str | None = None,
+        execution_iam_policy: dict[str, Any] | None = None,
+        tags: dict[str, str] | None = None,
     ) -> str: ...
 
 
@@ -444,11 +473,32 @@ class EmrServerlessClient:
                     created_at=r["createdAt"],
                     updated_at=r["updatedAt"],
                     entry_point=spark.get("entryPoint"),
-                    entry_point_arguments=tuple(spark.get("entryPointArguments", ())),
+                    entry_point_arguments=(
+                        tuple(spark["entryPointArguments"])
+                        if "entryPointArguments" in spark
+                        else None
+                    ),
                     spark_submit_parameters=spark.get("sparkSubmitParameters"),
                     execution_role_arn=r.get("executionRole", ""),
                     duration_ms=(duration_seconds * 1000) if duration_seconds is not None else None,
                     s3_monitoring_log_uri=log_uri,
+                    job_driver=r.get("jobDriver"),
+                    configuration_overrides=r.get("configurationOverrides"),
+                    execution_timeout_minutes=r.get("executionTimeoutMinutes"),
+                    retry_policy=r.get("retryPolicy"),
+                    mode=r.get("mode"),
+                    execution_iam_policy=r.get("executionIamPolicy"),
+                    tags=r.get("tags"),
+                    source_application_settings={
+                        key: r[key]
+                        for key in (
+                            "releaseLabel",
+                            "networkConfiguration",
+                            "imageConfiguration",
+                            "workerTypeSpecifications",
+                        )
+                        if key in r
+                    },
                 )
         except Exception as exc:
             mapped = _map_boto_error(exc)
@@ -462,10 +512,16 @@ class EmrServerlessClient:
         *,
         execution_role_arn: str,
         entry_point: str,
-        entry_point_arguments: tuple[str, ...],
+        entry_point_arguments: tuple[str, ...] | None,
         spark_submit_parameters: str | None,
         client_token: str,
         name: str | None = None,
+        configuration_overrides: dict[str, Any] | None = None,
+        execution_timeout_minutes: int | None = None,
+        retry_policy: dict[str, Any] | None = None,
+        mode: str | None = None,
+        execution_iam_policy: dict[str, Any] | None = None,
+        tags: dict[str, str] | None = None,
     ) -> str:
         """Submit a new job run. Returns the new ``job_run_id``.
 
@@ -480,28 +536,38 @@ class EmrServerlessClient:
         per call; that turns a retry after an ambiguous failure (accepted
         request, lost response) into a second billable job. The clone VM owns
         one token per form intent and reuses it across such retries."""
+        kwargs = build_start_job_run_request(
+            application_id,
+            execution_role_arn=execution_role_arn,
+            entry_point=entry_point,
+            entry_point_arguments=entry_point_arguments,
+            spark_submit_parameters=spark_submit_parameters,
+            client_token=client_token,
+            name=name,
+            configuration_overrides=configuration_overrides,
+            execution_timeout_minutes=execution_timeout_minutes,
+            retry_policy=retry_policy,
+            mode=mode,
+            execution_iam_policy=execution_iam_policy,
+            tags=tags,
+        )
         try:
             async with self._session.client(
                 "emr-serverless", region_name=self._region_name, config=_EMR_BOTO_CONFIG
             ) as c:
-                spark_submit: dict[str, Any] = {
-                    "entryPoint": entry_point,
-                    "entryPointArguments": list(entry_point_arguments),
-                }
-                if spark_submit_parameters is not None and spark_submit_parameters.strip():
-                    spark_submit["sparkSubmitParameters"] = spark_submit_parameters.strip()
-                kwargs: dict[str, Any] = {
-                    "applicationId": application_id,
-                    "executionRoleArn": execution_role_arn,
-                    "jobDriver": {"sparkSubmit": spark_submit},
-                    "clientToken": client_token,
-                }
-                if name is not None:
-                    kwargs["name"] = name
                 resp = await c.start_job_run(**kwargs)
                 return cast(str, resp["jobRunId"])
         except Exception as exc:
             mapped = _map_boto_error(exc)
-            if mapped is None:
-                raise
-            raise mapped from exc
+            category = type(mapped) if mapped is not None else ProviderError
+            messages = {
+                AuthRequiredError: "Authentication required; reauthenticate the selected profile",
+                PermissionDeniedError: "Access denied; check the execution role and StartJobRun permission",
+                ProviderUnreachableError: "No response from AWS; retry the unchanged request with the same client token",
+                ThrottledError: "AWS throttled the request; retry after waiting",
+                ValidationError: "AWS rejected the job settings; review the role, entry point and configuration",
+                NotFoundError: "The source application is no longer available",
+            }
+            # Provider messages and chained SDK exceptions can contain arbitrary
+            # Spark arguments, policies or credential-process output.
+            raise category(messages.get(category, "EMR job submission failed")) from None
