@@ -149,3 +149,18 @@ Target suites: `tests/unit/domain/test_emr_serverless.py`, `tests/unit/vm/emr_se
    source and selected-test typing, normal hooks and strict documentation checks.
 4. Update PR312 and continue the existing protected delivery gates on its new
    head. Preserve failed Windows evidence for #283; do not rerun the failed run.
+
+## 9. Task 4 delivery follow-up: preserve live Glue and Athena source focus
+
+1. Hold the real mount callback and release it after Textual focus changes but
+   before the coordinator's asynchronous update; reproduce the original picker
+   timeout in both services and add trigger/open/loading regression cases.
+2. Resolve a valid live focus target before an old coordinator slot when no
+   explicit fallback reference was supplied. Read `screen.focused` and guard
+   inactive screens; preserve explicit unavailable-control fallback behavior and
+   standalone defaults when no coordinator exists.
+3. Verify the full source-switch flow under the delayed callback ordering and
+   run affected service focus, navigation, source, compact and snapshot suites.
+   Run normal typing, lint, architecture, docs and commit checks.
+4. Update PR312, retain both failed Windows jobs, and require fresh final-head CI
+   before continuing the existing develop/main delivery sequence.

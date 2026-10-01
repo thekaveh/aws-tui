@@ -25,6 +25,8 @@ from aws_tui.ui.widgets.brand_banner import BrandBanner
 from aws_tui.ui.widgets.context_picker import ContextPicker
 from aws_tui.ui.widgets.emr_serverless.application_picker import ApplicationPicker
 from aws_tui.ui.widgets.emr_serverless.page import EmrServerlessPage
+from aws_tui.ui.widgets.glue.page import GluePage
+from aws_tui.vm.chrome.focus_coordinator_vm import FocusSlot
 from tests.helpers import drain_workers, focus_and_settle, wait_until
 from tests.snapshot.apps.demo_mode import DemoModeApp
 
@@ -562,6 +564,83 @@ async def test_deferred_emr_mount_focus_preserves_newer_focus(
             elif target in {"source", "application"}:
                 await pilot.press("enter")
                 await wait_until(lambda: widget.is_open, what="Enter opens focused picker")
+    finally:
+        app.app_ctx.root_vm.dispose()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("service_id", ["glue", "athena"])
+@pytest.mark.parametrize("focus_state", ["trigger", "open", "loading"])
+async def test_deferred_service_mount_focus_preserves_live_source_focus(
+    monkeypatch: pytest.MonkeyPatch,
+    service_id: str,
+    focus_state: str,
+) -> None:
+    page_type = GluePage if service_id == "glue" else AthenaPage
+    callback_name = (
+        "_deferred_maybe_focus_active" if service_id == "glue" else "_maybe_focus_active"
+    )
+    mount_focus = getattr(page_type, callback_name)
+    pending: list[GluePage | AthenaPage] = []
+
+    def hold_mount_focus(page: GluePage | AthenaPage, reference: FocusSlot | None = None) -> None:
+        if reference is None:
+            pending.append(page)
+        else:
+            mount_focus(page, reference)
+
+    monkeypatch.setattr(page_type, callback_name, hold_mount_focus)
+    app = DemoModeApp(theme="carbon")
+    try:
+        async with app.run_test(size=(80, 24)) as pilot:
+            await drain_workers(app)
+            app.app_ctx.root_vm.services_menu.switch_service_command.execute(service_id)
+            await wait_until(lambda: bool(pending), what=f"{service_id} mount focus callback held")
+            page = pending[0]
+            setup = app.app_ctx.root_vm.content_host._setup_task
+            if setup is not None:
+                await setup
+            await drain_workers(app)
+            await pilot.pause()
+            source = page.query_one(f"#{service_id}-source-header-picker", ContextPicker)
+            coordinator = app.app_ctx.focus_coordinator
+            app.set_focus(app.query_one("#nav-menu"))
+            await wait_until(
+                lambda: coordinator.focused_slot is FocusSlot.NAV_MENU,
+                what="navigation focus synchronized before source focus changes",
+            )
+            # Textual updates focused immediately, but DescendantFocus reaches
+            # the page asynchronously. Release the older mount callback inside
+            # that real interval, while the coordinator still names the rail.
+            app.set_focus(source)
+            assert app.screen.focused is source
+            assert coordinator.focused_slot is FocusSlot.NAV_MENU
+            if focus_state == "loading":
+                source.loading = True
+                assert app.focused is None
+            elif focus_state == "open":
+                source.open()
+                await wait_until(
+                    lambda: source.is_open and app.screen.focused is source.query_one(OptionList),
+                    what="source overlay owns focus before delayed mount callback",
+                )
+            expected = app.screen.focused
+            mount_focus(page)
+            await pilot.pause()
+            assert app.screen.focused is expected
+            assert coordinator.focused_slot is (
+                FocusSlot.GLUE_SOURCE if service_id == "glue" else FocusSlot.ATHENA_SOURCE
+            )
+            if focus_state == "trigger":
+                await pilot.press("enter")
+                await wait_until(lambda: source.is_open, what="Enter opens retained source picker")
+            if focus_state != "loading":
+                assert source.is_open
+                await pilot.press("escape")
+                await wait_until(
+                    lambda: not source.is_open and app.screen.focused is source,
+                    what="Escape restores source focus after delayed mount callback",
+                )
     finally:
         app.app_ctx.root_vm.dispose()
 

@@ -151,3 +151,21 @@ before reading its view model or invoking chrome/body rendering. Subscription
 cleanup remains mandatory and unchanged. Waiting longer in the test would leave
 stale work able to reach the detached pane. The regression retains the positive
 mounted control, zero observer count, zero later notifications and zero renders.
+
+## 8. Delivery correction: live focus before stale service slots
+
+Windows Python 3.13 in CI36799600908 exposed a Glue source-picker Enter timeout;
+Windows Python 3.11 exposed the corresponding source-switch picker timeout.
+Holding Glue's mount focus callback until the source trigger has focus reproduces
+the first timeout exactly: Textual already names the source picker while the
+coordinator still names the navigation rail. Athena's matching callback has the
+same independently reproduced defect. The page must use `screen.focused`, and
+when a coordinator exists and no explicit fallback reference is supplied, preserve
+a valid focus target and project its slot before consulting older VM state. This
+also preserves an open overlay or loading trigger. Inactive screens remain
+guarded. Explicit references used to reconcile unavailable controls retain their
+existing nearest-slot behavior. Standalone pages without a coordinator retain
+their existing default focus. A global focus rewrite or extra test delay would
+change unrelated contracts or leave the race intact. Cover all three source
+states for both services, existing fallback and modal tests, source swaps,
+navigation, compact layout and unchanged snapshots.
