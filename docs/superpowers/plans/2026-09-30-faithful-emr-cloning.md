@@ -126,3 +126,41 @@ env -u AWS_ACCESS_KEY_ID -u AWS_SECRET_ACCESS_KEY -u AWS_SESSION_TOKEN AWS_CONFI
 ```
 
 Target suites: `tests/unit/domain/test_emr_serverless.py`, `tests/unit/vm/emr_serverless/test_clone_vm.py`, `tests/unit/ui/emr_serverless/test_clone_modal.py`, `tests/integration/test_emr_page.py`, `tests/snapshot/test_emr_clone_modal.py`. Expected final result: all pass; failing red runs are retained as reproduction evidence, never relabeled successful. Run the repository's required hooks and CI unchanged, without reruns that conceal failures.
+
+## 7. Task 4 delivery follow-up: retain focus selected after EMR mount
+
+1. Capture the real mount callback in a deterministic full-app test, release it
+   after explicit focus, and observe the existing picker/focus assertion fail.
+2. Restrict `_maybe_focus_left` to an active screen with no focused widget,
+   using `screen.focused` to preserve loading-widget focus.
+3. Verify source/application triggers and overlays, details/logs/navigation,
+   loading focus, and no-focus default behavior; run affected focus, compact,
+   EMR integration and snapshots plus normal hooks.
+4. Update PR312 and its evidence, then continue the existing protected delivery
+   sequence. Do not waive CI failures or close #238 before promotion validation.
+
+## 8. Task 4 delivery follow-up: reject detached pane refreshes
+
+1. Hold a real mounted filter refresh and release it through the screen after
+   removal and a later navigation; verify the original detached-render assertion
+   fails while the ordinary-order control passes.
+2. Clear `_body_refresh_pending` and guard `_refresh_all` with `is_attached`.
+3. Run both regression cases and affected pane/VM/compact/snapshot suites,
+   source and selected-test typing, normal hooks and strict documentation checks.
+4. Update PR312 and continue the existing protected delivery gates on its new
+   head. Preserve failed Windows evidence for #283; do not rerun the failed run.
+
+## 9. Task 4 delivery follow-up: preserve live Glue and Athena source focus
+
+1. Hold the real mount callback and release it after Textual focus changes but
+   before the coordinator's asynchronous update; reproduce the original picker
+   timeout in both services and add trigger/open/loading regression cases.
+2. Resolve a valid live focus target before an old coordinator slot when no
+   explicit fallback reference was supplied. Read `screen.focused` and guard
+   inactive screens; preserve explicit unavailable-control fallback behavior and
+   standalone defaults when no coordinator exists.
+3. Verify the full source-switch flow under the delayed callback ordering and
+   run affected service focus, navigation, source, compact and snapshot suites.
+   Run normal typing, lint, architecture, docs and commit checks.
+4. Update PR312, retain both failed Windows jobs, and require fresh final-head CI
+   before continuing the existing develop/main delivery sequence.

@@ -651,7 +651,9 @@ class GluePage(DeferredWorkerMixin, HubSubscriberMixin, Widget):
         self._maybe_focus_active(reference)
 
     def _maybe_focus_active(self, reference: FocusSlot | None = None) -> None:
-        focused = self.app.focused
+        if not is_on_active_screen(self):
+            return
+        focused = self.screen.focused
         if (
             reference is None
             and self._focus_coordinator is not None
@@ -665,6 +667,16 @@ class GluePage(DeferredWorkerMixin, HubSubscriberMixin, Widget):
         targets = self._focus_targets()
         if not targets:
             return
+        # Mount reconciliation may run before DescendantFocus updates the
+        # coordinator. Keep a valid live focus target (including its overlay
+        # or a loading widget) instead of projecting the stale VM-owned slot.
+        # Explicit references and standalone pages without a coordinator keep
+        # their existing fallback/default focus behavior.
+        if reference is None and self._focus_coordinator is not None:
+            for slot, target in targets:
+                if focus_rests_within(target, focused):
+                    self._focus_coordinator.project_focused_slot(slot)
+                    return
         current_slot = (
             reference or self._focus_coordinator.focused_slot
             if self._focus_coordinator is not None

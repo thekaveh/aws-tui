@@ -212,18 +212,8 @@ class EmrServerlessPage(DeferredWorkerMixin, Widget):
         self.set_interval(apps_cadence, self._tick_applications, name="emr-poll-apps")
         self.set_interval(runs_cadence, self._tick_runs, name="emr-poll-runs")
         self.set_interval(detail_cadence, self._tick_detail, name="emr-poll-detail")
-        # Land Textual focus on the LEFT pane so the user gets the
-        # same "arrow keys move the cursor immediately" UX as the S3
-        # page. Without this, neither pane shows the
-        # ``:focus-within`` accent border and the user has to press
-        # Tab once before arrows do anything. EXCEPT: if NavMenu (or
-        # any widget outside this page) already owns focus when the
-        # auto-focus runs, do not steal — the user is mid-arrow-walk
-        # on the rail and the page swap was a side-effect of cursor
-        # navigation, not an intent to enter the runs pane. User
-        # feedback (post-PR-#98): "when I use [arrow] keys to move
-        # onto the emr service, it automatically focuses into the job
-        # runs and meaningless focus".
+        # Supply an initial runs-pane focus only if no later focus request
+        # has landed when this deferred callback runs.
         if self._left is not None:
             self.call_after_refresh(self._maybe_focus_left)
 
@@ -236,37 +226,17 @@ class EmrServerlessPage(DeferredWorkerMixin, Widget):
             self._picker.close(refocus=False)
 
     def _maybe_focus_left(self) -> None:
-        """Auto-focus the LEFT pane on initial page mount UNLESS a
-        widget outside this page (typically the NavMenu rail) already
-        owns Textual focus.
-
-        Round-3 directive §9.bis.11 / PR #99(a) closure: when a
-        :class:`FocusCoordinatorVM` is wired, the rail-walk gate
-        reads from `focused_slot == NAV_MENU` AND requires Textual
-        focus to actually exist on the rail — the coordinator's
-        VM-owned slot becomes the authoritative answer to "is the
-        user arrow-walking the menu?". When no coordinator is
-        wired, or when Textual focus is unset (programmatic
-        service-switch in tests), the legacy "focus left when
-        nothing else holds focus" semantics still apply.
-        """
-        if self._left is None:
+        """Supply default runs focus without replacing a newer focus choice."""
+        if self._left is None or not is_on_active_screen(self):
             return
-        textual_focused = self.app.focused
-        if (
-            self._focus_coordinator is not None
-            and textual_focused is not None
-            and not self.has_focus_within
-        ):
-            slot = self._focus_coordinator.focused_slot
-            if slot is FocusSlot.NAV_MENU:
-                # Rail-walk in progress: VM-owned slot agrees AND
-                # Textual focus is on the rail. Leave it alone.
-                return
-        if textual_focused is None or self.has_focus_within:
-            if self._focus_coordinator is not None:
-                self._focus_coordinator.project_focused_slot(FocusSlot.EMR_RUNS)
-            self._left.focus()
+        # App.focused hides loading widgets; they still own focus and must not
+        # lose it to this deferred mount callback. Picker overlays and the
+        # navigation rail likewise retain any focus established since mount.
+        if self.screen.focused is not None:
+            return
+        # Project synchronously so another deferred focus call cannot outlive
+        # the no-focus check above.
+        self._project_focus_slot(FocusSlot.EMR_RUNS)
 
     def on_descendant_focus(self, event: events.DescendantFocus) -> None:
         if event.widget is self.app.focused:

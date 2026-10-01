@@ -124,3 +124,48 @@ form, Hive authoring or cancellation API is part of this ticket.
 
 The user authorized routine design decisions and unsupervised execution of these
 acceptance criteria. This design therefore proceeds without a separate approval.
+
+## 6. Delivery correction: deferred EMR mount focus
+
+CI run 36795110567 exposed a source-picker Enter timeout. Holding the actual
+EMR mount-focus callback until the picker has focus reproduces the same failure:
+`_maybe_focus_left` moves focus back to the runs pane. The callback must provide
+an initial default only when the active page's screen has no focused widget.
+Existing focus in a picker, overlay, detail/log pane, or navigation rail wins;
+use `screen.focused` so a loading widget still owns focus. Preserve the existing
+no-focus default and guard against a callback targeting an inactive screen.
+Waiting longer in the test would conceal this production race; removing default
+focus entirely would break immediate arrow navigation. A narrow callback guard
+preserves both contracts. Validate delayed callbacks before and after picker
+opening, other focus targets, loading focus, and the existing default-navigation,
+modal, and snapshot regressions. This is a routine authorized delivery repair.
+
+## 7. Delivery correction: queued pane refresh after unmount
+
+Windows Python 3.11 in CI36797833782 exposed a queued pane refresh running after
+its subscription was correctly disposed. Textual's screen retains callbacks
+independently of their sending widget. A held mounted filter refresh released
+through the screen after removal reproduces the detached-pane render assertion.
+Clear the refresh-pending latch, then return if the pane is no longer attached,
+before reading its view model or invoking chrome/body rendering. Subscription
+cleanup remains mandatory and unchanged. Waiting longer in the test would leave
+stale work able to reach the detached pane. The regression retains the positive
+mounted control, zero observer count, zero later notifications and zero renders.
+
+## 8. Delivery correction: live focus before stale service slots
+
+Windows Python 3.13 in CI36799600908 exposed a Glue source-picker Enter timeout;
+Windows Python 3.11 exposed the corresponding source-switch picker timeout.
+Holding Glue's mount focus callback until the source trigger has focus reproduces
+the first timeout exactly: Textual already names the source picker while the
+coordinator still names the navigation rail. Athena's matching callback has the
+same independently reproduced defect. The page must use `screen.focused`, and
+when a coordinator exists and no explicit fallback reference is supplied, preserve
+a valid focus target and project its slot before consulting older VM state. This
+also preserves an open overlay or loading trigger. Inactive screens remain
+guarded. Explicit references used to reconcile unavailable controls retain their
+existing nearest-slot behavior. Standalone pages without a coordinator retain
+their existing default focus. A global focus rewrite or extra test delay would
+change unrelated contracts or leave the race intact. Cover all three source
+states for both services, existing fallback and modal tests, source swaps,
+navigation, compact layout and unchanged snapshots.

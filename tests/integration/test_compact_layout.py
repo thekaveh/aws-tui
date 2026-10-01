@@ -12,8 +12,8 @@ from textual import events
 from textual.containers import VerticalScroll
 from textual.geometry import Size
 from textual.pilot import Pilot
-from textual.screen import Screen
-from textual.widgets import Button, TextArea
+from textual.screen import ModalScreen, Screen
+from textual.widgets import Button, OptionList, TextArea
 
 from aws_tui.composition import build_app_context
 from aws_tui.demo.in_memory_athena import InMemoryAthena
@@ -23,6 +23,10 @@ from aws_tui.ui.widgets.athena.page import AthenaPage
 from aws_tui.ui.widgets.athena.query_view import AthenaQueryView
 from aws_tui.ui.widgets.brand_banner import BrandBanner
 from aws_tui.ui.widgets.context_picker import ContextPicker
+from aws_tui.ui.widgets.emr_serverless.application_picker import ApplicationPicker
+from aws_tui.ui.widgets.emr_serverless.page import EmrServerlessPage
+from aws_tui.ui.widgets.glue.page import GluePage
+from aws_tui.vm.chrome.focus_coordinator_vm import FocusSlot
 from tests.helpers import drain_workers, focus_and_settle, wait_until
 from tests.snapshot.apps.demo_mode import DemoModeApp
 
@@ -83,13 +87,16 @@ async def test_full_app_athena_editor_has_usable_height(size: tuple[int, int]) -
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("deferred_layout", [False, True])
 async def test_compact_athena_survives_geometry_read_before_initial_layout(
     monkeypatch: pytest.MonkeyPatch,
+    deferred_layout: bool,
 ) -> None:
     original_refresh_layout = Screen._refresh_layout
     original_resize = AthenaQueryView.on_resize
     geometry_read = False
     resize_seen = False
+    layout_released = not deferred_layout
 
     def record_resize(view: AthenaQueryView, event: events.Resize) -> None:
         nonlocal resize_seen
@@ -101,6 +108,12 @@ async def test_compact_athena_survives_geometry_read_before_initial_layout(
     ) -> None:
         nonlocal geometry_read
         views = list(screen.query(AthenaQueryView))
+        if views and not layout_released:
+            # A region lookup can build the geometry map before the screen's
+            # scheduled layout runs. Hold that layout until _open_athena has
+            # returned to exercise this ordering without relying on timing.
+            screen._compositor.update_widgets({views[0]})
+            return
         if not geometry_read and views and views[0].is_mounted:
             view = views[0]
             # Textual 8.2.8 can rebuild its lazy geometry map before the normal
@@ -118,6 +131,15 @@ async def test_compact_athena_survives_geometry_read_before_initial_layout(
     try:
         async with app.run_test(size=(80, 24)) as pilot:
             page = await _open_athena(app)
+            if deferred_layout:
+                assert not geometry_read
+                assert not resize_seen
+                layout_released = True
+                app.screen.refresh(layout=True)
+            await wait_until(
+                lambda: geometry_read,
+                what="early geometry read exercised before initial Athena layout",
+            )
             assert geometry_read
             page.vm.query.set_sql("SELECT 12345")
             await page.vm.query.execute()
@@ -455,6 +477,170 @@ async def test_compact_services_have_content_identity_and_escapable_pickers(
                 )
                 assert not picker.is_open
                 assert app.focused is picker
+    finally:
+        app.app_ctx.root_vm.dispose()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "target",
+    [
+        "source",
+        "source-open",
+        "source-loading",
+        "application",
+        "application-open",
+        "detail",
+        "logs",
+        "nav",
+        "unset",
+        "modal",
+    ],
+)
+async def test_deferred_emr_mount_focus_preserves_newer_focus(
+    monkeypatch: pytest.MonkeyPatch,
+    target: str,
+) -> None:
+    mount_focus = EmrServerlessPage._maybe_focus_left
+    pending: list[EmrServerlessPage] = []
+    monkeypatch.setattr(EmrServerlessPage, "_maybe_focus_left", lambda page: pending.append(page))
+    app = DemoModeApp(theme="carbon")
+    try:
+        async with app.run_test(size=(80, 24)) as pilot:
+            await drain_workers(app)
+            app.app_ctx.root_vm.services_menu.switch_service_command.execute("emr-serverless")
+            await wait_until(lambda: len(pending) == 1, what="EMR mount focus callback queued")
+            page = pending.pop()
+            setup = app.app_ctx.root_vm.content_host._setup_task
+            if setup is not None:
+                await setup
+            await drain_workers(app)
+            source = page.query_one("#emr-source-header-picker", ContextPicker)
+            application = page.query_one(ApplicationPicker)
+            widget = {
+                "source": source,
+                "source-open": source,
+                "source-loading": source,
+                "application": application,
+                "application-open": application,
+                "detail": page.right_detail,
+                "logs": page.right_pane,
+                "nav": app.query_one("#nav-menu"),
+                "unset": page.left_pane,
+                "modal": page.left_pane,
+            }[target]
+            assert widget is not None
+            await focus_and_settle(widget)
+            if target.endswith("-open"):
+                await pilot.press("enter")
+                await wait_until(
+                    lambda: widget.is_open and app.screen.focused is widget.query_one(OptionList),
+                    what="picker overlay owns focus before mount callback is released",
+                )
+            if target == "source-loading":
+                source.loading = True
+                assert app.focused is None
+            expected = app.screen.focused
+            if target == "unset":
+                app.set_focus(None)
+                assert app.screen.focused is None
+                expected = page.left_pane
+            if target == "modal":
+                await app.push_screen(ModalScreen())
+                assert app.screen.focused is None
+                expected = None
+            # Release the real callback only after the later focus request has
+            # landed. Drain its deferred focus and blur events before asserting.
+            mount_focus(page)
+            await pilot.pause()
+            assert app.screen.focused is expected
+            if target.endswith("-open"):
+                assert widget.is_open
+                await pilot.press("escape")
+                await wait_until(
+                    lambda: not widget.is_open and app.screen.focused is widget,
+                    what="Escape closes picker and restores trigger after delayed mount",
+                )
+            elif target in {"source", "application"}:
+                await pilot.press("enter")
+                await wait_until(lambda: widget.is_open, what="Enter opens focused picker")
+    finally:
+        app.app_ctx.root_vm.dispose()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("service_id", ["glue", "athena"])
+@pytest.mark.parametrize("focus_state", ["trigger", "open", "loading"])
+async def test_deferred_service_mount_focus_preserves_live_source_focus(
+    monkeypatch: pytest.MonkeyPatch,
+    service_id: str,
+    focus_state: str,
+) -> None:
+    page_type = GluePage if service_id == "glue" else AthenaPage
+    callback_name = (
+        "_deferred_maybe_focus_active" if service_id == "glue" else "_maybe_focus_active"
+    )
+    mount_focus = getattr(page_type, callback_name)
+    pending: list[GluePage | AthenaPage] = []
+
+    def hold_mount_focus(page: GluePage | AthenaPage, reference: FocusSlot | None = None) -> None:
+        if reference is None:
+            pending.append(page)
+        else:
+            mount_focus(page, reference)
+
+    monkeypatch.setattr(page_type, callback_name, hold_mount_focus)
+    app = DemoModeApp(theme="carbon")
+    try:
+        async with app.run_test(size=(80, 24)) as pilot:
+            await drain_workers(app)
+            app.app_ctx.root_vm.services_menu.switch_service_command.execute(service_id)
+            await wait_until(lambda: bool(pending), what=f"{service_id} mount focus callback held")
+            page = pending[0]
+            setup = app.app_ctx.root_vm.content_host._setup_task
+            if setup is not None:
+                await setup
+            await drain_workers(app)
+            await pilot.pause()
+            source = page.query_one(f"#{service_id}-source-header-picker", ContextPicker)
+            coordinator = app.app_ctx.focus_coordinator
+            app.set_focus(app.query_one("#nav-menu"))
+            await wait_until(
+                lambda: coordinator.focused_slot is FocusSlot.NAV_MENU,
+                what="navigation focus synchronized before source focus changes",
+            )
+            # Textual updates focused immediately, but DescendantFocus reaches
+            # the page asynchronously. Release the older mount callback inside
+            # that real interval, while the coordinator still names the rail.
+            app.set_focus(source)
+            assert app.screen.focused is source
+            assert coordinator.focused_slot is FocusSlot.NAV_MENU
+            if focus_state == "loading":
+                source.loading = True
+                assert app.focused is None
+            elif focus_state == "open":
+                source.open()
+                await wait_until(
+                    lambda: source.is_open and app.screen.focused is source.query_one(OptionList),
+                    what="source overlay owns focus before delayed mount callback",
+                )
+            expected = app.screen.focused
+            mount_focus(page)
+            await pilot.pause()
+            assert app.screen.focused is expected
+            assert coordinator.focused_slot is (
+                FocusSlot.GLUE_SOURCE if service_id == "glue" else FocusSlot.ATHENA_SOURCE
+            )
+            if focus_state == "trigger":
+                await pilot.press("enter")
+                await wait_until(lambda: source.is_open, what="Enter opens retained source picker")
+            if focus_state != "loading":
+                assert source.is_open
+                await pilot.press("escape")
+                await wait_until(
+                    lambda: not source.is_open and app.screen.focused is source,
+                    what="Escape restores source focus after delayed mount callback",
+                )
     finally:
         app.app_ctx.root_vm.dispose()
 

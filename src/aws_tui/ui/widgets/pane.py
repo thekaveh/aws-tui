@@ -629,6 +629,10 @@ class Pane(Widget):
         # FIRST statement, deliberately: everything below reads the VM, so a
         # notify that lands mid-render must be able to queue another pass.
         self._body_refresh_pending = False
+        # The screen can retain a refresh callback after this pane unmounts.
+        # Releasing the subscription stops new work, not already queued work.
+        if not self.is_attached:
+            return
         self._refresh_chrome()
         self._render_body()
 
