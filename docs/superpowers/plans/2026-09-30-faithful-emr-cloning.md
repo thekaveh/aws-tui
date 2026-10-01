@@ -177,3 +177,16 @@ Target suites: `tests/unit/domain/test_emr_serverless.py`, `tests/unit/vm/emr_se
 4. Create a correction PR into develop, followed by checked main promotion and
    history reconciliation. Preserve failed CI36810352609, including its separate
    PyPI audit connection failure; require final CI before closing #238.
+
+## 11. Task 4 delivery follow-up: isolate manual hint event dispatch
+
+1. Trace inherited handler dispatch and reproduce the missing-label assertion
+   using a late resize and delayed child composition in the manual fixture.
+2. Add a late-resize variant that detects unintended automatic rebuilding;
+   prevent default mount/resize handling only in the manual fixture.
+3. Keep original boundary assertions and verify that disabling production chip
+   retirement still fails both variants. Run surrounding chrome, hint VM,
+   navigation and integration tests, normal hooks and strict docs checks.
+4. Merge a checked correction PR into develop, update the existing main
+   promotion315, and require fresh final-head checks. Preserve the failed
+   promotion run without rerunning it; complete all remaining delivery gates.
