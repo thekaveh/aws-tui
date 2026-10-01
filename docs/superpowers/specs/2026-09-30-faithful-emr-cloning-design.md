@@ -183,3 +183,17 @@ view-change reconciliation retains its existing behavior. Guard the active scree
 before inspecting focus. Keep the original retry, paging and time-travel outcome
 assertions in normal and delayed callback cases. No timeout increase or hosted
 Windows rerun substitutes for this correction.
+
+## 10. Delivery correction: isolate the manual hint rebuild fixture
+
+Promotion CI36814150232 met the coverage threshold but failed a hint-legend
+boundary test with blank labels after its controlled rebuild. Textual dispatches
+handlers along the MRO; empty subclass mount/resize handlers do not suppress the
+base handlers. A trace confirms automatic rebuilds in the manual fixture. A late
+resize with held child composition reproduces the missing-label assertion.
+Explicitly prevent default mount/resize handling in that fixture so only its
+controlled tasks rebuild chips. Add a late-resize variant that waits for event
+delivery and verifies no extra rebuild occurred. Retain every original semantic
+identity, rendered-label, mount/removal boundary and service-change assertion.
+Disabling production chip retirement must still fail both variants. Production
+hint behavior remains covered by the separate compositor and integration tests.

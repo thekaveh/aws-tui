@@ -14,7 +14,7 @@ from rich.cells import cell_len
 from textual.app import App, ComposeResult
 from textual.containers import Horizontal
 from textual.css.query import NoMatches
-from textual.events import Click, Resize
+from textual.events import Click, Mount, Resize
 from textual.geometry import Size
 from textual.widget import Widget
 from textual.widgets import Static
@@ -380,8 +380,10 @@ def _expected_hint_ids(legend: HintLegend) -> tuple[str, ...]:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("late_resize", [False, True], ids=["normal", "late-resize"])
 async def test_hint_legend_rebuild_is_never_observably_empty_or_duplicated(
     monkeypatch: pytest.MonkeyPatch,
+    late_resize: bool,
 ) -> None:
     vm, hub = _athena_hint_vm()
     mount = Horizontal.mount
@@ -392,11 +394,21 @@ async def test_hint_legend_rebuild_is_never_observably_empty_or_duplicated(
     ] = {}
 
     class _ManualHintLegend(HintLegend):
-        def on_mount(self) -> None:
-            pass
+        rebuild_count = 0
+        resize_count = 0
 
-        def on_resize(self, _event: Resize) -> None:
-            pass
+        def on_mount(self, event: Mount) -> None:
+            # Textual dispatches handlers along the MRO even when overridden.
+            # This fixture owns rebuild timing, including mount and resize.
+            event.prevent_default()
+
+        def on_resize(self, event: Resize) -> None:
+            self.resize_count += 1
+            event.prevent_default()
+
+        async def _rebuild_chips(self) -> None:
+            self.rebuild_count += 1
+            await super()._rebuild_chips()
 
     def mount_at_observable_boundary(
         strip: Horizontal,
@@ -477,6 +489,16 @@ async def test_hint_legend_rebuild_is_never_observably_empty_or_duplicated(
                     gated_rebuilds.pop(rebuild)
 
             await assert_boundary()
+            if late_resize:
+                rebuild_count = legend.rebuild_count
+                resize_count = legend.resize_count
+                legend.post_message(Resize(Size(80, 3), Size(80, 3), Size(80, 3)))
+                await wait_until(
+                    lambda: legend.resize_count > resize_count,
+                    what="the manual hint fixture received the late resize",
+                )
+                await pilot.pause()
+                assert legend.rebuild_count == rebuild_count
             text = " ".join(str(static.render()) for static in legend.query(Static))
             assert "more" in text
             assert "quit" in text
