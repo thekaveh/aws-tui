@@ -646,8 +646,17 @@ class GluePage(DeferredWorkerMixin, HubSubscriberMixin, Widget):
         return self.is_running and self.is_attached and self.display
 
     def _deferred_maybe_focus_active(self, reference: FocusSlot | None = None) -> None:
-        if not self._focus_projection_available():
+        if not self._focus_projection_available() or not is_on_active_screen(self):
             return
+        if reference is not None and self._focus_coordinator is not None:
+            # A child update captured this reference before the user moved
+            # focus. Preserve a newer valid target; only reconcile the old
+            # slot when focus still needs that fallback.
+            focused = self.screen.focused
+            for slot, target in self._focus_targets():
+                if slot is not reference and focus_rests_within(target, focused):
+                    self._focus_coordinator.project_focused_slot(slot)
+                    return
         self._maybe_focus_active(reference)
 
     def _maybe_focus_active(self, reference: FocusSlot | None = None) -> None:
