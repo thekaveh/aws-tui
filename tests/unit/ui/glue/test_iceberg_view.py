@@ -466,7 +466,21 @@ async def test_enter_and_space_activate_focused_iceberg_tab(key: str) -> None:
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("key", ["enter", "space"])
-async def test_enter_and_space_press_all_enabled_iceberg_buttons(key: str) -> None:
+@pytest.mark.parametrize("delayed_focus", [False, True], ids=["normal", "delayed-focus"])
+async def test_enter_and_space_press_all_enabled_iceberg_buttons(
+    key: str, delayed_focus: bool, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    deferred_focus = GluePage._deferred_maybe_focus_active
+    held_focus: list[tuple[GluePage, FocusSlot]] = []
+
+    def hold_snapshot_focus(page: GluePage, reference: FocusSlot | None = None) -> None:
+        if reference is FocusSlot.GLUE_ICEBERG_SNAPSHOTS:
+            held_focus.append((page, reference))
+            return
+        deferred_focus(page, reference)
+
+    if delayed_focus:
+        monkeypatch.setattr(GluePage, "_deferred_maybe_focus_active", hold_snapshot_focus)
     vm, inspector = _build_vm()
     vm.catalog.iceberg._page_size = 1  # type: ignore[attr-defined]
     inspector.errors["snapshots"] = PermissionError("denied")
@@ -499,6 +513,13 @@ async def test_enter_and_space_press_all_enabled_iceberg_buttons(key: str) -> No
         more = pilot.app.query_one("#glue-iceberg-more", Button)
         assert not more.disabled
         await focus_and_settle(more)
+        if delayed_focus:
+            # Release real callbacks queued by the earlier snapshot load only
+            # after the user has moved from Retry to the enabled pager.
+            assert held_focus
+            for page, reference in held_focus:
+                pilot.app.screen.call_after_refresh(deferred_focus, page, reference)
+            await pilot.pause()
         await pilot.press(key)
         await wait_until(
             lambda: len(vm.catalog.iceberg.snapshots) == 2,
