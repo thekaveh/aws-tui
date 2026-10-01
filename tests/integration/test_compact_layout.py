@@ -12,8 +12,8 @@ from textual import events
 from textual.containers import VerticalScroll
 from textual.geometry import Size
 from textual.pilot import Pilot
-from textual.screen import Screen
-from textual.widgets import Button, TextArea
+from textual.screen import ModalScreen, Screen
+from textual.widgets import Button, OptionList, TextArea
 
 from aws_tui.composition import build_app_context
 from aws_tui.demo.in_memory_athena import InMemoryAthena
@@ -23,6 +23,8 @@ from aws_tui.ui.widgets.athena.page import AthenaPage
 from aws_tui.ui.widgets.athena.query_view import AthenaQueryView
 from aws_tui.ui.widgets.brand_banner import BrandBanner
 from aws_tui.ui.widgets.context_picker import ContextPicker
+from aws_tui.ui.widgets.emr_serverless.application_picker import ApplicationPicker
+from aws_tui.ui.widgets.emr_serverless.page import EmrServerlessPage
 from tests.helpers import drain_workers, focus_and_settle, wait_until
 from tests.snapshot.apps.demo_mode import DemoModeApp
 
@@ -473,6 +475,93 @@ async def test_compact_services_have_content_identity_and_escapable_pickers(
                 )
                 assert not picker.is_open
                 assert app.focused is picker
+    finally:
+        app.app_ctx.root_vm.dispose()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "target",
+    [
+        "source",
+        "source-open",
+        "source-loading",
+        "application",
+        "application-open",
+        "detail",
+        "logs",
+        "nav",
+        "unset",
+        "modal",
+    ],
+)
+async def test_deferred_emr_mount_focus_preserves_newer_focus(
+    monkeypatch: pytest.MonkeyPatch,
+    target: str,
+) -> None:
+    mount_focus = EmrServerlessPage._maybe_focus_left
+    pending: list[EmrServerlessPage] = []
+    monkeypatch.setattr(EmrServerlessPage, "_maybe_focus_left", lambda page: pending.append(page))
+    app = DemoModeApp(theme="carbon")
+    try:
+        async with app.run_test(size=(80, 24)) as pilot:
+            await drain_workers(app)
+            app.app_ctx.root_vm.services_menu.switch_service_command.execute("emr-serverless")
+            await wait_until(lambda: len(pending) == 1, what="EMR mount focus callback queued")
+            page = pending.pop()
+            setup = app.app_ctx.root_vm.content_host._setup_task
+            if setup is not None:
+                await setup
+            await drain_workers(app)
+            source = page.query_one("#emr-source-header-picker", ContextPicker)
+            application = page.query_one(ApplicationPicker)
+            widget = {
+                "source": source,
+                "source-open": source,
+                "source-loading": source,
+                "application": application,
+                "application-open": application,
+                "detail": page.right_detail,
+                "logs": page.right_pane,
+                "nav": app.query_one("#nav-menu"),
+                "unset": page.left_pane,
+                "modal": page.left_pane,
+            }[target]
+            assert widget is not None
+            await focus_and_settle(widget)
+            if target.endswith("-open"):
+                await pilot.press("enter")
+                await wait_until(
+                    lambda: widget.is_open and app.screen.focused is widget.query_one(OptionList),
+                    what="picker overlay owns focus before mount callback is released",
+                )
+            if target == "source-loading":
+                source.loading = True
+                assert app.focused is None
+            expected = app.screen.focused
+            if target == "unset":
+                app.set_focus(None)
+                assert app.screen.focused is None
+                expected = page.left_pane
+            if target == "modal":
+                await app.push_screen(ModalScreen())
+                assert app.screen.focused is None
+                expected = None
+            # Release the real callback only after the later focus request has
+            # landed. Drain its deferred focus and blur events before asserting.
+            mount_focus(page)
+            await pilot.pause()
+            assert app.screen.focused is expected
+            if target.endswith("-open"):
+                assert widget.is_open
+                await pilot.press("escape")
+                await wait_until(
+                    lambda: not widget.is_open and app.screen.focused is widget,
+                    what="Escape closes picker and restores trigger after delayed mount",
+                )
+            elif target in {"source", "application"}:
+                await pilot.press("enter")
+                await wait_until(lambda: widget.is_open, what="Enter opens focused picker")
     finally:
         app.app_ctx.root_vm.dispose()
 

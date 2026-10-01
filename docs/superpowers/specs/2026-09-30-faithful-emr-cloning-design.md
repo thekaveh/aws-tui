@@ -124,3 +124,18 @@ form, Hive authoring or cancellation API is part of this ticket.
 
 The user authorized routine design decisions and unsupervised execution of these
 acceptance criteria. This design therefore proceeds without a separate approval.
+
+## 6. Delivery correction: deferred EMR mount focus
+
+CI run 36795110567 exposed a source-picker Enter timeout. Holding the actual
+EMR mount-focus callback until the picker has focus reproduces the same failure:
+`_maybe_focus_left` moves focus back to the runs pane. The callback must provide
+an initial default only when the active page's screen has no focused widget.
+Existing focus in a picker, overlay, detail/log pane, or navigation rail wins;
+use `screen.focused` so a loading widget still owns focus. Preserve the existing
+no-focus default and guard against a callback targeting an inactive screen.
+Waiting longer in the test would conceal this production race; removing default
+focus entirely would break immediate arrow navigation. A narrow callback guard
+preserves both contracts. Validate delayed callbacks before and after picker
+opening, other focus targets, loading focus, and the existing default-navigation,
+modal, and snapshot regressions. This is a routine authorized delivery repair.

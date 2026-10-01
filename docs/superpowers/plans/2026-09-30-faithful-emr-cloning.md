@@ -126,3 +126,15 @@ env -u AWS_ACCESS_KEY_ID -u AWS_SECRET_ACCESS_KEY -u AWS_SESSION_TOKEN AWS_CONFI
 ```
 
 Target suites: `tests/unit/domain/test_emr_serverless.py`, `tests/unit/vm/emr_serverless/test_clone_vm.py`, `tests/unit/ui/emr_serverless/test_clone_modal.py`, `tests/integration/test_emr_page.py`, `tests/snapshot/test_emr_clone_modal.py`. Expected final result: all pass; failing red runs are retained as reproduction evidence, never relabeled successful. Run the repository's required hooks and CI unchanged, without reruns that conceal failures.
+
+## 7. Task 4 delivery follow-up: retain focus selected after EMR mount
+
+1. Capture the real mount callback in a deterministic full-app test, release it
+   after explicit focus, and observe the existing picker/focus assertion fail.
+2. Restrict `_maybe_focus_left` to an active screen with no focused widget,
+   using `screen.focused` to preserve loading-widget focus.
+3. Verify source/application triggers and overlays, details/logs/navigation,
+   loading focus, and no-focus default behavior; run affected focus, compact,
+   EMR integration and snapshots plus normal hooks.
+4. Update PR312 and its evidence, then continue the existing protected delivery
+   sequence. Do not waive CI failures or close #238 before promotion validation.
