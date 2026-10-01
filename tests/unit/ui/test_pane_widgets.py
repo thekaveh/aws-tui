@@ -1147,11 +1147,14 @@ async def test_marking_an_entry_flips_marked_and_repaints_the_mark_glyph() -> No
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "defer_scrollbar_layout", [False, True], ids=["normal", "delayed-scrollbar"]
+    ("defer_scrollbar_layout", "defer_initial_tick"),
+    [(False, False), (True, False), (True, True)],
+    ids=["normal", "delayed-scrollbar", "delayed-tick"],
 )
 async def test_cursor_move_repaints_only_the_two_affected_rows(
     monkeypatch: pytest.MonkeyPatch,
     defer_scrollbar_layout: bool,
+    defer_initial_tick: bool,
 ) -> None:
     """One keystroke must repaint two rows, whatever the listing size.
 
@@ -1187,6 +1190,19 @@ async def test_cursor_move_repaints_only_the_two_affected_rows(
     layout_released = not defer_scrollbar_layout
     layout_deferred = False
     original_layout = Screen._refresh_layout
+    original_timer_update = Screen._on_timer_update
+    timer_budget = 0 if defer_initial_tick else None
+
+    def _defer_timer_update(self: Screen[Any]) -> None:
+        nonlocal timer_budget
+        if len(self.query(EntryRow)) == 60 and timer_budget is not None:
+            if timer_budget == 0:
+                return
+            timer_budget -= 1
+        original_timer_update(self)
+
+    if defer_initial_tick:
+        monkeypatch.setattr(Screen, "_on_timer_update", _defer_timer_update)
 
     def _defer_followup_layout(self: Screen[Any], *args: Any, **kwargs: Any) -> Any:
         nonlocal layout_deferred
@@ -1215,9 +1231,21 @@ async def test_cursor_move_repaints_only_the_two_affected_rows(
             assert len(app.query(EntryRow)) == 60
             # The initial mount paints everything; only the steady state is
             # under test, so start counting from here.
+            if defer_initial_tick:
+                # One tick can perform the initial layout without performing
+                # its scrollbar follow-up before the pilot barrier returns.
+                timer_budget = 1
             await pilot.pause()  # Drain mount refresh messages before resetting the counter.
+            if defer_initial_tick:
+                assert not layout_deferred
+                timer_budget = None
+                app.screen._update_timer.resume()
             body = app.query_one("#pane-body", VerticalScroll)
             if defer_scrollbar_layout:
+                await wait_until(
+                    lambda: layout_deferred,
+                    what="scrollbar follow-up layout held after initial row geometry",
+                )
                 assert layout_deferred, "the regression must hold a real follow-up layout"
                 assert any(
                     row.size.width != body.scrollable_content_region.width
