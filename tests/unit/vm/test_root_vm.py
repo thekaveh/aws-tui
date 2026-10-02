@@ -14,6 +14,7 @@ from aws_tui.infra.connection_resolver import Connection
 from aws_tui.infra.keymap_store import KeymapStore
 from aws_tui.infra.log_sink import LogSink
 from aws_tui.infra.theme_store import ThemeStore
+from aws_tui.vm.messages import ConnectionChangedMessage
 from aws_tui.vm.root_vm import RootVM
 from aws_tui.vm.services_protocol import ServiceDescriptor, ServiceRegistry
 
@@ -120,6 +121,46 @@ async def test_switch_connection_updates_connection_and_menu() -> None:
     assert root.active_connection == _aws_conn()
     ids = {item.descriptor.id for item in root.services_menu.items}
     assert ids == {"s3", "ec2", "settings"}
+    root.dispose()
+
+
+async def test_refresh_connection_state_preserves_hosted_content() -> None:
+    s3 = _FakeService("s3")
+    root = _build_root(s3)
+    original = _aws_conn("engineering")
+    await root.switch_connection_with(original, TokenState.EXPIRED)
+    await root.switch_service("s3")
+    hosted = root.content_host.current
+    assert isinstance(hosted, ComponentVM)
+
+    messages: list[ConnectionChangedMessage] = []
+
+    def capture(message: object) -> None:
+        if isinstance(message, ConnectionChangedMessage):
+            messages.append(message)
+
+    subscription = root.message_hub.messages.subscribe(on_next=capture)
+    refreshed = Connection(
+        name=original.name,
+        kind=original.kind,
+        region=original.region,
+        source=original.source,
+        profile=original.profile,
+        session_token="refreshed-session-token",
+    )
+
+    root.refresh_connection_state(refreshed, TokenState.CONNECTED)
+
+    assert root.active_connection is refreshed
+    assert root.active_auth_state is TokenState.CONNECTED
+    assert root.content_host.current is hosted
+    assert root.content_host.current_id == "s3"
+    assert hosted.status is ConstructionStatus.CONSTRUCTED
+    assert root.services_menu.selected_id == "s3"
+    assert messages == [
+        ConnectionChangedMessage(connection=refreshed, auth_state=TokenState.CONNECTED)
+    ]
+    subscription.dispose()
     root.dispose()
 
 

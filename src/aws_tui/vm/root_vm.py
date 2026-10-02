@@ -203,6 +203,11 @@ class RootVM:
         # Send the message so connection-aware descendants react.
         self._hub.send(ConnectionChangedMessage(connection=connection, auth_state=auth_state))
 
+    def refresh_connection_state(self, connection: Connection, auth_state: TokenState) -> None:
+        """Publish refreshed credentials without rebuilding hosted content."""
+        self._set_connection_state(connection, auth_state)
+        self._hub.send(ConnectionChangedMessage(connection=connection, auth_state=auth_state))
+
     async def switch_connection_and_service(
         self,
         connection: Connection,
