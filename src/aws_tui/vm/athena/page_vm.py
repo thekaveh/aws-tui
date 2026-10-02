@@ -63,6 +63,14 @@ _WORKGROUP_DETAIL_ERROR = "Athena workgroup request failed"
 _DISCOVERY_PAGE_LIMIT = 64
 _DISCOVERY_EMPTY_PAGE_LIMIT = 3
 _MAX_CONTEXT_ITEMS = 1_000
+_RECOVERY_FAILURE_STATES = frozenset(
+    {
+        PaneState.AUTH_REQUIRED,
+        PaneState.FORBIDDEN,
+        PaneState.UNREACHABLE,
+        PaneState.ERROR,
+    }
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -1129,6 +1137,40 @@ class AthenaPageVM:
             ),
             setup_active=True,
         )
+
+    async def refresh_for_credential_recovery(self) -> PaneState:
+        """Await one read-only refresh for the currently visible surface."""
+        if self._active_view == "history":
+            await self.history.refresh()
+            return self.history.state
+        if self._active_view == "saved":
+            await self.saved.refresh_named_queries()
+            if self.saved.named_state in _RECOVERY_FAILURE_STATES:
+                return self.saved.named_state
+            await self.saved.refresh_prepared_statements()
+            if self.saved.prepared_state in _RECOVERY_FAILURE_STATES:
+                return self.saved.prepared_state
+            return (
+                PaneState.IDLE
+                if PaneState.IDLE in {self.saved.named_state, self.saved.prepared_state}
+                else PaneState.EMPTY
+            )
+        if self._active_view == "results" and self.results.execution_id is not None:
+            await self.results.load(self.results.execution_id)
+            return self.results.state
+
+        await self.refresh_query_context()
+        context_states = (
+            self._workgroups_state,
+            self._workgroup_detail_state,
+            self._catalogs_state,
+            self._databases_state,
+        )
+        failure = next(
+            (state for state in context_states if state in _RECOVERY_FAILURE_STATES),
+            None,
+        )
+        return failure or self._workgroups_state
 
     async def _clear_query_context(self) -> None:
         self._begin_context_change(

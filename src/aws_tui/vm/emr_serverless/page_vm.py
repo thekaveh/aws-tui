@@ -21,6 +21,7 @@ from aws_tui.vm.emr_serverless.applications_vm import ApplicationsVM
 from aws_tui.vm.emr_serverless.job_run_detail_vm import JobRunDetailVM
 from aws_tui.vm.emr_serverless.job_run_logs_vm import JobRunLogsVM
 from aws_tui.vm.emr_serverless.job_runs_vm import JobRunsVM
+from aws_tui.vm.file_manager.pane_vm import PaneState
 from aws_tui.vm.operation_owner import OperationOwner, OperationSuperseded
 from aws_tui.vm.service_source_vm import (
     SelectionScope,
@@ -284,6 +285,24 @@ class EmrServerlessPageVM:
             await self.refresh_job_runs()
         else:
             await self.refresh_job_run_detail()
+
+    async def refresh_for_credential_recovery(
+        self,
+        focus: Literal["applications", "runs", "detail", "logs"],
+    ) -> PaneState:
+        """Refresh the focused read surface and return its terminal state."""
+        if focus == "applications":
+            await self.refresh_applications()
+            return self.applications.state
+        if focus == "runs":
+            await self.refresh_job_runs()
+            return self.job_runs.state
+        if focus == "detail":
+            await self.refresh_job_run_detail()
+            return self.job_run_detail.state
+
+        await self.job_run_logs.load(use_cache=False)
+        return self.job_run_logs.credential_recovery_state
 
     async def _select_after_applications_load(self) -> None:
         if self.applications.selected_id is not None:

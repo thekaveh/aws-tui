@@ -46,6 +46,42 @@ def _make(
     return page, fake
 
 
+@pytest.mark.asyncio
+async def test_credential_recovery_refreshes_focused_read_without_submission() -> None:
+    page, fake = _make()
+    fake.add_application(app_id="a1", name="etl")
+    await page.setup()
+    fake.calls.clear()
+
+    state = await page.refresh_for_credential_recovery("applications")
+
+    assert state is PaneState.IDLE
+    assert [name for name, _args in fake.calls] == ["list_applications"]
+    assert all(name != "start_job_run" for name, _args in fake.calls)
+    page.dispose()
+    fake.dispose()
+
+
+@pytest.mark.asyncio
+async def test_credential_recovery_returns_typed_logs_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    page, fake = _make()
+
+    async def _load(*, use_cache: bool = True) -> None:
+        assert use_cache is False
+
+    monkeypatch.setattr(page.job_run_logs, "load", _load)
+    page.job_run_logs._state = LogsState.ERROR  # type: ignore[attr-defined]
+    page.job_run_logs._failure_state = PaneState.FORBIDDEN  # type: ignore[attr-defined]
+
+    state = await page.refresh_for_credential_recovery("logs")
+
+    assert state is PaneState.FORBIDDEN
+    page.dispose()
+    fake.dispose()
+
+
 def test_page_vm_threads_emr_boto_config_into_logs_client() -> None:
     page, _ = _make()
     assert page.source.connection_key == ("dev", "us-east-1")

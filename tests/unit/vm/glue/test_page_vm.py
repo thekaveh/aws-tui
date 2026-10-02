@@ -474,6 +474,21 @@ async def test_refresh_active_reloads_crawlers_with_unchanged_stored_filter() ->
 
 
 @pytest.mark.asyncio
+async def test_credential_recovery_returns_active_read_state_without_mutation() -> None:
+    fake = seeded_glue()
+    page = make_page_vm(fake)
+    await page.setup()
+    await page.select_view("crawlers")
+    fake.crawler_requests.clear()
+
+    state = await page.refresh_for_credential_recovery()
+
+    assert state in {PaneState.IDLE, PaneState.EMPTY}
+    assert fake.crawler_requests == [(None, None)]
+    page.dispose()
+
+
+@pytest.mark.asyncio
 async def test_empty_catalog_refresh_clears_selection_data_notifications_and_store() -> None:
     fake = seeded_glue()
     store = ServiceSelectionStore()

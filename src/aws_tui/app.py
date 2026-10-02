@@ -20,7 +20,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from functools import partial
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, ClassVar, cast
+from typing import TYPE_CHECKING, Any, ClassVar, Literal, cast
 
 from reactivex.abc import DisposableBase
 from rich.markup import escape
@@ -41,7 +41,12 @@ from textual.widgets import Input, Static, TextArea
 
 from aws_tui.composition import AppContext, build_app_context
 from aws_tui.domain.data_catalog import TableRef
-from aws_tui.domain.filesystem import AuthRequiredError, EntryKind
+from aws_tui.domain.filesystem import (
+    AuthRequiredError,
+    EntryKind,
+    PermissionDeniedError,
+    ProviderUnreachableError,
+)
 from aws_tui.domain.s3_uri import parse_s3_uri
 from aws_tui.infra.aws_session import TokenState
 from aws_tui.infra.connection_resolver import Connection, ConnectionNotFound
@@ -85,11 +90,17 @@ from aws_tui.vm.chrome.focus_coordinator_vm import FocusSlot
 from aws_tui.vm.chrome.quick_look_vm import QuickLookContent
 from aws_tui.vm.chrome.theme_picker_vm import ThemePickerVM
 from aws_tui.vm.clipboard_vm import ClipboardChannel
+from aws_tui.vm.credential_recovery import (
+    RecoveryGuidance,
+    classify_recovery_failure,
+)
+from aws_tui.vm.emr_serverless.page_vm import EmrServerlessPageVM
 from aws_tui.vm.file_manager.dual_pane_vm import DualPaneVM, FocusedPane
 from aws_tui.vm.file_manager.pane_vm import PaneState
 from aws_tui.vm.glue.iceberg_vm import IcebergView
 from aws_tui.vm.glue.page_vm import GluePageVM, GlueView
 from aws_tui.vm.messages import (
+    ConnectionChangedMessage,
     ConnectionListChangedMessage,
     CopyTableReferenceRequest,
     OpenAthenaTableRequest,
@@ -210,6 +221,12 @@ _PALETTE_COMMANDS: tuple[PaletteEntry, ...] = (
     PaletteEntry(
         "app.swap_source",
         "Switch source",
+        "source",
+        service_ids=_SOURCE_SERVICE_IDS,
+    ),
+    PaletteEntry(
+        "auth.authenticate",
+        "Retry active source credentials",
         "source",
         service_ids=_SOURCE_SERVICE_IDS,
     ),
@@ -693,6 +710,7 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
         self._actions.register("pane.modal_left", self.action_modal_left_or_ascend)
         self._actions.register("pane.modal_right", self.action_modal_right)
         self._actions.register("pane.refresh", self.action_refresh)
+        self._actions.register("auth.authenticate", self.action_authenticate)
         self._actions.register("app.help", self.action_help)
         self._actions.register("app.themes", self.action_themes)
         self._actions.register("app.cycle_theme", self.action_cycle_theme)
@@ -810,6 +828,7 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
         self._shutdown_errors: tuple[tuple[str, str], ...] = ()
         self._command_palette_populated: bool = False
         self._pane_state_sub: DisposableBase | None = None
+        self._connection_state_sub: DisposableBase | None = None
         self._connection_list_sub: DisposableBase | None = None
         self._nav_selection_sub: DisposableBase | None = None
         self._cursor_sub: DisposableBase | None = None
@@ -856,6 +875,8 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
         # Tracks the last frozenset of skipped connection names shown in a
         # skip-toast so repeated Shift+S presses don't stack duplicate toasts.
         self._last_skip_toast_set: frozenset[str] | None = None
+        self._source_revision = 0
+        self._auth_recovery_task: asyncio.Task[None] | None = None
 
     @property
     def app_ctx(self) -> AppContext:
@@ -953,6 +974,9 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
         # initial UNREACHABLE state-change (if the connection is offline) is
         # not missed (Bug 2: initial mount UNREACHABLE silently missed).
         self._pane_state_sub = ctx.hub.messages.subscribe(on_next=self._on_hub_message_pane_state)
+        self._connection_state_sub = ctx.hub.messages.subscribe(
+            on_next=self._on_connection_changed_for_recovery
+        )
         self._connection_list_sub = ctx.hub.messages.subscribe(
             on_next=self._on_connection_list_changed
         )
@@ -2371,6 +2395,254 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
         pane = getattr(dual, "focused_pane", None)
         if pane is not None:
             await pane.refresh()
+
+    async def action_authenticate(self) -> None:
+        """Retry the active source after credentials are repaired externally."""
+        self.record_action("auth.authenticate")
+        task = self._auth_recovery_task
+        if task is None or task.done():
+            task = asyncio.create_task(
+                self._recover_active_source(),
+                name="credential-recovery",
+            )
+            self._auth_recovery_task = task
+        try:
+            await asyncio.shield(task)
+        finally:
+            if task.done() and self._auth_recovery_task is task:
+                self._auth_recovery_task = None
+
+    def _on_connection_changed_for_recovery(self, message: object) -> None:
+        if isinstance(message, ConnectionChangedMessage):
+            self._source_revision += 1
+
+    def _credential_recovery_is_current(
+        self,
+        *,
+        connection: Connection,
+        revision: int,
+        service_id: str,
+        hosted: object,
+    ) -> bool:
+        root = self._app_ctx.root_vm
+        return (
+            self._source_revision == revision
+            and root.active_connection == connection
+            and root.content_host.current_id == service_id
+            and root.content_host.current is hosted
+        )
+
+    @staticmethod
+    def _credential_error_for_state(state: PaneState) -> BaseException:
+        if state is PaneState.AUTH_REQUIRED:
+            return AuthRequiredError("credential recovery read requires authentication")
+        if state is PaneState.FORBIDDEN:
+            return PermissionDeniedError("credential recovery read was denied")
+        if state is PaneState.UNREACHABLE:
+            return ProviderUnreachableError("credential recovery endpoint is unreachable")
+        return RuntimeError("credential recovery read failed")
+
+    def _show_credential_guidance(self, guidance: RecoveryGuidance) -> None:
+        notifications.advise(
+            self._app_ctx.root_vm.chrome.toast_stack,
+            subject="Auth",
+            message=guidance.message,
+            toast_id=f"credential-recovery-{guidance.kind.value.replace('_', '-')}",
+        )
+
+    def _show_generic_credential_guidance(self, connection: Connection) -> None:
+        self._show_credential_guidance(
+            classify_recovery_failure(connection, error=RuntimeError("recovery failed"))
+        )
+
+    async def _recover_active_source(self) -> None:
+        ctx = self._app_ctx
+        root = ctx.root_vm
+        connection = root.active_connection
+        service_id = root.content_host.current_id
+        hosted = root.content_host.current
+        revision = self._source_revision
+        if connection is None or service_id not in _SOURCE_SERVICE_IDS or hosted is None:
+            notifications.advise(
+                root.chrome.toast_stack,
+                subject="Auth",
+                message="No active remote source is available to retry.",
+                toast_id="credential-recovery-no-source",
+            )
+            return
+
+        try:
+            resolved = ctx.connection_resolver.resolve(connection.name)
+        except Exception as exc:
+            ctx.log_sink.warning(
+                "credential_recovery.resolve_failed",
+                error_type=type(exc).__name__,
+            )
+            self._show_generic_credential_guidance(connection)
+            return
+        if (resolved.kind, resolved.name, resolved.region) != (
+            connection.kind,
+            connection.name,
+            connection.region,
+        ):
+            ctx.log_sink.warning(
+                "credential_recovery.identity_changed",
+                kind=connection.kind,
+                name=connection.name,
+                region=connection.region,
+            )
+            self._show_generic_credential_guidance(connection)
+            return
+
+        try:
+            token_state = ctx.aws_session.probe_token(resolved).state
+        except Exception as exc:
+            ctx.log_sink.warning(
+                "credential_recovery.probe_failed",
+                error_type=type(exc).__name__,
+            )
+            self._show_generic_credential_guidance(connection)
+            return
+        if token_state is not TokenState.CONNECTED:
+            self._show_credential_guidance(
+                classify_recovery_failure(resolved, token_state=token_state)
+            )
+            return
+
+        try:
+            state = await self._refresh_source_for_credential_recovery(
+                connection=connection,
+                resolved=resolved,
+                revision=revision,
+                service_id=service_id,
+                hosted=hosted,
+            )
+        except asyncio.CancelledError:
+            raise
+        except (AuthRequiredError, PermissionDeniedError, ProviderUnreachableError) as exc:
+            self._show_credential_guidance(
+                classify_recovery_failure(resolved, token_state=token_state, error=exc)
+            )
+            return
+        except Exception as exc:
+            ctx.log_sink.error(
+                "credential_recovery.read_failed",
+                service=service_id,
+                error_type=type(exc).__name__,
+            )
+            self._show_generic_credential_guidance(resolved)
+            return
+
+        if state is None:
+            return
+        if state not in {PaneState.IDLE, PaneState.EMPTY}:
+            self._show_credential_guidance(
+                classify_recovery_failure(
+                    resolved,
+                    token_state=token_state,
+                    error=self._credential_error_for_state(state),
+                )
+            )
+            return
+        if not self._credential_recovery_is_current(
+            connection=connection,
+            revision=revision,
+            service_id=service_id,
+            hosted=hosted,
+        ):
+            return
+
+        root.refresh_connection_state(resolved, TokenState.CONNECTED)
+        self._clear_connection_unreachable(resolved.kind, resolved.name)
+        self._chain_resolved_to_local = False
+        self._chain_initial_conn = None
+        notifications.success(
+            root.chrome.toast_stack,
+            subject="Auth",
+            message=f"credentials refreshed for {resolved.name}",
+            toast_id="credential-recovery-success",
+        )
+
+    async def _refresh_source_for_credential_recovery(
+        self,
+        *,
+        connection: Connection,
+        resolved: Connection,
+        revision: int,
+        service_id: str,
+        hosted: object,
+    ) -> PaneState | None:
+        if service_id == "s3":
+            if not isinstance(hosted, DualPaneVM):
+                return None
+            return await self._recover_s3_credentials(
+                connection=connection,
+                resolved=resolved,
+                revision=revision,
+                hosted=hosted,
+            )
+        if service_id == "athena" and isinstance(hosted, AthenaPageVM):
+            return await hosted.refresh_for_credential_recovery()
+        if service_id == "glue" and isinstance(hosted, GluePageVM):
+            return await hosted.refresh_for_credential_recovery()
+        if service_id == "emr-serverless" and isinstance(hosted, EmrServerlessPageVM):
+            focus: Literal["applications", "runs", "detail", "logs"] = "applications"
+            page = self._emr_page()
+            if page is not None:
+                active = self._emr_active_pane(page)
+                if active is page.left_pane:
+                    focus = "runs"
+                elif active is page.right_detail:
+                    focus = "detail"
+                elif active is page.right_pane:
+                    focus = "logs"
+            return await hosted.refresh_for_credential_recovery(focus)
+        return None
+
+    async def _recover_s3_credentials(
+        self,
+        *,
+        connection: Connection,
+        resolved: Connection,
+        revision: int,
+        hosted: DualPaneVM,
+    ) -> PaneState | None:
+        from aws_tui.domain.filesystem import PathRef
+        from aws_tui.services.s3.service import _format_pane_title
+
+        targets: list[tuple[PaneVM, PathRef]] = []
+        if self._chain_resolved_to_local:
+            targets.append((hosted.left, PathRef(())))
+        else:
+            key = (connection.kind, connection.name)
+            for pane in (hosted.left, hosted.right):
+                if pane.current_connection_key == key:
+                    targets.append((pane, pane.path))
+        if not targets:
+            return None
+
+        staged: list[tuple[PaneVM, Any]] = []
+        for pane, path in targets:
+            provider = self._make_s3_provider_for_connection(resolved)
+            stage = await pane.stage_provider_recovery(
+                provider,
+                path=path,
+                identity_label=_format_pane_title(resolved),
+                path_protocol="s3:",
+                connection_key=(resolved.kind, resolved.name),
+            )
+            staged.append((pane, stage))
+
+        if not self._credential_recovery_is_current(
+            connection=connection,
+            revision=revision,
+            service_id="s3",
+            hosted=hosted,
+        ) or not all(pane.can_commit_provider_recovery(candidate) for pane, candidate in staged):
+            return None
+        for pane, candidate in staged:
+            pane.commit_provider_recovery(candidate)
+        return PaneState.IDLE
 
     async def _put_on_clipboard(self, value: str, label: str) -> None:
         """Copy ``value`` on both channels and report what actually happened.
@@ -5356,6 +5628,14 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
             setattr(self, attribute, None)
 
         run_cleanup("service_navigation.close_intake", self._close_service_navigation_intake)
+        recovery_task = getattr(self, "_auth_recovery_task", None)
+        if recovery_task is not None and not recovery_task.done():
+            recovery_task.cancel()
+            await await_cleanup(
+                "credential_recovery.task",
+                partial(self._await_tasks_through_cancellation, (recovery_task,)),
+            )
+        self._auth_recovery_task = None
         run_cleanup(
             "workers.cancel_content_mount",
             lambda: self.workers.cancel_group(self, "content-mount"),
@@ -5393,6 +5673,7 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
 
         for attribute in (
             "_pane_state_sub",
+            "_connection_state_sub",
             "_connection_list_sub",
             "_nav_selection_sub",
             "_cursor_sub",

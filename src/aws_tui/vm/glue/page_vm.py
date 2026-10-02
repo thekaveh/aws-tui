@@ -25,6 +25,14 @@ from aws_tui.vm.service_source_vm import (
 GlueView: TypeAlias = Literal["catalog", "jobs", "crawlers"]
 _VIEWS = frozenset({"catalog", "jobs", "crawlers"})
 _SUCCESS_STATES = frozenset({PaneState.IDLE, PaneState.EMPTY})
+_RECOVERY_FAILURE_STATES = frozenset(
+    {
+        PaneState.AUTH_REQUIRED,
+        PaneState.FORBIDDEN,
+        PaneState.UNREACHABLE,
+        PaneState.ERROR,
+    }
+)
 
 
 class GluePageVM:
@@ -295,6 +303,30 @@ class GluePageVM:
         else:
             self._loaded_views.discard("crawlers")
         await self._setup_view(self._active_view, generation)
+
+    async def refresh_for_credential_recovery(self) -> PaneState:
+        """Await the active read-only surface and return its terminal state."""
+        await self.refresh_active()
+        states: tuple[PaneState, ...]
+        if self._active_view == "catalog":
+            states = (
+                self.catalog.databases_state,
+                self.catalog.tables_state,
+                self.catalog.detail_state,
+                self.catalog.partitions_state,
+                self.catalog.statistics_state,
+            )
+            fallback = self.catalog.state
+        elif self._active_view == "jobs":
+            states = (self.jobs.jobs_state, self.jobs.runs_state)
+            fallback = self.jobs.state
+        else:
+            states = (self.crawlers.state, self.crawlers.detail_state)
+            fallback = self.crawlers.state
+        return next(
+            (state for state in states if state in _RECOVERY_FAILURE_STATES),
+            fallback,
+        )
 
     def open_s3_location(
         self,

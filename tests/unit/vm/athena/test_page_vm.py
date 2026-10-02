@@ -493,6 +493,42 @@ def _provider_call_counts(client: PageClient) -> tuple[int, ...]:
     )
 
 
+@pytest.mark.parametrize(
+    ("view", "expected_read"),
+    [
+        ("query", "workgroups"),
+        ("history", "history"),
+        ("results", "workgroups"),
+        ("saved", "saved"),
+    ],
+)
+@pytest.mark.asyncio
+async def test_credential_recovery_refreshes_only_the_active_read_surface(
+    view: str,
+    expected_read: str,
+) -> None:
+    client = PageClient()
+    page = make_page_vm(client)
+    await page.setup()
+    await page.select_view(view)  # type: ignore[arg-type]
+    client.workgroup_calls.clear()
+    client.history_calls.clear()
+    client.named_calls.clear()
+    client.prepared_calls.clear()
+    client.start_calls.clear()
+    client.stop_calls.clear()
+
+    state = await page.refresh_for_credential_recovery()
+
+    assert state in {PaneState.IDLE, PaneState.EMPTY}
+    assert bool(client.workgroup_calls) is (expected_read == "workgroups")
+    assert bool(client.history_calls) is (expected_read == "history")
+    assert bool(client.named_calls or client.prepared_calls) is (expected_read == "saved")
+    assert client.start_calls == []
+    assert client.stop_calls == []
+    page.dispose()
+
+
 @pytest.mark.asyncio
 async def test_open_table_preserves_context_and_prefills_without_execution() -> None:
     client = PageClient()
