@@ -126,6 +126,22 @@ class PaneViewModel:
     copy_selected_path: str | None  # cursor entry's full location, or None
 
 
+@dataclass(frozen=True, slots=True)
+class _ProviderRecoveryStage:
+    """An inert provider listing captured against one live pane revision."""
+
+    original_provider: FileSystemProvider
+    original_path: PathRef
+    original_generation: int
+    provider: FileSystemProvider
+    path: PathRef
+    entries: tuple[FileEntry, ...]
+    identity_label: str | None
+    path_protocol: str
+    connection_key: tuple[str, str]
+    used_root_fallback: bool
+
+
 # State → (user-facing text, severity) — VM-owned per MVVM. Severity maps
 # to a CSS class suffix the view appends.
 _PLACEHOLDER_FOR_STATE: dict[PaneState, tuple[str, str]] = {
@@ -739,6 +755,74 @@ class PaneVM:
     async def refresh(self) -> None:
         await self._reload()
 
+    async def stage_provider_recovery(
+        self,
+        provider: FileSystemProvider,
+        *,
+        path: PathRef,
+        identity_label: str | None,
+        path_protocol: str,
+        connection_key: tuple[str, str],
+    ) -> _ProviderRecoveryStage:
+        """Read a replacement provider while leaving the live pane untouched."""
+        original_provider = self._provider
+        original_path = self._path
+        original_generation = self._reload_generation
+        staged_path = path
+        used_root_fallback = False
+        try:
+            entries = await provider.list(staged_path)
+        except NotFoundError:
+            if staged_path.is_root:
+                entries = []
+            else:
+                staged_path = _ROOT_PATH
+                used_root_fallback = True
+                try:
+                    entries = await provider.list(staged_path)
+                except NotFoundError:
+                    entries = []
+        return _ProviderRecoveryStage(
+            original_provider=original_provider,
+            original_path=original_path,
+            original_generation=original_generation,
+            provider=provider,
+            path=staged_path,
+            entries=tuple(entries),
+            identity_label=identity_label,
+            path_protocol=path_protocol,
+            connection_key=connection_key,
+            used_root_fallback=used_root_fallback,
+        )
+
+    def can_commit_provider_recovery(self, staged: _ProviderRecoveryStage) -> bool:
+        """Return whether an inert recovery stage still targets this pane."""
+        return (
+            not self._disposed
+            and self._provider is staged.original_provider
+            and self._path == staged.original_path
+            and self._reload_generation == staged.original_generation
+        )
+
+    def commit_provider_recovery(self, staged: _ProviderRecoveryStage) -> None:
+        """Publish a previously read provider stage without another await."""
+        if not self.can_commit_provider_recovery(staged):
+            raise RuntimeError("stale provider recovery stage")
+        self._reload_generation += 1
+        self._provider = staged.provider
+        self._identity_label = staged.identity_label
+        self._path_protocol = staged.path_protocol
+        self._connection_key = staged.connection_key
+        self._path = staged.path
+        self._filter_text = ""
+        self._is_multiselect_mode = False
+        self._error_text = None
+        materialized = self._materialize_entries(staged.entries, staged.path)
+        self._replace_entries(materialized)
+        self._set_state(PaneState.IDLE if materialized else PaneState.EMPTY)
+        self._notify("path")
+        self._notify("viewmodel")
+
     async def swap_provider(
         self,
         provider: FileSystemProvider,
@@ -1057,29 +1141,29 @@ class PaneVM:
         if not self._reload_is_current(generation, provider, path):
             return
         self._error_text = None
-        # Prepend a synthetic ".." parent entry on any non-root path so the
-        # user can navigate up via Enter / mouse / single keystroke without
-        # remembering Backspace.
-        materialized: list[FileEntry] = list(raw)
-        if not self._path.is_root:
+        materialized = self._materialize_entries(raw, self._path)
+        self._replace_entries(materialized)
+        # IDLE if at least one real entry; EMPTY only if neither real entries
+        # nor a ".." row is present (i.e. truly root + empty bucket).
+        self._set_state(PaneState.IDLE if materialized else PaneState.EMPTY)
+
+    def _materialize_entries(self, raw: Iterable[FileEntry], path: PathRef) -> list[EntryVM]:
+        """Build pane children from one already-completed provider listing."""
+        materialized = list(raw)
+        if not path.is_root:
             materialized.insert(
                 0,
                 FileEntry(name="..", kind=EntryKind.DIRECTORY, size=None, modified=None),
             )
-        self._replace_entries(
-            [
-                EntryVM(
-                    entry=fe,
-                    hub=self._hub,
-                    dispatcher=self._dispatcher,
-                    id_prefix=f"{self._id_prefix}.entry",
-                )
-                for fe in materialized
-            ]
-        )
-        # IDLE if at least one real entry; EMPTY only if neither real entries
-        # nor a ".." row is present (i.e. truly root + empty bucket).
-        self._set_state(PaneState.IDLE if materialized else PaneState.EMPTY)
+        return [
+            EntryVM(
+                entry=entry,
+                hub=self._hub,
+                dispatcher=self._dispatcher,
+                id_prefix=f"{self._id_prefix}.entry",
+            )
+            for entry in materialized
+        ]
 
     def _reload_is_current(
         self,
