@@ -1430,9 +1430,8 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
 
         Used by the AWS+EXPIRED proactive-fallback path. The
         ``initial_conn`` is still in ``ctx.unreachable_connections``
-        so ``Shift+S`` skips it until the user runs
-        ``aws sso login --profile X`` and relaunches (or until the
-        ``r`` retry path clears the mark).
+        so ``Shift+S`` skips it until a successful in-session credential
+        retry clears the mark.
         """
         from aws_tui.vm.file_manager.dual_pane_vm import DualPaneVM
         from aws_tui.vm.file_manager.pane_vm import PaneVM
@@ -1523,11 +1522,11 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
         message, action = {
             "aws-sso-expired": (
                 f"SSO expired for [b]{profile}[/], both panes set to local",
-                f"refresh with [b]aws sso login --profile {profile}[/] and relaunch",
+                f"run [b]aws sso login --profile {profile}[/], then press [b]a[/] to retry",
             ),
             "aws-no-creds": (
                 f"no session for [b]{profile}[/], both panes set to local",
-                f"run [b]aws sso login --profile {profile}[/] (or set $AWS_PROFILE) and relaunch",
+                "repair credentials externally, then press [b]a[/] to retry",
             ),
         }.get(
             reason,

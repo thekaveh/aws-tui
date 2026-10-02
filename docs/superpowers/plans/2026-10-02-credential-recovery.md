@@ -10,7 +10,7 @@
 
 **Spec:** `docs/superpowers/specs/2026-10-02-credential-recovery-design.md`
 
-## Global constraints
+## 1. Global constraints
 
 - Keep action id `auth.authenticate` and default key `a`; expose the same action in the command palette as **Retry active source credentials**.
 - Re-resolve the captured connection name, but accept it only when kind, name, and region still match. Never select another account.
@@ -23,7 +23,7 @@
 - Treat source changes away and back as stale through a monotonic revision.
 - Sanitize guidance: fixed messages may include the profile name but never exception text, credential material, subprocess output, or full endpoint URLs.
 
-## Review focus
+## 2. Review focus
 
 Every task review must prove these cases rather than infer them from happy paths:
 
@@ -34,7 +34,7 @@ Every task review must prove these cases rather than infer them from happy paths
 5. A connected token probe followed by a denied provider read reports access-denied guidance and does not publish connected auth.
 6. An unexpected secret-bearing exception produces only fixed generic guidance.
 
-## Task 1: Add fixed recovery guidance and non-destructive root publication
+## 3. Task 1: Add fixed recovery guidance and non-destructive root publication
 
 **Files:**
 
@@ -43,7 +43,7 @@ Every task review must prove these cases rather than infer them from happy paths
 - Modify: `src/aws_tui/vm/root_vm.py`
 - Modify: `tests/unit/vm/test_root_vm.py`
 
-### Step 1: Write failing classifier tests
+### 3.1. Step 1: Write failing classifier tests
 
 Parameterize expired SSO, missing non-SSO credentials, `AuthRequiredError`, `PermissionDeniedError`, `ProviderUnreachableError`, and an unexpected exception. Assert the exact `RecoveryFailureKind`, retryable flag, and fixed guidance. Include a secret-bearing exception and endpoint with userinfo/query data, then assert none of those strings reach the result.
 
@@ -55,15 +55,15 @@ Run:
 
 Expected: FAIL because the module and classifier do not exist.
 
-### Step 2: Implement the smallest pure classifier
+### 3.2. Step 2: Implement the smallest pure classifier
 
 Add immutable `RecoveryGuidance`, `RecoveryFailureKind`, and `classify_recovery_failure(connection, *, token_state=None, error=None)`. Prefer typed token/error signals in a documented order and return fixed copy. Include only the sanitized connection profile/name needed for the external sign-in command.
 
-### Step 3: Verify the classifier
+### 3.3. Step 3: Verify the classifier
 
 Run the classifier test file and confirm all cases pass.
 
-### Step 4: Write failing root-publication tests
+### 3.4. Step 4: Write failing root-publication tests
 
 In `tests/unit/vm/test_root_vm.py`, construct hosted content with a disposal spy, call `refresh_connection_state`, and assert that connection/auth projections plus `ConnectionChangedMessage` update while hosted content, service, pane objects, and disposal count remain unchanged.
 
@@ -75,18 +75,18 @@ Run:
 
 Expected: FAIL because `refresh_connection_state` does not exist.
 
-### Step 5: Implement and verify root publication
+### 3.5. Step 5: Implement and verify root publication
 
 Add a synchronous `RootVM.refresh_connection_state(connection, auth_state)` that updates only the source projection and publishes the existing message. Run both Task 1 test files plus mypy for the touched modules.
 
-### Step 6: Commit Task 1
+### 3.6. Step 6: Commit Task 1
 
 ```sh
 git add src/aws_tui/vm/credential_recovery.py src/aws_tui/vm/root_vm.py tests/unit/vm/test_credential_recovery.py tests/unit/vm/test_root_vm.py
 git commit -m "feat: classify credential recovery failures"
 ```
 
-## Task 2: Stage and atomically commit S3 provider recovery
+## 4. Task 2: Stage and atomically commit S3 provider recovery
 
 **Files:**
 
@@ -94,7 +94,7 @@ git commit -m "feat: classify credential recovery failures"
 - Modify: `tests/unit/vm/file_manager/test_pane_vm.py`
 - Modify: `tests/unit/vm/file_manager/test_pane_vm_contracts.py`
 
-### Step 1: Write failing stage/commit tests
+### 4.1. Step 1: Write failing stage/commit tests
 
 Add tests proving:
 
@@ -114,17 +114,17 @@ Run:
 
 Expected: FAIL because the staged recovery API does not exist.
 
-### Step 2: Implement immutable staged recovery
+### 4.2. Step 2: Implement immutable staged recovery
 
 Add a private immutable staged value and public `stage_provider_recovery`, `can_commit_provider_recovery`, and `commit_provider_recovery`. Reuse the normal listing-to-entry materialization rules, including typed provider errors. Capture original provider object, path, and reload generation. Do not mutate observables or dispose existing entries while staging.
 
 When a non-root `NotFoundError` occurs, read root with the same provider. Treat root `NotFoundError` as an empty result. The synchronous commit must first revalidate and then replace metadata and entries from the staged value without awaiting or reading again.
 
-### Step 3: Add an atomic two-pane contract test
+### 4.3. Step 3: Add an atomic two-pane contract test
 
 Build two panes for the same connection, stage the first successfully, fail the second, and prove neither live pane changed. Then stage both successfully, prevalidate both, commit them without an await, and prove each provider was read once.
 
-### Step 4: Verify and commit Task 2
+### 4.4. Step 4: Verify and commit Task 2
 
 Run the pane VM unit suite, Ruff, and mypy for the touched module. Then commit:
 
@@ -133,7 +133,7 @@ git add src/aws_tui/vm/file_manager/pane_vm.py tests/unit/vm/file_manager/test_p
 git commit -m "feat: stage atomic pane credential recovery"
 ```
 
-## Task 3: Wire the durable action and guarded app transaction
+## 5. Task 3: Wire the durable action and guarded app transaction
 
 **Files:**
 
@@ -147,7 +147,7 @@ git commit -m "feat: stage atomic pane credential recovery"
 - Modify: `tests/unit/vm/emr_serverless/test_page_vm.py`
 - Modify: `tests/unit/vm/glue/test_page_vm.py`
 
-### Step 1: Write failing key and palette tests
+### 5.1. Step 1: Write failing key and palette tests
 
 Update keybinding wiring expectations so `a` dispatches `auth.authenticate`. Assert `_PALETTE_COMMANDS` contains the same action id and the visible label **Retry active source credentials**. Verify the action remains available after a toast expires and in local-only fallback mode.
 
@@ -159,7 +159,7 @@ Run:
 
 Expected: FAIL because the action is handlerless and absent from the palette.
 
-### Step 2: Add deterministic read-only service refresh contracts
+### 5.2. Step 2: Add deterministic read-only service refresh contracts
 
 Write unit tests first, then expose a small deterministic recovery refresh in each service VM:
 
@@ -169,7 +169,7 @@ Write unit tests first, then expose a small deterministic recovery refresh in ea
 
 Use service request logs that distinguish reads from mutations. Run the three page-VM unit files and retain the initial failures as reproduction evidence.
 
-### Step 3: Write the expired-to-valid S3 pilot
+### 5.3. Step 3: Write the expired-to-valid S3 pilot
 
 In `tests/integration/test_credential_recovery.py`, use a resolver that returns the same immutable `Connection`, a token probe that changes from expired to connected, and a provider with a held listing. Start from AUTH_REQUIRED or the boot local-only fallback, repair the token, invoke `a`, and assert:
 
@@ -182,7 +182,7 @@ In `tests/integration/test_credential_recovery.py`, use a resolver that returns 
 
 Expected first run: FAIL because no app recovery coordinator exists.
 
-### Step 4: Write failure, cancellation, coalescing, and stale pilots
+### 5.4. Step 4: Write failure, cancellation, coalescing, and stale pilots
 
 Cover all of these before implementation:
 
@@ -198,7 +198,7 @@ Cover all of these before implementation:
 - cancellation after all stage reads and before commit produces no change;
 - S3 copy/delete/move/mkdir/rename, EMR submission/cancel, Athena execute/cancel, and Glue mutations never appear in request logs.
 
-### Step 5: Implement app ownership and coalescing
+### 5.5. Step 5: Implement app ownership and coalescing
 
 In `AwsTuiApp`:
 
@@ -217,7 +217,7 @@ In `AwsTuiApp`:
 
 Do not replay actions or command history. Do not call any mutation-capable method.
 
-### Step 6: Verify Task 3 behavior
+### 5.6. Step 6: Verify Task 3 behavior
 
 Run:
 
@@ -227,14 +227,14 @@ Run:
 
 Then run affected source-switch, navigation, S3, Athena, EMR, and Glue integration suites. Run Ruff and mypy for every touched Python file.
 
-### Step 7: Commit Task 3
+### 5.7. Step 7: Commit Task 3
 
 ```sh
 git add src/aws_tui/app.py src/aws_tui/vm/athena/page_vm.py src/aws_tui/vm/emr_serverless/page_vm.py src/aws_tui/vm/glue/page_vm.py tests/integration/test_keybinding_wiring.py tests/integration/test_credential_recovery.py tests/unit/vm/athena/test_page_vm.py tests/unit/vm/emr_serverless/test_page_vm.py tests/unit/vm/glue/test_page_vm.py
 git commit -m "feat: retry active source credentials in session"
 ```
 
-## Task 4: Update the shipped contract and complete delivery verification
+## 6. Task 4: Update the shipped contract and complete delivery verification
 
 **Files:**
 
@@ -243,7 +243,7 @@ git commit -m "feat: retry active source credentials in session"
 - Modify: the existing credential/S3 troubleshooting document found by `rg -l 'credential|AUTH_REQUIRED|auth.authenticate' docs`
 - Modify: `tests/docs/test_shipped_behavior.py`
 
-### Step 1: Write failing documentation contract assertions
+### 6.1. Step 1: Write failing documentation contract assertions
 
 Replace the shipped-behavior expectation that auth is handlerless or requires relaunch. Assert docs expose `a`, the palette action, external credential repair, same-source retry, distinct guidance, and the boundary that aws-tui never runs login or writes credentials.
 
@@ -255,11 +255,11 @@ Run:
 
 Expected: FAIL against the old documentation.
 
-### Step 2: Update user documentation
+### 6.2. Step 2: Update user documentation
 
 Document the recovery workflow with concrete expired-SSO and missing-credential examples, plus preserved path/root-fallback behavior. Remove deferred/unbound/relaunch-only claims. Keep troubleshooting aligned with the fixed classifier text and mutation boundary.
 
-### Step 3: Review the full diff against all acceptance criteria
+### 6.3. Step 3: Review the full diff against all acceptance criteria
 
 Create an AC-to-test ledger for #244. Inspect the entire branch diff from `origin/develop`. Search for placeholders and unsafe calls:
 
@@ -270,7 +270,7 @@ git diff --check origin/develop...HEAD
 
 Confirm every review-focus case has a named test and every user-visible claim is implemented.
 
-### Step 4: Run local release gates
+### 6.4. Step 4: Run local release gates
 
 Use the repository's isolated AWS environment:
 
@@ -285,7 +285,7 @@ uv run pre-commit run --all-files --show-diff-on-failure
 
 Diagnose every failure; do not weaken tests, refresh snapshots blindly, or rerun hosted failures as a substitute for a fix.
 
-### Step 5: Commit docs and final corrections
+### 6.5. Step 5: Commit docs and final corrections
 
 Commit the documentation contract separately. Keep any review correction in a focused commit and rerun its affected tests plus the full required gates.
 
@@ -294,7 +294,7 @@ git add README.md docs tests/docs/test_shipped_behavior.py
 git commit -m "docs: explain in-session credential recovery"
 ```
 
-### Step 6: Execute the protected delivery cycle
+### 6.6. Step 6: Execute the protected delivery cycle
 
 - Push `codex/issue-244-credential-recovery` and create a PR to `develop` with the AC ledger, local verification, limitations, and `Refs #244` so the issue stays open.
 - Attach the PR to this chat, obtain whole-branch code review, resolve all findings, and verify required checks on the final head before merging.

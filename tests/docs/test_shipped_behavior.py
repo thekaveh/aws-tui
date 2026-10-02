@@ -17,10 +17,24 @@ def test_readme_describes_shipped_runtime_bindings_quick_look_and_palette() -> N
     assert "Streaming Quick Look (deferred)" not in text
     assert "Command palette (deferred)" not in text
     assert "`BindingResolver` installs handled `[keybindings]` overrides at runtime" in text
-    assert "Handlerless action IDs, including `auth.authenticate`, remain unbound" in text
+    assert "Handlerless deferred action IDs remain unbound" in text
     assert "shipped `[keybindings]` overlay behavior" in text
     assert "**Streaming Quick Look.** Press `Space`" in text
     assert "**Command palette.** Press `:` or `Ctrl+K`" in text
+
+
+def test_current_docs_describe_in_session_credential_recovery() -> None:
+    readme = _text("README.md")
+    keybindings = _text("docs/keybindings.md")
+    connections = _text("docs/connections.md")
+    s3 = _text("docs/services/s3.md")
+
+    assert "`a` retries the active source in place" in readme
+    assert "**Retry active source credentials**" in keybindings
+    assert "aws-tui never runs the AWS CLI or writes credentials" in connections
+    assert "expired SSO, missing credentials, access denied, and network failures" in connections
+    assert "preserves each matching pane's current path" in s3
+    assert "falls back to remote root only when a saved non-root path no longer exists" in s3
 
 
 def test_cookbook_describes_live_keybinding_overrides() -> None:

@@ -868,7 +868,7 @@ async def test_the_copy_tooltip_advice_is_owned_by_the_view_model() -> None:
     ``Pane.on_mouse_move``, which made the widget decide what a label reads
     -- and made the two of them free to drift apart from the placeholder
     text two properties away, which has always named its keys here
-    (``"press a to sign in"``, ``"press r to retry"``).
+    (``"press a to retry"``, ``"press r to retry"``).
 
     The two hints must stay distinguishable, because they describe
     different affordances: a row is not a click target (clicking one moves

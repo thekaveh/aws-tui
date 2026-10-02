@@ -80,7 +80,7 @@ as the universal escape hatch.
 
 | Action | Default | Notes |
 |---|---|---|
-| Authenticate (when auth toast active) | `auth.authenticate` action — *(deferred)* | Spec'd on `a`; handler not wired in v0.8.x |
+| Retry active source credentials | `a` | Re-probes the same source after credentials are repaired externally; also available as **Retry active source credentials** in the command palette |
 | Connection switcher | no shipped command — *(deferred)* | Dynamic `connection switch <name>` palette entries are not registered. |
 
 The command palette opens today with `:` or `Ctrl+K`; only the dynamic
@@ -256,7 +256,7 @@ claiming bare `y`, which is reserved by `glue.copy_table_ref`.
 
 The bindings that are wired today include `q`,
 `Ctrl+C`, `Tab` / `Shift+Tab`, `↑/↓` (and `j/k`), `Enter`,
-`Backspace`, `left`, `→`, `r`, `?`, `:`, `t`, `T`, `,` (comma → Settings),
+`Backspace`, `left`, `→`, `r`, `a`, `?`, `:`, `t`, `T`, `,` (comma → Settings),
 `c`, `d`, `S` (Shift+S), `A` (Shift+A), Glue `1` / `2` / `3`, Athena
 `1` / `2` / `3` / `4`, `F`, `G`, `y`, `Q`, `W`, `C`, `D`, `i`, `V`,
 `Ctrl+Enter`, `Esc`, `l`, `p`, `P` (Shift+P), `Space`, `f`,
@@ -298,7 +298,7 @@ unbound until a handler ships.
 | `pane.refresh` | `r` | yes | Re-run `provider.list()` |
 | `pane.copy_entry_path` | `p` | yes | Copy the cursor entry's full path to the clipboard; keyed and palette-visible (**Copy cursor entry path**, file manager only) |
 | `pane.copy_path` | `P` (`shift+p`) | yes | Copy the pane's current path to the clipboard; keyed and palette-visible (**Copy pane path**, file manager only) |
-| `auth.authenticate` | `a` (when auth toast active) | *(deferred)* | Reserved for a future auth helper; currently run `aws sso login --profile <name>` yourself |
+| `auth.authenticate` | `a` | yes | Retry the active source after external credential repair; never launches login or writes credentials |
 | `emr.next_application` | `A` (`shift+a`) | yes | Cycle to the next EMR application |
 | `emr.clone` | `c` (when EMR page mounted) | yes | Open the EMR clone-job-run modal pre-filled from the focused run. |
 | `emr.logs.filter` | `f` (when EMR logs pane focused) | yes | Open the EMR logs filter modal |

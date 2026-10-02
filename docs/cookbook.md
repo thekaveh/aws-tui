@@ -196,8 +196,8 @@ the cycle immediately, no relaunch.
 > expired or missing SSO profiles are skipped by the boot chain,
 > marked unreachable for the session, and surfaced through a recovery
 > toast while the app mounts local panes instead of hanging. Run
-> `aws sso login --profile <name>` and relaunch, or use the explicit
-> retry path when prompted.
+> `aws sso login --profile <name>` externally, then press `a` or choose
+> **Retry active source credentials** from the command palette.
 
 ---
 

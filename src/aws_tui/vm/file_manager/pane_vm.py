@@ -148,14 +148,14 @@ _PLACEHOLDER_FOR_STATE: dict[PaneState, tuple[str, str]] = {
     PaneState.LOADING: ("loading...", ""),
     PaneState.EMPTY: ("empty", ""),
     PaneState.AUTH_REQUIRED: (
-        "auth needed - press a to sign in (or `aws sso login --profile <name>`)",
+        "auth needed - repair credentials externally, then press a to retry",
         "warning",
     ),
     PaneState.FORBIDDEN: (
         "access denied\n\n"
         "Possible causes:\n"
         "  - No AWS credentials configured.\n"
-        "    Run `aws configure` or `aws configure sso` and relaunch.\n"
+        "    Repair credentials externally, then press a to retry.\n"
         "  - Credentials are valid but the IAM principal lacks\n"
         "    `s3:ListAllMyBuckets` (root listing) or `s3:ListBucket`\n"
         "    (object listing). Check IAM policy on the profile.\n"
@@ -175,7 +175,7 @@ _COLUMN_HEADER_TEXT: str = f"   {'NAME':<40} {'SIZE':>12}  {'MODIFIED':<18}"
 
 # Tooltip advice. Both sentences name a keystroke, which makes them the same
 # kind of string as the AUTH_REQUIRED / UNREACHABLE placeholders above
-# ("press a to sign in", "press r to retry") -- decided here rather than in
+# ("press a to retry", "press r to retry") -- decided here rather than in
 # the widget that draws them. ``vm/chrome/hint_legend_vm._tooltip_for`` is
 # the wider precedent: keybinding advice is composed VM-side and the view
 # binds to it.

@@ -12,15 +12,15 @@ The finished behavior gives `auth.authenticate` a real handler, the default `a` 
 
 ## 2. Options considered
 
-### A. Replay source selection
+### 2.1. Replay source selection
 
 Invoke the existing source-selection or Settings-to-S3 path. This is small, but it resets pane paths, can temporarily select another resolver entry, publishes state before the confirming read finishes, and cannot reliably discard a stale result.
 
-### B. Add a new recovery service and VM
+### 2.2. Add a new recovery service and VM
 
 Introduce a separate orchestration layer for all services. This gives strong isolation, but duplicates the existing connection resolver, service registry, pane lifecycle, and app-level navigation transaction machinery.
 
-### C. Add a narrow app coordinator with staged pane recovery
+### 2.3. Add a narrow app coordinator with staged pane recovery
 
 Keep orchestration in `AwsTuiApp`, add a pure failure/guidance classifier, and add a two-phase read/commit operation to `PaneVM`. The coordinator captures source identity, coalesces requests, re-resolves only that identity, stages the listing while old content remains authoritative, and commits only after freshness checks.
 
@@ -41,7 +41,7 @@ Keep orchestration in `AwsTuiApp`, add a pure failure/guidance classifier, and a
 
 ## 4. Components and boundaries
 
-### 4.1 Recovery classifier
+### 4.1. Recovery classifier
 
 Create `src/aws_tui/vm/credential_recovery.py` with:
 
@@ -51,7 +51,7 @@ Create `src/aws_tui/vm/credential_recovery.py` with:
 
 The classifier consumes `Connection`, `TokenState`, and the existing provider error taxonomy. It emits fixed guidance without including exception text, credential values, endpoints with userinfo/query data, or subprocess output.
 
-### 4.2 Staged pane read
+### 4.2. Staged pane read
 
 Extend `PaneVM` with a private immutable staged result and three public operations:
 
@@ -61,7 +61,7 @@ Extend `PaneVM` with a private immutable staged result and three public operatio
 
 The app stages every affected pane first, verifies every stage plus the global source generation, then commits them without an `await` between checks and commits. This prevents partial recovery when one of two panes still fails.
 
-### 4.3 App recovery coordinator
+### 4.3. App recovery coordinator
 
 `AwsTuiApp` registers `auth.authenticate` and adds `_auth_recovery_task` plus a monotonic `_source_revision`. A hub subscription increments the revision for every `ConnectionChangedMessage`; navigation/source actions also make a changed service or hosted VM fail the captured-context comparison.
 
@@ -82,7 +82,7 @@ For S3, each pane already bound to the captured connection is staged at its curr
 
 For EMR Serverless, Glue, and Athena, recovery delegates only to the current view's existing read-only refresh path. It never calls clone submission, Glue mutations, Athena execute/cancel, or any historical action. The current VM identity and source revision guard stale completions; service VMs' existing generation/disposal guards own their child reads. Auth state is published only after the current read surface reports a non-auth, non-forbidden, non-unreachable result.
 
-### 4.4 Root connection publication
+### 4.4. Root connection publication
 
 Add `RootVM.refresh_connection_state(connection, auth_state)`. It updates only the connection/auth projection and sends `ConnectionChangedMessage`; it does not dispose or rebuild hosted content. The coordinator calls it only after a successful confirming read and freshness checks.
 

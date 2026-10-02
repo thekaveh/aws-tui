@@ -247,16 +247,14 @@ aws-tui                       # launches with the default connection
 For SSO-backed profiles, if you've run `aws sso login --profile <name>`
 recently, aws-tui picks up the cached token silently (no network
 round-trip just to render the UI). Otherwise the picker shows the
-connection in `login needed` state — the `auth.authenticate` action is
-spec'd as `a` in
-[`docs/keybindings.md` connection/auth](docs/keybindings.md#16-connection-and-authentication) but its
-handler is deferred to v0.9. `BindingResolver` already installs handled
-overrides on the live keymap. Handlerless action IDs, including
-`auth.authenticate`, remain unbound. Today, run
-`aws sso login --profile <name>` in your shell and relaunch. Non-SSO
-profiles are attempted directly through boto3; debug shared credentials,
-`credential_process`, env, or role-backed profiles with
-`aws sts get-caller-identity --profile <name>`.
+connection in `login needed` state. Run `aws sso login --profile <name>`
+in your shell, then press `a`: `a` retries the active source in place without
+relaunching, switching accounts, or replaying a write. The same action is in
+the command palette as **Retry active source credentials**. Non-SSO profiles
+are attempted directly through boto3; repair shared credentials,
+`credential_process`, environment, or role-backed credentials externally,
+verify them with `aws sts get-caller-identity --profile <name>`, then press
+`a` to retry the active read surface.
 
 If `aws s3 ls` works on your shell but `aws-tui` shows
 `access denied` on the left pane, the most common cause is that
@@ -327,8 +325,9 @@ localization position live in
 README sections, so the published site and wiki serve the same tables instead
 of pointing back here.
 
-aws-tui does not launch AWS CLI SSO setup; run `aws sso login --profile
-<name>` in a terminal when prompted.
+aws-tui does not launch AWS CLI SSO setup or write credentials. Run `aws sso
+login --profile <name>` in a terminal when prompted, then press `a` to retry
+the active source without relaunching.
 
 ## 6. Contributing
 
