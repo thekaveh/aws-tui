@@ -255,13 +255,23 @@ class JobRunLogsVM:
 
     # ── Network actions ───────────────────────────────────────────────────
 
-    async def load(self, *, use_cache: bool = True) -> None:
+    async def load(
+        self,
+        *,
+        use_cache: bool = True,
+        preferred_file_key: str | None = None,
+    ) -> None:
         try:
-            await self._operations.run(lambda: self._load(use_cache=use_cache))
+            await self._operations.run(
+                lambda: self._load(
+                    use_cache=use_cache,
+                    preferred_file_key=preferred_file_key,
+                )
+            )
         except OperationSuperseded:
             return
 
-    async def _load(self, *, use_cache: bool) -> None:
+    async def _load(self, *, use_cache: bool, preferred_file_key: str | None) -> None:
         """Fetch + stream the selected log file.
 
         View-side ``exclusive=True, group="emr-logs"`` cancels any
@@ -324,7 +334,13 @@ class JobRunLogsVM:
                 self._failure_state = None
                 self._set_state(LogsState.NO_FILES)
                 return
-            current_key = self._current_file.key if self._current_file is not None else None
+            current_key = (
+                preferred_file_key
+                if preferred_file_key is not None
+                else self._current_file.key
+                if self._current_file is not None
+                else None
+            )
             selected_file = next((file for file in files if file.key == current_key), None)
             if selected_file is None:
                 selected_file = next(

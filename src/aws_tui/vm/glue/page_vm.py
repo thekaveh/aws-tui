@@ -307,6 +307,10 @@ class GluePageVM:
     async def refresh_for_credential_recovery(self) -> PaneState:
         """Await the active read-only surface and return its terminal state."""
         await self.refresh_active()
+        return self.credential_recovery_state()
+
+    def credential_recovery_state(self) -> PaneState:
+        """Return the terminal state of the currently restored read-only surface."""
         states: tuple[PaneState, ...]
         if self._active_view == "catalog":
             states = (

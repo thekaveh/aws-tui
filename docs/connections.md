@@ -136,13 +136,15 @@ credentials, repair the shared credentials, `credential_process`, environment,
 or role source and verify it with `aws sts get-caller-identity --profile
 <name>`. aws-tui never runs the AWS CLI or writes credentials.
 
-The retry is pinned to the active connection name, kind, and region. It
-re-probes that exact identity and refreshes only the active read surface; it
-does not switch accounts or repeat a query, job submission, transfer, or other
-mutation. The existing service, content, path, and selection remain in place
-when recovery fails or becomes stale. Fixed guidance distinguishes expired
-SSO, missing credentials, access denied, and network failures without exposing
-provider error text or credential material.
+The retry is pinned to the active connection's name, kind, region, profile,
+endpoint, and routing options. Credential values may rotate, but a profile or
+endpoint change is rejected so the retry cannot silently switch accounts or
+servers. It refreshes only the active read surface and never repeats a query,
+job submission, transfer, or other mutation. The existing service, content,
+path, and selection remain in place when recovery fails or becomes stale.
+Fixed guidance distinguishes expired SSO, missing credentials, access denied,
+and network failures without exposing provider error text or credential
+material.
 
 ## 4. Switching between connections at runtime
 

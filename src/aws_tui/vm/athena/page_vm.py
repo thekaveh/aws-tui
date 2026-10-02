@@ -1142,12 +1142,24 @@ class AthenaPageVM:
         """Await one read-only refresh for the currently visible surface."""
         if self._active_view == "history":
             await self.history.refresh()
-            return self.history.state
-        if self._active_view == "saved":
+        elif self._active_view == "saved":
             await self.saved.refresh_named_queries()
             if self.saved.named_state in _RECOVERY_FAILURE_STATES:
                 return self.saved.named_state
             await self.saved.refresh_prepared_statements()
+        elif self._active_view == "results" and self.results.execution_id is not None:
+            await self.results.load(self.results.execution_id)
+        else:
+            await self.refresh_query_context()
+        return self.credential_recovery_state()
+
+    def credential_recovery_state(self) -> PaneState:
+        """Return the terminal state of the currently loaded read-only surface."""
+        if self._active_view == "history":
+            return self.history.state
+        if self._active_view == "saved":
+            if self.saved.named_state in _RECOVERY_FAILURE_STATES:
+                return self.saved.named_state
             if self.saved.prepared_state in _RECOVERY_FAILURE_STATES:
                 return self.saved.prepared_state
             return (
@@ -1156,10 +1168,7 @@ class AthenaPageVM:
                 else PaneState.EMPTY
             )
         if self._active_view == "results" and self.results.execution_id is not None:
-            await self.results.load(self.results.execution_id)
             return self.results.state
-
-        await self.refresh_query_context()
         context_states = (
             self._workgroups_state,
             self._workgroup_detail_state,

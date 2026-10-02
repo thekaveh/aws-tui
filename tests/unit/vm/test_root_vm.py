@@ -186,6 +186,38 @@ async def test_switch_service_builds_and_hosts() -> None:
     root.dispose()
 
 
+async def test_adopt_prepared_service_vm_updates_connection_without_rebuilding() -> None:
+    service = _FakeService("athena", accepts_s3=False)
+    root = _build_root(service)
+    original = _aws_conn("engineering")
+    refreshed = Connection(
+        name=original.name,
+        kind=original.kind,
+        region=original.region,
+        source=original.source,
+        profile=original.profile,
+        session_token="rotated",
+    )
+    await root.switch_connection_with(original, TokenState.EXPIRED)
+    await root.switch_service("athena")
+    candidate = root.build_service_vm("athena", refreshed)
+    candidate.construct()  # type: ignore[attr-defined]
+
+    await root.adopt_prepared_service_vm(
+        refreshed,
+        TokenState.CONNECTED,
+        "athena",
+        candidate,
+    )
+
+    assert root.active_connection is refreshed
+    assert root.active_auth_state is TokenState.CONNECTED
+    assert root.content_host.current is candidate
+    assert root.content_host.current_id == "athena"
+    assert len(service.constructed) == 2
+    root.dispose()
+
+
 async def test_cancelled_switch_disposes_unadopted_vm() -> None:
     s3 = _FakeService("s3")
     root = _build_root(s3)

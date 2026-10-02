@@ -20,9 +20,9 @@ Invoke the existing source-selection or Settings-to-S3 path. This is small, but 
 
 Introduce a separate orchestration layer for all services. This gives strong isolation, but duplicates the existing connection resolver, service registry, pane lifecycle, and app-level navigation transaction machinery.
 
-### 2.3. Add a narrow app coordinator with staged pane recovery
+### 2.3. Add a narrow app coordinator with staged recovery
 
-Keep orchestration in `AwsTuiApp`, add a pure failure/guidance classifier, and add a two-phase read/commit operation to `PaneVM`. The coordinator captures source identity, coalesces requests, re-resolves only that identity, stages the listing while old content remains authoritative, and commits only after freshness checks.
+Keep orchestration in `AwsTuiApp`, add a pure failure/guidance classifier, and stage the confirming read away from live content. S3 uses a two-phase read/commit operation on `PaneVM`; Athena, Glue, and EMR Serverless build and load a fresh off-screen service tree. The coordinator captures source identity, coalesces requests, re-resolves only that identity, and adopts staged state only after freshness checks.
 
 **Decision:** C. It reuses existing ownership boundaries and provides the atomicity the acceptance criteria require without a parallel service architecture.
 
@@ -69,22 +69,24 @@ The app stages every affected pane first, verifies every stage plus the global s
 
 The coordinator captures:
 
-- connection kind/name/region and the exact `Connection` value;
+- the connection's non-secret binding identity (kind, name, region, source,
+  profile, endpoint, path-style routing, and TLS verification) plus the exact
+  `Connection` value;
 - auth state;
 - active service id and hosted VM identity;
 - source revision;
 - each matching remote pane's path; and
 - whether the S3 view is the local-only boot fallback.
 
-It re-resolves the captured name. A missing connection or a kind/name/region mismatch fails without selection changes. It calls `AwsSession.probe_token` again. `EXPIRED` and `MISSING` return classifier guidance without a provider call. `CONNECTED` proceeds to the confirming read.
+It re-resolves the captured name. A missing connection or binding-identity mismatch fails without selection changes. Credential values are excluded from that identity so an expected key or session-token rotation can recover, while profile, endpoint, and routing changes cannot silently redirect the retry. It calls `AwsSession.probe_token` again. `EXPIRED` and `MISSING` return classifier guidance without a provider call. `CONNECTED` proceeds to the confirming read.
 
 For S3, each pane already bound to the captured connection is staged at its current path. In a boot local-only fallback, the left pane is staged as the recovered remote pane at root while the right local pane stays untouched. On successful commit, `RootVM.refresh_connection_state(connection, CONNECTED)` publishes the refreshed source without disposing content, the unreachable/fallback memo is cleared, and a success toast reports the retained path or root fallback.
 
-For EMR Serverless, Glue, and Athena, recovery delegates only to the current view's existing read-only refresh path. It never calls clone submission, Glue mutations, Athena execute/cancel, or any historical action. The current VM identity and source revision guard stale completions; service VMs' existing generation/disposal guards own their child reads. Auth state is published only after the current read surface reports a non-auth, non-forbidden, non-unreachable result.
+For EMR Serverless, Glue, and Athena, recovery builds a new VM tree against the re-resolved connection and runs its existing read-only setup/refresh path off-screen. Candidate diagnostics are suppressed while staged so an unexpected provider exception cannot publish candidate-only text through the live root. Failure, cancellation, or staleness shuts down and disposes the candidate; the current VM and widget remain authoritative. Success atomically adopts the prepared VM with the refreshed connection/auth projection, then mounts its matching widget. Recovery never calls clone submission, Glue mutations, Athena execute/cancel, or any historical action.
 
 ### 4.4. Root connection publication
 
-Add `RootVM.refresh_connection_state(connection, auth_state)`. It updates only the connection/auth projection and sends `ConnectionChangedMessage`; it does not dispose or rebuild hosted content. The coordinator calls it only after a successful confirming read and freshness checks.
+Add `RootVM.refresh_connection_state(connection, auth_state)` for successful S3 pane commits. Add prepared-service build/adoption boundaries for AWS services so an off-screen VM can be loaded first and adopted without running setup twice. Prepared adoption updates the hosted VM and connection/auth projection in one publication boundary. The coordinator calls either path only after a successful confirming read and freshness checks.
 
 ## 5. Failure and cancellation rules
 

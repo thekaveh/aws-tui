@@ -9,13 +9,14 @@ via Textual's ``set_interval`` — there's no domain-tier
 from __future__ import annotations
 
 from collections.abc import Callable, Coroutine
+from dataclasses import dataclass
 from typing import Any, Literal
 
 from vmx import ComponentVMOf, Message, MessageHub
 from vmx.services.dispatcher import Dispatcher
 
-from aws_tui.domain.emr_logs import EmrServerlessLogsClient
-from aws_tui.domain.emr_serverless import EmrServerlessClientProtocol
+from aws_tui.domain.emr_logs import EmrServerlessLogsClient, LogFilter
+from aws_tui.domain.emr_serverless import EmrServerlessClientProtocol, JobRunState
 from aws_tui.infra.connection_resolver import Connection
 from aws_tui.vm.emr_serverless.applications_vm import ApplicationsVM
 from aws_tui.vm.emr_serverless.job_run_detail_vm import JobRunDetailVM
@@ -28,6 +29,15 @@ from aws_tui.vm.service_source_vm import (
     ServiceSelectionStore,
     ServiceSourceContext,
 )
+
+
+@dataclass(frozen=True, slots=True)
+class EmrCredentialRecoverySnapshot:
+    application_id: str | None
+    job_run_id: str | None
+    run_state_filter: frozenset[JobRunState]
+    log_file_key: str | None
+    log_filter: LogFilter
 
 
 class EmrServerlessPageVM:
@@ -304,6 +314,53 @@ class EmrServerlessPageVM:
         await self.job_run_logs.load(use_cache=False)
         return self.job_run_logs.credential_recovery_state
 
+    def export_credential_recovery_snapshot(self) -> EmrCredentialRecoverySnapshot:
+        current_file = self.job_run_logs.current_file
+        return EmrCredentialRecoverySnapshot(
+            application_id=self.applications.selected_id,
+            job_run_id=self.job_runs.selected_id,
+            run_state_filter=self.job_runs.state_filter,
+            log_file_key=current_file.key if current_file is not None else None,
+            log_filter=self.job_run_logs.filter,
+        )
+
+    async def restore_and_refresh_for_credential_recovery(
+        self,
+        snapshot: EmrCredentialRecoverySnapshot,
+        focus: Literal["applications", "runs", "detail", "logs"],
+    ) -> PaneState:
+        """Restore the exact live read target in an off-screen candidate."""
+        self.job_runs.set_state_filter(snapshot.run_state_filter)
+        await self.setup()
+        if snapshot.application_id is not None:
+            if not any(app.id == snapshot.application_id for app in self.applications.applications):
+                return PaneState.ERROR
+            if self.applications.selected_id != snapshot.application_id:
+                await self.select_application(snapshot.application_id)
+        if snapshot.job_run_id is not None:
+            while (
+                not any(run.job_run_id == snapshot.job_run_id for run in self.job_runs.runs)
+                and self.job_runs.has_more
+            ):
+                await self.load_more_job_runs()
+            if not any(run.job_run_id == snapshot.job_run_id for run in self.job_runs.runs):
+                return PaneState.ERROR
+            if self.job_runs.selected_id != snapshot.job_run_id:
+                await self.select_job_run(snapshot.job_run_id)
+        self.job_run_logs.set_filter(snapshot.log_filter)
+        if focus == "logs":
+            await self.job_run_logs.load(
+                use_cache=False,
+                preferred_file_key=snapshot.log_file_key,
+            )
+            if snapshot.log_file_key is not None and (
+                self.job_run_logs.current_file is None
+                or self.job_run_logs.current_file.key != snapshot.log_file_key
+            ):
+                return PaneState.ERROR
+            return self.job_run_logs.credential_recovery_state
+        return await self.refresh_for_credential_recovery(focus)
+
     async def _select_after_applications_load(self) -> None:
         if self.applications.selected_id is not None:
             return
@@ -336,4 +393,4 @@ class EmrServerlessPageVM:
         return not self._disposed and not self._shutdown_started
 
 
-__all__ = ["EmrServerlessPageVM"]
+__all__ = ["EmrCredentialRecoverySnapshot", "EmrServerlessPageVM"]

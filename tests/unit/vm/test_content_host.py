@@ -212,6 +212,37 @@ async def test_set_content_awaits_setup_when_vm_defines_one() -> None:
     host.dispose()
 
 
+async def test_set_content_adopts_prepared_vm_without_repeating_lifecycle() -> None:
+    events: list[str] = []
+
+    class _PreparedVM:
+        def construct(self) -> None:
+            events.append("construct")
+
+        async def setup(self) -> None:
+            events.append("setup")
+
+        def dispose(self) -> None:
+            events.append("dispose")
+
+    host = _build()
+    vm = _PreparedVM()
+    vm.construct()
+    await vm.setup()
+
+    await host.set_content(
+        cast("ComponentVM", vm),
+        service_id="athena",
+        already_prepared=True,
+    )
+
+    assert host.current is vm
+    assert host._setup_task is None
+    assert events == ["construct", "setup"]
+    host.dispose()
+    assert events == ["construct", "setup", "dispose"]
+
+
 async def test_set_content_does_not_block_on_slow_setup() -> None:
     """Adoption + ``"current"`` message fire before ``setup`` awaits a
     slow operation — the user-perceptible regression that motivated the
