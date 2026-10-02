@@ -169,3 +169,31 @@ their existing default focus. A global focus rewrite or extra test delay would
 change unrelated contracts or leave the race intact. Cover all three source
 states for both services, existing fallback and modal tests, source swaps,
 navigation, compact layout and unchanged snapshots.
+
+## 9. Delivery correction: stale deferred Iceberg focus references
+
+Final develop CI36810352609 exposed a Windows Python 3.11 keyboard pager timeout.
+Holding real child-update callbacks captured while the snapshot tab had focus,
+then releasing them after the user focuses the enabled pager, reproduces the
+exact timeout for both Enter and Space. The old reference restores the snapshot
+tab and consumes the paging key there. In deferred reconciliation only, preserve
+a newer valid live focus target and synchronize its coordinator slot. Continue
+nearest-slot fallback when focus has no valid replacement; direct explicit
+view-change reconciliation retains its existing behavior. Guard the active screen
+before inspecting focus. Keep the original retry, paging and time-travel outcome
+assertions in normal and delayed callback cases. No timeout increase or hosted
+Windows rerun substitutes for this correction.
+
+## 10. Delivery correction: isolate the manual hint rebuild fixture
+
+Promotion CI36814150232 met the coverage threshold but failed a hint-legend
+boundary test with blank labels after its controlled rebuild. Textual dispatches
+handlers along the MRO; empty subclass mount/resize handlers do not suppress the
+base handlers. A trace confirms automatic rebuilds in the manual fixture. A late
+resize with held child composition reproduces the missing-label assertion.
+Explicitly prevent default mount/resize handling in that fixture so only its
+controlled tasks rebuild chips. Add a late-resize variant that waits for event
+delivery and verifies no extra rebuild occurred. Retain every original semantic
+identity, rendered-label, mount/removal boundary and service-change assertion.
+Disabling production chip retirement must still fail both variants. Production
+hint behavior remains covered by the separate compositor and integration tests.
