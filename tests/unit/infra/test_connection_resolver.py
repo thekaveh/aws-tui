@@ -1108,3 +1108,58 @@ class TestDiscovery:
         assert snapshot.connections == tuple(resolver.list())
         assert snapshot.connections[0].region == "eu-west-1"
         assert snapshot.connections[1].access_key_id is None
+
+
+def test_resolve_selected_reads_only_selected_keychain(tmp_path: Path, store: ConfigStore) -> None:
+    for name in ("chosen", "other"):
+        store.add_connection(
+            ConnectionEntry(
+                name=name,
+                kind="s3-compatible",
+                endpoint_url="https://example.invalid",
+                credentials=f"keychain:{name}-service",
+            )
+        )
+    reads: list[tuple[str, str]] = []
+
+    class TrackingKeychain(InMemoryKeychain):
+        def get(self, service: str, key: str) -> str | None:
+            reads.append((service, key))
+            return "synthetic-secret"
+
+    config, credentials = _write_aws_files(tmp_path)
+    resolver = ConnectionResolver(
+        config_store=store,
+        keychain=TrackingKeychain(),
+        aws_config_path=config,
+        aws_credentials_path=credentials,
+    )
+    assert resolver.resolve_selected("chosen").name == "chosen"
+    assert {service for service, _ in reads} == {"chosen-service"}
+    assert {key for _, key in reads} == {"access_key_id", "secret_access_key", "session_token"}
+    reads.clear()
+    with pytest.raises(ConnectionNotFound):
+        resolver.resolve_selected("absent")
+    assert not reads
+    # Existing eager list/resolve semantics remain intact for their callers.
+    assert resolver.resolve("chosen").name == "chosen"
+    assert {service for service, _ in reads} == {"chosen-service", "other-service"}
+
+
+def test_resolve_selected_preserves_explicit_over_auto_precedence(
+    tmp_path: Path, store: ConfigStore
+) -> None:
+    store.add_connection(ConnectionEntry(name="chosen", kind="aws", profile="base"))
+    config, credentials = _write_aws_files(
+        tmp_path,
+        config_body="[profile chosen]\nregion = eu-west-1\n[profile base]\nregion = ap-south-1\n",
+    )
+    resolver = ConnectionResolver(
+        config_store=store,
+        aws_config_path=config,
+        aws_credentials_path=credentials,
+    )
+    selected = resolver.resolve_selected("chosen")
+    assert selected.profile == "base"
+    assert selected.region == "ap-south-1"
+    assert resolver.resolve_selected("base").source == "auto-aws-profile"
