@@ -2,6 +2,12 @@
 
 How to cut a release.
 
+GitHub Actions workflows are manual-only. Routine development and promotion
+use the applicable local checks in CONTRIBUTING §5. Pushing a tag does not
+publish a release; the hosted publication sequence below requires a separately
+authorized manual dispatch. Supported-platform release evidence remains
+required; local macOS results alone do not establish it.
+
 ```text
 edit changelog + version + README
         ↓
@@ -10,6 +16,8 @@ open release PR (base develop) · merge
 open promotion PR develop → main · merge (merge commit, never squash)
         ↓
 git tag -a vX.Y.Z -m "vX.Y.Z" && git push origin vX.Y.Z
+        ↓
+explicitly dispatch release.yml from vX.Y.Z with target=pypi
         ↓
 approve `pypi` environment in GitHub Actions (one click)
         ↓
@@ -55,8 +63,8 @@ git push -u origin release/vX.Y.Z
 gh pr create --base develop --title "chore(release): cut vX.Y.Z" --fill
 ```
 
-Review the PR like any other change and merge it into `develop` when CI is
-green. Then open the promotion PR from `develop` to `main`:
+Review the PR like any other change and merge it into `develop` after the
+applicable local checks pass. Then open the promotion PR from `develop` to `main`:
 
 ```bash
 gh pr create --base main --head develop \
@@ -65,9 +73,9 @@ gh pr create --base main --head develop \
 
 Merge the promotion PR with a **merge commit, never squash** and never rebase:
 `main` must contain `develop`'s exact commits so the two branches stay
-semantically identical and the next back-merge is a no-op. The `ci gate`
-check must be green on the promotion PR itself; the ruleset's strict
-up-to-date policy means a `develop` push after opening it requires a rerun.
+semantically identical and the next back-merge is a no-op. Verify the final
+promotion source locally and record its commit and results in the PR. If
+`develop` changes after verification, rerun the affected local checks.
 
 ### 1.1. Pre-tag checklist
 
@@ -81,7 +89,7 @@ up-to-date policy means a `develop` push after opening it requires a rerun.
   metadata and PyPI readme. Install each artifact into its own fresh temporary
   environment and run `aws-tui --version`, `aws-tui --help`, and
   `python -m aws_tui --version` in both.
-- **Supported-platform status.** Confirm the latest required CI run is green on
+- **Supported-platform status.** Obtain passing verification evidence on
   macOS, Linux, and Windows for Python 3.11, 3.12, and 3.13. Record any
   platform-specific exception in the release PR instead of silently relying on
   the Linux result.
@@ -181,9 +189,11 @@ git tag -a vX.Y.Z -m "vX.Y.Z"
 git push origin vX.Y.Z
 ```
 
-The `release.yml` workflow fires. Watch it:
+The tag push does not start `release.yml`. Only after manual publication is
+authorized, dispatch it from the matching tag and watch it:
 
 ```bash
+gh workflow run release.yml --ref vX.Y.Z -f target=pypi
 gh run watch
 ```
 
