@@ -30,7 +30,7 @@ Reuse AwsSession.probe_token for SSO freshness where applicable, and contain Tok
 
 ## Named probes
 
-Default report includes a non-actionable skipped probe with guidance to name a source. Explicit unknown names are actionable; never fall back to another source. Resolve credentials for the selected source only, so unrelated keychains never prompt. Add a narrowly scoped selected-source resolver API if necessary; preserve existing list/resolve semantics.
+Default report includes a non-actionable skipped probe with guidance to name a source. An explicit probe replaces that default skipped row with its actual result, preserving all local diagnostic checks. Explicit unknown names are actionable; never fall back to another source. Resolve credentials for the selected source only, so unrelated keychains never prompt. Add a narrowly scoped selected-source resolver API if necessary; preserve existing list/resolve semantics.
 
 Use one bounded read-only API operation: AWS STS GetCallerIdentity or S3-compatible ListBuckets. Discard response payloads; do not enumerate accounts, services, bucket contents, objects, queries, or jobs. Set connect/read timeout 5 seconds and total_max_attempts 1, including credential-provider clients. Close clients on success and failures. Credential-source network requests are permitted only by the explicit named probe.
 

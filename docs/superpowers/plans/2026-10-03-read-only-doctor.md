@@ -43,7 +43,7 @@
 - Produces frozen `DoctorCheck(name: str, result: str, context: Mapping[str, str], next_step: str, actionable: bool = False)`.
 - Produces frozen `DoctorReport(checks: tuple[DoctorCheck, ...])`, `.exit_code: int`, `.render_json() -> str`, `.render_text() -> str`. Public report serializers never expose internal auth data.
 - Produces `collect_local_diagnostics(paths: DoctorPaths | None = None) -> DoctorReport`.
-- Later tasks append checks using `dataclasses.replace(report, checks=(*report.checks, check))`; no duplicate schema or mutable auth report payload.
+- Later tasks compose checks using `dataclasses.replace(report, checks=(*report.checks, check))`; for an explicit probe, first omit the default skipped probe row. No duplicate schema or mutable auth report payload.
 
 - [ ] **Step 1: Write failing tests for the immutable schema and actual fixture-driven collector.** Fixture creates a private tmp home with explicit paths and no real credentials. Write tests equivalent to:
 
@@ -131,7 +131,7 @@ probe_config = BotoConfig(connect_timeout=5, read_timeout=5,
 
 **Interfaces:**
 - Consumes Task 1 report/collector and Task 2 probe_source.
-- App parser adds doctor subparser and --json/--probe; raises SystemExit(report.exit_code) after rendering before build_app_context.
+- App parser adds doctor subparser and --json/--probe; raises SystemExit(report.exit_code) after rendering before build_app_context. Explicit --probe replaces the default skipped probe row with the actual result; retain every local diagnostic row.
 - HelpModal adds optional `log_path: Path | None = None`, `crash_path: Path | None = None`; app supplies ctx.log_sink.path and ctx.crash_dump.base_dir. Defaults preserve existing callers using pure paths. Dynamic values use literal Static markup=False.
 
 - [ ] **Step 1: Write failing real CLI and running-app help tests.** Block socket/keyring/process/build_app_context/resize/AwsTuiApp.run; use actual local collector fixtures for healthy/failing results and SystemExit. Both formats and explicit fakeprobe invocation receive tests, including malformed flags and demoenv:
@@ -148,7 +148,7 @@ def test_doctor_main_never_composes(monkeypatch, capsys, healthy_home):
 
 Running AwsTuiApp with app_context_factory and run_test, open help through action/registered key, await mounted HelpModal, assert doctor command and exact ctx log/crash paths in rendered Static text. Include bracket/control-bearing synthetic paths and keyboard-scroll reachability. Preserve existing help/keymap/theme tests.
 - [ ] **Step 2: Verify RED.** Run new CLI/help tests before modifying app/help; save argparse missing-subcommand/content failures.
-- [ ] **Step 3: Wire early CLI and safe help.** Reuse one report schema; append namedprobe via dataclasses.replace. Default missingprobe is collector skipped check. Existing root flags/version/help/demo behavior remain compatible. Provide error usage for doctor+launch flags. No app composition on doctor, including malformed config. Update main docstring and actual HelpModal construction, preserving layer boundaries.
+- [ ] **Step 3: Wire early CLI and safe help.** Reuse one report schema. For an explicit name, replace the default skipped probe row via `dataclasses.replace(report, checks=(*tuple(check for check in report.checks if check.name != 'probe'), probe_source(name)))`. With no explicit name, retain the collector's skipped check and do not call probe_source. Add a CLI test asserting exactly one probe row for an explicit request. Existing root flags/version/help/demo behavior remain compatible. Provide error usage for doctor+launch flags. No app composition on doctor, including malformed config. Update main docstring and actual HelpModal construction, preserving layer boundaries.
 - [ ] **Step 4: Update canonical docs and verify.** Document schema_version=1, 0/1/2 exits, default offline/no socket/no writes, namedprobe usage/operations/timeouts and SSO/process/MFA limits; help locations derive effective runtime paths. Add a concise changelog entry. Inspect actual docs renderer/generator and run existing strict docs/parity tests locally, no publication. Do not update unrelated snapshots; if actual help snapshots exist and change, inspect product rendering/content first and report exact changed golden list.
 - [ ] **Step 5: Run new tests plus affected CLI/help/log/crash/docs tests, Ruff and mypy.** Existing log/crash tests remain unmodified. Report RED/GREEN commands and counts, self-review full diff and all AC mappings.
 - [ ] **Step 6: Commit coherent integration/docs.** Stage exact Task 3 files and `git commit -m "feat: expose doctor CLI and diagnostic help"`.
