@@ -2357,7 +2357,7 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
 
     async def action_descend(self) -> None:
         self.record_action("pane.descend")
-        focused = self.focused
+        focused = self.focused if len(self.screen_stack) == 1 else None
         if (
             len(self.screen_stack) == 1
             and isinstance(focused, ModalButton)
