@@ -24,7 +24,15 @@ _SOURCE = {"Switch source", "Retry active source credentials"}
 # Scoped to the file manager: ``pane.copy_entry_path`` / ``pane.copy_path``
 # resolve through ``_focused_file_pane()``, and only the S3 service hosts a
 # ``DualPaneVM``, so they are inert on every other page.
-_PANE = {"Copy cursor entry path", "Copy pane path"}
+_PANE = {
+    "Copy cursor entry path",
+    "Copy pane path",
+    "Enter multi-select mode",
+    "Toggle cursor selection",
+    "Select all visible entries",
+    "Clear selection",
+    "Exit multi-select mode",
+}
 _GLUE = {
     "Glue catalog",
     "Glue jobs",

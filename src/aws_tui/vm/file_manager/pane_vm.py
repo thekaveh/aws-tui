@@ -205,12 +205,17 @@ def _require_single_segment(name: str) -> None:
         raise ProviderError(f"name must be a single path segment: {name!r}")
 
 
-def _summary_text(*, count: int, marked: int, total_bytes: int, marked_bytes: int) -> str:
+def _summary_text(
+    *, count: int, marked: int, total_bytes: int, marked_bytes: int, multiselect: bool = False
+) -> str:
     """Build the canonical summary line.
 
     When the user has marked entries the size label shows the SUM OF
     THE MARKED ENTRIES (so the user can see how big the upcoming copy
-    is). With no marks, it falls back to the total directory size."""
+    is). Multi-select mode always names the marked count and bytes, including
+    zero. In normal mode with no marks, show the total directory size."""
+    if multiselect:
+        return f"multi: {marked} marked · {_human_bytes(marked_bytes)}"
     if count == 0:
         return "empty"
     if marked > 0:
@@ -591,6 +596,7 @@ class PaneVM:
                 marked=marked,
                 total_bytes=total_bytes,
                 marked_bytes=marked_bytes,
+                multiselect=self._is_multiselect_mode,
             ),
             breadcrumb_text="/" if self._path.is_root else "/" + "/".join(self._path.segments),
             column_header_text=_COLUMN_HEADER_TEXT,
@@ -1068,6 +1074,7 @@ class PaneVM:
         # fresh exception; the success path drops it explicitly
         # at the end of the method.
         self._error_text = None
+        self._clear_marks()
         self._set_state(PaneState.LOADING)
         try:
             raw = await provider.list(path)
@@ -1306,6 +1313,7 @@ class PaneVM:
         if not value:
             self._clear_marks()
         self._notify("is_multiselect_mode")
+        self._notify("viewmodel")
 
     def _select_all(self) -> None:
         if not self._filtered:

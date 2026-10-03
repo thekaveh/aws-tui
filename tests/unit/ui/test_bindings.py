@@ -139,3 +139,50 @@ def test_bare_printable_keys_never_take_priority_over_editable_widgets() -> None
         assert not _binding_priority("pane.toggle_select", key), key
     for key in ("ctrl+k", "Ctrl+K", "escape", "f1", "enter", "backspace"):
         assert _binding_priority("pane.toggle_select", key), key
+
+
+def test_all_selection_ids_emit_individually_and_exit_yields_to_editor() -> None:
+    ids = (
+        "pane.enter_multiselect",
+        "pane.toggle_select",
+        "pane.select_all",
+        "pane.clear_selection",
+        "pane.exit_multiselect",
+    )
+    resolver = BindingResolver(
+        keymap=KeymapStore(), actions=_registry(*ids, "pane.quick_look", "auth.authenticate")
+    )
+    bindings = {binding.action: binding for binding in resolver.to_textual_bindings()}
+    for action_id, key in zip(ids, ("v", "space", "a", "u", "ctrl+v"), strict=True):
+        action = (
+            f"dispatch({action_id!r}, {key!r})"
+            if action_id in {"pane.toggle_select", "pane.select_all"}
+            else f"dispatch({action_id!r})"
+        )
+        assert bindings[action].key == key
+    assert bindings["dispatch('pane.clear_selection')"].description == "Clear selection"
+    assert bindings["dispatch('pane.exit_multiselect')"].description == "Exit multi-select"
+    assert not bindings["dispatch('pane.exit_multiselect')"].priority
+    assert (
+        bindings["dispatch('pane.toggle_select', 'space')"].key
+        == bindings["dispatch('pane.quick_look', 'space')"].key
+    )
+
+
+def test_contextual_bindings_serialize_each_actual_normalized_key() -> None:
+    from textual.actions import parse
+
+    keymap = KeymapStore(
+        overlay={"pane.quick_look": ["Space", "x"], "auth.authenticate": ["a", "b"]}
+    )
+    ids = ("pane.quick_look", "pane.toggle_select", "auth.authenticate", "pane.select_all")
+    bindings = BindingResolver(keymap=keymap, actions=_registry(*ids)).to_textual_bindings()
+    assert len(bindings) == 6
+    assert {(binding.key, parse(binding.action)[1:]) for binding in bindings} == {
+        ("space", ("dispatch", ("pane.quick_look", "space"))),
+        ("x", ("dispatch", ("pane.quick_look", "x"))),
+        ("space", ("dispatch", ("pane.toggle_select", "space"))),
+        ("a", ("dispatch", ("auth.authenticate", "a"))),
+        ("b", ("dispatch", ("auth.authenticate", "b"))),
+        ("a", ("dispatch", ("pane.select_all", "a"))),
+    }
