@@ -18,11 +18,18 @@ import sys
 import unicodedata
 from collections.abc import Mapping
 from dataclasses import dataclass, replace
+from datetime import UTC, datetime
 from pathlib import Path
 from types import MappingProxyType
 from urllib.parse import urlsplit, urlunsplit
 
-from aws_tui.infra.aws_session import AwsSession, TokenLoadError, TokenState
+from aws_tui.infra.aws_session import (
+    _SKEW_BUFFER,
+    AwsSession,
+    TokenLoadError,
+    TokenState,
+    _parse_iso8601,
+)
 from aws_tui.infra.config_store import Config, ConfigError, ConfigStore
 from aws_tui.infra.connection_resolver import (
     Connection,
@@ -257,16 +264,35 @@ def _sso_result(connection: Connection, profile: str, key: str, paths: DoctorPat
             return "missing_credentials"
         if not isinstance(token, str):
             return "unreadable_sso"
-        probe = AwsSession(
+        session = AwsSession(
             sso_cache_dir=paths.sso_cache_dir, aws_config_path=paths.aws_config_file
-        ).probe_token(replace(connection, profile=profile))
-    except (TokenLoadError, OSError, UnicodeError, ValueError, TypeError, AttributeError):
+        )
+        # The app probe only resolves AWS config metadata. Shared credentials
+        # can select a different cache (or supply the only SSO metadata), so
+        # never accept the probe's non-SSO CONNECTED shortcut as freshness.
+        if session._sso_cache_key_for_profile(profile) == cache_file.stem:
+            probe = session.probe_token(replace(connection, profile=profile))
+            if probe.state != TokenState.CONNECTED or probe.expires_at is not None:
+                return {
+                    TokenState.CONNECTED: "ok",
+                    TokenState.EXPIRED: "expired_sso",
+                    TokenState.MISSING: "missing_credentials",
+                }[probe.state]
+        # Confined fallback: the same pure parser/skew policy, applied only to
+        # the known cache selected by resolved local metadata. No config writes
+        # or credential providers are needed to align the two local inputs.
+        expires_at = _parse_iso8601(payload["expiresAt"])
+        return "expired_sso" if expires_at - _SKEW_BUFFER <= datetime.now(UTC) else "ok"
+    except (
+        TokenLoadError,
+        OSError,
+        UnicodeError,
+        ValueError,
+        TypeError,
+        AttributeError,
+        OverflowError,
+    ):
         return "unreadable_sso"
-    return {
-        TokenState.CONNECTED: "ok",
-        TokenState.EXPIRED: "expired_sso",
-        TokenState.MISSING: "missing_credentials",
-    }[probe.state]
 
 
 def _aws_auth_result(
@@ -287,6 +313,7 @@ def _aws_auth_result(
         if profile not in profiles:
             return "unverified"
     visited: set[str] = set()
+    derived_role = False
     while True:
         if profile in visited:
             return "invalid_config"
@@ -294,11 +321,13 @@ def _aws_auth_result(
         metadata = profiles.get(profile)
         if metadata is None:
             return "unverified" if invalid else "missing_credentials"
+        derived_role = derived_role or bool(metadata.get("role_arn"))
         key = metadata.get("sso_session") or metadata.get("sso_start_url")
         if key:
             if "aws-config" in invalid:
                 return "unverified"
-            return _sso_result(connection, profile, key, paths)
+            result = _sso_result(connection, profile, key, paths)
+            return "unverified" if derived_role and result == "ok" else result
         if metadata.get("role_arn"):
             source = metadata.get("source_profile")
             if source:
@@ -311,7 +340,7 @@ def _aws_auth_result(
         ):
             return "unverified"
         if _has_keys(metadata.get("aws_access_key_id"), metadata.get("aws_secret_access_key")):
-            return "ok"
+            return "unverified" if derived_role else "ok"
         return "unverified" if invalid else "missing_credentials"
 
 

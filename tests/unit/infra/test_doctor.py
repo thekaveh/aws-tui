@@ -372,7 +372,7 @@ def test_role_source_sso_and_cycle(paths, cycle):
             + "\n"
         )
     checks = _auth(collect_local_diagnostics(paths))
-    assert checks[-1].result == ("invalid_config" if cycle else "ok")
+    assert checks[-1].result == ("invalid_config" if cycle else "unverified")
     assert checks[-1].actionable == cycle
 
 
@@ -559,7 +559,13 @@ def test_multihop_sso_and_nested_process_provider(paths):
             "[profile middle]\nrole_arn = private\nsource_profile = dev\n[profile outer]\nrole_arn = private\nsource_profile = middle\n[profile process]\ncredential_process = /never/run\n[profile process-role]\nrole_arn = private\nsource_profile = process\n"
         )
     checks = _auth(collect_local_diagnostics(paths))
-    assert [check.result for check in checks] == ["ok", "ok", "ok", "unverified", "unverified"]
+    assert [check.result for check in checks] == [
+        "ok",
+        "unverified",
+        "unverified",
+        "unverified",
+        "unverified",
+    ]
 
 
 @pytest.mark.parametrize("missing", ["aws_access_key_id", "aws_secret_access_key"])
@@ -646,3 +652,97 @@ def test_effective_log_and_crash_paths_and_source_origin(paths):
     assert path_check.context["crash"] == str(paths.cache_dir / "crash")
     check = _auth(report)[0]
     assert check.context == {"source": "1", "kind": "aws", "origin": "auto-aws-profile"}
+
+
+@pytest.mark.parametrize("source_state", ["static", "sso", "missing", "expired", "unreadable"])
+def test_role_source_prerequisites_never_prove_derived_credentials(paths, source_state):
+    if source_state == "static":
+        _static_profile(paths)
+        _aws(paths, "[profile dev]\n")
+    elif source_state != "missing":
+        cache = _sso(
+            paths,
+            expires=datetime.now(UTC) - timedelta(hours=1) if source_state == "expired" else None,
+        )
+        if source_state == "unreadable":
+            cache.write_bytes(b"\xffsynthetic-secret")
+    with paths.aws_config_file.open("a") as file:
+        file.write("[profile role]\nrole_arn = private\nsource_profile = dev\n")
+    check = _auth(collect_local_diagnostics(paths))[-1]
+    expected = {
+        "static": "unverified",
+        "sso": "unverified",
+        "missing": "missing_credentials",
+        "expired": "expired_sso",
+        "unreadable": "unreadable_sso",
+    }[source_state]
+    assert check.result == expected
+    assert check.actionable == (source_state not in {"static", "sso"})
+
+
+@pytest.mark.parametrize("modern", [False, True])
+@pytest.mark.parametrize("cache_state", ["healthy", "expired", "missing", "unreadable", "extreme"])
+def test_shared_credentials_sso_uses_resolved_cache_freshness(paths, modern, cache_state):
+    cache = _sso(paths, modern=modern)
+    paths.aws_credentials_file.write_text(
+        paths.aws_config_file.read_text().replace("[profile dev]", "[dev]"), encoding="utf-8"
+    )
+    paths.aws_config_file.unlink()
+    if cache_state == "missing":
+        cache.unlink()
+    elif cache_state == "unreadable":
+        cache.write_bytes(b"\xffsynthetic-secret")
+    elif cache_state in {"expired", "extreme"}:
+        payload = json.loads(cache.read_text())
+        payload["expiresAt"] = (
+            "0001-01-01T00:00:00Z"
+            if cache_state == "extreme"
+            else (datetime.now(UTC) - timedelta(hours=1)).isoformat()
+        )
+        cache.write_text(json.dumps(payload), encoding="utf-8")
+    before = _snapshot(paths.config_file.parent)
+    check = _auth(collect_local_diagnostics(paths))[0]
+    assert (
+        check.result
+        == {
+            "healthy": "ok",
+            "expired": "expired_sso",
+            "missing": "missing_credentials",
+            "unreadable": "unreadable_sso",
+            "extreme": "unreadable_sso",
+        }[cache_state]
+    )
+    assert _snapshot(paths.config_file.parent) == before
+
+
+def test_shared_credentials_override_cannot_probe_unrelated_sso_cache(paths):
+    _sso(paths)
+    url = "https://other.example.invalid/start"
+    paths.aws_credentials_file.write_text(
+        f"[dev]\nsso_session = replacement\nsso_start_url = {url}\n", encoding="utf-8"
+    )
+    cache = paths.sso_cache_dir / (hashlib.sha1(b"replacement").hexdigest() + ".json")
+    cache.write_text(
+        json.dumps(
+            {
+                "accessToken": "synthetic-replacement-token",
+                "expiresAt": (datetime.now(UTC) - timedelta(hours=1)).isoformat(),
+            }
+        ),
+        encoding="utf-8",
+    )
+    check = _auth(collect_local_diagnostics(paths))[0]
+    assert check.result == "expired_sso"
+
+
+def test_extreme_sso_expiration_returns_safe_actionable_report(paths):
+    _sso(
+        paths,
+        payload={"accessToken": "synthetic-extreme-secret", "expiresAt": "0001-01-01T00:00:00Z"},
+    )
+    report = collect_local_diagnostics(paths)
+    check = _auth(report)[0]
+    assert check.result == "unreadable_sso"
+    assert check.actionable
+    assert report.exit_code == 1
+    assert "synthetic-extreme-secret" not in report.render_json() + report.render_text()
