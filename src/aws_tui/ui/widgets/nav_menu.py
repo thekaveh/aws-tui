@@ -28,6 +28,7 @@ DETAIL → LOGS — wired in :mod:`aws_tui.app`).
 
 from __future__ import annotations
 
+import asyncio
 import contextlib
 from typing import TYPE_CHECKING, ClassVar
 
@@ -210,7 +211,18 @@ class NavMenu(Widget, can_focus=True):
     async def show_first_run_connections(self, snapshot: ConnectionDiscoveryDisplay | None) -> None:
         """Replace the optional discovery section; None restores the ordinary rail."""
         for section in list(self.query(FirstRunConnectionList)):
-            await section.remove()
+            # AwaitRemove gathers widget message pumps; caller cancellation must
+            # not cancel those pumps and poison later application pruning.
+            removal = asyncio.ensure_future(section.remove())
+            cancelled = False
+            while not removal.done():
+                try:
+                    await asyncio.shield(removal)
+                except asyncio.CancelledError:
+                    cancelled = True
+            removal.result()
+            if cancelled:
+                raise asyncio.CancelledError
         self.styles.width = NAV_MENU_WIDTH if snapshot is None else 28
         self.query_one("#menu-spacer").display = snapshot is None
         if snapshot is not None:

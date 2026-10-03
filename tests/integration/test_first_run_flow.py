@@ -822,16 +822,6 @@ async def test_failed_mount_recovery_retains_original_navigation_owner(
             if destination == "shutdown":
                 monkeypatch.setattr(env.app, "_mount_settings_view", settings_mount)
                 monkeypatch.setattr(env.app, "_mount_no_connection_placeholder", setup_mount)
-                if phase == "queued":
-                    await wait_until(
-                        lambda: (
-                            not any(
-                                worker.group == "content-mount" and worker.is_running
-                                for worker in env.app.workers
-                            )
-                        ),
-                        what="failed selection finishes before queued recovery shutdown",
-                    )
                 quit_task = asyncio.create_task(env.app.action_quit())
                 await wait_until(
                     lambda: env.app._service_navigation_closed, what="shutdown closes intake"
@@ -878,6 +868,56 @@ async def test_failed_mount_recovery_retains_original_navigation_owner(
                     assert env.app.query_one(FirstRunView) is expected_view
                     assert env.app.query_one(ConnectionFormInline) is expected_form
                     assert env.app.query_one(Input).value == "unsaved-new-form"
+            assert env.app.crash_report is None
+            assert aws_bytes(env) == before
+        finally:
+            release.set()
+
+
+@pytest.mark.asyncio
+async def test_public_quit_drains_pending_first_run_rail_prune(app_context_factory, monkeypatch):  # type: ignore[no-untyped-def]
+    from aws_tui.ui.widgets.first_run import FirstRunConnectionList
+
+    env = setup_context(app_context_factory, monkeypatch)
+    started, release = asyncio.Event(), asyncio.Event()
+    prune_cancelled = asyncio.Event()
+
+    async def unmount(_section):
+        started.set()
+        try:
+            await release.wait()
+        except asyncio.CancelledError:
+            prune_cancelled.set()
+            raise
+
+    async with env.app.run_test(size=(120, 40)) as pilot:
+        await ready(env, pilot)
+        env.aws_config.write_text("[profile added]\nregion=us-east-1\n")
+        before = aws_bytes(env)
+        await pilot.press("tab", "tab", "enter")
+        await drain_workers(env.app)
+        nav = env.app.query_one(NavMenu)
+        width_before = nav.styles.width
+        spacer = nav.query_one("#menu-spacer")
+        assert not spacer.display
+        monkeypatch.setattr(FirstRunConnectionList, "on_unmount", unmount, raising=False)
+        env.app.query_one(ConnectionChoice).focus()
+        await pilot.pause()
+        await env.app.action_descend()
+        await asyncio.wait_for(started.wait(), 5)
+        try:
+            quit_task = asyncio.create_task(env.app.action_quit())
+            await wait_until(
+                lambda: env.app._service_navigation_closed, what="public quit closes intake"
+            )
+            release.set()
+            await quit_task
+            # This is observed before run_test's context performs its cleanup.
+            print("rail message pump cancelled during public quit:", prune_cancelled.is_set())
+            assert not prune_cancelled.is_set()
+            assert nav.styles.width == width_before
+            assert not spacer.display
+            assert env.app._shutdown_complete
             assert env.app.crash_report is None
             assert aws_bytes(env) == before
         finally:
