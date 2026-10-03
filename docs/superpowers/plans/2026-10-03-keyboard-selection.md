@@ -48,11 +48,11 @@
 | 1: five handlers and emitted keys | App registry plus BindingResolver, defaults and independently remapped aliases |
 | 2: five palette entries | File-manager entry IDs/labels and absence on unrelated services; actual Enter execution |
 | 3: Space modes | Running pilot: normal Quick Look, multi-select toggle and no preview/storage read |
-| 4: modal containment | Running confirm modal: all five shortcuts leave mode, marks and captured transfer targets unchanged |
+| 4: modal containment | Fresh confirm modal per shortcut: selection cannot mutate underlying mode/marks/targets; native Space activation retains captured targets |
 | 5: filtered select-all/whole-list clear | VM fixtures with real rows, parent link, hidden marks and filter transitions |
 | 6: visible mode/count/bytes and exit | Mounted pane summary before marking, after mark/clear and after exit |
 | 7: parent/empty/swap/reload | Command matrix; reload pending, failure/cancel and stale/source replacement as applicable |
-| 8: no selection storage calls/exact transfers | Recording in-memory provider baseline; selection makes zero calls; confirmed copy/delete consume exactly marked rows, including hidden marks |
+| 8: no selection storage calls/exact transfers | Recording in-memory provider baseline; selection makes zero calls; confirmed copy/delete consume exactly the active filtered marked_entries; retained hidden marks stay inactive until visible again |
 | 9: other pane retention | Pilot selects distinct panes, changes focus and checks both mark sets |
 | 10: existing interaction contracts | Border/swap marks, modifier-click, copy/delete and keymap suites; credential recovery and editor/modal containment regression suites |
 | 11: truthful keybinding docs | Canonical selection and action tables show all five shipped keys/semantics, with unrelated deferred actions retained |
@@ -73,7 +73,7 @@
 - [ ] Prove palette discovery/scope and actual Enter execution for enter/toggle/select/clear/exit after dismissal. The palette VM invokes before Screen dismissal today; account for this at the App bridge without a modal loophole.
 - [ ] Pilot normal Space opens Quick Look; v enters mode; Space toggles only the cursor mark; u clears; ctrl+v exits. Inspect the actual mounted summary for mode, zero/nonzero marked count and selected bytes.
 - [ ] Pilot a healthy focused pane selects filtered rows without credential recovery. Error/source contexts preserve auth recovery. Separate Space/a overlays keep explicit actions independent and do not rely on binding ordering.
-- [ ] Push a confirm modal with a captured copy/delete selection; press every new key and assert mode, marks and target list stay unchanged. Exercise coordinator-only modal state too.
+- [ ] Push a fresh confirm modal per new physical key and assert no selection mutates underlying mode, marks or captured targets. Preserve native Space button activation: focus Cancel or record confirmation state/targets at activation; never continue the key sequence against a dismissed modal. All five direct registry selection commands must be inert behind confirm and coordinator-only modal guards.
 - [ ] VM matrix: filtered select-all, hidden clear, parent-only and empty states, source swap, reload, pending/error/cancel and stale results as applicable. Selection itself must issue zero provider reads or mutations after startup baselines.
 - [ ] Pilot distinct marks on both panes survive focus changes and operations on the focused pane only. Confirmed copy and delete target exactly the marked rows; cursor fallback remains unchanged when no rows are marked.
 - [ ] Preserve existing Shift+arrow leaving-row toggle and modifier-click behavior.
@@ -87,7 +87,7 @@
 - [ ] Update canonical docs and runtime expectation lists to the new true behavior; keep alias approval and unrelated deferred functionality unchanged.
 
 **Step 3: Verify and review artifacts.**
-- [ ] Run all changed/new tests. Run the protected regressions: `tests/unit/vm/file_manager/test_pane_vm_border_swap_marks.py`, `tests/integration/test_modifier_click_multiselect.py`, `tests/integration/test_copy_delete_actions.py`, `tests/unit/infra/test_keymap_store.py`, `tests/integration/test_keybinding_wiring.py`, `tests/integration/test_command_palette_wiring.py`, `tests/integration/test_credential_recovery.py`, and `tests/integration/test_modal_key_containment.py`.
+- [ ] Run all changed/new tests. Run the protected regressions: `tests/unit/vm/file_manager/test_pane_vm.py` (including `test_marked_entries_are_scoped_to_the_visible_filtered_rows`), `tests/unit/vm/file_manager/test_pane_vm_border_swap_marks.py`, `tests/integration/test_modifier_click_multiselect.py`, `tests/integration/test_copy_delete_actions.py`, `tests/unit/infra/test_keymap_store.py`, `tests/integration/test_keybinding_wiring.py`, `tests/integration/test_command_palette_wiring.py`, `tests/integration/test_credential_recovery.py`, and `tests/integration/test_modal_key_containment.py`.
 - [ ] Run relevant pane UI/VM suites and snapshot families. Use `DYLD_FALLBACK_LIBRARY_PATH=/opt/homebrew/opt/cairo/lib .venv/bin/python -m pytest ...` where Cairo rendering applies. Diagnose each changed golden and inspect final renders, including selection mode. Do not run controller-owned full coverage/docs/build gates in parallel or restart live test handles.
 - [ ] Record RED/GREEN commands, counts, all eleven AC-to-test mappings, storage-call/transfer evidence, keys/overlays, rendered screenshots and changed files in the task report. Explicitly distinguish direct pilot evidence from unit-only claims.
 - [ ] Commit coherent implementation/tests/docs with normal hooks. No bypass, push, merge, issue/board writes, or child-agent delegation. Return only DONE/NEEDS_CONTEXT/BLOCKED, commit(s), one-line test summary and material concerns.

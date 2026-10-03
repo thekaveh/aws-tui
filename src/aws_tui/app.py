@@ -51,6 +51,7 @@ from aws_tui.domain.s3_uri import parse_s3_uri
 from aws_tui.infra.aws_session import TokenState
 from aws_tui.infra.connection_resolver import Connection, ConnectionNotFound
 from aws_tui.infra.crash_dump import CrashDump
+from aws_tui.infra.keymap_store import textual_key_name
 from aws_tui.infra.redaction import redact_text
 from aws_tui.infra.theme_store import ThemeNotFound, ThemeStore
 from aws_tui.ui import notifications
@@ -235,7 +236,30 @@ _MODAL_ROUTED_ACTIONS = frozenset(
     }
 )
 
+_PANE_SELECTION_ACTIONS = frozenset(
+    {
+        "pane.enter_multiselect",
+        "pane.toggle_select",
+        "pane.select_all",
+        "pane.clear_selection",
+        "pane.exit_multiselect",
+    }
+)
+
 _PALETTE_COMMANDS: tuple[PaletteEntry, ...] = (
+    PaletteEntry(
+        "pane.enter_multiselect", "Enter multi-select mode", "pane", service_ids=_PANE_SERVICE_IDS
+    ),
+    PaletteEntry(
+        "pane.toggle_select", "Toggle cursor selection", "pane", service_ids=_PANE_SERVICE_IDS
+    ),
+    PaletteEntry(
+        "pane.select_all", "Select all visible entries", "pane", service_ids=_PANE_SERVICE_IDS
+    ),
+    PaletteEntry("pane.clear_selection", "Clear selection", "pane", service_ids=_PANE_SERVICE_IDS),
+    PaletteEntry(
+        "pane.exit_multiselect", "Exit multi-select mode", "pane", service_ids=_PANE_SERVICE_IDS
+    ),
     PaletteEntry("app.themes", "Theme picker", "app"),
     PaletteEntry("app.cycle_theme", "Cycle theme", "app"),
     PaletteEntry(
@@ -817,6 +841,11 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
         self._actions.register("pane.mark_up", self.action_mark_up)
         self._actions.register("pane.mark_down", self.action_mark_down)
         self._actions.register("pane.quick_look", self.action_quick_look)
+        self._actions.register("pane.enter_multiselect", self.action_enter_multiselect)
+        self._actions.register("pane.toggle_select", self.action_toggle_select)
+        self._actions.register("pane.select_all", self.action_select_all)
+        self._actions.register("pane.clear_selection", self.action_clear_selection)
+        self._actions.register("pane.exit_multiselect", self.action_exit_multiselect)
         self._actions.register("app.command_palette", self.action_command_palette)
         # Install the resolver-materialized bindings, keeping Textual's built-in
         # ``ctrl+q`` (alt-quit) and ``ctrl+p`` (command palette) that arrived via
@@ -1828,6 +1857,35 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
             len(self.screen_stack) > 1 or self._app_ctx.focus_coordinator.is_modal
         ) and action_id not in _MODAL_ROUTED_ACTIONS:
             return None
+        # Physical aliases share context; named registry/palette actions keep
+        # their explicit meaning even when users remap the pair independently.
+        if action_id in {"pane.quick_look", "pane.toggle_select"} and self._bindings_overlap(
+            "pane.quick_look", "pane.toggle_select"
+        ):
+            pane = self._focused_file_pane()
+            if pane is not None and pane.state is PaneState.LOADING:
+                return None
+            action_id = (
+                "pane.toggle_select"
+                if pane is not None and pane.is_multiselect_mode
+                else "pane.quick_look"
+            )
+        elif action_id in {"auth.authenticate", "pane.select_all"} and self._bindings_overlap(
+            "auth.authenticate", "pane.select_all"
+        ):
+            pane = self._focused_file_pane()
+            if pane is not None and pane.state is PaneState.LOADING:
+                return None
+            action_id = (
+                "pane.select_all"
+                if (
+                    pane is not None
+                    and pane.state in {PaneState.IDLE, PaneState.EMPTY}
+                    and self._app_ctx.root_vm.active_auth_state
+                    not in {TokenState.MISSING, TokenState.EXPIRED}
+                )
+                else "auth.authenticate"
+            )
         return self._actions.invoke(action_id)
 
     def _on_palette_action_message(self, message: object) -> None:
@@ -1855,6 +1913,32 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
         if dual is None:
             return None
         return getattr(dual, "focused_pane", None)
+
+    def _execute_pane_selection(self, action_id: str, command_name: str) -> None:
+        if len(self.screen_stack) > 1 or self._app_ctx.focus_coordinator.is_modal:
+            return
+        pane = self._focused_file_pane()
+        if pane is None or pane.state not in {PaneState.IDLE, PaneState.EMPTY}:
+            return
+        self.record_action(action_id)
+        command = getattr(pane, command_name)
+        if command.can_execute():
+            command.execute()
+
+    def action_enter_multiselect(self) -> None:
+        self._execute_pane_selection("pane.enter_multiselect", "enter_multiselect_command")
+
+    def action_toggle_select(self) -> None:
+        self._execute_pane_selection("pane.toggle_select", "toggle_select_command")
+
+    def action_select_all(self) -> None:
+        self._execute_pane_selection("pane.select_all", "select_all_command")
+
+    def action_clear_selection(self) -> None:
+        self._execute_pane_selection("pane.clear_selection", "clear_selection_command")
+
+    def action_exit_multiselect(self) -> None:
+        self._execute_pane_selection("pane.exit_multiselect", "exit_multiselect_command")
 
     def action_quick_look(self) -> None:
         """Open a 64 KB Quick Look preview for the focused pane's cursor file.
@@ -1884,8 +1968,8 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
     def _populate_command_palette(self) -> None:
         """Register the curated app commands into the palette (idempotent).
 
-        Each entry's action dispatches through the ActionRegistry, so selecting
-        a command is identical to pressing its key. ``register_entry`` replaces
+        Each entry invokes its named ActionRegistry command; physical shared
+        keys choose context at dispatch. ``register_entry`` replaces
         by id, so re-running is a no-op; the flag just avoids redundant work.
         """
         if self._command_palette_populated:
@@ -1894,9 +1978,17 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
         for entry in _PALETTE_COMMANDS:
             vm.register_entry(
                 entry,
-                partial(self._actions.invoke, entry.id),
+                # PaletteVM invokes before CommandPalette dismisses its screen.
+                # Defer only synchronous selection so strict modal guards and
+                # focused-pane restoration still apply at invocation time.
+                partial(self._schedule_palette_selection, entry.id)
+                if entry.id in _PANE_SELECTION_ACTIONS
+                else partial(self._actions.invoke, entry.id),
             )
         self._command_palette_populated = True
+
+    def _schedule_palette_selection(self, action_id: str) -> None:
+        self.call_after_refresh(self._actions.invoke, action_id)
 
     def action_command_palette(self) -> None:
         """Open the fuzzy command palette (bound to ``:`` / ``Ctrl+K``)."""
@@ -3586,7 +3678,10 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
 
     def _bindings_overlap(self, first: str, second: str) -> bool:
         keymap = self._app_ctx.keymap_store
-        return bool(set(keymap.resolve(first)) & set(keymap.resolve(second)))
+        return bool(
+            {textual_key_name(key) for key in keymap.resolve(first)}
+            & {textual_key_name(key) for key in keymap.resolve(second)}
+        )
 
     async def action_open_glue_s3_location(self) -> None:
         self.record_action("glue.open_s3_location")

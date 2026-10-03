@@ -52,6 +52,8 @@ _ACTION_DESCRIPTIONS: dict[str, str] = {
     "pane.enter_multiselect": "Multi-select",
     "pane.toggle_select": "Select",
     "pane.select_all": "Select all",
+    "pane.clear_selection": "Clear selection",
+    "pane.exit_multiselect": "Exit multi-select",
     "pane.copy": "Copy",
     "pane.copy_entry_path": "Copy path",
     "pane.copy_path": "Copy dir",
@@ -100,7 +102,7 @@ _VISIBLE_ACTIONS: frozenset[str] = frozenset(
 #: Actions that must yield to a focused widget even when their configured key
 #: is non-printable.
 _NON_PRIORITY_ACTIONS: frozenset[str] = frozenset(
-    {"app.quit", "athena.cancel", "pane.modal_left", "pane.modal_right"}
+    {"app.quit", "athena.cancel", "pane.modal_left", "pane.modal_right", "pane.exit_multiselect"}
 )
 
 

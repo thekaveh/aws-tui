@@ -80,6 +80,11 @@ _EXPECTED: set[tuple[str, str, bool, bool]] = {
     ("shift+up", "dispatch('pane.mark_up')", False, True),
     ("shift+down", "dispatch('pane.mark_down')", False, True),
     ("space", "dispatch('pane.quick_look')", False, False),
+    ("v", "dispatch('pane.enter_multiselect')", False, False),
+    ("space", "dispatch('pane.toggle_select')", False, False),
+    ("a", "dispatch('pane.select_all')", False, False),
+    ("u", "dispatch('pane.clear_selection')", False, False),
+    ("ctrl+v", "dispatch('pane.exit_multiselect')", False, False),
     ("ctrl+q", "quit", False, True),
     ("ctrl+p", "command_palette", False, True),
 }
@@ -103,9 +108,9 @@ def test_no_handlerless_keys_bound(app_context_factory) -> None:  # type: ignore
     keys = set(app._bindings.key_to_bindings)
     assert ("Q", "dispatch('glue.query_in_athena')", False, False) in _installed(app)
     # Deferred (handlerless) actions' keys must NOT be bound: filter (slash),
-    # enter_multiselect (v), select_all, move (m), new (n).
+    # move (m), new (n).
     # (`space`->quick_look and `:`/`ctrl+k`->command_palette are now wired.)
-    for k in ("slash", "v", "m", "n"):
+    for k in ("slash", "m", "n"):
         assert k not in keys, f"{k} should be unbound (handlerless)"
 
 

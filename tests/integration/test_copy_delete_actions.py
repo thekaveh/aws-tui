@@ -189,6 +189,9 @@ async def test_mark_keys_do_not_change_delete_target_behind_confirm_modal(
         # "Delete alpha.txt?" modal deleted beta too.
         await pilot.press("shift+down")
         await pilot.press("shift+down")
+        # Selection shortcuts also stay behind the confirmation screen.
+        # Space is the modal button activation, tested in keyboard_selection.
+        await pilot.press("v", "a", "u", "ctrl+v")
         await pilot.pause()
         await pilot.press("right")
         await pilot.pause()

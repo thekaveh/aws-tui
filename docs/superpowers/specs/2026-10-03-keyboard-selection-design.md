@@ -22,11 +22,11 @@ Keep defaults `v`, `space`, `a`; add `pane.clear_selection` on `u` and `pane.exi
 
 When the Space aliases overlap, physical dispatch chooses Quick Look outside multi-select and cursor marking inside it. Existing Glue/EMR Space activation remains intact. When the a aliases overlap, a ready/empty file pane selects all; a credential/error state or another AWS page retains credential recovery. Loading must not trigger a provider read or mark stale rows. If the aliases are remapped separately, each named action remains independent. Explicit credential recovery from the palette always retries; it never becomes select-all.
 
-Selection handlers enforce screen-stack/coordinator modal guards. Palette callbacks for these synchronous selection actions schedule invocation after palette dismissal using the existing App refresh scheduler, rather than weakening the guard. Test real Enter execution for all five, with focus restoration and no mutation behind a separate confirm modal.
+Selection handlers enforce screen-stack/coordinator modal guards. Palette callbacks for these synchronous selection actions schedule invocation after palette dismissal using the existing App refresh scheduler, rather than weakening the guard. Test real Enter execution for all five, with focus restoration and no selection mutation behind a separate confirm modal. Preserve native modal Space button activation; test each physical shortcut behind a fresh modal, checking pane marks at activation rather than after legitimate transfer reload.
 
 ## 4. VM and display contract
 
-Reuse existing mark operations and predicates; do not redesign the mark model, filtering, cursor movement, or transfer pipeline. Select-all adds marks only to filtered real rows; clear removes all marks, including hidden ones. Parent links are never marked. Empty and parent-only panes cannot gain marks. Reset marks when reload starts if RED evidence confirms stale marks during pending/error/cancel refresh; preserve generation and provider-identity guards. Source swaps reset only their own pane.
+Reuse existing mark operations and predicates; do not redesign the mark model, filtering, cursor movement, or transfer pipeline. Select-all adds marks only to filtered real rows; clear removes all marks, including hidden ones. Transfer targets and summary count/bytes derive from the existing filtered marked_entries contract: hidden marks are retained but inactive until visible again. Parent links are never marked. Empty and parent-only panes cannot gain marks. Reset marks when reload starts if RED evidence confirms stale marks during pending/error/cancel refresh; preserve generation and provider-identity guards. Source swaps reset only their own pane.
 
 The mounted pane summary names multi-select mode, marked count and selected-byte total, including zero marks after enter or clear. Exiting clears marks and restores normal summary. Publish the VM change so the UI updates without another cursor movement. Preserve normal-mode copy and keep the summary readable; verify 120×40 and examine 80×24 if layout changes.
 
@@ -37,11 +37,11 @@ The mounted pane summary names multi-select mode, marked count and selected-byte
 | 1: five handlers and emitted keys | App registry plus BindingResolver, defaults and independently remapped aliases |
 | 2: five palette entries | File-manager entry IDs/labels and absence on unrelated services; actual Enter execution |
 | 3: Space modes | Running pilot: normal Quick Look, multi-select toggle and no preview/storage read |
-| 4: modal containment | Running confirm modal: all five shortcuts leave mode, marks and captured transfer targets unchanged |
+| 4: modal containment | Fresh confirm modal per shortcut: selection cannot mutate underlying mode/marks/targets; native Space activation retains captured targets |
 | 5: filtered select-all/whole-list clear | VM fixtures with real rows, parent link, hidden marks and filter transitions |
 | 6: visible mode/count/bytes and exit | Mounted pane summary before marking, after mark/clear and after exit |
 | 7: parent/empty/swap/reload | Command matrix; reload pending, failure/cancel and stale/source replacement as applicable |
-| 8: no selection storage calls/exact transfers | Recording in-memory provider baseline; selection makes zero calls; confirmed copy/delete consume exactly marked rows, including hidden marks |
+| 8: no selection storage calls/exact transfers | Recording in-memory provider baseline; selection makes zero calls; confirmed copy/delete consume exactly the active filtered marked_entries; retained hidden marks stay inactive until visible again |
 | 9: other pane retention | Pilot selects distinct panes, changes focus and checks both mark sets |
 | 10: existing interaction contracts | Border/swap marks, modifier-click, copy/delete and keymap suites; credential recovery and editor/modal containment regression suites |
 | 11: truthful keybinding docs | Canonical selection and action tables show all five shipped keys/semantics, with unrelated deferred actions retained |
