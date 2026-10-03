@@ -1,14 +1,9 @@
 name: release
 
-# Two entry points:
-#
-# - ``push: tags: ['v*']`` — the routine release path. Tag a
-#   commit ``vX.Y.Z`` and push: the pipeline runs verify →
-#   platform-tests + lowest-supported-dependencies + smoke-install → pypi →
-#   github-release → homebrew-bump.
-#
-# - ``workflow_dispatch`` with ``target = testpypi | pypi`` — the
-#   dry-run lane. ``testpypi`` publishes to test.pypi.org and
+# Only explicit ``workflow_dispatch`` starts a release. Tag pushes do not
+# run hosted jobs while verification runs locally.
+# ``workflow_dispatch`` with ``target = testpypi | pypi`` selects the
+# publish lane. ``testpypi`` publishes to test.pypi.org and
 #   skips the GitHub Release + Homebrew bump (rehearses changes
 #   to the release machinery itself without burning a real
 #   version number). ``pypi`` must be run from the matching tag and
@@ -18,9 +13,6 @@ name: release
 #   are immutable.
 
 on:
-  push:
-    tags:
-      - "v*"
   workflow_dispatch:
     inputs:
       target:

@@ -20,7 +20,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from functools import partial
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, ClassVar, cast
+from typing import TYPE_CHECKING, Any, ClassVar, Literal, cast
 
 from reactivex.abc import DisposableBase
 from rich.markup import escape
@@ -41,7 +41,12 @@ from textual.widgets import Input, Static, TextArea
 
 from aws_tui.composition import AppContext, build_app_context
 from aws_tui.domain.data_catalog import TableRef
-from aws_tui.domain.filesystem import AuthRequiredError, EntryKind
+from aws_tui.domain.filesystem import (
+    AuthRequiredError,
+    EntryKind,
+    PermissionDeniedError,
+    ProviderUnreachableError,
+)
 from aws_tui.domain.s3_uri import parse_s3_uri
 from aws_tui.infra.aws_session import TokenState
 from aws_tui.infra.connection_resolver import Connection, ConnectionNotFound
@@ -85,11 +90,18 @@ from aws_tui.vm.chrome.focus_coordinator_vm import FocusSlot
 from aws_tui.vm.chrome.quick_look_vm import QuickLookContent
 from aws_tui.vm.chrome.theme_picker_vm import ThemePickerVM
 from aws_tui.vm.clipboard_vm import ClipboardChannel
+from aws_tui.vm.credential_recovery import (
+    RecoveryGuidance,
+    classify_recovery_failure,
+    connection_binding_identity,
+)
+from aws_tui.vm.emr_serverless.page_vm import EmrServerlessPageVM
 from aws_tui.vm.file_manager.dual_pane_vm import DualPaneVM, FocusedPane
 from aws_tui.vm.file_manager.pane_vm import PaneState
 from aws_tui.vm.glue.iceberg_vm import IcebergView
 from aws_tui.vm.glue.page_vm import GluePageVM, GlueView
 from aws_tui.vm.messages import (
+    ConnectionChangedMessage,
     ConnectionListChangedMessage,
     CopyTableReferenceRequest,
     OpenAthenaTableRequest,
@@ -99,6 +111,10 @@ from aws_tui.vm.messages import (
     ThemeChangedMessage,
 )
 from aws_tui.vm.nav_menu_vm import SETTINGS_NAV_ID
+from aws_tui.vm.service_diagnostics import (
+    CapturedServiceDiagnostic,
+    capture_service_diagnostics,
+)
 from aws_tui.vm.service_source_vm import ServiceSourceContext
 
 _ACTION_RING_SIZE = 100
@@ -116,6 +132,16 @@ class _S3HandoffSnapshot:
     glue: _GluePageSnapshot | None = field(repr=False)
 
 
+@dataclass(slots=True)
+class _StagedServiceRecovery:
+    """Off-screen AWS service tree whose credential read has completed."""
+
+    state: PaneState
+    vm: object = field(repr=False)
+    commit_selection: Callable[[], None] = field(repr=False)
+    diagnostics: tuple[CapturedServiceDiagnostic, ...] = field(repr=False)
+
+
 @dataclass(frozen=True, slots=True)
 class _GluePageSnapshot:
     active_view: GlueView
@@ -123,6 +149,11 @@ class _GluePageSnapshot:
     table_ref: TableRef | None = field(repr=False)
     iceberg_view: IcebergView | None
     iceberg_snapshot_id: int | None
+    job_name: str | None
+    job_run_id: str | None
+    job_run_states: frozenset[str]
+    crawler_name: str | None
+    crawler_state: str | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -210,6 +241,12 @@ _PALETTE_COMMANDS: tuple[PaletteEntry, ...] = (
     PaletteEntry(
         "app.swap_source",
         "Switch source",
+        "source",
+        service_ids=_SOURCE_SERVICE_IDS,
+    ),
+    PaletteEntry(
+        "auth.authenticate",
+        "Retry active source credentials",
         "source",
         service_ids=_SOURCE_SERVICE_IDS,
     ),
@@ -693,6 +730,7 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
         self._actions.register("pane.modal_left", self.action_modal_left_or_ascend)
         self._actions.register("pane.modal_right", self.action_modal_right)
         self._actions.register("pane.refresh", self.action_refresh)
+        self._actions.register("auth.authenticate", self.action_authenticate)
         self._actions.register("app.help", self.action_help)
         self._actions.register("app.themes", self.action_themes)
         self._actions.register("app.cycle_theme", self.action_cycle_theme)
@@ -810,6 +848,7 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
         self._shutdown_errors: tuple[tuple[str, str], ...] = ()
         self._command_palette_populated: bool = False
         self._pane_state_sub: DisposableBase | None = None
+        self._connection_state_sub: DisposableBase | None = None
         self._connection_list_sub: DisposableBase | None = None
         self._nav_selection_sub: DisposableBase | None = None
         self._cursor_sub: DisposableBase | None = None
@@ -856,6 +895,8 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
         # Tracks the last frozenset of skipped connection names shown in a
         # skip-toast so repeated Shift+S presses don't stack duplicate toasts.
         self._last_skip_toast_set: frozenset[str] | None = None
+        self._source_revision = 0
+        self._auth_recovery_task: asyncio.Task[None] | None = None
 
     @property
     def app_ctx(self) -> AppContext:
@@ -953,6 +994,9 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
         # initial UNREACHABLE state-change (if the connection is offline) is
         # not missed (Bug 2: initial mount UNREACHABLE silently missed).
         self._pane_state_sub = ctx.hub.messages.subscribe(on_next=self._on_hub_message_pane_state)
+        self._connection_state_sub = ctx.hub.messages.subscribe(
+            on_next=self._on_connection_changed_for_recovery
+        )
         self._connection_list_sub = ctx.hub.messages.subscribe(
             on_next=self._on_connection_list_changed
         )
@@ -1406,9 +1450,8 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
 
         Used by the AWS+EXPIRED proactive-fallback path. The
         ``initial_conn`` is still in ``ctx.unreachable_connections``
-        so ``Shift+S`` skips it until the user runs
-        ``aws sso login --profile X`` and relaunches (or until the
-        ``r`` retry path clears the mark).
+        so ``Shift+S`` skips it until a successful in-session credential
+        retry clears the mark.
         """
         from aws_tui.vm.file_manager.dual_pane_vm import DualPaneVM
         from aws_tui.vm.file_manager.pane_vm import PaneVM
@@ -1499,11 +1542,11 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
         message, action = {
             "aws-sso-expired": (
                 f"SSO expired for [b]{profile}[/], both panes set to local",
-                f"refresh with [b]aws sso login --profile {profile}[/] and relaunch",
+                f"run [b]aws sso login --profile {profile}[/], then press [b]a[/] to retry",
             ),
             "aws-no-creds": (
                 f"no session for [b]{profile}[/], both panes set to local",
-                f"run [b]aws sso login --profile {profile}[/] (or set $AWS_PROFILE) and relaunch",
+                "repair credentials externally, then press [b]a[/] to retry",
             ),
         }.get(
             reason,
@@ -2371,6 +2414,446 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
         pane = getattr(dual, "focused_pane", None)
         if pane is not None:
             await pane.refresh()
+
+    async def action_authenticate(self) -> None:
+        """Retry the active source after credentials are repaired externally."""
+        self.record_action("auth.authenticate")
+        task = self._auth_recovery_task
+        if task is None or task.done():
+            task = asyncio.create_task(
+                self._recover_active_source(),
+                name="credential-recovery",
+            )
+            self._auth_recovery_task = task
+        try:
+            await asyncio.shield(task)
+        finally:
+            if task.done() and self._auth_recovery_task is task:
+                self._auth_recovery_task = None
+
+    def _on_connection_changed_for_recovery(self, message: object) -> None:
+        if isinstance(message, ConnectionChangedMessage):
+            self._source_revision += 1
+
+    def _credential_recovery_is_current(
+        self,
+        *,
+        connection: Connection,
+        revision: int,
+        service_id: str,
+        hosted: object,
+    ) -> bool:
+        root = self._app_ctx.root_vm
+        return (
+            self._source_revision == revision
+            and root.active_connection == connection
+            and root.content_host.current_id == service_id
+            and root.content_host.current is hosted
+        )
+
+    @staticmethod
+    def _credential_error_for_state(state: PaneState) -> BaseException:
+        if state is PaneState.AUTH_REQUIRED:
+            return AuthRequiredError("credential recovery read requires authentication")
+        if state is PaneState.FORBIDDEN:
+            return PermissionDeniedError("credential recovery read was denied")
+        if state is PaneState.UNREACHABLE:
+            return ProviderUnreachableError("credential recovery endpoint is unreachable")
+        return RuntimeError("credential recovery read failed")
+
+    def _show_credential_guidance(self, guidance: RecoveryGuidance) -> None:
+        notifications.advise(
+            self._app_ctx.root_vm.chrome.toast_stack,
+            subject="Auth",
+            message=guidance.message,
+            toast_id=f"credential-recovery-{guidance.kind.value.replace('_', '-')}",
+        )
+
+    def _show_generic_credential_guidance(self, connection: Connection) -> None:
+        self._show_credential_guidance(
+            classify_recovery_failure(connection, error=RuntimeError("recovery failed"))
+        )
+
+    async def _recover_active_source(self) -> None:
+        ctx = self._app_ctx
+        root = ctx.root_vm
+        connection = root.active_connection
+        service_id = root.content_host.current_id
+        hosted = root.content_host.current
+        revision = self._source_revision
+        if connection is None or service_id not in _SOURCE_SERVICE_IDS or hosted is None:
+            notifications.advise(
+                root.chrome.toast_stack,
+                subject="Auth",
+                message="No active remote source is available to retry.",
+                toast_id="credential-recovery-no-source",
+            )
+            return
+
+        try:
+            resolved = ctx.connection_resolver.resolve(connection.name)
+        except Exception as exc:
+            ctx.log_sink.warning(
+                "credential_recovery.resolve_failed",
+                error_type=type(exc).__name__,
+            )
+            self._show_generic_credential_guidance(connection)
+            return
+        if connection_binding_identity(resolved) != connection_binding_identity(connection):
+            ctx.log_sink.warning(
+                "credential_recovery.identity_changed",
+                kind=connection.kind,
+                name=connection.name,
+                region=connection.region,
+            )
+            self._show_generic_credential_guidance(connection)
+            return
+
+        try:
+            token_state = ctx.aws_session.probe_token(resolved).state
+        except Exception as exc:
+            ctx.log_sink.warning(
+                "credential_recovery.probe_failed",
+                error_type=type(exc).__name__,
+            )
+            self._show_generic_credential_guidance(connection)
+            return
+        if token_state is not TokenState.CONNECTED:
+            self._show_credential_guidance(
+                classify_recovery_failure(resolved, token_state=token_state)
+            )
+            return
+
+        try:
+            recovery = await self._refresh_source_for_credential_recovery(
+                connection=connection,
+                resolved=resolved,
+                revision=revision,
+                service_id=service_id,
+                hosted=hosted,
+            )
+        except asyncio.CancelledError:
+            raise
+        except (AuthRequiredError, PermissionDeniedError, ProviderUnreachableError) as exc:
+            self._show_credential_guidance(
+                classify_recovery_failure(resolved, token_state=token_state, error=exc)
+            )
+            return
+        except Exception as exc:
+            ctx.log_sink.error(
+                "credential_recovery.read_failed",
+                service=service_id,
+                error_type=type(exc).__name__,
+            )
+            self._show_generic_credential_guidance(resolved)
+            return
+
+        if recovery is None:
+            return
+        state = recovery.state if isinstance(recovery, _StagedServiceRecovery) else recovery
+        if isinstance(recovery, _StagedServiceRecovery):
+            for diagnostic in recovery.diagnostics:
+                ctx.log_sink.error(
+                    "credential_recovery.candidate_failure",
+                    service=diagnostic.service,
+                    operation=diagnostic.operation,
+                    error_type=diagnostic.error_type,
+                )
+        if state not in {PaneState.IDLE, PaneState.EMPTY}:
+            if isinstance(recovery, _StagedServiceRecovery):
+                await self._discard_staged_service_recovery(recovery.vm)
+            self._show_credential_guidance(
+                classify_recovery_failure(
+                    resolved,
+                    token_state=token_state,
+                    error=self._credential_error_for_state(state),
+                )
+            )
+            return
+        if not self._credential_recovery_is_current(
+            connection=connection,
+            revision=revision,
+            service_id=service_id,
+            hosted=hosted,
+        ):
+            if isinstance(recovery, _StagedServiceRecovery):
+                await self._discard_staged_service_recovery(recovery.vm)
+            return
+
+        if isinstance(recovery, _StagedServiceRecovery):
+            try:
+                await self._commit_staged_service_recovery(
+                    recovery,
+                    connection=resolved,
+                    service_id=service_id,
+                )
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                ctx.log_sink.error(
+                    "credential_recovery.commit_failed",
+                    service=service_id,
+                    error_type=type(exc).__name__,
+                )
+                self._show_generic_credential_guidance(resolved)
+                return
+        else:
+            root.refresh_connection_state(resolved, TokenState.CONNECTED)
+        self._clear_connection_unreachable(resolved.kind, resolved.name)
+        self._chain_resolved_to_local = False
+        self._chain_initial_conn = None
+        notifications.success(
+            root.chrome.toast_stack,
+            subject="Auth",
+            message=f"credentials refreshed for {resolved.name}",
+            toast_id="credential-recovery-success",
+        )
+
+    async def _refresh_source_for_credential_recovery(
+        self,
+        *,
+        connection: Connection,
+        resolved: Connection,
+        revision: int,
+        service_id: str,
+        hosted: object,
+    ) -> PaneState | _StagedServiceRecovery | None:
+        if service_id == "s3":
+            if not isinstance(hosted, DualPaneVM):
+                return None
+            return await self._recover_s3_credentials(
+                connection=connection,
+                resolved=resolved,
+                revision=revision,
+                hosted=hosted,
+            )
+        if service_id in {"athena", "glue", "emr-serverless"}:
+            return await self._stage_service_credential_recovery(
+                resolved=resolved,
+                service_id=service_id,
+                hosted=hosted,
+            )
+        return None
+
+    async def _stage_service_credential_recovery(
+        self,
+        *,
+        resolved: Connection,
+        service_id: str,
+        hosted: object,
+    ) -> _StagedServiceRecovery | None:
+        """Verify credentials in a fresh service tree without touching the live one."""
+        focus: Literal["applications", "runs", "detail", "logs"] = "applications"
+        if service_id == "emr-serverless":
+            if not isinstance(hosted, EmrServerlessPageVM):
+                return None
+            page = self._emr_page()
+            if page is not None:
+                active = self._emr_active_pane(page)
+                if active is page.left_pane:
+                    focus = "runs"
+                elif active is page.right_detail:
+                    focus = "detail"
+                elif active is page.right_pane:
+                    focus = "logs"
+        elif (service_id == "athena" and not isinstance(hosted, AthenaPageVM)) or (
+            service_id == "glue" and not isinstance(hosted, GluePageVM)
+        ):
+            return None
+
+        athena_snapshot: AthenaPageSnapshot | None = None
+        athena_fallback_sql: str | None = None
+        if isinstance(hosted, AthenaPageVM):
+            try:
+                athena_snapshot = hosted.export_snapshot()
+            except ValueError:
+                # A page whose first authenticated read failed has no complete
+                # context snapshot yet.  Its draft SQL is still durable state,
+                # while the active view is already carried by the isolated
+                # selection-store clone used to build the candidate.
+                athena_fallback_sql = hosted.query.sql
+        athena_result_execution_id = (
+            hosted.results.execution_id
+            if isinstance(hosted, AthenaPageVM) and hosted.active_view == "results"
+            else None
+        )
+        glue_snapshot = (
+            self._capture_glue_page_snapshot(hosted) if isinstance(hosted, GluePageVM) else None
+        )
+        emr_snapshot = (
+            hosted.export_credential_recovery_snapshot()
+            if isinstance(hosted, EmrServerlessPageVM)
+            else None
+        )
+        recovery_vm = self._app_ctx.root_vm.build_recovery_service_vm(service_id, resolved)
+        candidate = recovery_vm.vm
+        try:
+            candidate.construct()  # type: ignore[attr-defined]
+            with capture_service_diagnostics() as diagnostics:
+                if isinstance(candidate, AthenaPageVM):
+                    await candidate.setup()
+                    state = candidate.credential_recovery_state()
+                    if state in {PaneState.IDLE, PaneState.EMPTY}:
+                        if athena_snapshot is not None:
+                            await candidate.restore_snapshot(athena_snapshot)
+                            if athena_result_execution_id is not None:
+                                await candidate.results.load(
+                                    athena_result_execution_id,
+                                    from_history=True,
+                                )
+                                state = candidate.results.state
+                            else:
+                                state = candidate.credential_recovery_state()
+                        else:
+                            if athena_fallback_sql is not None:
+                                candidate.query.set_sql(athena_fallback_sql)
+                            state = candidate.credential_recovery_state()
+                elif isinstance(candidate, GluePageVM) and glue_snapshot is not None:
+                    await candidate.setup()
+                    state = await candidate.refresh_for_credential_recovery()
+                    if state in {PaneState.IDLE, PaneState.EMPTY}:
+                        await self._restore_glue_page_snapshot(candidate, glue_snapshot)
+                        state = candidate.credential_recovery_state()
+                elif isinstance(candidate, EmrServerlessPageVM) and emr_snapshot is not None:
+                    state = await candidate.restore_and_refresh_for_credential_recovery(
+                        emr_snapshot,
+                        focus,
+                    )
+                else:
+                    raise TypeError(f"unsupported recovery VM for {service_id}")
+        except BaseException:
+            await self._discard_staged_service_recovery(candidate)
+            raise
+        return _StagedServiceRecovery(
+            state=state,
+            vm=candidate,
+            commit_selection=recovery_vm.commit_selection,
+            diagnostics=tuple(diagnostics),
+        )
+
+    async def _discard_staged_service_recovery(self, candidate: object) -> None:
+        """Drain and dispose an off-screen candidate that was not adopted."""
+        shutdown = getattr(candidate, "shutdown", None)
+        if callable(shutdown):
+            with contextlib.suppress(Exception, asyncio.CancelledError):
+                result = shutdown()
+                if isinstance(result, Awaitable):
+                    await result
+        with contextlib.suppress(Exception):
+            candidate.dispose()  # type: ignore[attr-defined]
+
+    async def _commit_staged_service_recovery(
+        self,
+        recovery: _StagedServiceRecovery,
+        *,
+        connection: Connection,
+        service_id: str,
+    ) -> None:
+        """Adopt a verified candidate and mount its matching view."""
+        ctx = self._app_ctx
+        replacement: Widget | None = None
+        staging_host: Container | None = None
+        host: Container | None = None
+        try:
+            replacement = build_service_view(
+                service_id,
+                recovery.vm,
+                hub=ctx.hub,
+                keymap=ctx.keymap_store,
+                source_candidates=_service_source_contexts(ctx, service_id),
+                focus_coordinator=ctx.focus_coordinator,
+            )
+            host = self.query_one("#content-host", Container)
+            # Textual requires sibling ids to be unique.  The live and staged
+            # service roots intentionally have the same stable id, so mount
+            # the candidate one level deeper while it proves that its widget
+            # tree can initialize.  The wrapper remains the content-host child
+            # after commit and is removed by the normal next service swap.
+            staging_host = Container(replacement)
+            staging_host.styles.width = "100%"
+            staging_host.styles.height = "100%"
+            staging_host.display = False
+            await host.mount(staging_host)
+        except BaseException:
+            if staging_host is not None and staging_host.is_mounted:
+                with contextlib.suppress(Exception):
+                    await staging_host.remove()
+            await self._discard_staged_service_recovery(recovery.vm)
+            raise
+
+        prior_children = tuple(child for child in host.children if child is not staging_host)
+        try:
+            await ctx.root_vm.adopt_prepared_service_vm(
+                connection,
+                TokenState.CONNECTED,
+                service_id,
+                recovery.vm,
+            )
+        except BaseException:
+            with contextlib.suppress(Exception):
+                await staging_host.remove()
+            raise
+
+        recovery.commit_selection()
+        for child in prior_children:
+            child.display = False
+        staging_host.display = True
+        for child in prior_children:
+            try:
+                await child.remove()
+            except Exception as exc:
+                ctx.log_sink.warning(
+                    "credential_recovery.stale_widget_cleanup_failed",
+                    service=service_id,
+                    error_type=type(exc).__name__,
+                )
+        if service_id in {"glue", "athena"}:
+            self._recompute_hint_disables()
+
+    async def _recover_s3_credentials(
+        self,
+        *,
+        connection: Connection,
+        resolved: Connection,
+        revision: int,
+        hosted: DualPaneVM,
+    ) -> PaneState | None:
+        from aws_tui.domain.filesystem import PathRef
+        from aws_tui.services.s3.service import _format_pane_title
+
+        targets: list[tuple[PaneVM, PathRef]] = []
+        if self._chain_resolved_to_local:
+            targets.append((hosted.left, PathRef(())))
+        else:
+            key = (connection.kind, connection.name)
+            for pane in (hosted.left, hosted.right):
+                if pane.current_connection_key == key:
+                    targets.append((pane, pane.path))
+        if not targets:
+            return None
+
+        staged: list[tuple[PaneVM, Any]] = []
+        for pane, path in targets:
+            provider = self._make_s3_provider_for_connection(resolved)
+            stage = await pane.stage_provider_recovery(
+                provider,
+                path=path,
+                identity_label=_format_pane_title(resolved),
+                path_protocol="s3:",
+                connection_key=(resolved.kind, resolved.name),
+            )
+            staged.append((pane, stage))
+
+        if not self._credential_recovery_is_current(
+            connection=connection,
+            revision=revision,
+            service_id="s3",
+            hosted=hosted,
+        ) or not all(pane.can_commit_provider_recovery(candidate) for pane, candidate in staged):
+            return None
+        for pane, candidate in staged:
+            pane.commit_provider_recovery(candidate)
+        return PaneState.IDLE
 
     async def _put_on_clipboard(self, value: str, label: str) -> None:
         """Copy ``value`` on both channels and report what actually happened.
@@ -4037,6 +4520,11 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
             table_ref=selected.ref if selected is not None else None,
             iceberg_view=iceberg.active_view if iceberg.available else None,
             iceberg_snapshot_id=iceberg.selected_snapshot_id,
+            job_name=page.jobs.selected_job_name,
+            job_run_id=page.jobs.selected_run_id,
+            job_run_states=page.jobs.run_state_filter,
+            crawler_name=page.crawlers.selected_crawler_name,
+            crawler_state=page.crawlers.state_filter,
         )
 
     @staticmethod
@@ -4044,17 +4532,56 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
         page: GluePageVM,
         snapshot: _GluePageSnapshot,
     ) -> None:
-        if snapshot.table_ref is not None:
-            await page.open_table(snapshot.table_ref)
-        elif snapshot.database_name is not None:
-            await page.select_database(snapshot.database_name)
-        if snapshot.table_ref is not None and snapshot.iceberg_view is not None:
-            iceberg = page.catalog.iceberg
-            await iceberg.select_view(snapshot.iceberg_view)
-            if snapshot.iceberg_snapshot_id is not None:
-                iceberg.select_snapshot(snapshot.iceberg_snapshot_id)
         if page.active_view != snapshot.active_view:
             await page.select_view(snapshot.active_view)
+        if snapshot.active_view == "catalog":
+            if snapshot.table_ref is not None:
+                await page.open_table(snapshot.table_ref)
+            elif snapshot.database_name is not None:
+                await page.select_database(snapshot.database_name)
+            if snapshot.table_ref is not None and snapshot.iceberg_view is not None:
+                iceberg = page.catalog.iceberg
+                view_restored = await iceberg.select_view(snapshot.iceberg_view)
+                if not view_restored or iceberg.active_view != snapshot.iceberg_view:
+                    raise ValueError("Glue recovery Iceberg view is unavailable")
+                if snapshot.iceberg_snapshot_id is not None:
+                    snapshot_restored = iceberg.select_snapshot(snapshot.iceberg_snapshot_id)
+                    if (
+                        not snapshot_restored
+                        or iceberg.selected_snapshot_id != snapshot.iceberg_snapshot_id
+                    ):
+                        raise ValueError("Glue recovery Iceberg snapshot is unavailable")
+            if snapshot.database_name is not None and (
+                page.catalog.selected_database_name != snapshot.database_name
+            ):
+                raise ValueError("Glue recovery database is unavailable")
+            if snapshot.table_ref is not None and (
+                page.catalog.selected_table_name != snapshot.table_ref.table_name
+            ):
+                raise ValueError("Glue recovery table is unavailable")
+        elif snapshot.active_view == "jobs":
+            await page.set_job_run_states(snapshot.job_run_states)
+            if snapshot.job_name is not None:
+                await page.select_job(snapshot.job_name)
+            if snapshot.job_run_id is not None:
+                page.select_job_run(snapshot.job_run_id)
+            if page.jobs.run_state_filter != snapshot.job_run_states:
+                raise ValueError("Glue recovery job filter is unavailable")
+            if snapshot.job_name is not None and page.jobs.selected_job_name != snapshot.job_name:
+                raise ValueError("Glue recovery job is unavailable")
+            if snapshot.job_run_id is not None and page.jobs.selected_run_id != snapshot.job_run_id:
+                raise ValueError("Glue recovery job run is unavailable")
+        else:
+            await page.set_crawler_state(snapshot.crawler_state)
+            if snapshot.crawler_name is not None:
+                await page.select_crawler(snapshot.crawler_name)
+            if page.crawlers.state_filter != snapshot.crawler_state:
+                raise ValueError("Glue recovery crawler filter is unavailable")
+            if (
+                snapshot.crawler_name is not None
+                and page.crawlers.selected_crawler_name != snapshot.crawler_name
+            ):
+                raise ValueError("Glue recovery crawler is unavailable")
 
     async def _restore_superseded_table_handoff(
         self,
@@ -5356,6 +5883,14 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
             setattr(self, attribute, None)
 
         run_cleanup("service_navigation.close_intake", self._close_service_navigation_intake)
+        recovery_task = getattr(self, "_auth_recovery_task", None)
+        if recovery_task is not None and not recovery_task.done():
+            recovery_task.cancel()
+            await await_cleanup(
+                "credential_recovery.task",
+                partial(self._await_tasks_through_cancellation, (recovery_task,)),
+            )
+        self._auth_recovery_task = None
         run_cleanup(
             "workers.cancel_content_mount",
             lambda: self.workers.cancel_group(self, "content-mount"),
@@ -5393,6 +5928,7 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
 
         for attribute in (
             "_pane_state_sub",
+            "_connection_state_sub",
             "_connection_list_sub",
             "_nav_selection_sub",
             "_cursor_sub",

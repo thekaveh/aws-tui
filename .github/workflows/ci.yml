@@ -1,10 +1,8 @@
 name: ci
 
+# Local verification is the merge gate. Hosted jobs are retained for an
+# explicitly requested manual run; pushes and PRs must not start them.
 on:
-  pull_request:
-    branches: [main, develop]
-  push:
-    branches: [main, develop]
   workflow_dispatch:
 
 concurrency:

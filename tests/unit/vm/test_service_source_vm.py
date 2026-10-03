@@ -38,3 +38,24 @@ def test_selection_store_is_scoped_by_service_connection_and_region() -> None:
     store.set(prod, "application_id", "prod-app")
     assert store.get(dev, "application_id") == "dev-app"
     assert store.get(prod, "application_id") == "prod-app"
+
+
+def test_selection_store_clone_commits_only_requested_scope() -> None:
+    scope = SelectionScope("glue", "dev", "us-east-1")
+    unrelated = SelectionScope("athena", "dev", "us-east-1")
+    store = ServiceSelectionStore()
+    store.set(scope, "active_view", "catalog")
+
+    candidate = store.clone()
+    candidate.set(scope, "active_view", "jobs")
+    candidate.set(scope, "job_name", "nightly")
+    store.set(unrelated, "workgroup", "updated-after-clone")
+
+    assert store.get(scope, "active_view") == "catalog"
+    assert store.get(scope, "job_name") is None
+
+    store.replace_scope_from(candidate, scope)
+
+    assert store.get(scope, "active_view") == "jobs"
+    assert store.get(scope, "job_name") == "nightly"
+    assert store.get(unrelated, "workgroup") == "updated-after-clone"

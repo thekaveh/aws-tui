@@ -9,6 +9,7 @@ the VM layer treats them through the structural :class:`Service` protocol.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any, Protocol, runtime_checkable
 
@@ -26,6 +27,14 @@ class ServiceDescriptor:
     id: str
     label: str
     icon: str
+
+
+@dataclass(frozen=True, slots=True)
+class RecoveryServiceVM:
+    """Off-screen VM plus the selection-store commit it owns."""
+
+    vm: object
+    commit_selection: Callable[[], None]
 
 
 @runtime_checkable
@@ -69,6 +78,7 @@ class ServiceRegistry:
 
 
 __all__ = [
+    "RecoveryServiceVM",
     "Service",
     "ServiceDescriptor",
     "ServiceNotFound",

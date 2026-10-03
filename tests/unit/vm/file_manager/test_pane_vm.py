@@ -146,6 +146,189 @@ async def test_stale_reload_cannot_publish_after_provider_swap() -> None:
     pane.dispose()
 
 
+class _RecordingListFS(InMemoryFS):
+    def __init__(self, *, failure: BaseException | None = None) -> None:
+        super().__init__()
+        self.failure = failure
+        self.list_calls: list[PathRef] = []
+
+    async def list(self, path: PathRef) -> list[FileEntry]:
+        self.list_calls.append(path)
+        if self.failure is not None:
+            raise self.failure
+        return await super().list(path)
+
+
+def _live_pane_projection(pane: PaneVM) -> tuple[object, ...]:
+    return (
+        pane.provider,
+        pane.path,
+        pane.identity_label,
+        pane.path_protocol,
+        pane.current_connection_key,
+        pane.entries,
+        pane.state,
+        pane.filter_text,
+        pane.cursor_index,
+        pane.marked_entries,
+        pane.is_multiselect_mode,
+        pane._reload_generation,
+    )
+
+
+@pytest.mark.asyncio
+async def test_provider_recovery_stages_without_changing_live_pane() -> None:
+    live = await _seed_fs()
+    pane = await _make_pane(live)
+    pane.set_filter_command.execute(".txt")
+    pane.toggle_select_command.execute()
+    before = _live_pane_projection(pane)
+    recovered = _RecordingListFS()
+    await recovered.write_stream(PathRef(("recovered.txt",)), _astream(b"ready"))
+
+    staged = await pane.stage_provider_recovery(
+        recovered,
+        path=pane.path,
+        identity_label="aws · engineering · us-east-1",
+        path_protocol="s3:",
+        connection_key=("aws", "engineering"),
+    )
+
+    assert recovered.list_calls == [PathRef(())]
+    assert staged.used_root_fallback is False
+    assert _live_pane_projection(pane) == before
+
+    pane.commit_provider_recovery(staged)
+
+    assert recovered.list_calls == [PathRef(())]
+    assert pane.provider is recovered
+    assert pane.path == PathRef(())
+    assert pane.identity_label == "aws · engineering · us-east-1"
+    assert pane.path_protocol == "s3:"
+    assert pane.current_connection_key == ("aws", "engineering")
+    assert [entry.entry.name for entry in pane.entries] == ["recovered.txt"]
+    assert pane.state is PaneState.IDLE
+    pane.dispose()
+
+
+@pytest.mark.asyncio
+async def test_provider_recovery_missing_path_stages_remote_root() -> None:
+    class _MissingPathFS(_RecordingListFS):
+        async def list(self, path: PathRef) -> list[FileEntry]:
+            self.list_calls.append(path)
+            if not path.is_root:
+                raise NotFoundError(path.as_posix())
+            return await InMemoryFS.list(self, path)
+
+    live = await _seed_fs()
+    pane = await _make_pane(live)
+    await pane.navigate_to(PathRef(("b",)))
+    recovered = _MissingPathFS()
+    await recovered.write_stream(PathRef(("root.txt",)), _astream(b"root"))
+
+    staged = await pane.stage_provider_recovery(
+        recovered,
+        path=pane.path,
+        identity_label="aws · engineering · us-east-1",
+        path_protocol="s3:",
+        connection_key=("aws", "engineering"),
+    )
+
+    assert recovered.list_calls == [PathRef(("b",)), PathRef(())]
+    assert staged.used_root_fallback is True
+    assert pane.path == PathRef(("b",))
+
+    pane.commit_provider_recovery(staged)
+
+    assert pane.path == PathRef(())
+    assert [entry.entry.name for entry in pane.entries] == ["root.txt"]
+    pane.dispose()
+
+
+@pytest.mark.asyncio
+async def test_provider_recovery_missing_root_stages_empty_listing() -> None:
+    recovered = _RecordingListFS(failure=NotFoundError("/"))
+    pane = await _make_pane(await _seed_fs())
+
+    staged = await pane.stage_provider_recovery(
+        recovered,
+        path=PathRef(()),
+        identity_label="aws · engineering · us-east-1",
+        path_protocol="s3:",
+        connection_key=("aws", "engineering"),
+    )
+    pane.commit_provider_recovery(staged)
+
+    assert recovered.list_calls == [PathRef(())]
+    assert pane.entries == ()
+    assert pane.state is PaneState.EMPTY
+    pane.dispose()
+
+
+@pytest.mark.parametrize(
+    "failure",
+    [
+        AuthRequiredError("expired"),
+        PermissionDeniedError("denied"),
+        ProviderUnreachableError("offline"),
+        RuntimeError("unexpected"),
+        asyncio.CancelledError(),
+    ],
+)
+@pytest.mark.asyncio
+async def test_provider_recovery_failure_preserves_complete_live_projection(
+    failure: BaseException,
+) -> None:
+    pane = await _make_pane(await _seed_fs())
+    pane.set_filter_command.execute(".txt")
+    pane.toggle_select_command.execute()
+    before = _live_pane_projection(pane)
+    recovered = _RecordingListFS(failure=failure)
+
+    with pytest.raises(type(failure)):
+        await pane.stage_provider_recovery(
+            recovered,
+            path=pane.path,
+            identity_label="aws · engineering · us-east-1",
+            path_protocol="s3:",
+            connection_key=("aws", "engineering"),
+        )
+
+    assert _live_pane_projection(pane) == before
+    assert recovered.list_calls == [PathRef(())]
+    pane.dispose()
+
+
+@pytest.mark.parametrize("stale_by", ["provider", "path", "generation"])
+@pytest.mark.asyncio
+async def test_provider_recovery_rejects_stale_stage(stale_by: str) -> None:
+    live = await _seed_fs()
+    pane = await _make_pane(live)
+    recovered = _RecordingListFS()
+    await recovered.write_stream(PathRef(("recovered.txt",)), _astream(b"ready"))
+    staged = await pane.stage_provider_recovery(
+        recovered,
+        path=pane.path,
+        identity_label="aws · engineering · us-east-1",
+        path_protocol="s3:",
+        connection_key=("aws", "engineering"),
+    )
+
+    if stale_by == "provider":
+        await pane.swap_provider(await _seed_fs())
+    elif stale_by == "path":
+        await pane.navigate_to(PathRef(("b",)))
+    else:
+        await pane.refresh()
+    before_commit = _live_pane_projection(pane)
+
+    assert pane.can_commit_provider_recovery(staged) is False
+    with pytest.raises(RuntimeError, match="stale provider recovery"):
+        pane.commit_provider_recovery(staged)
+    assert _live_pane_projection(pane) == before_commit
+    pane.dispose()
+
+
 @pytest.mark.asyncio
 async def test_pane_placeholder_redacts_endpoint_secrets() -> None:
     pane = PaneVM(
@@ -685,7 +868,7 @@ async def test_the_copy_tooltip_advice_is_owned_by_the_view_model() -> None:
     ``Pane.on_mouse_move``, which made the widget decide what a label reads
     -- and made the two of them free to drift apart from the placeholder
     text two properties away, which has always named its keys here
-    (``"press a to sign in"``, ``"press r to retry"``).
+    (``"press a to retry"``, ``"press r to retry"``).
 
     The two hints must stay distinguishable, because they describe
     different affordances: a row is not a click target (clicking one moves

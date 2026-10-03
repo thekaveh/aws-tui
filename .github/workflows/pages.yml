@@ -1,27 +1,7 @@
 name: pages
+# Publication is opt-in while verification runs locally.
 on:
   workflow_dispatch:
-  push:
-    branches: [main]
-    paths:
-      # Whole tree, not just the hero screenshot: ``docs/index.md`` embeds
-      # ``assets/aws-tui-poster.png`` on the published site, and
-      # ``assets/fonts/fira-code/*.ttf`` is read when rasterizing every
-      # diagram SVG. Listing one file left those two able to change without
-      # redeploying Pages.
-      - "assets/**"
-      - "docs/**"
-      # Root project documents the manifest publishes to the site and wiki.
-      # They live outside docs/**, so an edit confined to one of them shipped
-      # nothing until the next unrelated docs change.
-      - "CONTRIBUTING.md"
-      - "SECURITY.md"
-      - "CODE_OF_CONDUCT.md"
-      - "scripts/docs/**"
-      - "Makefile"
-      - "pyproject.toml"
-      - "uv.lock"
-      - ".github/workflows/pages.yml"
 
 permissions:
   contents: read

@@ -14,8 +14,8 @@ from aws_tui.domain.sql_policy import ReadOnlySqlPolicy
 from aws_tui.infra.aws_session import AwsSession
 from aws_tui.infra.connection_resolver import Connection
 from aws_tui.vm.athena.page_vm import AthenaPageVM
-from aws_tui.vm.service_source_vm import ServiceSelectionStore
-from aws_tui.vm.services_protocol import ServiceDescriptor
+from aws_tui.vm.service_source_vm import SelectionScope, ServiceSelectionStore
+from aws_tui.vm.services_protocol import RecoveryServiceVM, ServiceDescriptor
 
 
 class AthenaClientProtocol(Protocol):
@@ -123,6 +123,21 @@ class AthenaService:
         return connection.kind == "aws"
 
     def build_vm(self, connection: Connection) -> AthenaPageVM:
+        return self._build_vm(connection, self._selections)
+
+    def build_recovery_vm(self, connection: Connection) -> RecoveryServiceVM:
+        selections = self._selections.clone()
+        scope = SelectionScope(self.descriptor.id, connection.name, connection.region)
+        return RecoveryServiceVM(
+            vm=self._build_vm(connection, selections),
+            commit_selection=lambda: self._selections.replace_scope_from(selections, scope),
+        )
+
+    def _build_vm(
+        self,
+        connection: Connection,
+        selections: ServiceSelectionStore,
+    ) -> AthenaPageVM:
         client: AthenaClientProtocol = (
             self._client_factory(connection)
             if self._client_factory is not None
@@ -137,7 +152,7 @@ class AthenaService:
             policy=policy,
             runner=AthenaQueryRunner(client, policy),
             connection=connection,
-            selection_store=self._selections,
+            selection_store=selections,
             hub=self._hub,
             dispatcher=self._dispatcher,
         )
