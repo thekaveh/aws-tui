@@ -324,12 +324,12 @@ async def test_normalized_shared_aliases_dispatch_context_regardless_of_id(
         calls: list[str] = []
         app._actions.register("auth.authenticate", lambda: calls.append("auth"))
         # Exercise either emitted ID: behavior cannot depend on binding ordering.
-        app.action_dispatch("pane.quick_look" if quick_first else "pane.toggle_select")
+        app.action_dispatch("pane.quick_look" if quick_first else "pane.toggle_select", "Space")
         assert isinstance(app.screen, QuickLook)
         await pilot.press("escape", "v")
-        app.action_dispatch("pane.quick_look" if quick_first else "pane.toggle_select")
+        app.action_dispatch("pane.quick_look" if quick_first else "pane.toggle_select", "Space")
         assert marks(pane) == {"alpha.txt"}
-        app.action_dispatch("auth.authenticate" if quick_first else "pane.select_all")
+        app.action_dispatch("auth.authenticate" if quick_first else "pane.select_all", "a")
         assert marks(pane) == {"alpha.txt", "beta.txt", "gamma.txt"}
         assert calls == []
         # Explicit credential palette actions retain recovery even when healthy.
@@ -343,11 +343,11 @@ async def test_normalized_shared_aliases_dispatch_context_regardless_of_id(
         pane._set_state(PaneState.LOADING)
         for action_id in SELECTION:
             app._actions.invoke(action_id)
-        app.action_dispatch("auth.authenticate")
+        app.action_dispatch("auth.authenticate", "a")
         assert calls == ["auth"]
         assert pane.provider.calls == baseline
         pane._set_state(PaneState.AUTH_REQUIRED)
-        app.action_dispatch("pane.select_all")
+        app.action_dispatch("pane.select_all", "a")
         assert calls == ["auth", "auth"]
 
 
@@ -434,3 +434,62 @@ async def test_large_selected_bytes_fit_narrow_footer(
         assert fs.calls == baseline
         out = Path("/tmp/aws-tui-selection")
         app.save_screenshot(str(out / f"selection-80-{count}-large.svg"))
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "exclusive_action",
+    ["pane.quick_look", "pane.toggle_select", "auth.authenticate", "pane.select_all"],
+)
+async def test_partly_overlapping_aliases_keep_exclusive_keys_explicit(
+    app_context_factory, exclusive_action
+):  # type: ignore[no-untyped-def]
+    from aws_tui.vm.file_manager.pane_vm import PaneState
+
+    ctx = app_context_factory(fs=await seeded())
+    _use_injected_s3_connection(ctx)
+    shared = (
+        "Space"
+        if exclusive_action.startswith("pane.") and exclusive_action != "pane.select_all"
+        else "a"
+    )
+    ctx.keymap_store = KeymapStore(overlay={exclusive_action: [shared, "x"]})
+    app = AwsTuiApp(ctx)
+    async with app.run_test(size=(120, 40)) as pilot:
+        await drain_workers(app)
+        await pilot.pause()
+        pane = app._focused_file_pane()
+        calls: list[str] = []
+        app._actions.register("auth.authenticate", lambda: calls.append("auth"))
+        if exclusive_action == "pane.quick_look":
+            await pilot.press("v", "x")
+            assert isinstance(app.screen, QuickLook)
+            assert marks(pane) == set()
+            await pilot.press("escape", "space")
+            assert marks(pane) == {"alpha.txt"}
+        elif exclusive_action == "pane.toggle_select":
+            await pilot.press("x")
+            assert not isinstance(app.screen, QuickLook)
+            assert marks(pane) == {"alpha.txt"}
+            await pilot.press("space")
+            assert marks(pane) == set()
+            assert not isinstance(app.screen, QuickLook)
+        elif exclusive_action == "auth.authenticate":
+            await pilot.press("x")
+            assert calls == ["auth"]
+            assert marks(pane) == set()
+            await pilot.press("a")
+            assert marks(pane) == {"alpha.txt", "beta.txt", "gamma.txt"}
+            assert calls == ["auth"]
+        else:
+            # An exclusive select-all key must never become credential retry.
+            pane._set_state(PaneState.AUTH_REQUIRED)
+            await pilot.press("x")
+            assert calls == []
+            assert marks(pane) == set()
+            pane._set_state(PaneState.IDLE)
+            await pilot.press("x")
+            assert marks(pane) == {"alpha.txt", "beta.txt", "gamma.txt"}
+            pane._set_state(PaneState.AUTH_REQUIRED)
+            await pilot.press("a")
+            assert calls == ["auth"]

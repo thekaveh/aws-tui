@@ -1845,11 +1845,11 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
         # so cleanup still runs instead of being silently dropped.
         self._run_lifecycle_worker(self.action_quit, group="shutdown")
 
-    def action_dispatch(self, action_id: str) -> Awaitable[None] | None:
+    def action_dispatch(self, action_id: str, key: str | None = None) -> Awaitable[None] | None:
         """Single Textual action behind every resolver-materialized binding.
 
-        Each installed ``Binding`` uses ``dispatch('<action_id>')``; Textual
-        calls this method, which forwards to the :class:`ActionRegistry` that
+        Contextual bindings carry their normalized physical key; other bindings
+        use only the action ID. This forwards to the :class:`ActionRegistry` that
         holds the real handler. Returning the handler's awaitable (if any)
         lets Textual await async actions.
         """
@@ -1859,8 +1859,10 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
             return None
         # Physical aliases share context; named registry/palette actions keep
         # their explicit meaning even when users remap the pair independently.
-        if action_id in {"pane.quick_look", "pane.toggle_select"} and self._bindings_overlap(
-            "pane.quick_look", "pane.toggle_select"
+        if (
+            key is not None
+            and action_id in {"pane.quick_look", "pane.toggle_select"}
+            and self._bindings_overlap("pane.quick_look", "pane.toggle_select", key=key)
         ):
             pane = self._focused_file_pane()
             if pane is not None and pane.state is PaneState.LOADING:
@@ -1870,8 +1872,10 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
                 if pane is not None and pane.is_multiselect_mode
                 else "pane.quick_look"
             )
-        elif action_id in {"auth.authenticate", "pane.select_all"} and self._bindings_overlap(
-            "auth.authenticate", "pane.select_all"
+        elif (
+            key is not None
+            and action_id in {"auth.authenticate", "pane.select_all"}
+            and self._bindings_overlap("auth.authenticate", "pane.select_all", key=key)
         ):
             pane = self._focused_file_pane()
             if pane is not None and pane.state is PaneState.LOADING:
@@ -3676,12 +3680,12 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
             toast_id="athena-result-location-invalid",
         )
 
-    def _bindings_overlap(self, first: str, second: str) -> bool:
+    def _bindings_overlap(self, first: str, second: str, *, key: str | None = None) -> bool:
         keymap = self._app_ctx.keymap_store
-        return bool(
-            {textual_key_name(key) for key in keymap.resolve(first)}
-            & {textual_key_name(key) for key in keymap.resolve(second)}
-        )
+        shared = {textual_key_name(token) for token in keymap.resolve(first)} & {
+            textual_key_name(token) for token in keymap.resolve(second)
+        }
+        return bool(shared) if key is None else textual_key_name(key) in shared
 
     async def action_open_glue_s3_location(self) -> None:
         self.record_action("glue.open_s3_location")

@@ -165,7 +165,8 @@ class BindingResolver:
         for documentation but produce no runtime binding, so no keystroke maps
         to a handler that does not exist.
 
-        ``action`` is the parameterized ``dispatch('<action_id>')`` form;
+        ``action`` uses ``dispatch(action_id)``; contextual aliases also carry
+        their normalized physical key so exclusive keys retain named semantics.
         ``AwsTuiApp.action_dispatch`` forwards it to the
         :class:`ActionRegistry`, which holds the real handler. Only the first
         keystroke of a chip-worthy action is shown in Textual's footer.
@@ -179,10 +180,22 @@ class BindingResolver:
             description = _describe(action_id)
             visible = action_id in _VISIBLE_ACTIONS
             for index, key in enumerate(keys):
+                runtime_key = textual_key_name(key)
+                action = (
+                    f"dispatch({action_id!r}, {runtime_key!r})"
+                    if action_id
+                    in {
+                        "pane.quick_look",
+                        "pane.toggle_select",
+                        "auth.authenticate",
+                        "pane.select_all",
+                    }
+                    else f"dispatch({action_id!r})"
+                )
                 bindings.append(
                     Binding(
-                        key=textual_key_name(key),
-                        action=f"dispatch({action_id!r})",
+                        key=runtime_key,
+                        action=action,
                         description=description,
                         show=index == 0 and visible,
                         priority=_binding_priority(action_id, key),

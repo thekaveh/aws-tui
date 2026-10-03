@@ -42,7 +42,7 @@ _EXPECTED: set[tuple[str, str, bool, bool]] = {
     ("left", "dispatch('pane.modal_left')", False, False),
     ("right", "dispatch('pane.modal_right')", False, False),
     ("r", "dispatch('pane.refresh')", True, False),
-    ("a", "dispatch('auth.authenticate')", False, False),
+    ("a", "dispatch('auth.authenticate', 'a')", False, False),
     ("question_mark", "dispatch('app.help')", True, False),
     ("colon", "dispatch('app.command_palette')", True, False),
     ("ctrl+k", "dispatch('app.command_palette')", False, True),
@@ -79,10 +79,10 @@ _EXPECTED: set[tuple[str, str, bool, bool]] = {
     ("l", "dispatch('athena.load_more')", False, False),
     ("shift+up", "dispatch('pane.mark_up')", False, True),
     ("shift+down", "dispatch('pane.mark_down')", False, True),
-    ("space", "dispatch('pane.quick_look')", False, False),
+    ("space", "dispatch('pane.quick_look', 'space')", False, False),
     ("v", "dispatch('pane.enter_multiselect')", False, False),
-    ("space", "dispatch('pane.toggle_select')", False, False),
-    ("a", "dispatch('pane.select_all')", False, False),
+    ("space", "dispatch('pane.toggle_select', 'space')", False, False),
+    ("a", "dispatch('pane.select_all', 'a')", False, False),
     ("u", "dispatch('pane.clear_selection')", False, False),
     ("ctrl+v", "dispatch('pane.exit_multiselect')", False, False),
     ("ctrl+q", "quit", False, True),
@@ -117,7 +117,7 @@ def test_no_handlerless_keys_bound(app_context_factory) -> None:  # type: ignore
 def test_auth_recovery_has_durable_key_and_palette_entry(app_context_factory) -> None:  # type: ignore[no-untyped-def]
     app = AwsTuiApp(app_context_factory())
 
-    assert ("a", "dispatch('auth.authenticate')", False, False) in _installed(app)
+    assert ("a", "dispatch('auth.authenticate', 'a')", False, False) in _installed(app)
     assert any(
         entry.id == "auth.authenticate" and entry.label == "Retry active source credentials"
         for entry in _PALETTE_COMMANDS

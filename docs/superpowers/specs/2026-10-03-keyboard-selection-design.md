@@ -16,7 +16,7 @@ The eleven current ACs require all five existing selection commands to be reacha
 
 ## 3. Chosen approach
 
-Register five small App bridges to the existing VM commands. Keep intentional shared-key decisions at `action_dispatch`, using the existing normalized `_bindings_overlap` seam. Registry handlers and explicit palette commands retain their named meanings. Unconditional handler fallbacks would couple separately remapped keys and explicit palette actions; collapsing duplicate resolver bindings would undermine the requirement that every registered ID emits a binding.
+Register five small App bridges to the existing VM commands. Keep intentional shared-key decisions at `action_dispatch`, using the normalized triggering key and the shared-key intersection (extend the existing normalized overlap seam as needed). If action key lists overlap only partly, nonshared shortcuts retain the action's explicit meaning. Registry handlers and explicit palette commands retain their named meanings. Unconditional handler fallbacks would couple separately remapped keys and explicit palette actions; collapsing duplicate resolver bindings would undermine the requirement that every registered ID emits a binding.
 
 Keep defaults `v`, `space`, `a`; add `pane.clear_selection` on `u` and `pane.exit_multiselect` on `ctrl+v`. Make exit non-priority so text editors retain paste. Add labels and five S3/file-manager-scoped palette entries, not global entries or extra footer chips. No new approved alias pair is needed.
 

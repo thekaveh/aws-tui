@@ -33,7 +33,7 @@
 - Edit canonical documentation only; regenerate copied assets/site/wiki through existing scripts, never hand-edit generated output.
 
 **Files and responsibilities:**
-- `src/aws_tui/app.py`: register `pane.enter_multiselect`, `pane.toggle_select`, `pane.select_all`, `pane.clear_selection`, `pane.exit_multiselect`; small focused-pane command bridges; strict modal guards; contextual physical alias routing; five scoped palette entries and post-dismissal selection invocation.
+- `src/aws_tui/app.py`: register `pane.enter_multiselect`, `pane.toggle_select`, `pane.select_all`, `pane.clear_selection`, `pane.exit_multiselect`; small focused-pane command bridges; strict modal guards; contextual physical alias routing using the actual normalized triggering key; five scoped palette entries and post-dismissal selection invocation.
 - `src/aws_tui/infra/keymap_store.py`: keep `v`, `space`, `a`; add clear on `u`, exit on `ctrl+v`; preserve APPROVED_ALIAS_PAIRS unchanged.
 - `src/aws_tui/ui/bindings.py`: descriptions for clear/exit; exit yields to editors. Every ID must materialize its own Binding.
 - `src/aws_tui/vm/file_manager/pane_vm.py`: mode/count/selected-byte projection and notification; minimum lifecycle reset required by RED evidence, preserving all existing mark/filter/cursor/generation semantics.
@@ -45,7 +45,7 @@
 
 | AC | Required verification |
 | --- | --- |
-| 1: five handlers and emitted keys | App registry plus BindingResolver, defaults and independently remapped aliases |
+| 1: five handlers and emitted keys | App registry plus BindingResolver, defaults, independently remapped aliases and partly overlapping multi-key lists |
 | 2: five palette entries | File-manager entry IDs/labels and absence on unrelated services; actual Enter execution |
 | 3: Space modes | Running pilot: normal Quick Look, multi-select toggle and no preview/storage read |
 | 4: modal containment | Fresh confirm modal per shortcut: selection cannot mutate underlying mode/marks/targets; native Space activation retains captured targets |
@@ -80,7 +80,7 @@
 
 **Step 2: Implement the smallest complete change for GREEN.**
 - [ ] Reuse PaneVM command properties and their can_execute checks; do not reimplement marking in the App.
-- [ ] Put shared-key decisions in physical binding dispatch using normalized overlap checks. Palette/direct registry commands retain explicit semantics. Space on unrelated Glue/EMR pages keeps existing activation; auth palette recovery remains explicit. Loading selection is inert without storage calls.
+- [ ] Put shared-key decisions in physical binding dispatch using the actual normalized triggering key and key-set intersection; partly overlapping multi-key lists must not contextualize exclusive shortcuts. Palette/direct registry commands retain explicit semantics. Space on unrelated Glue/EMR pages keeps existing activation; auth palette recovery remains explicit. Loading selection is inert without storage calls.
 - [ ] Strict handler guards reject modal precedence and unrelated services. Schedule only the new synchronous palette selection callbacks after dismissal; verify focused-pane restoration.
 - [ ] Add readable mode-aware summary even at zero marks and publish changes; retain normal-mode formatting. Clear/exit semantics must match the existing VM commands.
 - [ ] If pending/error/cancel RED confirms stale reload marks, reset marks at reload start without bypassing generation guards or mutating the other pane. Do not redesign selection or transfer state.

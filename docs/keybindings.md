@@ -43,7 +43,9 @@ They act only on the focused pane and are inert behind modals or during loading.
 The pane summary uses `multi: N marked · size` to show mode, marked count, and
 selected bytes even with zero marks. Hidden marks stay stored but do not participate in transfers or
 summary totals until the filter is cleared. Clear selection removes hidden marks
-too. Separately remapped alias keys keep each action's explicit meaning.
+too. Only keys shared by an alias pair choose behavior from context. Separately
+remapped keys and exclusive keys in partly overlapping lists keep each action's
+explicit meaning.
 
 ### 1.3. File operations
 
