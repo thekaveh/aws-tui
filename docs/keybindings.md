@@ -395,7 +395,7 @@ palette, but do not need a default key. The same rule applies to
 keyed, palette-visible actions; keyboard, palette, and button entry points all
 dispatch their registered action IDs before the VM publishes the typed request.
 
-## Loaded listing controls
+## 6. Loaded listing controls
 
 `/` opens the focused file pane's case-insensitive name filter. Typing updates
 rows immediately; Escape or Done retains the query. Clear in the editor or pane
