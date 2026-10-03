@@ -10,7 +10,7 @@
 
 **Spec:** docs/superpowers/specs/2026-10-03-read-only-doctor-design.md
 
-## Global Constraints
+## 1. Global Constraints
 
 - Python remains >=3.11,<3.14; dependencies and lockfile remain unchanged.
 - JSON has integer `schema_version: 1` and each check has `name`, `result`, `context`, `next_step`.
@@ -21,7 +21,7 @@
 - Only applicable local checks run; GitHub Actions remain disabled.
 - Use synthetic fixtures only; do not invoke live AWS resources or publish packages/docs.
 
-## Review Focus
+## 2. Review Focus
 
 - Corrupt UTF-8/JSON or non-object SSO cache: safe unreadable result and no traceback/secrets (Task 1).
 - A keychain source beside the probed source: only the named source may request its own secrets (Task 2).
@@ -31,7 +31,9 @@
 
 ---
 
-### Task 1: Immutable reports and offline local diagnostics
+## 3. Implementation tasks
+
+### 3.1. Task 1: Immutable reports and offline local diagnostics
 
 **Files:**
 - Create: `src/aws_tui/infra/doctor.py`
@@ -82,7 +84,7 @@ class DoctorReport:
 - [ ] **Step 4: Verify GREEN and affected existing components.** Run doctor, config_store, connection_resolver, aws_session, keymap_store and redaction unit files with `--no-cov -q`; run Ruff and mypy on changed production files. Record command/count/output and self-review full task diff. Do not run the full repository suite; the controller performs that once on final branch.
 - [ ] **Step 5: Commit coherent Task 1 files.** `git add src/aws_tui/infra/doctor.py tests/unit/infra/test_doctor.py` then `git commit -m "feat: add read-only local doctor diagnostics"`. Hooks remain enabled; request justified escalation if sandbox OS hooks fail.
 
-### Task 2: Bounded explicitly named read-only probes
+### 3.2. Task 2: Bounded explicitly named read-only probes
 
 **Files:**
 - Create: `src/aws_tui/infra/doctor_probe.py`
@@ -120,7 +122,7 @@ probe_config = BotoConfig(connect_timeout=5, read_timeout=5,
 - [ ] **Step 4: Verify GREEN and unchanged auth components.** Run doctor_probe, doctor, resolver and aws_session unit files, Ruff and mypy changed files. Read full diff and record test counts and bounded/read-only evidence. No real AWS/keychain/network use in tests.
 - [ ] **Step 5: Commit coherent Task 2.** Stage only its production/test files and `git commit -m "feat: add explicit read-only doctor probes"`.
 
-### Task 3: Early CLI dispatch, actual-path help and canonical docs
+### 3.3. Task 3: Early CLI dispatch, actual-path help and canonical docs
 
 **Files:**
 - Modify: `src/aws_tui/app.py` main/action_help
@@ -132,7 +134,7 @@ probe_config = BotoConfig(connect_timeout=5, read_timeout=5,
 **Interfaces:**
 - Consumes Task 1 report/collector and Task 2 probe_source.
 - App parser adds doctor subparser and --json/--probe; raises SystemExit(report.exit_code) after rendering before build_app_context. Explicit --probe replaces the default skipped probe row with the actual result; retain every local diagnostic row.
-- HelpModal adds optional `log_path: Path | None = None`, `crash_path: Path | None = None`; app supplies ctx.log_sink.path and ctx.crash_dump.base_dir. Defaults preserve existing callers using pure paths. Dynamic values use literal Static markup=False.
+- HelpModal adds optional `log_path: Path | None = None`, `crash_path: Path | None = None`; app supplies ctx.log_sink.path and ctx.log_sink.path.parent.parent / "crash" (the actual _build_crash_report calculation). Defaults preserve existing callers using pure paths. Dynamic values use literal Static markup=False.
 
 - [ ] **Step 1: Write failing real CLI and running-app help tests.** Block socket/keyring/process/build_app_context/resize/AwsTuiApp.run; use actual local collector fixtures for healthy/failing results and SystemExit. Both formats and explicit fakeprobe invocation receive tests, including malformed flags and demoenv:
 
@@ -153,10 +155,10 @@ Running AwsTuiApp with app_context_factory and run_test, open help through actio
 - [ ] **Step 5: Run new tests plus affected CLI/help/log/crash/docs tests, Ruff and mypy.** Existing log/crash tests remain unmodified. Report RED/GREEN commands and counts, self-review full diff and all AC mappings.
 - [ ] **Step 6: Commit coherent integration/docs.** Stage exact Task 3 files and `git commit -m "feat: expose doctor CLI and diagnostic help"`.
 
-## Controller verification and delivery
+## 4. Controller verification and delivery
 
 After each task, review its complete BASE..HEAD diff with fresh spec/quality reviewer. Do not start the next task with unresolved material findings. After all tasks, request whole-branch review, run all applicable all-file hooks, complete default full suite with coverage and all snapshots, strict docs/site/wiki parity, package/build/twine/import checks. Verify no hosted Actions run. Complete exact-head protected develop PR, attached promotion PR, post-merge local checks/tree parity, safe own feature cleanup, substantive issue closure with all eight ACs and board Done. Preserve unrelated Dependabot PRs. Only then start #239.
 
-## Plan self-review
+## 5. Plan self-review
 
 All ACs map to explicit tasks and evidence; interfaces and path names match across tasks. The five review-focus cases are each required in their owning task. Default offline validation and explicit SDK networking are separate; task constraints agree. Worker suites are bounded to affected files; final full local gate belongs to the controller. The goal's standing autonomous authorization supplies execution-method and routine plan approval, so implementation proceeds without a redundant approval menu.

@@ -2,13 +2,13 @@
 
 Issue: https://github.com/thekaveh/aws-tui/issues/246
 
-## Authority and scope
+## 1. Authority and scope
 
 Implement all eight current acceptance criteria. The standing goal authorizes routine design decisions and the complete protected delivery cycle without another approval menu. Only applicable local checks run; GitHub Actions remain disabled. This command diagnoses startup and authentication using existing infrastructure, without replacing logging, crash capture, credential recovery, or first-run setup.
 
 Python remains >=3.11,<3.14; dependencies and lockfile remain unchanged. The installed botocore 1.40.61 is the supported minimum. Preserve architecture rules and existing CLI contracts, including `--demo`, `--version`, `--help`, and `python -m aws_tui`.
 
-## CLI and reports
+## 2. CLI and reports
 
 Add `aws-tui doctor [--json] [--probe NAME]`. A probe requires one exact source name. Dispatch before app composition, Textual startup, resize negotiation, LogSink, CrashDump, keyring access, or demo composition. The demo environment does not invent healthy doctor results. Reject incompatible doctor/root launch flags as argparse usage errors.
 
@@ -18,7 +18,7 @@ Checks cover version, Python/runtime/platform, effective config/cache/log/crash 
 
 Use explicit results for `missing_config`, `invalid_config`, `invalid_keybinding`, `keybinding_collision`, `unknown_action`, `missing_credentials`, `expired_sso`, `unreadable_sso`, `unverified`, `skipped`, and healthy `ok`. Runtime/read errors are contained using safe fixed guidance rather than exception messages. Each actionable result provides a concrete next step.
 
-## Default collector
+## 3. Default collector
 
 `DoctorPaths` describes effective config file, cache directory, AWS config file, AWS shared credentials file, and SSO cache directory. Compute defaults at call time, honoring current path/environment semantics. Default path lookup does not create directories.
 
@@ -28,7 +28,7 @@ Inspect only known local credential fields. S3-compatible static/env/shared-prof
 
 Reuse AwsSession.probe_token for SSO freshness where applicable, and contain TokenLoadError and malformed cache shapes/encodings. Distinguish missing, expired and unreadable SSO cache. A valid expiration without a usable access token is not sufficient. Never report cached tokens, refresh tokens, client secrets, raw cache data, or raw loader errors. Non-SSO probe_token CONNECTED is not proof of authentication or permissions.
 
-## Named probes
+## 4. Named probes
 
 Default report includes a non-actionable skipped probe with guidance to name a source. An explicit probe replaces that default skipped row with its actual result, preserving all local diagnostic checks. Explicit unknown names are actionable; never fall back to another source. Resolve credentials for the selected source only, so unrelated keychains never prompt. Add a narrowly scoped selected-source resolver API if necessary; preserve existing list/resolve semantics.
 
@@ -38,19 +38,19 @@ Reuse botocore's credential resolver and profile provider builder rather than a 
 
 Classify success, denied, unreachable, timed_out and skipped separately. Missing/expired/unreadable local auth prerequisites retain their diagnostic meaning. Never emit vendor exception messages, full service responses, request headers, account identifiers, ARNs, or signed URLs. Fake clients test every result and lifecycle. Modern/legacy/nested SSO fixtures prove no OIDC call, token save or file changes.
 
-## Privacy and integrity
+## 5. Privacy and integrity
 
 Whitelist context fields and safe metadata; never dump Config, Connection, os.environ, exception strings, log/crash tails, SQL, AWS files, cache payloads or SDK objects. Apply existing redact_text/redact_mapping to projected display fields without replacing stable result identifiers. Strip terminal control characters and render dynamic help paths literally. Strip endpoint URL userinfo/query/fragment. Retain existing redaction and log/crash formats unchanged.
 
 Sentinel fixtures cover static/env/keychain/session keys, SSO access/refresh tokens and client secrets, SQL in config/log/error/env inputs, authorization strings and presigned endpoint secrets. Assertions cover both JSON and text and demonstrate reuse of redact_text. Socket blockers, forbidden write/permission/keychain/process/client spies, and before/after bytes/modes/directory inventories establish the default read-only contract. Named probes must preserve all config/cache/log/credential files and permissions too.
 
-## Help and documentation
+## 6. Help and documentation
 
 HelpModal names `aws-tui doctor`, JSON and named-probe usage, and the actual running context's log/crash paths. App supplies those paths; help does not import AWS infrastructure or composition. Preserve existing optional keymap constructor callers. A real running-app Pilot test checks command and actual paths, safe literal rendering, and keyboard access to the new section.
 
 Update canonical user docs, README and changelog to describe offline limits, result/exit behavior and safe probes; verify the existing generated site/wiki transformations locally without publication. Change snapshots only if observed rendered product content changes, with explicit content evidence; do not blindly regenerate unrelated goldens.
 
-## AC evidence map
+## 7. AC evidence map
 
 | AC | Required evidence | Owner |
 |---|---|---|
@@ -63,7 +63,7 @@ Update canonical user docs, README and changelog to describe offline limits, res
 | 7 | existing test_log_sink.py and test_crash_dump.py unchanged and passing | Task 3/local final gates |
 | 8 | real AwsTuiApp HelpModal Pilot asserts command and ctx paths | Task 3 |
 
-## Alternatives and self-review
+## 8. Alternatives and self-review
 
 Starting app composition then exiting was rejected because it writes log/cache paths. Running the ordinary aioboto3 client factory was rejected because its retries are larger and its SSO provider may refresh disk cache. Skipping every dynamic profile was rejected because optional probes must be useful for the app's supported sources. An entirely new credential engine was rejected in favor of the SDK's existing providers with a confined read-only token adapter. No new package or broad refactor is needed.
 
