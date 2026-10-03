@@ -13,7 +13,12 @@ from types import SimpleNamespace
 
 import botocore.session
 import pytest
-from botocore.exceptions import ClientError, EndpointConnectionError, ReadTimeoutError
+from botocore.exceptions import (
+    ClientError,
+    ConnectionClosedError,
+    EndpointConnectionError,
+    ReadTimeoutError,
+)
 from botocore.tokens import SSOTokenProvider
 from botocore.utils import JSONFileCache
 
@@ -103,6 +108,8 @@ class FakeClient:
             raise ClientError({"Error": {"Code": "AccessDenied", "Message": SECRET}}, operation)
         if condition == "unreachable":
             raise EndpointConnectionError(endpoint_url=SECRET)
+        if condition == "closed":
+            raise ConnectionClosedError(endpoint_url=SECRET)
         if condition == "timeout":
             raise ReadTimeoutError(endpoint_url=SECRET)
         if condition == "unexpected":
@@ -193,6 +200,7 @@ def inventory(root):
         ("success", "ok"),
         ("denied", "denied"),
         ("unreachable", "unreachable"),
+        ("closed", "unreachable"),
         ("timeout", "timed_out"),
         ("unexpected", "unverified"),
     ],
@@ -461,15 +469,25 @@ def test_sdk_credential_source_http_is_bounded_and_closed(
 
 
 @pytest.mark.parametrize("provider", ["container", "metadata"])
+@pytest.mark.parametrize("nested", [False, True])
 @pytest.mark.parametrize(
-    ("condition", "expected"), [("timeout", "timed_out"), ("unreachable", "unreachable")]
+    ("condition", "expected"),
+    [("timeout", "timed_out"), ("unreachable", "unreachable"), ("closed", "unreachable")],
 )
 def test_credential_source_transport_error_is_not_false_missing(
-    paths, clients, monkeypatch, provider, condition, expected
+    paths, clients, monkeypatch, provider, nested, condition, expected
 ):
     from botocore.httpsession import URLLib3Session
 
-    aws(paths)
+    if nested:
+        aws(
+            paths,
+            "[profile chosen]\nrole_arn = arn:aws:iam::123456789012:role/outer\ncredential_source = "
+            + ("EcsContainer" if provider == "container" else "Ec2InstanceMetadata")
+            + "\n",
+        )
+    else:
+        aws(paths)
     if provider == "container":
         monkeypatch.setenv(
             "AWS_CONTAINER_CREDENTIALS_FULL_URI", "http://localhost:8765/credentials"
@@ -480,6 +498,8 @@ def test_credential_source_transport_error_is_not_false_missing(
 
     def send(self, request):
         attempts.append(self)
+        if condition == "closed":
+            raise ConnectionClosedError(endpoint_url=SECRET)
         if condition == "timeout":
             raise ReadTimeoutError(endpoint_url=SECRET)
         raise EndpointConnectionError(endpoint_url=SECRET)

@@ -746,3 +746,148 @@ def test_extreme_sso_expiration_returns_safe_actionable_report(paths):
     assert check.actionable
     assert report.exit_code == 1
     assert "synthetic-extreme-secret" not in report.render_json() + report.render_text()
+
+
+@pytest.mark.parametrize("modern", [False, True])
+@pytest.mark.parametrize("unused_state", ["missing", "expired", "unreadable"])
+def test_role_ignores_unused_parent_sso_cache(paths, monkeypatch, modern, unused_state):
+    key = "unused-session" if modern else "https://example.invalid/unused-start"
+    parent_sso = "sso_session = unused-session\n" if modern else f"sso_start_url = {key}\n"
+    _aws(
+        paths,
+        "[profile role]\nrole_arn = arn:aws:iam::123456789012:role/synthetic\n"
+        "source_profile = base\nsso_account_id = 123456789012\nsso_role_name = unused-role\n"
+        + parent_sso
+        + "[profile base]\n"
+        + (
+            "[sso-session unused-session]\nsso_start_url = https://example.invalid/unused-start\nsso_region = us-east-1\n"
+            if modern
+            else ""
+        ),
+    )
+    _static_profile(paths, "base")
+    cache = paths.sso_cache_dir / (hashlib.sha1(key.encode()).hexdigest() + ".json")
+    if unused_state == "expired":
+        cache.write_text(
+            json.dumps(
+                {
+                    "accessToken": "unused-token",
+                    "expiresAt": (datetime.now(UTC) - timedelta(hours=1)).isoformat(),
+                }
+            )
+        )
+    elif unused_state == "unreadable":
+        cache.write_bytes(b"\xffunused-token")
+    forbidden = Mock(side_effect=AssertionError("unexpected external action"))
+    monkeypatch.setattr(botocore.session.Session, "create_client", forbidden)
+    monkeypatch.setattr(socket.socket, "connect", forbidden)
+    monkeypatch.setattr(subprocess, "Popen", forbidden)
+    session = botocore.session.Session(profile="role")
+    session.set_config_variable("config_file", str(paths.aws_config_file))
+    session.set_config_variable("credentials_file", str(paths.aws_credentials_file))
+    session.set_config_variable("metadata_service_timeout", 5)
+    session.set_config_variable("metadata_service_num_attempts", 1)
+    sdk_resolver = session.get_component("credential_provider")
+    try:
+        assert session.get_credentials().method == "assume-role"
+    finally:
+        sdk_resolver.get_provider("container-role")._fetcher._session.close()
+        sdk_resolver.get_provider("iam-role")._role_fetcher._session.close()
+    # Collector itself must never use the credential resolver/provider.
+    monkeypatch.setattr(botocore.session.Session, "get_credentials", forbidden)
+    before = _snapshot(paths.config_file.parent)
+    report = collect_local_diagnostics(paths)
+    assert _auth(report)[0].result == "unverified"
+    assert not _auth(report)[0].actionable
+    assert report.exit_code == 0
+    assert _snapshot(paths.config_file.parent) == before
+    forbidden.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    ("source_state", "expected"),
+    [
+        ("healthy", "unverified"),
+        ("expired", "expired_sso"),
+        ("missing", "missing_credentials"),
+        ("unreadable", "unreadable_sso"),
+    ],
+)
+def test_role_preserves_active_source_sso_when_source_role_fields_are_unused(
+    paths, monkeypatch, source_state, expected
+):
+    cache = _sso(
+        paths, expires=datetime.now(UTC) - timedelta(hours=1) if source_state == "expired" else None
+    )
+    if source_state == "missing":
+        cache.unlink()
+    elif source_state == "unreadable":
+        cache.write_bytes(b"\xffsynthetic-token")
+    _aws(
+        paths,
+        "[profile outer]\nrole_arn = arn:aws:iam::123456789012:role/outer\nsource_profile = base\n[profile base]\nrole_arn = arn:aws:iam::123456789012:role/unused\nsource_profile = unused-missing\nsso_session = synthetic-session\nsso_account_id = 123456789012\nsso_role_name = synthetic-role\n[sso-session synthetic-session]\nsso_start_url = https://example.invalid/start\nsso_region = us-east-1\n",
+    )
+    _static_profile(paths, "base")
+    forbidden = Mock(side_effect=AssertionError("unexpected external action"))
+    monkeypatch.setattr(botocore.session.Session, "create_client", forbidden)
+    monkeypatch.setattr(socket.socket, "connect", forbidden)
+    monkeypatch.setattr(subprocess, "Popen", forbidden)
+    session = botocore.session.Session(profile="outer")
+    session.set_config_variable("config_file", str(paths.aws_config_file))
+    session.set_config_variable("credentials_file", str(paths.aws_credentials_file))
+    sdk_resolver = session.get_component("credential_provider")
+    try:
+        credentials = session.get_credentials()
+        assert credentials.method == "assume-role"
+        # SDK source-profile static fields select the profile provider chain,
+        # where SSO precedes shared static keys and unused source role fields.
+        assert credentials._refresh_using.__self__._source_credentials.method == "sso"
+    finally:
+        sdk_resolver.get_provider("container-role")._fetcher._session.close()
+        sdk_resolver.get_provider("iam-role")._role_fetcher._session.close()
+    monkeypatch.setattr(botocore.session.Session, "get_credentials", forbidden)
+    before = _snapshot(paths.config_file.parent)
+    check = _auth(collect_local_diagnostics(paths))[0]
+    assert check.result == expected
+    assert check.actionable == (source_state != "healthy")
+    assert _snapshot(paths.config_file.parent) == before
+    forbidden.assert_not_called()
+
+
+@pytest.mark.parametrize("sso_source", [False, True])
+def test_role_static_self_source_matches_sdk_without_false_cycle(paths, monkeypatch, sso_source):
+    if sso_source:
+        _sso(paths, expires=datetime.now(UTC) - timedelta(hours=1))
+    _aws(
+        paths,
+        "[profile dev]\nrole_arn = arn:aws:iam::123456789012:role/synthetic\nsource_profile = dev\n"
+        + (
+            "sso_session = synthetic-session\nsso_account_id = 123456789012\nsso_role_name = synthetic-role\n[sso-session synthetic-session]\nsso_start_url = https://example.invalid/start\nsso_region = us-east-1\n"
+            if sso_source
+            else ""
+        ),
+    )
+    _static_profile(paths)
+    forbidden = Mock(side_effect=AssertionError("unexpected external action"))
+    monkeypatch.setattr(botocore.session.Session, "create_client", forbidden)
+    monkeypatch.setattr(socket.socket, "connect", forbidden)
+    session = botocore.session.Session(profile="dev")
+    session.set_config_variable("config_file", str(paths.aws_config_file))
+    session.set_config_variable("credentials_file", str(paths.aws_credentials_file))
+    sdk_resolver = session.get_component("credential_provider")
+    try:
+        credentials = session.get_credentials()
+        assert credentials.method == "assume-role"
+        assert credentials._refresh_using.__self__._source_credentials.method == (
+            "sso" if sso_source else "shared-credentials-file"
+        )
+    finally:
+        sdk_resolver.get_provider("container-role")._fetcher._session.close()
+        sdk_resolver.get_provider("iam-role")._role_fetcher._session.close()
+    monkeypatch.setattr(botocore.session.Session, "get_credentials", forbidden)
+    before = _snapshot(paths.config_file.parent)
+    check = _auth(collect_local_diagnostics(paths))[0]
+    assert check.result == ("expired_sso" if sso_source else "unverified")
+    assert check.actionable == sso_source
+    assert _snapshot(paths.config_file.parent) == before
+    forbidden.assert_not_called()

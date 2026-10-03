@@ -25,6 +25,7 @@ from botocore.credentials import (
 from botocore.exceptions import (
     ClientError,
     ConfigParseError,
+    ConnectionClosedError,
     ConnectTimeoutError,
     EndpointConnectionError,
     InvalidConfigError,
@@ -166,7 +167,7 @@ class _ProbeHTTP(URLLib3Session):  # type: ignore[misc]
             raise _ProbeStop(
                 "timed_out", "Check credential-source network connectivity, then rerun doctor."
             ) from None
-        except (EndpointConnectionError, SSLError, ConnectionError):
+        except (EndpointConnectionError, ConnectionClosedError, SSLError, ConnectionError):
             raise _ProbeStop(
                 "unreachable",
                 "Check credential-source network connectivity and TLS settings, then rerun doctor.",
@@ -370,7 +371,7 @@ def probe_source(name: str, paths: DoctorPaths | None = None) -> DoctorCheck:
             context,
             "Check network connectivity and the source endpoint, then rerun doctor.",
         )
-    except (EndpointConnectionError, SSLError, ConnectionError):
+    except (EndpointConnectionError, ConnectionClosedError, SSLError, ConnectionError):
         return _check(
             "unreachable",
             context,

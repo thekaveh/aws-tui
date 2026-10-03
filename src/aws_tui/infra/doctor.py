@@ -321,19 +321,31 @@ def _aws_auth_result(
         metadata = profiles.get(profile)
         if metadata is None:
             return "unverified" if invalid else "missing_credentials"
-        derived_role = derived_role or bool(metadata.get("role_arn"))
+        # The SDK tries assume-role before the profile's SSO provider. Parent
+        # SSO metadata can be stale and unused when a role selects its source.
+        # A nested source with any static key fields uses the SDK's profile
+        # provider chain instead, where its SSO metadata can be active.
+        has_static_fields = any(
+            key in metadata for key in ("aws_access_key_id", "aws_secret_access_key")
+        )
+        follow_role = bool(metadata.get("role_arn")) and (not derived_role or not has_static_fields)
+        derived_role = derived_role or follow_role
+        if follow_role:
+            source = metadata.get("source_profile")
+            if source:
+                # The SDK permits a top-level role to source its own static
+                # fields; its profile provider chain then supplies the source.
+                if source != profile or not has_static_fields:
+                    profile = source
+                    continue
+            else:
+                return "unverified"
         key = metadata.get("sso_session") or metadata.get("sso_start_url")
         if key:
             if "aws-config" in invalid:
                 return "unverified"
             result = _sso_result(connection, profile, key, paths)
             return "unverified" if derived_role and result == "ok" else result
-        if metadata.get("role_arn"):
-            source = metadata.get("source_profile")
-            if source:
-                profile = source
-                continue
-            return "unverified"
         if any(
             metadata.get(field)
             for field in ("credential_process", "web_identity_token_file", "credential_source")
