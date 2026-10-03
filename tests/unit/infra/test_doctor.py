@@ -891,3 +891,58 @@ def test_role_static_self_source_matches_sdk_without_false_cycle(paths, monkeypa
     assert check.actionable == sso_source
     assert _snapshot(paths.config_file.parent) == before
     forbidden.assert_not_called()
+
+
+@pytest.mark.parametrize("nested", [False, True])
+@pytest.mark.parametrize("unused_state", ["healthy", "expired", "missing", "unreadable"])
+def test_web_identity_ignores_unused_role_source_and_sso(paths, monkeypatch, nested, unused_state):
+    import botocore.credentials
+
+    cache = _sso(
+        paths, expires=datetime.now(UTC) - timedelta(hours=1) if unused_state == "expired" else None
+    )
+    if unused_state == "missing":
+        cache.unlink()
+    elif unused_state == "unreadable":
+        cache.write_bytes(b"\xffunused-token")
+    body = (
+        "[profile dev]\nrole_arn = arn:aws:iam::123456789012:role/web\nweb_identity_token_file = "
+        + str(paths.config_file.parent / "unread-web-token")
+        + "\nsource_profile = unused-missing\nsso_session = synthetic-session\nsso_account_id = 123456789012\nsso_role_name = unused-role\n"
+    )
+    if nested:
+        body += "[profile outer]\nrole_arn = arn:aws:iam::123456789012:role/outer\nsource_profile = dev\n"
+    body += "[sso-session synthetic-session]\nsso_start_url = https://example.invalid/start\nsso_region = us-east-1\n"
+    _aws(paths, body)
+    forbidden = Mock(
+        side_effect=AssertionError("unexpected external action or unused prerequisite")
+    )
+    monkeypatch.setattr(botocore.session.Session, "create_client", forbidden)
+    monkeypatch.setattr(socket.socket, "connect", forbidden)
+    monkeypatch.setattr(subprocess, "Popen", forbidden)
+    session = botocore.session.Session(profile="outer" if nested else "dev")
+    session.set_config_variable("config_file", str(paths.aws_config_file))
+    session.set_config_variable("credentials_file", str(paths.aws_credentials_file))
+    sdk_resolver = session.get_component("credential_provider")
+    try:
+        credentials = session.get_credentials()
+        if nested:
+            assert credentials.method == "assume-role"
+            credentials = credentials._refresh_using.__self__._source_credentials
+        assert credentials.method == "assume-role-with-web-identity"
+    finally:
+        sdk_resolver.get_provider("container-role")._fetcher._session.close()
+        sdk_resolver.get_provider("iam-role")._role_fetcher._session.close()
+    # Inspect SDK selection only above. The collector must not resolve/freeze
+    # credentials, open sockets, execute processes or inspect unused SSO data.
+    monkeypatch.setattr(botocore.session.Session, "get_credentials", forbidden)
+    monkeypatch.setattr(botocore.credentials.CredentialResolver, "load_credentials", forbidden)
+    monkeypatch.setattr(socket, "socket", forbidden)
+    monkeypatch.setattr(doctor, "_sso_result", forbidden)
+    before = _snapshot(paths.config_file.parent)
+    report = collect_local_diagnostics(paths)
+    assert all(check.result == "unverified" for check in _auth(report))
+    assert not any(check.actionable for check in _auth(report))
+    assert report.exit_code == 0
+    assert _snapshot(paths.config_file.parent) == before
+    forbidden.assert_not_called()

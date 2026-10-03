@@ -321,6 +321,10 @@ def _aws_auth_result(
         metadata = profiles.get(profile)
         if metadata is None:
             return "unverified" if invalid else "missing_credentials"
+        # Web identity precedes profile SSO and excludes ordinary assume-role
+        # source resolution. Its token file/provider remain unverified offline.
+        if metadata.get("web_identity_token_file"):
+            return "unverified"
         # The SDK tries assume-role before the profile's SSO provider. Parent
         # SSO metadata can be stale and unused when a role selects its source.
         # A nested source with any static key fields uses the SDK's profile
@@ -328,7 +332,11 @@ def _aws_auth_result(
         has_static_fields = any(
             key in metadata for key in ("aws_access_key_id", "aws_secret_access_key")
         )
-        follow_role = bool(metadata.get("role_arn")) and (not derived_role or not has_static_fields)
+        follow_role = (
+            bool(metadata.get("role_arn"))
+            and "web_identity_token_file" not in metadata
+            and (not derived_role or not has_static_fields)
+        )
         derived_role = derived_role or follow_role
         if follow_role:
             source = metadata.get("source_profile")
