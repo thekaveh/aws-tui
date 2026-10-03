@@ -63,6 +63,7 @@ _ACTION_DESCRIPTIONS: dict[str, str] = {
     "pane.refresh": "Refresh",
     "auth.authenticate": "Retry credentials",
     "emr.clone": "Clone EMR run",
+    "emr.cancel": "Cancel selected EMR job run",
     "emr.logs.filter": "Filter EMR logs",
 }
 

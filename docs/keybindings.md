@@ -121,6 +121,7 @@ focused editable widget can consume text first.
 | Cursor up / down | `↑` `↓` (also `k` / `j`) | Moves the LEFT-pane row cursor; master-detail follows the cursor (the RIGHT pane re-loads on every cursor move, not only on `Enter`). |
 | Select run (explicit) | `Enter` | Re-emits `RunSelected` for the cursor row. |
 | Refresh | `r` | Forces an immediate poll on the active pane (apps if LEFT focused on the picker, runs if LEFT focused on the runs list, detail if RIGHT focused). |
+| Cancel selected job run | `x` | `emr.cancel`: danger confirmation names the exact source, application and run; starts on Keep running. Request cancellation is available only for SUBMITTED, PENDING, SCHEDULED, QUEUED and RUNNING, while idle. Requires `emr-serverless:CancelJobRun`. Acknowledgement leaves cached state untouched; existing polling observes CANCELLING/CANCELLED. The Commands hint and palette use the same action. |
 | Clone selected job run | `c` | Opens the Spark clone form from the focused run. Edit arguments, Spark parameters and advanced settings as JSON, choose Review, inspect source identity and changes, then Submit. Enter in a single-line field opens review; Tab reaches the fixed footer. Unsupported drivers are refused. Escape closes the form; it does not cancel an AWS job already submitted. |
 | Cycle pane focus | `Tab` / `Shift+Tab` | 6-slot cycle: nav rail → source selector → application selector → runs pane → detail pane → logs pane → nav rail. |
 | Backspace | `Backspace` | No-op on EMR (symmetric to `Descend` having an EMR branch). |
@@ -312,6 +313,7 @@ unbound until a handler ships.
 | `pane.copy_path` | `P` (`shift+p`) | yes | Copy the pane's current path to the clipboard; keyed and palette-visible (**Copy pane path**, file manager only) |
 | `auth.authenticate` | `a` | yes | Retry the active source after external credential repair; never launches login or writes credentials |
 | `emr.next_application` | `A` (`shift+a`) | yes | Cycle to the next EMR application |
+| `emr.cancel` | `x` (when EMR page mounted) | yes | Confirm the exact selected active run before requesting cancellation; never retries automatically. |
 | `emr.clone` | `c` (when EMR page mounted) | yes | Open the EMR clone-job-run modal pre-filled from the focused run. |
 | `emr.logs.filter` | `f` (when EMR logs pane focused) | yes | Open the EMR logs filter modal |
 | `glue.catalog` | `1` | yes | Select the Glue Catalog view |

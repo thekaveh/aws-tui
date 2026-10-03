@@ -29,6 +29,7 @@ from aws_tui.infra.keymap_store import KeymapStore
 from aws_tui.ui import notifications
 from aws_tui.ui.widgets._focus_guard import focus_rests_within, is_on_active_screen
 from aws_tui.ui.widgets._worker import DeferredWorkerMixin
+from aws_tui.ui.widgets.confirm_modal import TextualDialogService
 from aws_tui.ui.widgets.context_picker import ContextPicker
 from aws_tui.ui.widgets.emr_serverless.application_picker import ApplicationPicker
 from aws_tui.ui.widgets.emr_serverless.clone_modal import JobRunCloneModal
@@ -502,6 +503,34 @@ class EmrServerlessPage(DeferredWorkerMixin, Widget):
             if modal.is_attached and modal.is_active:
                 modal.action_cancel()
             clone_vm.dispose()
+
+    def action_cancel_selected_run(self) -> None:
+        if not is_on_active_screen(self):
+            return
+        self._run_lifecycle_worker(self._cancel_selected_run, group="emr-cancel", exclusive=False)
+
+    def _cancel_owner_current(self) -> bool:
+        return (
+            self.is_attached and self.app.app_ctx.root_vm.content_host.current is self._vm  # type: ignore[attr-defined]
+        )
+
+    async def _cancel_selected_run(self) -> None:
+        if not self._cancel_owner_current():
+            return
+        ctx = self.app.app_ctx  # type: ignore[attr-defined]
+        dialogs = TextualDialogService(self.app, ctx.confirm_vm, hub=self._hub)
+        result = await self._vm.cancel_selected_run(
+            partial(ctx.confirm_vm.ask, dialog_service=dialogs),
+            source_is_current=self._cancel_owner_current,
+        )
+        if not self._cancel_owner_current() or not result.message:
+            return
+        if result.status == "requested":
+            notifications.announce(
+                ctx.root_vm.chrome.toast_stack, subject="Job", message=result.message
+            )
+        else:
+            self._post_advisory_toast("Job", result.message)
 
     def open_focused_log_filter(self) -> bool:
         focused = self.app.focused

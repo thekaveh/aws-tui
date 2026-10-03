@@ -1,8 +1,8 @@
 """EmrServerlessService — second concrete :class:`Service` implementation.
 
 The service composes the read-mostly application, job-run detail, and log
-browser, including focused clone submission for an existing run. Generic job
-submission and cancellation are intentionally not exposed;
+browser, including focused clone submission and confirmed cancellation for an
+existing run. Generic job submission remains deferred;
 :class:`EmrServerlessPageVM` remains the hosted root VM.
 
 Construction strategy mirrors :class:`S3Service`: the service holds
