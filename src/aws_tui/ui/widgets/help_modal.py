@@ -110,6 +110,11 @@ class HelpModal(ModalScreen[None]):
                 yield self._action_row("pane.ascend", "ascend to parent")
                 yield self._action_row("pane.refresh", "refresh focused pane")
 
+                yield Static("Loaded listing", classes="help-section")
+                yield self._action_row("pane.filter", "filter loaded names; Clear restores rows")
+                yield self._action_row("pane.fuzzy_find", "find and select a loaded entry")
+                yield self._key_row("Palette", "Sort loaded entries / Clear pane filter")
+
                 yield Static("Mouse / Trackpad", classes="help-section")
                 yield self._key_row("Click pane", "switch focus to it")
                 yield self._key_row("Click row", "move cursor")

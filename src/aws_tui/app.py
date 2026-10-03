@@ -74,6 +74,7 @@ from aws_tui.ui.widgets.help_modal import HelpModal
 from aws_tui.ui.widgets.hint_legend import HintLegend
 from aws_tui.ui.widgets.modal_button import ModalButton
 from aws_tui.ui.widgets.nav_menu import NavMenu
+from aws_tui.ui.widgets.pane_listing_controls import FilterPaneModal, FindPaneModal, SortPaneModal
 from aws_tui.ui.widgets.quick_look import QuickLook
 from aws_tui.ui.widgets.service_source_header import ServiceSourceHeader
 from aws_tui.ui.widgets.service_view_factory import build_service_view
@@ -256,6 +257,10 @@ _PALETTE_COMMANDS: tuple[PaletteEntry, ...] = (
     PaletteEntry(
         "pane.select_all", "Select all visible entries", "pane", service_ids=_PANE_SERVICE_IDS
     ),
+    PaletteEntry("pane.filter", "Filter loaded entries", "pane", service_ids=_PANE_SERVICE_IDS),
+    PaletteEntry("pane.fuzzy_find", "Find loaded entry", "pane", service_ids=_PANE_SERVICE_IDS),
+    PaletteEntry("pane.sort", "Sort loaded entries", "pane", service_ids=_PANE_SERVICE_IDS),
+    PaletteEntry("pane.clear_filter", "Clear pane filter", "pane", service_ids=_PANE_SERVICE_IDS),
     PaletteEntry("pane.clear_selection", "Clear selection", "pane", service_ids=_PANE_SERVICE_IDS),
     PaletteEntry(
         "pane.exit_multiselect", "Exit multi-select mode", "pane", service_ids=_PANE_SERVICE_IDS
@@ -845,6 +850,10 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
         self._actions.register("pane.toggle_select", self.action_toggle_select)
         self._actions.register("pane.select_all", self.action_select_all)
         self._actions.register("pane.clear_selection", self.action_clear_selection)
+        self._actions.register("pane.filter", partial(self._listing_control, "filter"))
+        self._actions.register("pane.fuzzy_find", partial(self._listing_control, "find"))
+        self._actions.register("pane.sort", partial(self._listing_control, "sort"))
+        self._actions.register("pane.clear_filter", partial(self._listing_control, "clear"))
         self._actions.register("pane.exit_multiselect", self.action_exit_multiselect)
         self._actions.register("app.command_palette", self.action_command_palette)
         # Install the resolver-materialized bindings, keeping Textual's built-in
@@ -1929,6 +1938,20 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
         if command.can_execute():
             command.execute()
 
+    def _listing_control(self, operation: str) -> None:
+        if len(self.screen_stack) > 1 or self._app_ctx.focus_coordinator.is_modal:
+            return
+        pane = self._focused_file_pane()
+        if pane is None or pane.state not in {PaneState.IDLE, PaneState.EMPTY}:
+            return
+        if operation == "clear":
+            pane.set_filter_command.execute("")
+        else:
+            screen = {"filter": FilterPaneModal, "find": FindPaneModal, "sort": SortPaneModal}[
+                operation
+            ]
+            self.push_screen(screen(pane))
+
     def action_enter_multiselect(self) -> None:
         self._execute_pane_selection("pane.enter_multiselect", "enter_multiselect_command")
 
@@ -1983,10 +2006,12 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
             vm.register_entry(
                 entry,
                 # PaletteVM invokes before CommandPalette dismisses its screen.
-                # Defer only synchronous selection so strict modal guards and
+                # Defer synchronous pane actions so strict modal guards and
                 # focused-pane restoration still apply at invocation time.
                 partial(self._schedule_palette_selection, entry.id)
-                if entry.id in _PANE_SELECTION_ACTIONS
+                if entry.id
+                in _PANE_SELECTION_ACTIONS
+                | {"pane.filter", "pane.fuzzy_find", "pane.sort", "pane.clear_filter"}
                 else partial(self._actions.invoke, entry.id),
             )
         self._command_palette_populated = True

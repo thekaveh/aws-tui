@@ -86,7 +86,8 @@ _EXPECTED: set[tuple[str, str, bool, bool]] = {
     ("u", "dispatch('pane.clear_selection')", False, False),
     ("ctrl+v", "dispatch('pane.exit_multiselect')", False, False),
     ("ctrl+q", "quit", False, True),
-    ("ctrl+p", "command_palette", False, True),
+    ("ctrl+p", "dispatch('pane.fuzzy_find')", False, True),
+    ("slash", "dispatch('pane.filter')", False, False),
 }
 
 
@@ -107,10 +108,9 @@ def test_no_handlerless_keys_bound(app_context_factory) -> None:  # type: ignore
     app = AwsTuiApp(app_context_factory())
     keys = set(app._bindings.key_to_bindings)
     assert ("Q", "dispatch('glue.query_in_athena')", False, False) in _installed(app)
-    # Deferred (handlerless) actions' keys must NOT be bound: filter (slash),
-    # move (m), new (n).
+    # Deferred (handlerless) actions' keys must NOT be bound: move (m), new (n).
     # (`space`->quick_look and `:`/`ctrl+k`->command_palette are now wired.)
-    for k in ("slash", "m", "n"):
+    for k in ("m", "n"):
         assert k not in keys, f"{k} should be unbound (handlerless)"
 
 
