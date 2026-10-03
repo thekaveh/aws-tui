@@ -23,6 +23,11 @@ section; the current tree must not be tagged as v0.8.0.
 
 ### Added
 
+- **Read-only diagnostics (#246).** `aws-tui doctor` reports local setup
+  failures and repair steps before the TUI starts; `--json` provides schema
+  version 1 and `--probe NAME` explicitly checks one source. Running help
+  shows the active log file and crash directory.
+
 - **In-session connection setup (#243).** Empty or invalid local connection
   configuration opens actionable setup with the existing S3-compatible form.
   Save and open persists through the Settings connection owner and opens S3;
