@@ -125,6 +125,8 @@ class KeymapStore:
         "pane.enter_multiselect": ("v",),
         "pane.toggle_select": ("space",),
         "pane.select_all": ("a",),
+        "pane.clear_selection": ("u",),
+        "pane.exit_multiselect": ("ctrl+v",),
         "pane.copy": ("c",),
         "pane.move": ("m",),
         "pane.delete": ("d",),

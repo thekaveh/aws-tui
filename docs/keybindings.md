@@ -30,12 +30,22 @@ as the universal escape hatch.
 
 | Action | Default | Notes |
 |---|---|---|
-| Enter multi-select mode | `pane.enter_multiselect` action — *(deferred)* | Spec'd on `v`; handler not wired in v0.8.x |
-| Toggle row selection | `pane.toggle_select` action — *(deferred)* | Spec'd on `Space` (in multi-select); not wired |
+| Enter multi-select mode | `v` | Enters the focused file pane's mode without marking a row |
+| Toggle row selection | `Space` | In multi-select, toggles the cursor row; in normal mode, opens Quick Look |
 | Extend selection one row | `Shift+↑` / `Shift+↓` | Marks the row the cursor is leaving + moves cursor |
 | Modifier+click on row | `Shift+Click`, `Cmd+Click`, `Ctrl+Click` | Toggles mark on the clicked row; on macOS terminals reserve `Shift+Click`, so `Cmd+Click` is the reliable path there |
-| Select all | `pane.select_all` action — *(deferred)* | Spec'd on `a` (in multi-select); not wired |
-| Clear selection | no shipped command — *(deferred)* | Persistent marks can be toggled individually; a keyboard clear-all action is not registered. |
+| Select all | `a` | Adds marks to filtered real rows in a ready file pane; credential/error contexts retry the active source |
+| Clear selection | `u` | Clears all marks, including hidden rows; keeps multi-select mode |
+| Exit multi-select mode | `Ctrl+V` | Clears marks and leaves mode; focused editors retain paste |
+
+All five selection commands also appear in the file-manager command palette.
+They act only on the focused pane and are inert behind modals or during loading.
+The pane summary uses `multi: N marked · size` to show mode, marked count, and
+selected bytes even with zero marks. Hidden marks stay stored but do not participate in transfers or
+summary totals until the filter is cleared. Clear selection removes hidden marks
+too. Only keys shared by an alias pair choose behavior from context. Separately
+remapped keys and exclusive keys in partly overlapping lists keep each action's
+explicit meaning.
 
 ### 1.3. File operations
 
@@ -54,7 +64,7 @@ as the universal escape hatch.
 
 | Action | Default | Notes |
 |---|---|---|
-| Quick Look | `Space` | Streams the first 64 KB of the selected file |
+| Quick Look | `Space` | In normal file-pane mode, streams the first 64 KB of the cursor file; multi-select toggles its mark |
 | Fuzzy find | `pane.fuzzy_find` action — *(deferred)* | Spec'd on `Ctrl+P`; not wired |
 | Filter pane | `pane.filter` action — *(deferred)* | Spec'd on `/`; not wired |
 | Command palette | `:` / `Ctrl+K` | Opens the fuzzy app-command palette |
@@ -80,7 +90,7 @@ as the universal escape hatch.
 
 | Action | Default | Notes |
 |---|---|---|
-| Retry active source credentials | `a` | Re-probes the same source after credentials are repaired externally; also available as **Retry active source credentials** in the command palette |
+| Retry active source credentials | `a` | Re-probes the same source in credential/error contexts and other AWS pages; a ready file pane selects all visible entries. **Retry active source credentials** in the palette always retries. |
 | Connection switcher | no shipped command — *(deferred)* | Dynamic `connection switch <name>` palette entries are not registered. |
 
 The command palette opens today with `:` or `Ctrl+K`; only the dynamic
@@ -288,9 +298,11 @@ unbound until a handler ships.
 | `pane.quick_look` | `space` (normal mode) | yes | Stream first 64 KB |
 | `pane.filter` | `/` | *(deferred)* | Local pane filter |
 | `pane.fuzzy_find` | `ctrl+p` | *(deferred)* | Fuzzy find paths / buckets |
-| `pane.enter_multiselect` | `v` | *(deferred)* | Enter multi-select mode |
-| `pane.toggle_select` | `space` (multi-select) | *(deferred)* | Add / remove from selection |
-| `pane.select_all` | `a` | *(deferred)* | Select all in pane |
+| `pane.enter_multiselect` | `v` | yes | Enter focused-pane multi-select mode without marking |
+| `pane.toggle_select` | `space` | yes | Toggle cursor mark; physical shared Space opens Quick Look outside multi-select |
+| `pane.select_all` | `a` | yes | Add marks to filtered real rows; physical shared a retries credentials in error/source contexts |
+| `pane.clear_selection` | `u` | yes | Clear all marks, including hidden rows, and retain mode |
+| `pane.exit_multiselect` | `ctrl+v` | yes | Clear marks and exit mode; yield to editor paste |
 | `pane.copy` | `c` | yes | Copy marked entries to other pane |
 | `pane.move` | `m` | *(deferred)* | Move marked entries (or rename one); the always-visible navigation rail leaves `m` available when the wiring lands. |
 | `pane.delete` | `d` | yes | Delete marked entries (confirms) |

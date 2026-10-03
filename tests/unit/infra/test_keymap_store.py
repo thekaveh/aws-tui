@@ -205,3 +205,14 @@ def test_documented_uppercase_overlay_reaches_the_runtime_key() -> None:
     resolved = [textual_key_name(key) for key in store.resolve("app.command_palette")]
 
     assert "ctrl+k" in resolved
+
+
+def test_selection_defaults_and_independent_alias_remapping() -> None:
+    store = KeymapStore()
+    assert store.resolve("pane.clear_selection") == ("u",)
+    assert store.resolve("pane.exit_multiselect") == ("ctrl+v",)
+    remapped = KeymapStore(overlay={"pane.toggle_select": "x", "pane.select_all": "b"})
+    assert remapped.resolve("pane.quick_look") == ("space",)
+    assert remapped.resolve("auth.authenticate") == ("a",)
+    assert remapped.resolve("pane.toggle_select") == ("x",)
+    assert remapped.resolve("pane.select_all") == ("b",)

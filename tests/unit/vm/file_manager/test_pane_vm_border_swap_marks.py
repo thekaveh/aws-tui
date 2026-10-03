@@ -15,7 +15,7 @@ from __future__ import annotations
 from collections.abc import AsyncIterator
 
 import pytest
-from vmx import MessageHub, RxDispatcher
+from vmx import NULL_DISPATCHER, MessageHub, RxDispatcher
 
 from aws_tui.demo.in_memory_fs import InMemoryFS
 from aws_tui.domain.filesystem import PathRef
@@ -258,4 +258,89 @@ async def test_placeholder_text_in_idle_state() -> None:
         assert vm.state is PaneState.IDLE
         assert vm.viewmodel.placeholder_text is None
     finally:
+        vm.dispose()
+
+
+@pytest.mark.asyncio
+async def test_selection_mode_summary_publishes_at_zero_and_hidden_clear() -> None:
+    fs = await _seed()
+    vm = PaneVM(provider=fs, hub=MessageHub(), dispatcher=NULL_DISPATCHER)
+    vm.construct()
+    await vm.setup()
+    try:
+        vm.enter_multiselect_command.execute()
+        assert "multi:" in vm.viewmodel.summary
+        assert "0 marked" in vm.viewmodel.summary
+        assert "0 B" in vm.viewmodel.summary
+        vm.move_cursor_to(1)
+        vm.toggle_select_command.execute()
+        vm.set_filter_command.execute("beta")
+        vm.select_all_command.execute()
+        assert {e.entry.name for e in vm.marked_entries} == {"beta.txt"}
+        assert {e.entry.name for e in vm.entries if e.is_marked} == {"alpha.txt", "beta.txt"}
+        assert "100 B" in vm.viewmodel.summary
+        vm.clear_selection_command.execute()
+        assert not any(entry.is_marked for entry in vm.entries)
+        assert vm.marked_entries == ()
+        assert vm.is_multiselect_mode
+        assert "0 marked" in vm.viewmodel.summary
+        vm.exit_multiselect_command.execute()
+        assert not vm.is_multiselect_mode
+        assert "multi:" not in vm.viewmodel.summary
+        await vm.navigate_to(PathRef(("subdir",)))
+        vm.select_all_command.execute()
+        vm.toggle_select_command.execute()
+        assert vm.marked_entries == ()
+        await vm.swap_provider(InMemoryFS())
+        vm.select_all_command.execute()
+        vm.toggle_select_command.execute()
+        assert vm.marked_entries == ()
+        assert not vm.is_multiselect_mode
+    finally:
+        vm.dispose()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("outcome", ["success", "error", "cancel"])
+async def test_reload_clears_marks_before_provider_returns(outcome: str) -> None:
+    import asyncio
+
+    from aws_tui.domain.filesystem import ProviderError
+
+    fs = await _seed()
+    vm = PaneVM(provider=fs, hub=MessageHub(), dispatcher=NULL_DISPATCHER)
+    vm.construct()
+    await vm.setup()
+    started, release = asyncio.Event(), asyncio.Event()
+    original_list = fs.list
+
+    async def blocked_list(path: PathRef):  # type: ignore[no-untyped-def]
+        started.set()
+        await release.wait()
+        if outcome == "error":
+            raise ProviderError("listing failed")
+        return await original_list(path)
+
+    fs.list = blocked_list  # type: ignore[method-assign]
+    task = None
+    try:
+        vm.toggle_mark_at(1)
+        assert len(vm.marked_entries) == 1
+        task = asyncio.create_task(vm.refresh())
+        await started.wait()
+        assert vm.state is PaneState.LOADING
+        assert not any(entry.is_marked for entry in vm.entries)
+        assert vm.marked_entries == ()
+        if outcome == "cancel":
+            task.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await task
+        else:
+            release.set()
+            await task
+        assert vm.marked_entries == ()
+    finally:
+        if task is not None and not task.done():
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
         vm.dispose()

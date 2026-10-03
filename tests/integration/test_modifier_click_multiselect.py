@@ -156,8 +156,7 @@ async def test_pane_footer_summary_includes_selected_bytes(
         focused.vm.toggle_mark_at(focused.vm.cursor_index)
         await pilot.pause()
         summary = focused.vm.viewmodel.summary
-        assert "marked" in summary
-        assert "selected" in summary
+        assert summary == "multi: 1 marked · 10 B"
 
 
 @pytest.mark.asyncio
