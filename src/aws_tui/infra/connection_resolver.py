@@ -17,7 +17,7 @@ import builtins
 import configparser
 import logging
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Final
 
@@ -221,6 +221,18 @@ class ConnectionResolver:
         for conn in self.list():
             if conn.name == name:
                 return conn
+        raise ConnectionNotFound(name)
+
+    def resolve_selected(self, name: str) -> Connection:
+        """Resolve one exact source without dereferencing unrelated secrets."""
+        cfg = self._config_store.load()
+        entry = cfg.connections.get(name)
+        if entry is not None:
+            selected = replace(cfg, connections={name: entry})
+            return self._explicit_connections(selected)[0]
+        for connection in self._auto_connections():
+            if connection.name == name:
+                return connection
         raise ConnectionNotFound(name)
 
     def materialize(self, name: str) -> ConnectionEntry:

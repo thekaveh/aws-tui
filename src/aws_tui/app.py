@@ -16,7 +16,7 @@ import sys
 import weakref
 from collections import deque
 from collections.abc import AsyncIterator, Awaitable, Callable
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 from functools import partial
 from pathlib import Path
@@ -50,6 +50,8 @@ from aws_tui.domain.s3_uri import parse_s3_uri
 from aws_tui.infra.aws_session import TokenState
 from aws_tui.infra.connection_resolver import Connection, ConnectionDiscovery, ConnectionNotFound
 from aws_tui.infra.crash_dump import CrashDump
+from aws_tui.infra.doctor import collect_local_diagnostics
+from aws_tui.infra.doctor_probe import probe_source
 from aws_tui.infra.keymap_store import textual_key_name
 from aws_tui.infra.redaction import redact_text
 from aws_tui.infra.theme_store import ThemeNotFound, ThemeStore
@@ -3402,7 +3404,13 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
     async def action_help(self) -> None:
         """Show the help overlay with the active configurable keymap."""
         self.record_action("app.help")
-        await self.push_screen(HelpModal(keymap=self._app_ctx.keymap_store))
+        await self.push_screen(
+            HelpModal(
+                keymap=self._app_ctx.keymap_store,
+                log_path=self._app_ctx.log_sink.path,
+                crash_path=self._app_ctx.log_sink.path.parent.parent / "crash",
+            )
+        )
 
     async def action_copy(self) -> None:
         """Copy the focused pane's marked entries (or the cursor row if
@@ -6454,16 +6462,17 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
 
 
 def main() -> None:
-    """Run the Textual app with unhandled-exception capture.
+    """Run diagnostics before composition, or launch the Textual app.
 
     Invoked by the ``aws-tui`` console script and ``python -m aws_tui``.
     If the app surfaces an unhandled exception, ``_handle_exception``
-    writes a crash dump under ``~/.cache/aws-tui/crash/`` and the
+    writes a crash dump under the runtime cache's crash directory and the
     saved :class:`CrashReport` is printed here before the exception is
     re-raised so the user knows where the dump landed.
 
-    Recognises ``--help``, ``--version``, and ``--demo`` before
-    launching the UI.
+    Recognises ``doctor``, ``--help``, ``--version``, and ``--demo`` before
+    launching the UI. Doctor renders a read-only report and exits without
+    creating app state or negotiating terminal protocols.
     """
     from aws_tui.demo import is_demo_mode_enabled
 
@@ -6481,7 +6490,32 @@ def main() -> None:
         action="store_true",
         help="print the aws-tui version and demo-mode status, then exit",
     )
+    commands = parser.add_subparsers(dest="command")
+    doctor = commands.add_parser(
+        "doctor", help="inspect local configuration without launching the UI"
+    )
+    doctor.add_argument(
+        "--json", action="store_true", help="print the schema-versioned JSON report"
+    )
+    doctor.add_argument(
+        "--probe", metavar="NAME", help="perform a read-only network probe of one exact source name"
+    )
     args = parser.parse_args()
+
+    if args.command == "doctor":
+        if args.demo or args.version:
+            parser.error("doctor cannot be combined with --demo or --version")
+        doctor_report = collect_local_diagnostics()
+        if args.probe is not None:
+            doctor_report = replace(
+                doctor_report,
+                checks=(
+                    *tuple(check for check in doctor_report.checks if check.name != "probe"),
+                    probe_source(args.probe),
+                ),
+            )
+        print(doctor_report.render_json() if args.json else doctor_report.render_text())
+        raise SystemExit(doctor_report.exit_code)
 
     demo = args.demo or is_demo_mode_enabled(argv=[])
 
