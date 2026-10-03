@@ -922,12 +922,22 @@ The tabs are:
 
 Each tab loads on demand through `IcebergInspector`, which submits a bounded
 read-only query to Athena metadata tables such as
-`"table$snapshots"` and `"table$files"`. The UI reveals 50 rows at a time;
-**Load more** exposes already-bounded rows without broadening the Athena query.
+`"table$snapshots"` and `"table$files"`. These caps are metadata row limits. Each inspection requests at most one extra
+sentinel row, which is removed before display. An extra row proves **truncated**
+coverage; without it, exhausted result pagination proves **complete** coverage.
+Exactly reaching the cap alone does not prove truncation. Missing exhaustion
+evidence is reported as **unknown**.
+
+The footer separates visible rows, fetched display rows, collection coverage,
+and the metadata row limit. The UI reveals 50 cached rows at a time;
+**Load more** exposes cached rows without issuing another Athena query. A
+truncation warning remains after every fetched row is visible, and failed
+refreshes retain prior coverage and fetched rows.
 **Retry** reruns only the active tab. A permission, throttling, shape, or
 network error is a partial failure of that metadata pane and does not erase
 successful sibling tabs.
 
+Metadata row limits do not bound bytes scanned or Athena costs.
 These are real Athena queries, not free Glue lookups. Account for
 metadata-query costs, workgroup limits, bytes scanned, result storage, and
 concurrency exactly as for other Athena statements. The selected profile needs

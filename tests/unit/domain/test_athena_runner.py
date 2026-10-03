@@ -1276,3 +1276,20 @@ async def test_polling_backs_off_exponentially_between_status_checks() -> None:
 
     assert delays, "the poll loop never paused: GetQueryExecution was busy-polled"
     assert delays == [0.25, 0.5, 1.0, 2.0, 4.0, 5.0], f"backoff schedule changed: {delays}"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("count", "token", "exhausted"),
+    [(0, None, True), (2, None, True), (2, "more", False), (3, None, False)],
+)
+async def test_runner_reports_pagination_exhaustion(count, token, exhausted) -> None:
+    client = RunnerClient(
+        states=(_detail(QueryState.SUCCEEDED),),
+        pages={None: ResultPage((COLUMN,), tuple((str(i),) for i in range(count)), token)},
+    )
+    result = await AthenaQueryRunner(client, ReadOnlySqlPolicy()).run(
+        "SELECT snapshot_id FROM x LIMIT 2", CONTEXT, request_token="coverage", max_rows=2
+    )
+    assert result.source_exhausted is exhausted
+    assert len(result.rows) == min(count, 2)

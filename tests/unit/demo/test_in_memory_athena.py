@@ -1347,9 +1347,9 @@ async def test_runtime_alias_keeps_runtime_identity_but_uses_seeded_storage_name
     manifests = await inspector.list_manifests(table_ref)
     files = await inspector.list_files(table_ref)
     storage_uris = (
-        *(snapshot.manifest_list for snapshot in snapshots),
-        *(manifest.path for manifest in manifests),
-        *(data_file.file_path for data_file in files),
+        *(snapshot.manifest_list for snapshot in snapshots.rows),
+        *(manifest.path for manifest in manifests.rows),
+        *(data_file.file_path for data_file in files.rows),
         *(
             value
             for seeded in fake._seeded_query_results.values()
@@ -1469,3 +1469,39 @@ def test_in_memory_athena_has_no_module_global_mutable_instances() -> None:
 
     assert first.calls is not second.calls
     assert first.query_executions is not second.query_executions
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "view", ["snapshots", "history", "manifests", "files", "partitions", "refs"]
+)
+async def test_builtin_demo_and_contextual_inspector_propagate_complete_coverage(view) -> None:
+    from aws_tui.infra.connection_resolver import Connection
+    from aws_tui.services.glue.service import _ContextualIcebergInspector
+    from aws_tui.vm.service_source_vm import ServiceSelectionStore
+
+    fake = seeded_demo_athena("demo-dev")
+    ref = TableRef("AwsDataCatalog", "dev_analytics", "dev_events_iceberg", "demo-dev", "us-east-1")
+    inspector = _ContextualIcebergInspector(
+        client=fake,
+        connection=Connection(
+            name="demo-dev", kind="aws", region="us-east-1", source="test", profile="demo-dev"
+        ),
+        selections=ServiceSelectionStore(),
+    )
+    result = await getattr(inspector, f"list_{view}")(ref)
+    assert result.coverage.status == "complete"
+    assert result.coverage.collection == view
+    assert result.coverage.table_ref == ref
+    assert (
+        result.coverage.row_limit
+        == {
+            "snapshots": 100,
+            "history": 100,
+            "manifests": 500,
+            "files": 1000,
+            "partitions": 500,
+            "refs": 100,
+        }[view]
+    )
+    assert result.rows

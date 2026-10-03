@@ -3,9 +3,9 @@
 from __future__ import annotations
 
 from collections.abc import Callable
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime
-from typing import TypeVar
+from typing import Generic, Literal, TypeVar
 from uuid import uuid4
 
 import sqlglot
@@ -29,6 +29,20 @@ _PARTITION_METRIC_COLUMNS = (
     "last_updated_snapshot_id",
 )
 T = TypeVar("T")
+
+
+@dataclass(frozen=True, slots=True)
+class IcebergCoverage:
+    status: Literal["complete", "truncated", "unknown"]
+    row_limit: int
+    collection: str
+    table_ref: TableRef
+
+
+@dataclass(frozen=True, slots=True)
+class IcebergInspection(Generic[T]):
+    rows: tuple[T, ...] = field(repr=False)
+    coverage: IcebergCoverage
 
 
 @dataclass(frozen=True, slots=True)
@@ -127,7 +141,7 @@ class IcebergInspector:
     async def list_snapshots(
         self,
         table_ref: TableRef,
-    ) -> tuple[IcebergSnapshot, ...]:
+    ) -> IcebergInspection[IcebergSnapshot]:
         return await self._inspect(
             table_ref,
             suffix="snapshots",
@@ -140,7 +154,7 @@ class IcebergInspector:
     async def list_history(
         self,
         table_ref: TableRef,
-    ) -> tuple[IcebergHistoryEntry, ...]:
+    ) -> IcebergInspection[IcebergHistoryEntry]:
         return await self._inspect(
             table_ref,
             suffix="history",
@@ -153,7 +167,7 @@ class IcebergInspector:
     async def list_manifests(
         self,
         table_ref: TableRef,
-    ) -> tuple[IcebergManifest, ...]:
+    ) -> IcebergInspection[IcebergManifest]:
         return await self._inspect(
             table_ref,
             suffix="manifests",
@@ -170,7 +184,7 @@ class IcebergInspector:
     async def list_files(
         self,
         table_ref: TableRef,
-    ) -> tuple[IcebergDataFile, ...]:
+    ) -> IcebergInspection[IcebergDataFile]:
         return await self._inspect(
             table_ref,
             suffix="files",
@@ -186,14 +200,14 @@ class IcebergInspector:
     async def list_partitions(
         self,
         table_ref: TableRef,
-    ) -> tuple[IcebergPartition, ...]:
+    ) -> IcebergInspection[IcebergPartition]:
         result = await self._partition_result(table_ref)
-        return _sanitize_mapping(result, _map_partitions)
+        return _inspection(result, table_ref, "partitions", 500, _map_partitions)
 
     async def list_refs(
         self,
         table_ref: TableRef,
-    ) -> tuple[IcebergReference, ...]:
+    ) -> IcebergInspection[IcebergReference]:
         return await self._inspect(
             table_ref,
             suffix="refs",
@@ -211,19 +225,20 @@ class IcebergInspector:
         table_ref: TableRef,
     ) -> IcebergPartitionSpec:
         result = await self._partition_result(table_ref)
-        return _sanitize_mapping(result, _map_partition_spec)
+        _validate_bounded_result(result, 500)
+        return _sanitize_mapping(replace(result, rows=result.rows[:500]), _map_partition_spec)
 
     async def _partition_result(
         self,
         table_ref: TableRef,
     ) -> BoundedQueryResult:
         self._validate_table(table_ref)
-        sql = f"SELECT * FROM {_metadata_table(table_ref, 'partitions')} LIMIT 500"
+        sql = f"SELECT * FROM {_metadata_table(table_ref, 'partitions')} LIMIT 501"
         return await self._runner.run(
             sql,
             self._context,
             request_token=_request_token(),
-            max_rows=500,
+            max_rows=501,
         )
 
     async def _inspect(
@@ -235,19 +250,19 @@ class IcebergInspector:
         order_by: str,
         limit: int,
         mapper: Callable[[BoundedQueryResult], tuple[T, ...]],
-    ) -> tuple[T, ...]:
+    ) -> IcebergInspection[T]:
         self._validate_table(table_ref)
         sql = (
             f"SELECT {projection} FROM {_metadata_table(table_ref, suffix)} "
-            f"ORDER BY {order_by} LIMIT {limit}"
+            f"ORDER BY {order_by} LIMIT {limit + 1}"
         )
         result = await self._runner.run(
             sql,
             self._context,
             request_token=_request_token(),
-            max_rows=limit,
+            max_rows=limit + 1,
         )
-        return _sanitize_mapping(result, mapper)
+        return _inspection(result, table_ref, suffix, limit, mapper)
 
     def _validate_table(self, table_ref: TableRef) -> None:
         if (
@@ -271,6 +286,36 @@ def _metadata_table(table_ref: TableRef, suffix: str) -> str:
             quote_athena_identifier(f"{table_ref.table_name}${suffix}"),
         )
     )
+
+
+def _validate_bounded_result(result: BoundedQueryResult, limit: int) -> None:
+    if (
+        type(result) is not BoundedQueryResult
+        or type(result.columns) is not tuple
+        or type(result.rows) is not tuple
+        or len(result.rows) > limit + 1
+        or (result.source_exhausted is not None and type(result.source_exhausted) is not bool)
+    ):
+        raise IcebergMetadataShapeError("invalid bounded Iceberg metadata result")
+
+
+def _inspection(
+    result: BoundedQueryResult,
+    table_ref: TableRef,
+    collection: str,
+    limit: int,
+    mapper: Callable[[BoundedQueryResult], tuple[T, ...]],
+) -> IcebergInspection[T]:
+    _validate_bounded_result(result, limit)
+    status: Literal["complete", "truncated", "unknown"] = (
+        "truncated"
+        if len(result.rows) > limit
+        else "complete"
+        if result.source_exhausted is True
+        else "unknown"
+    )
+    rows = _sanitize_mapping(replace(result, rows=result.rows[:limit]), mapper)
+    return IcebergInspection(rows, IcebergCoverage(status, limit, collection, table_ref))
 
 
 def _sanitize_mapping(
@@ -715,8 +760,10 @@ def _map_refs(
 
 
 __all__ = [
+    "IcebergCoverage",
     "IcebergDataFile",
     "IcebergHistoryEntry",
+    "IcebergInspection",
     "IcebergInspector",
     "IcebergManifest",
     "IcebergMetadataShapeError",
