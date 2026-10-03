@@ -784,6 +784,7 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
         self._actions.register("app.swap_source", self.action_swap_source)
         self._actions.register("emr.next_application", self.action_next_emr_application)
         self._actions.register("emr.clone", self.action_clone_emr_run)
+        self._actions.register("emr.cancel", self.action_cancel_emr_run)
         self._actions.register("emr.logs.filter", self.action_filter_emr_logs)
         self._actions.register(
             "glue.catalog",
@@ -898,6 +899,7 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
         self._shutdown_complete = False
         self._shutdown_errors: tuple[tuple[str, str], ...] = ()
         self._command_palette_populated: bool = False
+        self._emr_cancel_available = False
         self._pane_state_sub: DisposableBase | None = None
         self._connection_state_sub: DisposableBase | None = None
         self._connection_list_sub: DisposableBase | None = None
@@ -1776,7 +1778,7 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
                     focus_coordinator=ctx.focus_coordinator,
                 )
                 await self._replace_content_widget(host, replacement)
-                if _svc_id in {"glue", "athena"}:
+                if _svc_id in {"glue", "athena", "emr-serverless"}:
                     self._recompute_hint_disables()
             return True
         except Exception as exc:
@@ -2262,6 +2264,7 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
                 else partial(self._actions.invoke, entry.id),
             )
         self._command_palette_populated = True
+        self._recompute_hint_disables()
 
     def _schedule_palette_selection(self, action_id: str) -> None:
         self.call_after_refresh(self._actions.invoke, action_id)
@@ -3194,7 +3197,7 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
                     service=service_id,
                     error_type=type(exc).__name__,
                 )
-        if service_id in {"glue", "athena"}:
+        if service_id in {"glue", "athena", "emr-serverless"}:
             self._recompute_hint_disables()
 
     async def _recover_s3_credentials(
@@ -3866,6 +3869,14 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
             return
         if self._bindings_overlap("emr.clone", "pane.copy"):
             await self.action_copy()
+
+    def action_cancel_emr_run(self) -> None:
+        if len(self.screen_stack) > 1 or self._app_ctx.focus_coordinator.is_modal:
+            return
+        page = self._emr_page()
+        if page is not None:
+            self.record_action("emr.cancel")
+            page.action_cancel_selected_run()
 
     def action_filter_emr_logs(self) -> None:
         page = self._emr_page()
@@ -5470,14 +5481,23 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
         the focused pane's cursor target. Today's only rule: the
         ``..`` parent row disables ``pane.copy`` and ``pane.delete``
         (no source to copy/delete — the parent reference is
-        navigation-only). EMR panes are out of scope; their cursor
-        target is a job-run, all chips stay enabled.
+        navigation-only). EMR selection, detail, and busy events also
+        update cancellation availability.
         """
         from vmx import PropertyChangedMessage
 
         from aws_tui.vm.file_manager.pane_vm import PaneVM
 
         if not isinstance(msg, PropertyChangedMessage):
+            return
+        emr_page = self._emr_page()
+        if emr_page is not None and msg.sender_object in {
+            emr_page.vm,
+            emr_page.vm.applications,
+            emr_page.vm.job_runs,
+            emr_page.vm.job_run_detail,
+        }:
+            self._recompute_hint_disables()
             return
         glue_page = self._glue_page()
         if glue_page is not None and msg.sender_object in {
@@ -5511,8 +5531,30 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
     def _recompute_hint_disables(self) -> None:
         """Push a fresh disabled-action set to the HintLegendVM based
         on the focused pane's current cursor target. Safe to call at
-        any time — no-ops on EMR / Settings (no DualPaneVM mounted).
+        any time; EMR cancellation uses the page VM eligibility predicate.
         """
+        emr_page = self._emr_page()
+        can_cancel = emr_page is not None and emr_page.vm.can_cancel_selected_run()
+        palette = self._app_ctx.command_palette_vm
+        if can_cancel and not self._emr_cancel_available:
+            palette.register_entry(
+                PaletteEntry(
+                    "emr.cancel",
+                    "Cancel selected EMR job run",
+                    "emr",
+                    ("cancel", "job", "run"),
+                    service_ids=_EMR_SERVICE_IDS,
+                ),
+                partial(self._schedule_palette_selection, "emr.cancel"),
+            )
+        elif not can_cancel:
+            palette.unregister_entry("emr.cancel")
+        self._emr_cancel_available = can_cancel
+        if emr_page is not None:
+            self._app_ctx.root_vm.chrome.hint_legend.set_disabled_actions(
+                frozenset() if can_cancel else frozenset({"emr.cancel"})
+            )
+            return
         athena_page = self._athena_page()
         if athena_page is not None:
             disabled: set[str] = set()
@@ -5932,7 +5974,7 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
                 focus_coordinator=ctx.focus_coordinator,
             )
             await self._replace_content_widget(host, replacement)
-            if service_id in {"glue", "athena"}:
+            if service_id in {"glue", "athena", "emr-serverless"}:
                 self._recompute_hint_disables()
         except Exception as exc:
             ctx.log_sink.error(

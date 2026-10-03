@@ -1,9 +1,10 @@
 """EMR Serverless domain types — records + StrEnums.
 
 The supported surface is read-mostly: list applications and job runs, inspect
-job-run details and logs, and clone an existing run through ``start_job_run``.
+job-run details and logs, clone an existing run through ``start_job_run``, and
+request cancellation through ``cancel_job_run``.
 The records here map boto3 ``EMRServerless`` responses into values consumed by
-the viewmodels; generic submission and cancellation remain deferred."""
+the viewmodels; generic submission remains deferred."""
 
 from __future__ import annotations
 
@@ -43,6 +44,11 @@ _EMR_BOTO_CONFIG: BotoConfig = BotoConfig(
     retries={"total_max_attempts": 6, "mode": "adaptive"},
 )
 EMR_BOTO_CONFIG: BotoConfig = _EMR_BOTO_CONFIG
+
+# This mutation must not be retried automatically, including by the SDK.
+EMR_CANCEL_BOTO_CONFIG: BotoConfig = EMR_BOTO_CONFIG.merge(
+    BotoConfig(retries={"total_max_attempts": 1, "mode": "standard"})
+)
 
 
 class ApplicationState(StrEnum):
@@ -85,6 +91,17 @@ class JobRunState(StrEnum):
     FAILED = "FAILED"
     CANCELLING = "CANCELLING"
     CANCELLED = "CANCELLED"
+
+
+CANCELLABLE_JOB_RUN_STATES: frozenset[JobRunState] = frozenset(
+    {
+        JobRunState.SUBMITTED,
+        JobRunState.PENDING,
+        JobRunState.SCHEDULED,
+        JobRunState.QUEUED,
+        JobRunState.RUNNING,
+    }
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -179,6 +196,8 @@ class EmrServerlessClientProtocol(Protocol):
         job_run_id: str,
     ) -> JobRunDetail: ...
 
+    async def cancel_job_run(self, application_id: str, job_run_id: str) -> None: ...
+
     async def start_job_run(
         self,
         application_id: str,
@@ -199,7 +218,9 @@ class EmrServerlessClientProtocol(Protocol):
 
 
 __all__ = [
+    "CANCELLABLE_JOB_RUN_STATES",
     "EMR_BOTO_CONFIG",
+    "EMR_CANCEL_BOTO_CONFIG",
     "ApplicationState",
     "ApplicationSummary",
     "EmrServerlessClient",
@@ -266,7 +287,7 @@ map_boto_error = _map_boto_error
 
 
 class EmrServerlessClient:
-    """Async aioboto3 facade for EMR Serverless read and clone operations.
+    """Async aioboto3 facade for EMR Serverless read, clone and cancellation operations.
 
     The client opens a fresh aioboto3 ``emr-serverless`` client per
     call (the boto3 EMR Serverless client is cheap to instantiate
@@ -500,6 +521,19 @@ class EmrServerlessClient:
                         if key in r
                     },
                 )
+        except Exception as exc:
+            mapped = _map_boto_error(exc)
+            if mapped is None:
+                raise
+            raise mapped from exc
+
+    async def cancel_job_run(self, application_id: str, job_run_id: str) -> None:
+        """Request cancellation once; the acknowledgement is not a run state."""
+        try:
+            async with self._session.client(
+                "emr-serverless", region_name=self._region_name, config=EMR_CANCEL_BOTO_CONFIG
+            ) as c:
+                await c.cancel_job_run(applicationId=application_id, jobRunId=job_run_id)
         except Exception as exc:
             mapped = _map_boto_error(exc)
             if mapped is None:

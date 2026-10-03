@@ -43,6 +43,7 @@ _SERVICE_ACTIONS: dict[str, tuple[str, ...]] = {
         "app.swap_source",
         "emr.next_application",
         "emr.clone",
+        "emr.cancel",
     ),
     "glue": (
         "glue.catalog",
@@ -115,6 +116,7 @@ _ACTION_LABELS: dict[str, str] = {
     "app.quit": "quit",
     "auth.authenticate": "retry auth",
     "emr.clone": "clone",
+    "emr.cancel": "cancel",
     "emr.logs.filter": "filter logs",
     "glue.catalog": "catalog",
     "glue.jobs": "jobs",
@@ -159,6 +161,7 @@ _ACTION_EFFECTS: dict[str, str] = {
         "Select the next EMR Serverless application and load its runs. This does not start a job."
     ),
     "emr.clone": "Open the clone workflow for the selected EMR Serverless job run.",
+    "emr.cancel": "Confirm the exact source and run before requesting cancellation.",
     "glue.catalog": "Show the Glue Catalog view. This performs read-only discovery.",
     "glue.jobs": "Show Glue jobs and their read-only run history.",
     "glue.crawlers": "Show Glue crawlers and their read-only state.",
@@ -191,6 +194,7 @@ _ACTION_REQUIREMENTS: dict[str, str] = {
     "pane.copy": "Requires a copyable selected item.",
     "pane.delete": "Requires a deletable selected item.",
     "emr.clone": "Requires a selected cloneable job run.",
+    "emr.cancel": "Requires a selected active job run and no pending cancellation request.",
     "glue.copy_table_ref": "Requires a visible selected Glue table.",
     "glue.query_in_athena": "Requires a visible selected Glue table.",
     "glue.time_travel_in_athena": "Requires a visible selected snapshot row.",

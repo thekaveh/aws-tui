@@ -344,3 +344,10 @@ Evidence: `tests/unit/domain/test_emr_serverless.py`,
 `tests/integration/test_emr_page.py` and
 `tests/snapshot/test_emr_clone_modal.py`. These use stubs and demo data; they do
 not establish permissions or successful execution in a live AWS account.
+
+## 12. 2026-10-03 EMR selected-run cancellation
+
+| Integration point | Pinned version / ref | Consumed contract | Verification method |
+|---|---:|---|---|
+| EMR selected-run cancellation | `botocore==1.40.61`, EMR Serverless API `2021-07-13` | `CancelJobRun` consumes exactly `applicationId` and `jobRunId`; the optional shutdown grace field is omitted. The acknowledgement is discarded and supplies no lifecycle state. Its dedicated config uses `total_max_attempts=1`, standard mode, 10-second connect and 60-second read timeouts. Shared read/submission retries stay unchanged. IAM permission is `emr-serverless:CancelJobRun`. | Locked-model request contracts, synthetic single-attempt transport and cleanup/error tests, VM identity/reservation tests, and real Pilot confirmation, source/selection replacement, polled rendering, safe feedback, key/palette/hint tests. |
+| Cancellation UI and demo ownership | Internal PageVM / VMx lifecycle and Textual confirmation contract | `emr.cancel` defaults to printable `x`; keyboard, conditional service palette and hint invoke one action. PageVM reserves through confirmation/request, captures source/application/run, and revalidates before dispatch and feedback. Acknowledgement leaves cached state untouched; existing reads expose CANCELLING/CANCELLED. Demo cancellation stops the selected clone state walk. | Controlled provider-boundary reads and recorded captured calls; rapid keys, in-flight repeats, modal input/remapping, owner teardown, category guidance and no stale notification Pilot tests. |

@@ -173,7 +173,11 @@ def test_contextual_bindings_serialize_each_actual_normalized_key() -> None:
     from textual.actions import parse
 
     keymap = KeymapStore(
-        overlay={"pane.quick_look": ["Space", "x"], "auth.authenticate": ["a", "b"]}
+        overlay={
+            "pane.quick_look": ["Space", "x"],
+            "auth.authenticate": ["a", "b"],
+            "emr.cancel": "z",
+        }
     )
     ids = ("pane.quick_look", "pane.toggle_select", "auth.authenticate", "pane.select_all")
     bindings = BindingResolver(keymap=keymap, actions=_registry(*ids)).to_textual_bindings()
@@ -201,3 +205,14 @@ def test_listing_controls_modified_remaps_are_non_priority(action_id: str) -> No
         assert len(bindings) == 1
         assert bindings[0].key == "ctrl+u"
         assert not bindings[0].priority
+
+
+def test_emr_cancel_is_printable_non_priority_and_remappable() -> None:
+    for overlay, key in ((None, "x"), ({"emr.cancel": "z"}, "z")):
+        resolver = BindingResolver(
+            keymap=KeymapStore(overlay=overlay), actions=_registry("emr.cancel")
+        )
+        (binding,) = resolver.to_textual_bindings()
+        assert binding.key == key
+        assert not binding.priority
+        assert binding.description == "Cancel selected EMR job run"

@@ -6,14 +6,21 @@ can pattern-match on stable values."""
 
 from __future__ import annotations
 
-from dataclasses import FrozenInstanceError
+import asyncio
+import json
+from dataclasses import FrozenInstanceError, replace
 from datetime import UTC, datetime
-from unittest.mock import AsyncMock
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, Mock
 
+import aioboto3
 import botocore.exceptions
 import pytest
+from aiobotocore.awsrequest import AioAWSResponse
+from aiobotocore.httpsession import AIOHTTPSession
 
 from aws_tui.demo.in_memory_emr import InMemoryEmr as _InMemoryEmr
+from aws_tui.domain import emr_serverless as emr_domain
 from aws_tui.domain.emr_serverless import (
     _EMR_BOTO_CONFIG,
     EMR_BOTO_CONFIG,
@@ -1135,3 +1142,340 @@ async def test_clone_distinguishes_omitted_and_empty_arguments(present: bool) ->
         client_token="omission-intent",
     )
     assert stub.start_job_run.await_args.kwargs["jobDriver"] == source["jobDriver"]
+
+
+# Cancellation is a single mutation attempt, including inside the SDK transport.
+def _cancel_boundary(raised: BaseException | None = None):
+    wire = SimpleNamespace(
+        cancel_job_run=AsyncMock(
+            return_value={"applicationId": "a1", "jobRunId": "r1"},
+            side_effect=raised,
+        )
+    )
+    manager = AsyncMock()
+    manager.__aenter__.return_value = wire
+    session = Mock()
+    session.client.return_value = manager
+    client = EmrServerlessClient(session=session, region_name="us-east-1")
+    return client, session, manager, wire
+
+
+def test_cancellable_job_run_states_contract() -> None:
+    assert (
+        frozenset(
+            {
+                JobRunState.SUBMITTED,
+                JobRunState.PENDING,
+                JobRunState.SCHEDULED,
+                JobRunState.QUEUED,
+                JobRunState.RUNNING,
+            }
+        )
+        == emr_domain.CANCELLABLE_JOB_RUN_STATES
+    )
+    assert isinstance(emr_domain.CANCELLABLE_JOB_RUN_STATES, frozenset)
+    assert callable(emr_domain.EmrServerlessClientProtocol.cancel_job_run)
+
+
+@pytest.mark.asyncio
+async def test_cancel_job_run_exact_wire_config_and_cleanup() -> None:
+    client, session, manager, wire = _cancel_boundary()
+    assert await client.cancel_job_run("a1", "r1") is None
+    wire.cancel_job_run.assert_awaited_once_with(applicationId="a1", jobRunId="r1")
+    session.client.assert_called_once_with(
+        "emr-serverless",
+        region_name="us-east-1",
+        config=emr_domain.EMR_CANCEL_BOTO_CONFIG,
+    )
+    config = session.client.call_args.kwargs["config"]
+    assert config.retries == {"total_max_attempts": 1, "mode": "standard"}
+    assert (config.connect_timeout, config.read_timeout) == (10, 60)
+    assert EMR_BOTO_CONFIG.retries == {"total_max_attempts": 6, "mode": "adaptive"}
+    manager.__aexit__.assert_awaited_once()
+
+
+@pytest.mark.parametrize(
+    ("raised", "expected"),
+    [
+        (_client_error("AccessDeniedException", "CancelJobRun"), PermissionDeniedError),
+        (_client_error("ResourceNotFoundException", "CancelJobRun"), NotFoundError),
+        (_client_error("ThrottlingException", "CancelJobRun"), ThrottledError),
+        (_client_error("ValidationException", "CancelJobRun"), ValidationError),
+        (botocore.exceptions.NoCredentialsError(), AuthRequiredError),
+        (
+            botocore.exceptions.PartialCredentialsError(provider="test", cred_var="secret"),
+            AuthRequiredError,
+        ),
+        (botocore.exceptions.ProfileNotFound(profile="missing"), AuthRequiredError),
+        (
+            botocore.exceptions.TokenRetrievalError(provider="sso", error_msg="expired"),
+            AuthRequiredError,
+        ),
+        (
+            botocore.exceptions.CredentialRetrievalError(provider="test", error_msg="failed"),
+            AuthRequiredError,
+        ),
+        (botocore.exceptions.SSOTokenLoadError(error_msg="expired"), AuthRequiredError),
+        (botocore.exceptions.UnauthorizedSSOTokenError(), AuthRequiredError),
+        (botocore.exceptions.NoAuthTokenError(), AuthRequiredError),
+        (botocore.exceptions.EndpointConnectionError(endpoint_url="x"), ProviderUnreachableError),
+        (
+            botocore.exceptions.EndpointResolutionError(msg="missing endpoint"),
+            ProviderUnreachableError,
+        ),
+        (botocore.exceptions.ConnectTimeoutError(endpoint_url="x"), ProviderUnreachableError),
+        (botocore.exceptions.ReadTimeoutError(endpoint_url="x"), ProviderUnreachableError),
+        (botocore.exceptions.ConnectionError(error="offline"), ProviderUnreachableError),
+        (botocore.exceptions.ConnectionClosedError(endpoint_url="x"), ProviderUnreachableError),
+        (
+            botocore.exceptions.ResponseStreamingError(error="broken stream"),
+            ProviderUnreachableError,
+        ),
+        (
+            botocore.exceptions.IncompleteReadError(actual_bytes=1, expected_bytes=2),
+            ProviderUnreachableError,
+        ),
+        (botocore.exceptions.ProxyConnectionError(proxy_url="x"), ProviderUnreachableError),
+        (botocore.exceptions.SSLError(endpoint_url="x", error="tls"), ProviderUnreachableError),
+        (botocore.exceptions.ParamValidationError(report="bad parameter"), ValidationError),
+        (RuntimeError("unrelated"), RuntimeError),
+        (asyncio.CancelledError(), asyncio.CancelledError),
+    ],
+)
+@pytest.mark.asyncio
+async def test_cancel_job_run_maps_errors_once_and_closes_context(raised, expected) -> None:
+    client, _session, manager, wire = _cancel_boundary(raised)
+    with pytest.raises(expected) as caught:
+        await client.cancel_job_run("a1", "r1")
+    if isinstance(raised, RuntimeError | asyncio.CancelledError):
+        assert caught.value is raised
+    else:
+        assert caught.value.__cause__ is raised
+    wire.cancel_job_run.assert_awaited_once_with(applicationId="a1", jobRunId="r1")
+    manager.__aexit__.assert_awaited_once()
+    assert manager.__aexit__.call_args.args[1] is raised
+
+
+@pytest.mark.asyncio
+async def test_cancel_job_run_maps_context_entry_credentials_failure() -> None:
+    client = EmrServerlessClient(session=_ContextFailureSession())
+    with pytest.raises(AuthRequiredError, match="credential process failed"):
+        await client.cancel_job_run("a1", "r1")
+
+
+@pytest.mark.parametrize(
+    ("failure", "expected"),
+    [
+        ("server", ProviderError),
+        ("throttle", ThrottledError),
+        ("connect", ProviderUnreachableError),
+        ("read", ProviderUnreachableError),
+    ],
+)
+@pytest.mark.asyncio
+async def test_cancel_job_run_sdk_http_boundary_has_one_attempt(
+    monkeypatch: pytest.MonkeyPatch,
+    failure: str,
+    expected: type[ProviderError],
+) -> None:
+    requests = []
+
+    async def send(_http_session, request):
+        requests.append(request)
+        if failure == "connect":
+            raise botocore.exceptions.EndpointConnectionError(endpoint_url=request.url)
+        if failure == "read":
+            raise botocore.exceptions.ReadTimeoutError(endpoint_url=request.url)
+        status, code = (
+            (500, "InternalServerException")
+            if failure == "server"
+            else (429, "ThrottlingException")
+        )
+        body = json.dumps({"message": "synthetic error"}).encode()
+        return AioAWSResponse(
+            request.url,
+            status,
+            {
+                "content-type": "application/json",
+                "x-amzn-errortype": code,
+            },
+            SimpleNamespace(read=AsyncMock(return_value=body)),
+        )
+
+    monkeypatch.setattr(AIOHTTPSession, "send", send)
+    exits = []
+    original_exit = AIOHTTPSession.__aexit__
+
+    async def observed_exit(http_session, *args):
+        exits.append(args)
+        await original_exit(http_session, *args)
+
+    monkeypatch.setattr(AIOHTTPSession, "__aexit__", observed_exit)
+    session = aioboto3.Session(
+        aws_access_key_id="fake-access",
+        aws_secret_access_key="fake-secret",
+        aws_session_token="fake-token",
+        region_name="us-east-1",
+    )
+    client = EmrServerlessClient(session=session, region_name="us-east-1")
+    with pytest.raises(expected):
+        await client.cancel_job_run("a1", "r1")
+    assert len(requests) == 1
+    assert requests[0].method == "DELETE"
+    assert requests[0].url.endswith("/applications/a1/jobruns/r1")
+    assert requests[0].body in (None, b"", "")
+    assert len(exits) == 1
+
+
+@pytest.mark.parametrize(
+    "state",
+    [
+        JobRunState.SUBMITTED,
+        JobRunState.PENDING,
+        JobRunState.SCHEDULED,
+        JobRunState.QUEUED,
+        JobRunState.RUNNING,
+        JobRunState.CANCELLING,
+    ],
+)
+@pytest.mark.asyncio
+async def test_demo_cancel_changes_only_selected_records_and_preserves_payload(state) -> None:
+    fake = _InMemoryEmr()
+    fake.add_application(app_id="a1", name="selected")
+    other_app = fake.add_application(app_id="a2", name="other")
+    old_summary = fake.add_job_run(application_id="a1", job_run_id="r1", name="run", state=state)
+    old_detail = fake.add_job_run_detail(
+        application_id="a1",
+        job_run_id="r1",
+        entry_point_arguments=("arg",),
+        spark_submit_parameters="--conf x=y",
+        s3_monitoring_log_uri="s3://logs/prefix",
+    )
+    old_detail = replace(
+        old_detail,
+        execution_timeout_minutes=12,
+        retry_policy={"maxAttempts": 2},
+        mode="BATCH",
+        execution_iam_policy={"policy": "value"},
+        tags={"tag": "value"},
+        source_application_settings={"releaseLabel": "emr-7.0.0"},
+    )
+    fake._details[("a1", "r1")] = old_detail
+    other_summary = fake.add_job_run(
+        application_id="a2", job_run_id="r1", state=JobRunState.RUNNING
+    )
+    other_detail = fake.add_job_run_detail(application_id="a2", job_run_id="r1")
+    try:
+        assert await fake.cancel_job_run("a1", "r1") is None
+        assert ("cancel_job_run", ("a1", "r1")) in fake.calls
+        new_summary = (await fake.list_job_runs("a1"))[0]
+        new_detail = await fake.get_job_run("a1", "r1")
+        assert new_summary.state is new_detail.state is JobRunState.CANCELLED
+        assert old_summary.state is old_detail.state is state
+        assert new_summary.updated_at == new_detail.updated_at > old_summary.updated_at
+        assert new_detail.duration_ms == int(
+            (new_detail.updated_at - new_detail.created_at).total_seconds() * 1000
+        )
+        assert replace(new_summary, state=state, updated_at=old_summary.updated_at) == old_summary
+        assert (
+            replace(
+                new_detail,
+                state=state,
+                updated_at=old_detail.updated_at,
+                duration_ms=old_detail.duration_ms,
+            )
+            == old_detail
+        )
+        assert (await fake.list_job_runs("a2"))[0] is other_summary
+        assert await fake.get_job_run("a2", "r1") is other_detail
+        assert other_app in await fake.list_applications()
+    finally:
+        await fake.aclose()
+
+
+@pytest.mark.parametrize("state", [JobRunState.SUCCESS, JobRunState.FAILED, JobRunState.CANCELLED])
+@pytest.mark.asyncio
+async def test_demo_cancel_does_not_rewrite_terminal_records(state) -> None:
+    fake = _InMemoryEmr()
+    fake.add_application(app_id="a1", name="app")
+    summary = fake.add_job_run(application_id="a1", job_run_id="r1", state=state)
+    detail = fake.add_job_run_detail(application_id="a1", job_run_id="r1")
+    assert await fake.cancel_job_run("a1", "r1") is None
+    assert await fake.cancel_job_run("a1", "r1") is None
+    assert (await fake.list_job_runs("a1"))[0] is summary
+    assert await fake.get_job_run("a1", "r1") is detail
+    await fake.aclose()
+
+
+@pytest.mark.parametrize(("application_id", "job_run_id"), [("missing", "r1"), ("a1", "missing")])
+@pytest.mark.asyncio
+async def test_demo_cancel_missing_application_or_run_is_not_found(
+    application_id, job_run_id
+) -> None:
+    fake = _InMemoryEmr()
+    fake.add_application(app_id="a1", name="app")
+    # An orphan seed still cannot make an unknown application valid.
+    fake.add_job_run(application_id="missing", job_run_id="r1", state=JobRunState.RUNNING)
+    with pytest.raises(NotFoundError):
+        await fake.cancel_job_run(application_id, job_run_id)
+    assert ("cancel_job_run", (application_id, job_run_id)) in fake.calls
+    await fake.aclose()
+
+
+@pytest.mark.parametrize(
+    ("transition", "observed"),
+    [
+        (1, JobRunState.SUBMITTED),
+        (2, JobRunState.SCHEDULED),
+        (3, JobRunState.RUNNING),
+    ],
+)
+@pytest.mark.asyncio
+async def test_demo_cancel_cannot_be_resurrected_by_any_pending_transition(
+    monkeypatch: pytest.MonkeyPatch,
+    transition: int,
+    observed: JobRunState,
+) -> None:
+    reached, release = asyncio.Event(), asyncio.Event()
+    original_sleep = asyncio.sleep
+    selected_task = None
+    stages = {}
+
+    async def controlled_sleep(delay):
+        task = asyncio.current_task()
+        if delay >= 1:
+            stages[task] = stages.get(task, 0) + 1
+            if task is selected_task and stages[task] == transition:
+                reached.set()
+                await release.wait()
+        await original_sleep(0)
+
+    monkeypatch.setattr(asyncio, "sleep", controlled_sleep)
+    fake = _InMemoryEmr()
+    fake.add_application(app_id="a1", name="selected")
+    fake.add_application(app_id="a2", name="other")
+    kwargs = dict(
+        execution_role_arn="arn:aws:iam::123456789012:role/Job",
+        entry_point="s3://bucket/job.py",
+        entry_point_arguments=(),
+        spark_submit_parameters=None,
+    )
+    try:
+        run_id = await fake.start_job_run("a1", client_token="one", **kwargs)
+        selected_task = next(iter(fake._state_tasks))
+        other_run_id = await fake.start_job_run("a2", client_token="two", **kwargs)
+        walk_tasks = tuple(fake._state_tasks)
+        assert len(walk_tasks) == 2
+        await reached.wait()
+        assert (await fake.get_job_run("a1", run_id)).state is observed
+        await fake.cancel_job_run("a1", run_id)
+        release.set()
+        await asyncio.gather(*walk_tasks)
+        assert (await fake.get_job_run("a1", run_id)).state is JobRunState.CANCELLED
+        assert (await fake.list_job_runs("a1"))[0].state is JobRunState.CANCELLED
+        assert (await fake.get_job_run("a2", other_run_id)).state is JobRunState.SUCCESS
+        assert all(task.done() and not task.cancelled() for task in walk_tasks)
+    finally:
+        release.set()
+        await fake.aclose()
+    assert not fake._state_tasks

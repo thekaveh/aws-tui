@@ -37,6 +37,7 @@ from aws_tui.domain.emr_serverless import (
     JobRunState,
     JobRunSummary,
 )
+from aws_tui.domain.filesystem import NotFoundError
 
 # Mirrors aws_tui.demo.in_memory_fs._DEMO_LATENCY_SEC. Surfaces the
 # UI's loading… placeholders during demo runs.
@@ -313,6 +314,17 @@ class InMemoryEmr:
         self.calls.append(("get_job_run", (application_id, job_run_id)))
         return self._details[(application_id, job_run_id)]
 
+    async def cancel_job_run(self, application_id: str, job_run_id: str) -> None:
+        """Cancel only the selected run, preserving immutable read snapshots."""
+        await asyncio.sleep(_DEMO_LATENCY_SEC)
+        self.calls.append(("cancel_job_run", (application_id, job_run_id)))
+        run = self._runs.get(application_id, {}).get(job_run_id)
+        if application_id not in self._apps or run is None:
+            raise NotFoundError("application or job run not found")
+        if run.state in {JobRunState.SUCCESS, JobRunState.FAILED, JobRunState.CANCELLED}:
+            return
+        self._set_run_state(application_id, job_run_id, JobRunState.CANCELLED, advance_seconds=1)
+
     async def start_job_run(
         self,
         application_id: str,
@@ -455,27 +467,16 @@ class InMemoryEmr:
         # ``dispose()`` calls ``task.cancel()``.  No try/except is
         # needed — the cancellation unwinds the coroutine naturally
         # and the task wrapper marks the task as cancelled.
-        await asyncio.sleep(1.0)
-        self._set_run_state(
-            application_id,
-            job_run_id,
-            JobRunState.SCHEDULED,
-            advance_seconds=1,
-        )
-        await asyncio.sleep(1.0)
-        self._set_run_state(
-            application_id,
-            job_run_id,
-            JobRunState.RUNNING,
-            advance_seconds=1,
-        )
-        await asyncio.sleep(3.0)
-        self._set_run_state(
-            application_id,
-            job_run_id,
-            JobRunState.SUCCESS,
-            advance_seconds=3,
-        )
+        for state, seconds in (
+            (JobRunState.SCHEDULED, 1),
+            (JobRunState.RUNNING, 1),
+            (JobRunState.SUCCESS, 3),
+        ):
+            await asyncio.sleep(float(seconds))
+            run = self._runs.get(application_id, {}).get(job_run_id)
+            if run is not None and run.state is JobRunState.CANCELLED:
+                return
+            self._set_run_state(application_id, job_run_id, state, advance_seconds=seconds)
 
     def _set_run_state(
         self,

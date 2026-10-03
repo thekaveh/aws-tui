@@ -2,8 +2,8 @@
 
 The EMR Serverless service is an AWS-only operational view for applications,
 job runs, details, and S3-backed logs. It is read-mostly: browsing and log
-inspection are read-only, while cloning an existing run is the one focused
-submission workflow.
+inspection are read-only. Focused workflows clone an existing run or request
+cancellation of one selected active run.
 
 ## 1. Source and application context
 
@@ -71,7 +71,7 @@ Submit calls the public EMR Serverless `StartJobRun` API. Validation and provide
 errors keep the modal open with category-specific recovery guidance. Submission
 errors and observable diagnostics exclude argument, policy and credential
 values. A source change invalidates the open clone. The service does not expose
-a blank submit form or an AWS job cancellation command. During submission,
+a blank submit form. During submission,
 **Close** dismisses the form; it does not cancel a job AWS may have accepted.
 
 Submission carries an app-owned `clientToken`. The token is minted when the
@@ -83,7 +83,40 @@ does not. Successful submission or closing and reopening the form starts a new
 intent. Before reopening after an uncertain outcome, inspect the application's
 runs because the earlier request may already have succeeded.
 
-## 4. Architecture
+## 4. Cancel selected run
+
+Press `x` (`emr.cancel`), click the **cancel** Commands hint, or choose
+**Cancel selected EMR job run** in the command palette. Cancellation is
+available for `SUBMITTED`, `PENDING`, `SCHEDULED`, `QUEUED`, and `RUNNING`.
+`CANCELLING` and terminal `SUCCESS`, `FAILED`, or `CANCELLED` runs cannot
+receive another request. The hint is disabled and the palette entry is removed
+when the selected run is ineligible or a request is pending.
+
+If your custom keymap already uses `x` for another action, explicitly remap
+`emr.cancel` to a distinct unused key, such as `z`. See
+[Migrating custom x bindings](../keybindings.md#21-migrating-custom-x-bindings)
+for the configuration example and the entire-overlay fallback on collision.
+
+The danger confirmation **Cancel EMR job run?** names the exact source
+(connection/profile/region), application id, and run id. It starts on
+**Keep running**; choose **Request cancellation** to proceed. Escape sends no
+request. Changing source, application, or run before acceptance prevents a
+request to the old or replacement target. Leaving the page drains its owned
+work and confirmation. Results from a superseded target do not notify the new
+selection.
+
+The AWS identity needs `emr-serverless:CancelJobRun` permission. The API has
+one attempt per deliberate request, with no automatic retry. A denied or
+missing target is reported with fixed recovery guidance. After an unconfirmed
+network outcome, refresh job state before a deliberate retry: AWS may already
+have accepted the earlier request.
+
+An acknowledgement displays **cancellation requested** and leaves cached
+state untouched. Existing reads and polling show actual `CANCELLING` (still
+active), then `CANCELLED` (terminal); an observed `SUCCESS` or `FAILED` remains
+truthful. Key repeats and polls never submit an automatic cancellation.
+
+## 5. Architecture
 
 `EmrServerlessService` composes `EmrServerlessPageVM`, which owns
 `ApplicationsVM`, `JobRunsVM`, `JobRunDetailVM`, and `JobRunLogsVM`.
@@ -96,11 +129,13 @@ The exact AWS operations and pinned SDK model are recorded in the
 [Consumed Contract Ledger](../contract-ledger.md). The complete keyboard
 surface is in [Keybindings](../keybindings.md).
 
-## 5. Verification and demo
+## 6. Verification and demo
 
 Demo mode provides profile-isolated applications, terminal and active runs,
 clone transitions, and streamable success and failure logs without network
-access. Unit tests cover poller cadence, stale-target rejection, clone
+access. Demo cancellation changes only the selected backend run to `CANCELLED`,
+which existing reads then reveal. A cancelled clone stops its state walk and
+cannot resume or affect another run. Unit tests cover poller cadence, stale-target rejection, clone
 validation, provider errors, bounded discovery, and bounded log streaming.
 Snapshot and end-to-end tests cover selectors, focus order, master-detail
 behavior, modal submission, and log filtering.
