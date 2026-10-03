@@ -252,8 +252,8 @@ class TextualDialogService(DialogService):
         if request is None:
             raise RuntimeError("confirmation request is not open")
         screen = ConfirmModal(self._vm, request, hub=self._hub)
-        await self._app.push_screen(screen)
         try:
+            await self._app.push_screen(screen)
             return await modal_vm.wait_result()
         except asyncio.CancelledError:
             modal_vm.dispose()

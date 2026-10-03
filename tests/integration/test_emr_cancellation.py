@@ -27,7 +27,7 @@ from aws_tui.infra.aws_session import TokenState
 from aws_tui.services.emr_serverless.service import EmrServerlessService
 from aws_tui.services.s3 import S3Service
 from aws_tui.ui.widgets.command_palette import CommandPalette
-from aws_tui.ui.widgets.confirm_modal import ConfirmModal
+from aws_tui.ui.widgets.confirm_modal import ConfirmModal, TextualDialogService
 from aws_tui.ui.widgets.emr_serverless.page import EmrServerlessPage
 from aws_tui.ui.widgets.hint_legend import HintLegend
 from aws_tui.ui.widgets.settings.connection_form import ConnectionFormInline
@@ -238,6 +238,74 @@ async def test_ineligible_reason_has_no_callable_offer(
         assert fake.cancel_calls == []
         assert not isinstance(app.screen, ConfirmModal)
         assert (state.value if state else "select an EMR job run") in toast_text(app)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("change", ["dispose", "source"])
+async def test_owner_teardown_during_confirmation_mount(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, change: str
+) -> None:
+    async with cancellation_app(tmp_path) as (app, pilot, page, fake):
+        original_mount = ConfirmModal.on_mount
+        original_shutdown = page.vm.shutdown
+        shutdown_entered = asyncio.Event()
+        mounted = asyncio.Event()
+        owned_tasks: list[asyncio.Task] = []
+        replacements: list[asyncio.Task] = []
+
+        async def shutdown_at_mount() -> None:
+            shutdown_entered.set()
+            await original_shutdown()
+
+        async def teardown_on_mount(modal: ConfirmModal) -> None:
+            original_mount(modal)
+            assert modal is app.screen
+            assert not modal._mounted_event.is_set()
+            assert app.app_ctx.confirm_vm.is_open
+            assert page.vm.cancel_busy
+            owned_tasks.extend(page.vm._operations.tasks)
+            assert len(owned_tasks) == 1
+            # The real operation is suspended in ask -> present -> AwaitMount,
+            # before wait_result can begin. No fake dialog or mount is used.
+            presentation = owned_tasks[0].get_coro().cr_await.cr_await
+            assert presentation.cr_code is TextualDialogService.present.__code__
+            assert presentation.cr_await is not None
+            if change == "dispose":
+                page.vm.dispose()
+            else:
+                replacements.append(
+                    asyncio.create_task(
+                        app.app_ctx.root_vm.switch_connection_and_service(
+                            app.app_ctx.connection_resolver.resolve("other"),
+                            TokenState.CONNECTED,
+                            "emr-serverless",
+                        )
+                    )
+                )
+                await shutdown_entered.wait()
+            assert owned_tasks[0].cancelling()
+            mounted.set()
+
+        monkeypatch.setattr(page.vm, "shutdown", shutdown_at_mount)
+        monkeypatch.setattr(ConfirmModal, "on_mount", teardown_on_mount)
+        await pilot.press("x")
+        await asyncio.wait_for(mounted.wait(), timeout=15)
+        for replacement in replacements:
+            await replacement
+        await drain_workers(app)
+        await pilot.pause()
+        assert all(task.cancelled() for task in owned_tasks)
+        assert page.vm._operations.tasks == set()
+        assert not page.vm.cancel_busy
+        assert not app.app_ctx.confirm_vm.is_open
+        assert fake.cancel_calls == []
+        assert not any(isinstance(screen, ConfirmModal) for screen in app.screen_stack)
+        assert app.screen.focused is not None
+        assert app.screen.focused.screen is app.screen
+        # Real keyboard routing remains usable without dismissing the old modal.
+        await pilot.press("ctrl+k")
+        assert isinstance(app.screen, CommandPalette)
+        await pilot.press("escape")
 
 
 @pytest.mark.asyncio
