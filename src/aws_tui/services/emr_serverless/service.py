@@ -34,8 +34,8 @@ from aws_tui.domain.emr_serverless import (
 from aws_tui.domain.filesystem import ProviderError
 from aws_tui.infra.connection_resolver import Connection
 from aws_tui.vm.emr_serverless.page_vm import EmrServerlessPageVM
-from aws_tui.vm.service_source_vm import ServiceSelectionStore
-from aws_tui.vm.services_protocol import ServiceDescriptor
+from aws_tui.vm.service_source_vm import SelectionScope, ServiceSelectionStore
+from aws_tui.vm.services_protocol import RecoveryServiceVM, ServiceDescriptor
 
 #: Test hook — when provided, replaces real ``EmrServerlessClient`` construction
 #: with whatever the factory returns (typically ``_InMemoryEmr``).
@@ -179,6 +179,21 @@ class EmrServerlessService:
 
     def build_vm(self, connection: Connection) -> EmrServerlessPageVM:
         """Build a fresh page VM for ``connection``."""
+        return self._build_vm(connection, self._selection_store)
+
+    def build_recovery_vm(self, connection: Connection) -> RecoveryServiceVM:
+        selections = self._selection_store.clone()
+        scope = SelectionScope(self.descriptor.id, connection.name, connection.region)
+        return RecoveryServiceVM(
+            vm=self._build_vm(connection, selections),
+            commit_selection=lambda: self._selection_store.replace_scope_from(selections, scope),
+        )
+
+    def _build_vm(
+        self,
+        connection: Connection,
+        selections: ServiceSelectionStore,
+    ) -> EmrServerlessPageVM:
         client = self._make_client(connection)
         logs_client = self._make_logs_client(connection, client=client)
         return EmrServerlessPageVM(
@@ -187,7 +202,7 @@ class EmrServerlessService:
             hub=self._hub,
             dispatcher=self._dispatcher,
             connection=connection,
-            selection_store=self._selection_store,
+            selection_store=selections,
         )
 
     # ── Internal ────────────────────────────────────────────────────────────

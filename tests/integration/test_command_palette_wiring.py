@@ -20,7 +20,7 @@ from tests.unit.vm.glue._fake_glue import seeded_glue
 from tests.unit.vm.glue.test_iceberg_vm import RecordingInspector
 
 _GLOBAL = {"Theme picker", "Cycle theme", "Settings", "Help", "Quit"}
-_SOURCE = {"Switch source"}
+_SOURCE = {"Switch source", "Retry active source credentials"}
 # Scoped to the file manager: ``pane.copy_entry_path`` / ``pane.copy_path``
 # resolve through ``_focused_file_pane()``, and only the S3 service hosts a
 # ``DualPaneVM``, so they are inert on every other page.

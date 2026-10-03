@@ -45,7 +45,7 @@ from aws_tui.infra.duckdb import DuckDbPort
 from aws_tui.vm.glue.iceberg_vm import IcebergInspectionUnavailableError
 from aws_tui.vm.glue.page_vm import GluePageVM
 from aws_tui.vm.service_source_vm import SelectionScope, ServiceSelectionStore
-from aws_tui.vm.services_protocol import ServiceDescriptor
+from aws_tui.vm.services_protocol import RecoveryServiceVM, ServiceDescriptor
 
 
 class GlueClientProtocol(Protocol):
@@ -256,6 +256,21 @@ class GlueService:
         return connection.kind == "aws"
 
     def build_vm(self, connection: Connection) -> GluePageVM:
+        return self._build_vm(connection, self._selections)
+
+    def build_recovery_vm(self, connection: Connection) -> RecoveryServiceVM:
+        selections = self._selections.clone()
+        scope = SelectionScope(self.descriptor.id, connection.name, connection.region)
+        return RecoveryServiceVM(
+            vm=self._build_vm(connection, selections),
+            commit_selection=lambda: self._selections.replace_scope_from(selections, scope),
+        )
+
+    def _build_vm(
+        self,
+        connection: Connection,
+        selections: ServiceSelectionStore,
+    ) -> GluePageVM:
         client: GlueClientProtocol = (
             self._client_factory(connection)
             if self._client_factory is not None
@@ -271,10 +286,10 @@ class GlueService:
             iceberg_inspector=_ContextualIcebergInspector(
                 client=athena_client,
                 connection=connection,
-                selections=self._selections,
+                selections=selections,
             ),
             connection=connection,
-            selection_store=self._selections,
+            selection_store=selections,
             hub=self._hub,
             dispatcher=self._dispatcher,
             duckdb_port=self._duckdb_port,

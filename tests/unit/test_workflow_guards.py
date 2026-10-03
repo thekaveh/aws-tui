@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import fnmatch
 import tomllib
 from pathlib import Path
 from typing import Any
@@ -12,6 +11,13 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 
 def _workflow(path: str) -> dict[str, Any]:
     return yaml.safe_load((REPO_ROOT / path).read_text(encoding="utf-8"))
+
+
+def test_workflows_require_explicit_manual_dispatch() -> None:
+    """Local-only verification must not start unsolicited hosted jobs."""
+    for workflow_path in sorted((REPO_ROOT / ".github/workflows").glob("*.yml")):
+        workflow = _workflow(str(workflow_path))
+        assert set(workflow[True]) == {"workflow_dispatch"}, workflow_path.name
 
 
 def _step(workflow: dict[str, Any], job: str, name: str) -> dict[str, Any]:
@@ -471,11 +477,6 @@ def test_pages_publication_is_main_only_including_manual_dispatch() -> None:
             if str(step.get("uses", "")).startswith("astral-sh/setup-uv@")
         )
         assert setup_uv["with"]["version"] == "${{ env.UV_VERSION }}"
-    # ``assets/**`` rather than the hero alone: ``docs/index.md`` embeds
-    # ``assets/aws-tui-poster.png`` on both published surfaces, and the Fira
-    # Code TTFs are base64-embedded into every rendered diagram SVG. Listing
-    # one file let a poster or font change ship without redeploying Pages.
-    assert "assets/**" in workflow[True]["push"]["paths"]
     assert workflow["permissions"] == {"contents": "read"}
     assert workflow["jobs"]["deploy"]["permissions"] == {
         "contents": "read",
@@ -560,43 +561,3 @@ def test_release_creation_does_not_depend_on_runner_gh_cli() -> None:
 
     assert "gh release create" not in release
     assert "api.github.com/repos" in release
-
-
-def _manifest_sources() -> set[str]:
-    manifest = yaml.safe_load((REPO_ROOT / "docs" / "manifest.yaml").read_text(encoding="utf-8"))
-    sources: set[str] = {manifest["package"]["source"]}
-
-    def walk(entries: list[dict]) -> None:
-        for entry in entries:
-            if "source" in entry:
-                sources.add(entry["source"])
-            walk(entry.get("children", []))
-
-    walk(manifest["sections"])
-    for diagram in manifest.get("diagrams", []):
-        sources.add(diagram["master"])
-    return sources
-
-
-def _path_filter_matches(pattern: str, path: str) -> bool:
-    # GitHub's ``**`` matches across directory separators; fnmatch's ``*``
-    # already does, so ``docs/**`` becomes ``docs/*``.
-    return fnmatch.fnmatchcase(path, pattern.replace("**", "*"))
-
-
-def test_pages_publication_triggers_on_every_manifest_source() -> None:
-    """A manifest source outside the trigger filters publishes stale copies.
-
-    ``CONTRIBUTING.md``, ``SECURITY.md``, and ``CODE_OF_CONDUCT.md`` are
-    published from the manifest but lived outside ``docs/**``, so an edit
-    confined to one of them never redeployed Pages or the wiki.
-    """
-    workflow = _workflow(".github/workflows/pages.yml")
-    patterns = workflow[True]["push"]["paths"]
-
-    missing = sorted(
-        source
-        for source in _manifest_sources()
-        if not any(_path_filter_matches(pattern, source) for pattern in patterns)
-    )
-    assert missing == [], f"manifest sources absent from pages.yml push paths: {missing}"

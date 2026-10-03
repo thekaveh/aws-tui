@@ -28,7 +28,7 @@ from vmx import NULL_DISPATCHER, MessageHub
 from vmx.messages.protocols import Message
 
 from aws_tui.demo.in_memory_fs import InMemoryFS
-from aws_tui.domain.filesystem import PathRef
+from aws_tui.domain.filesystem import FileEntry, PathRef, PermissionDeniedError
 from aws_tui.vm.file_manager.pane_vm import PaneState, PaneVM
 
 
@@ -196,3 +196,67 @@ async def test_state_invariant_idle_after_initial_setup() -> None:
     pane = await _make_pane()
     assert pane.state == PaneState.IDLE
     pane.dispose()
+
+
+@pytest.mark.asyncio
+async def test_two_pane_recovery_stages_all_before_any_commit() -> None:
+    class _RecoveryFS(InMemoryFS):
+        def __init__(self, *, fails: bool = False) -> None:
+            super().__init__()
+            self.fails = fails
+            self.list_calls: list[PathRef] = []
+
+        async def list(self, path: PathRef) -> list[FileEntry]:
+            self.list_calls.append(path)
+            if self.fails:
+                raise PermissionDeniedError("denied")
+            return await super().list(path)
+
+    left = await _make_pane()
+    right = await _make_pane()
+    left_before = (left.provider, left.entries, left.state, left.path)
+    right_before = (right.provider, right.entries, right.state, right.path)
+    new_left = _RecoveryFS()
+    denied_right = _RecoveryFS(fails=True)
+
+    left_stage = await left.stage_provider_recovery(
+        new_left,
+        path=left.path,
+        identity_label="aws · engineering · us-east-1",
+        path_protocol="s3:",
+        connection_key=("aws", "engineering"),
+    )
+    with pytest.raises(PermissionDeniedError):
+        await right.stage_provider_recovery(
+            denied_right,
+            path=right.path,
+            identity_label="aws · engineering · us-east-1",
+            path_protocol="s3:",
+            connection_key=("aws", "engineering"),
+        )
+
+    assert (left.provider, left.entries, left.state, left.path) == left_before
+    assert (right.provider, right.entries, right.state, right.path) == right_before
+    assert left.can_commit_provider_recovery(left_stage)
+
+    new_right = _RecoveryFS()
+    right_stage = await right.stage_provider_recovery(
+        new_right,
+        path=right.path,
+        identity_label="aws · engineering · us-east-1",
+        path_protocol="s3:",
+        connection_key=("aws", "engineering"),
+    )
+    assert left.can_commit_provider_recovery(left_stage)
+    assert right.can_commit_provider_recovery(right_stage)
+
+    left.commit_provider_recovery(left_stage)
+    right.commit_provider_recovery(right_stage)
+
+    assert new_left.list_calls == [PathRef(())]
+    assert denied_right.list_calls == [PathRef(())]
+    assert new_right.list_calls == [PathRef(())]
+    assert left.provider is new_left
+    assert right.provider is new_right
+    left.dispose()
+    right.dispose()

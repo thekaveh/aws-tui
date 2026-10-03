@@ -37,7 +37,7 @@ from aws_tui.vm.messages import (
     ThemeChangedMessage,
 )
 from aws_tui.vm.nav_menu_vm import NavMenuVM
-from aws_tui.vm.services_protocol import ServiceRegistry
+from aws_tui.vm.services_protocol import RecoveryServiceVM, ServiceRegistry
 
 
 class RootVM:
@@ -203,6 +203,11 @@ class RootVM:
         # Send the message so connection-aware descendants react.
         self._hub.send(ConnectionChangedMessage(connection=connection, auth_state=auth_state))
 
+    def refresh_connection_state(self, connection: Connection, auth_state: TokenState) -> None:
+        """Publish refreshed credentials without rebuilding hosted content."""
+        self._set_connection_state(connection, auth_state)
+        self._hub.send(ConnectionChangedMessage(connection=connection, auth_state=auth_state))
+
     async def switch_connection_and_service(
         self,
         connection: Connection,
@@ -262,6 +267,56 @@ class RootVM:
         vm = service.build_vm(self._connection)
         await self._adopt_service_vm(service_id, vm)
 
+    def build_service_vm(self, service_id: str, connection: Connection) -> object:
+        """Build, but do not construct or adopt, a supported service VM."""
+        service = self._registry.get(service_id)
+        if not service.supports(connection):
+            raise RuntimeError(
+                f"service {service_id!r} does not support connection {connection.name!r}"
+            )
+        return service.build_vm(connection)
+
+    def build_recovery_service_vm(
+        self,
+        service_id: str,
+        connection: Connection,
+    ) -> RecoveryServiceVM:
+        """Build a speculative VM with an isolated persisted-selection store."""
+        service = self._registry.get(service_id)
+        if not service.supports(connection):
+            raise RuntimeError(
+                f"service {service_id!r} does not support connection {connection.name!r}"
+            )
+        build_recovery = getattr(service, "build_recovery_vm", None)
+        if not callable(build_recovery):
+            raise RuntimeError(f"service {service_id!r} does not support staged recovery")
+        candidate = build_recovery(connection)
+        if not isinstance(candidate, RecoveryServiceVM):
+            raise TypeError(f"service {service_id!r} returned an invalid recovery VM")
+        return candidate
+
+    async def adopt_prepared_service_vm(
+        self,
+        connection: Connection,
+        auth_state: TokenState,
+        service_id: str,
+        vm: object,
+    ) -> None:
+        """Atomically publish a service VM whose setup already succeeded."""
+        service = self._registry.get(service_id)
+        if not service.supports(connection):
+            raise RuntimeError(
+                f"service {service_id!r} does not support connection {connection.name!r}"
+            )
+        await self._adopt_service_vm(
+            service_id,
+            vm,
+            before_publish=lambda: self._set_connection_state(connection, auth_state),
+            already_prepared=True,
+        )
+        self._hub.send(ConnectionChangedMessage(connection=connection, auth_state=auth_state))
+        self._services_menu.switch_service_command.execute(service_id)
+
     async def _adopt_service_vm(
         self,
         service_id: str,
@@ -269,6 +324,7 @@ class RootVM:
         *,
         prepare_vm: Callable[[object], None] | None = None,
         before_publish: Callable[[], None] | None = None,
+        already_prepared: bool = False,
     ) -> None:
         """Adopt one prebuilt service VM with selection rollback."""
         # Reflect the selection in the menu BEFORE adoption — the user
@@ -290,6 +346,7 @@ class RootVM:
                 service_id=service_id,
                 prepare=prepare_vm,
                 before_publish=before_publish,
+                already_prepared=already_prepared,
             )
         except (Exception, asyncio.CancelledError):
             # Revert — host failed to adopt, ribbon must not advance.

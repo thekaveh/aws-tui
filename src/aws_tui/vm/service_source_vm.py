@@ -52,5 +52,22 @@ class ServiceSelectionStore:
     def discard(self, scope: SelectionScope, key: str) -> None:
         self._values.pop((scope, key), None)
 
+    def clone(self) -> ServiceSelectionStore:
+        """Return an isolated copy suitable for speculative service setup."""
+        clone = ServiceSelectionStore()
+        clone._values = dict(self._values)
+        return clone
+
+    def replace_scope_from(
+        self,
+        source: ServiceSelectionStore,
+        scope: SelectionScope,
+    ) -> None:
+        """Commit one candidate scope without overwriting unrelated updates."""
+        self._values = {key: value for key, value in self._values.items() if key[0] != scope}
+        self._values.update(
+            {key: value for key, value in source._values.items() if key[0] == scope}
+        )
+
 
 __all__ = ["SelectionScope", "ServiceSelectionStore", "ServiceSourceContext"]

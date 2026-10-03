@@ -114,6 +114,7 @@ class ContentHostVM:
         service_id: str | None,
         prepare: Callable[[Any], None] | None = None,
         before_publish: Callable[[], None] | None = None,
+        already_prepared: bool = False,
     ) -> None:
         try:
             async with self._swap_lock:
@@ -122,6 +123,7 @@ class ContentHostVM:
                     service_id=service_id,
                     prepare=prepare,
                     before_publish=before_publish,
+                    already_prepared=already_prepared,
                 )
         except BaseException:
             # Ownership transfers before lock acquisition. If adoption never
@@ -137,6 +139,7 @@ class ContentHostVM:
         service_id: str | None,
         prepare: Callable[[Any], None] | None,
         before_publish: Callable[[], None] | None,
+        already_prepared: bool,
     ) -> None:
         """Swap the hosted VM. Idempotent only for the identical VM instance.
 
@@ -156,7 +159,7 @@ class ContentHostVM:
         if self._current is vm and vm is not None:
             # Re-adopting the identical VM instance is a true no-op.
             return
-        if vm is not None:
+        if vm is not None and not already_prepared:
             # Construction is the only synchronous adoption step that can
             # fail. Complete it while the outgoing VM is still intact so a
             # bad replacement cannot empty the content host.
@@ -202,7 +205,7 @@ class ContentHostVM:
             before_publish()
         send_value_free(self._hub, PropertyChangedMessage.create(self, self.name, "current"))
 
-        setup = getattr(vm, "setup", None)
+        setup = None if already_prepared else getattr(vm, "setup", None)
         if callable(setup):
             # Dispatch as a background task so a slow ``setup``
             # (e.g. ``S3FS.list`` blocking on a 60-second botocore

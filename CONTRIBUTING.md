@@ -22,7 +22,7 @@ This repo follows a strict layer architecture; see [docs/architecture.md](docs/a
 View (Textual)  →  ViewModel (VMx)  →  Service plugins  →  Domain ops  →  Infrastructure
 ```
 
-`scripts/check-layers.sh` parses imports with `ast`, resolves relative imports, and fails CI on any forbidden edge.
+`scripts/check-layers.sh` parses imports with `ast`, resolves relative imports, and rejects any forbidden edge.
 
 ## 3. Documentation
 
@@ -40,15 +40,14 @@ The docs tooling lives in its own dependency group:
 
 ```
 uv sync --group docs      # MkDocs Material, cairosvg + fontTools (diagrams), PyYAML
-make docs-check           # the same gate CI runs
+make docs-check           # documentation drift and strict build
 uv run --group docs pytest tests/docs
 ```
 
 `make docs-check` verifies self-containment (no surface links to another
 surface or to GitHub source views), hierarchical heading numbering, manifest
 completeness, and that the committed generated artifacts match a fresh render.
-CI runs it on every pull request, so a documentation change that skips it fails
-there instead.
+Run it locally before submitting documentation changes.
 
 `./scripts/bootstrap.sh` syncs `--all-groups`, so a bootstrapped checkout can
 run everything. If you sync the `dev` group alone, `uv run pytest` still
@@ -71,7 +70,15 @@ Scopes follow the layer names (`infra`, `domain`, `vm`, `services`, `ui`, `app`,
 - Branch feature, fix, and maintenance work from `develop`. Reserve `main`
   for release-promotion PRs from `develop`. Open the PR early; mark draft
   until ready.
-- CI must be green. Snapshot test changes need explicit review of the goldens diff.
+- Verification runs locally. Run applicable tests, `uv run pre-commit run --all-files`,
+  and `make docs-check` before merging. Validate package changes with
+  `uv build --no-build-isolation`, `uv run python -m scripts.check_dist dist/`,
+  and `uv run twine check dist/*`. Record results and platform limitations in
+  the PR. Snapshot test changes need explicit review of the goldens diff.
+- GitHub Actions workflows are manual-only; pushes, pull requests, and tags do
+  not start hosted checks. Do not dispatch workflows during local-only work.
+  A macOS result does not establish Linux or Windows compatibility. Requirements
+  for evidence from another platform remain open until that evidence exists.
 - New services go under `src/aws_tui/services/<name>/` and register in `src/aws_tui/composition.py`. See [docs/adding-a-service.md](docs/adding-a-service.md).
 - Adding an AWS API call? Run integration tests against `moto`. For S3-compatible quirks, add a note in [docs/connections.md](docs/connections.md).
 

@@ -127,6 +127,25 @@ SSO-backed profiles use local AWS config and SSO cache reads only; no AWS
 network call. Non-SSO profiles return `connected` from the offline probe and
 are validated by the live boto path.
 
+### 3.1. Recovering credentials without relaunching
+
+Repair credentials outside the application, then press **`a`** or choose
+**Retry active source credentials** from the command palette. For an expired
+SSO session, run `aws sso login --profile <name>`. For missing non-SSO
+credentials, repair the shared credentials, `credential_process`, environment,
+or role source and verify it with `aws sts get-caller-identity --profile
+<name>`. aws-tui never runs the AWS CLI or writes credentials.
+
+The retry is pinned to the active connection's name, kind, region, profile,
+endpoint, and routing options. Credential values may rotate, but a profile or
+endpoint change is rejected so the retry cannot silently switch accounts or
+servers. It refreshes only the active read surface and never repeats a query,
+job submission, transfer, or other mutation. The existing service, content,
+path, and selection remain in place when recovery fails or becomes stale.
+Fixed guidance distinguishes expired SSO, missing credentials, access denied,
+and network failures without exposing provider error text or credential
+material.
+
 ## 4. Switching between connections at runtime
 
 Every connection the resolver returns — AWS profiles, manually-configured

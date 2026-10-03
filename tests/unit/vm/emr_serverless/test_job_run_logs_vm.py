@@ -14,7 +14,13 @@ from aws_tui.domain.emr_logs import (
     LogFile,
     LogFileKind,
 )
+from aws_tui.domain.filesystem import (
+    AuthRequiredError,
+    PermissionDeniedError,
+    ProviderUnreachableError,
+)
 from aws_tui.vm.emr_serverless.job_run_logs_vm import JobRunLogsVM, LogsState
+from aws_tui.vm.file_manager.pane_vm import PaneState
 
 
 def _hub() -> MessageHub[Message]:
@@ -509,6 +515,36 @@ async def test_load_provider_error_transitions_to_error(monkeypatch: pytest.Monk
 
     assert vm.state is LogsState.ERROR
     assert vm.error_text is not None
+    vm.dispose()
+
+
+@pytest.mark.parametrize(
+    ("error", "expected"),
+    [
+        (AuthRequiredError("missing"), PaneState.AUTH_REQUIRED),
+        (PermissionDeniedError("denied"), PaneState.FORBIDDEN),
+        (ProviderUnreachableError("offline"), PaneState.UNREACHABLE),
+    ],
+)
+async def test_load_retains_typed_provider_failure_for_credential_recovery(
+    monkeypatch: pytest.MonkeyPatch,
+    error: Exception,
+    expected: PaneState,
+) -> None:
+    async def _list_raises(**kwargs: object) -> list[LogFile]:
+        raise error
+
+    monkeypatch.setattr(
+        "aws_tui.domain.emr_logs.list_log_files",
+        _list_raises,
+        raising=False,
+    )
+    vm = _make()
+    vm.set_target("app1", "run1", _LOG_URI)
+
+    await vm.load()
+
+    assert vm.credential_recovery_state is expected
     vm.dispose()
 
 

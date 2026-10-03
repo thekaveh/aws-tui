@@ -34,6 +34,7 @@ from aws_tui.domain.filesystem import ProviderError
 from aws_tui.infra.redaction import redact_text
 from aws_tui.vm._observable import ObserverSafeSubject, send_value_free
 from aws_tui.vm.emr_serverless._errors import map_provider_error
+from aws_tui.vm.file_manager.pane_vm import PaneState
 from aws_tui.vm.operation_owner import OperationOwner, OperationSuperseded
 from aws_tui.vm.service_diagnostics import report_unexpected_service_error
 
@@ -89,6 +90,7 @@ class JobRunLogsVM:
         self._log_uri: str | None = None
         # Loaded state
         self._state: LogsState = LogsState.EMPTY_TARGET
+        self._failure_state: PaneState | None = None
         self._error_text: str | None = None
         self._available_files: tuple[LogFile, ...] = ()
         self._current_file: LogFile | None = None
@@ -132,6 +134,19 @@ class JobRunLogsVM:
     @property
     def error_text(self) -> str | None:
         return self._error_text
+
+    @property
+    def credential_recovery_state(self) -> PaneState:
+        """Return the typed terminal state used by credential recovery."""
+        if self._state is LogsState.ERROR:
+            return self._failure_state or PaneState.ERROR
+        if self._state in {
+            LogsState.EMPTY_TARGET,
+            LogsState.NO_LOG_CONFIG,
+            LogsState.NO_FILES,
+        }:
+            return PaneState.EMPTY
+        return PaneState.IDLE
 
     @property
     def available_files(self) -> tuple[LogFile, ...]:
@@ -210,6 +225,7 @@ class JobRunLogsVM:
         self._lines_scanned = 0
         self._matched_count = 0
         self._error_text = None
+        self._failure_state = None
         if app_id is None or run_id is None:
             self._set_state(LogsState.EMPTY_TARGET)
         elif log_uri is None:
@@ -239,13 +255,23 @@ class JobRunLogsVM:
 
     # ── Network actions ───────────────────────────────────────────────────
 
-    async def load(self, *, use_cache: bool = True) -> None:
+    async def load(
+        self,
+        *,
+        use_cache: bool = True,
+        preferred_file_key: str | None = None,
+    ) -> None:
         try:
-            await self._operations.run(lambda: self._load(use_cache=use_cache))
+            await self._operations.run(
+                lambda: self._load(
+                    use_cache=use_cache,
+                    preferred_file_key=preferred_file_key,
+                )
+            )
         except OperationSuperseded:
             return
 
-    async def _load(self, *, use_cache: bool) -> None:
+    async def _load(self, *, use_cache: bool, preferred_file_key: str | None) -> None:
         """Fetch + stream the selected log file.
 
         View-side ``exclusive=True, group="emr-logs"`` cancels any
@@ -305,9 +331,16 @@ class JobRunLogsVM:
                 if self._current_file is not None:
                     self._current_file = None
                     self._notify("current_file")
+                self._failure_state = None
                 self._set_state(LogsState.NO_FILES)
                 return
-            current_key = self._current_file.key if self._current_file is not None else None
+            current_key = (
+                preferred_file_key
+                if preferred_file_key is not None
+                else self._current_file.key
+                if self._current_file is not None
+                else None
+            )
             selected_file = next((file for file in files if file.key == current_key), None)
             if selected_file is None:
                 selected_file = next(
@@ -353,6 +386,7 @@ class JobRunLogsVM:
                 self._notify("lines")
                 self._notify("matched_count")
                 self._notify("progress")
+                self._failure_state = None
                 self._set_state(LogsState.TRUNCATED if cached_truncated else LogsState.READY)
                 return
             buffered: list[str] = []
@@ -407,6 +441,7 @@ class JobRunLogsVM:
             # LRU eviction: drop the oldest entry until back under cap.
             while len(self._cache) > _CACHE_MAX_ENTRIES:
                 self._cache.popitem(last=False)
+            self._failure_state = None
             self._set_state(LogsState.TRUNCATED if truncated else LogsState.READY)
         except ProviderError as exc:
             # Identity guard on the error path too — set_target is
@@ -417,12 +452,11 @@ class JobRunLogsVM:
             # describing the prior run's failure.
             if (self._application_id, self._job_run_id, self._log_uri) != target:
                 return
-            new_state, self._error_text = map_provider_error(exc)
+            self._failure_state, self._error_text = map_provider_error(exc)
             # Re-map the file-pane states the EMR mapper returns to a
             # logs-specific state. UNREACHABLE / AUTH_REQUIRED /
             # FORBIDDEN / ERROR all collapse to LogsState.ERROR for
             # the pane — error_text carries the detail.
-            _ = new_state
             self._set_state(LogsState.ERROR)
         except asyncio.CancelledError:
             # User switched panes or runs — leave state where it is
@@ -433,6 +467,7 @@ class JobRunLogsVM:
             if (self._application_id, self._job_run_id, self._log_uri) != target:
                 return
             self._error_text = redact_text(f"unexpected error: {exc}")
+            self._failure_state = PaneState.ERROR
             report_unexpected_service_error(
                 self._hub, service="emr-serverless", operation="load_job_logs", error=exc
             )

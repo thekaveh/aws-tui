@@ -15,7 +15,7 @@ import pytest
 from vmx import NULL_DISPATCHER, MessageHub
 from vmx.messages.protocols import Message
 
-from aws_tui.app import _MODAL_ROUTED_ACTIONS, AwsTuiApp
+from aws_tui.app import _MODAL_ROUTED_ACTIONS, _PALETTE_COMMANDS, AwsTuiApp
 from aws_tui.composition import build_app_context
 from aws_tui.domain.data_catalog import TableFormat
 from aws_tui.ui.widgets.help_modal import HelpModal
@@ -42,6 +42,7 @@ _EXPECTED: set[tuple[str, str, bool, bool]] = {
     ("left", "dispatch('pane.modal_left')", False, False),
     ("right", "dispatch('pane.modal_right')", False, False),
     ("r", "dispatch('pane.refresh')", True, False),
+    ("a", "dispatch('auth.authenticate')", False, False),
     ("question_mark", "dispatch('app.help')", True, False),
     ("colon", "dispatch('app.command_palette')", True, False),
     ("ctrl+k", "dispatch('app.command_palette')", False, True),
@@ -102,10 +103,20 @@ def test_no_handlerless_keys_bound(app_context_factory) -> None:  # type: ignore
     keys = set(app._bindings.key_to_bindings)
     assert ("Q", "dispatch('glue.query_in_athena')", False, False) in _installed(app)
     # Deferred (handlerless) actions' keys must NOT be bound: filter (slash),
-    # enter_multiselect (v), select_all/authenticate (a), move (m), new (n).
+    # enter_multiselect (v), select_all, move (m), new (n).
     # (`space`->quick_look and `:`/`ctrl+k`->command_palette are now wired.)
-    for k in ("slash", "v", "a", "m", "n"):
+    for k in ("slash", "v", "m", "n"):
         assert k not in keys, f"{k} should be unbound (handlerless)"
+
+
+def test_auth_recovery_has_durable_key_and_palette_entry(app_context_factory) -> None:  # type: ignore[no-untyped-def]
+    app = AwsTuiApp(app_context_factory())
+
+    assert ("a", "dispatch('auth.authenticate')", False, False) in _installed(app)
+    assert any(
+        entry.id == "auth.authenticate" and entry.label == "Retry active source credentials"
+        for entry in _PALETTE_COMMANDS
+    )
 
 
 def test_printable_selector_bindings_yield_to_athena_editor(app_context_factory) -> None:  # type: ignore[no-untyped-def]
