@@ -888,9 +888,9 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
         # unhandled exception so ``main()`` can print the dump path and
         # re-raise after the app has torn down.
         self._crash_report: CrashReport | None = None
-        self._content_mount_hosts: weakref.WeakKeyDictionary[Widget, Container] = (
-            weakref.WeakKeyDictionary()
-        )
+        self._content_mount_hosts: weakref.WeakKeyDictionary[
+            Widget, tuple[Container, tuple[str, int] | None]
+        ] = weakref.WeakKeyDictionary()
         self._content_mount_recovering: weakref.WeakSet[Widget] = weakref.WeakSet()
         self._shutdown_task: asyncio.Task[None] | None = None
         self._shutdown_complete = False
@@ -5937,10 +5937,18 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
 
     async def _replace_content_widget(self, host: Container, replacement: Widget) -> None:
         """Mount a content replacement or leave a coherent error surface."""
-        if any(candidate is host for candidate in self._content_mount_hosts.values()):
+        navigation_owner = self._service_navigation_owner
+        if any(candidate[0] is host for candidate in self._content_mount_hosts.values()):
             host = await self._reset_content_host(host)
+            if (
+                self._service_navigation_closed
+                or self._service_navigation_owner != navigation_owner
+            ):
+                return
         await host.remove_children()
-        self._content_mount_hosts[replacement] = host
+        if self._service_navigation_closed or self._service_navigation_owner != navigation_owner:
+            return
+        self._content_mount_hosts[replacement] = (host, navigation_owner)
         try:
             await host.mount(replacement)
             self.call_after_refresh(lambda: self._expire_content_mount_registration(replacement))
@@ -5948,6 +5956,11 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
             self._content_mount_hosts.pop(replacement, None)
             try:
                 host = await self._reset_content_host(host)
+                if (
+                    self._service_navigation_closed
+                    or self._service_navigation_owner != navigation_owner
+                ):
+                    return
                 await host.mount(
                     Static(
                         "Unable to render this view.",
@@ -5973,10 +5986,14 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
         next_sibling = siblings[index + 1] if index + 1 < len(siblings) else None
         await host.remove()
         replacement = Container(id="content-host")
+        if self._service_navigation_closed:
+            return replacement
         await parent.mount(replacement, before=next_sibling)
         return replacement
 
-    def _content_mount_owner(self, error: Exception) -> tuple[Widget, Container] | None:
+    def _content_mount_owner(
+        self, error: Exception
+    ) -> tuple[Widget, Container, tuple[str, int] | None] | None:
         """Find a registered replacement implicated in a lifecycle traceback."""
         hosts = getattr(self, "_content_mount_hosts", None)
         if hosts is None:
@@ -5998,9 +6015,10 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
                 continue
             current: Widget | None = widget
             while current is not None:
-                host = hosts.get(current)
-                if host is not None and current not in recovering:
-                    return current, host
+                registration = hosts.get(current)
+                if registration is not None and current not in recovering:
+                    host, navigation_owner = registration
+                    return current, host, navigation_owner
                 parent = current.parent
                 current = parent if isinstance(parent, Widget) else None
         return None
@@ -6010,23 +6028,46 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
         replacement: Widget,
         host: Container,
         error: Exception,
+        navigation_owner: tuple[str, int] | None,
     ) -> None:
-        try:
-            current_host = self.query_one("#content-host", Container)
-            if current_host is not host:
-                return
-            self._app_ctx.log_sink.error(
-                "app.content_mount.lifecycle_failed",
-                error=str(error),
-                error_type=type(error).__name__,
+        def is_owned() -> bool:
+            return (
+                not self._service_navigation_closed
+                and self._service_navigation_owner == navigation_owner
             )
-            recovered_host = await self._reset_content_host(host)
-            owner = self._service_navigation_owner
-            if owner is not None and owner[0] == "first-run" and self._first_run_owned(owner[1]):
-                await self._mount_no_connection_placeholder()
-                if self._first_run_owned(owner[1]):
-                    await self._refresh_first_run_discovery(owner[1])
-                    if not self._first_run_owned(owner[1]):
+
+        try:
+            # Intent can advance while resetting, but the winning service mount
+            # must wait until the empty host boundary is repaired.
+            async with self._service_navigation_lock:
+                if not is_owned():
+                    return
+                current_host = self.query_one("#content-host", Container)
+                if current_host is not host:
+                    return
+                self._app_ctx.log_sink.error(
+                    "app.content_mount.lifecycle_failed",
+                    error=str(error),
+                    error_type=type(error).__name__,
+                )
+                recovered_host = await self._reset_content_host(host)
+                if (
+                    not is_owned()
+                    or self.query_one("#content-host", Container) is not recovered_host
+                ):
+                    return
+                if navigation_owner is not None and navigation_owner[0] == "first-run":
+                    await self._mount_no_connection_placeholder()
+                    if (
+                        not is_owned()
+                        or self.query_one("#content-host", Container) is not recovered_host
+                    ):
+                        return
+                    await self._refresh_first_run_discovery(navigation_owner[1])
+                    if (
+                        not is_owned()
+                        or self.query_one("#content-host", Container) is not recovered_host
+                    ):
                         return
                     self._set_first_run_busy(False)
                     view = self._first_run_view()
@@ -6034,15 +6075,17 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
                         view.show_error(
                             "Unable to open connection. Check the connection, then select it again."
                         )
-                        self.call_after_refresh(partial(self._focus_first_run, view, owner[1]))
-                return
-            await recovered_host.mount(
-                Static(
-                    "Unable to render this view.",
-                    id="content-mount-error",
-                    markup=False,
+                        self.call_after_refresh(
+                            partial(self._focus_first_run, view, navigation_owner[1])
+                        )
+                    return
+                await recovered_host.mount(
+                    Static(
+                        "Unable to render this view.",
+                        id="content-mount-error",
+                        markup=False,
+                    )
                 )
-            )
         finally:
             self._content_mount_hosts.pop(replacement, None)
             self._content_mount_recovering.discard(replacement)
@@ -6131,12 +6174,18 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
         """
         mount_owner = self._content_mount_owner(error)
         if mount_owner is not None:
-            replacement, host = mount_owner
+            replacement, host, navigation_owner = mount_owner
             # Claim recovery before yielding to the worker. Textual may surface
             # more than one lifecycle exception while unwinding a failed mount.
             self._content_mount_recovering.add(replacement)
             self._run_lifecycle_worker(
-                partial(self._recover_content_mount_lifecycle, replacement, host, error),
+                partial(
+                    self._recover_content_mount_lifecycle,
+                    replacement,
+                    host,
+                    error,
+                    navigation_owner,
+                ),
                 name="content mount recovery",
                 group="content-mount-recovery",
             )

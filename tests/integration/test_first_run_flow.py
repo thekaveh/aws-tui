@@ -677,6 +677,7 @@ async def test_mount_recovery_discovery_cannot_update_new_setup_generation(
     from textual.widget import Widget
 
     from aws_tui import app as app_module
+    from aws_tui.ui.widgets.first_run import FirstRunConnectionList
 
     env = setup_context(app_context_factory, monkeypatch)
     started, release = asyncio.Event(), asyncio.Event()
@@ -719,11 +720,11 @@ async def test_mount_recovery_discovery_cannot_update_new_setup_generation(
         await pilot.press("enter")
         await asyncio.wait_for(started.wait(), 5)
         await pilot.press("comma")
-        await wait_until(
-            lambda: len(env.app.query(SettingsView)) == 1, what="Settings wins recovery"
+        # Recovery holds the mount lock; intent advances before the winner mounts.
+        env.app.on_first_run_connection_list_setup_requested(
+            FirstRunConnectionList.SetupRequested()
         )
-        button(env.app, "first-run-setup").focus()
-        await pilot.press("enter")
+        release.set()
         await wait_until(
             lambda: (
                 len(env.app.query(FirstRunView)) == 1
@@ -738,3 +739,146 @@ async def test_mount_recovery_discovery_cannot_update_new_setup_generation(
         )
         assert env.app.crash_report is None
         assert aws_bytes(env) == before
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("phase", ["queued", "reset", "remove"])
+@pytest.mark.parametrize("destination", ["settings", "setup", "shutdown"])
+async def test_failed_mount_recovery_retains_original_navigation_owner(
+    app_context_factory, monkeypatch, phase, destination
+):  # type: ignore[no-untyped-def]
+    from textual.widget import Widget
+
+    from aws_tui import app as app_module
+    from aws_tui.ui.widgets.first_run import FirstRunConnectionList
+
+    env = setup_context(app_context_factory, monkeypatch)
+    started, release = asyncio.Event(), asyncio.Event()
+    winner_mount_started = asyncio.Event()
+    original_recover = env.app._recover_content_mount_lifecycle
+    original_reset = env.app._reset_content_host
+    original_settings_mount = env.app._mount_settings_view
+    original_setup_mount = env.app._mount_no_connection_placeholder
+    paused = False
+    recovering = False
+
+    class BrokenView(Widget):
+        def on_mount(self):
+            raise RuntimeError("old mount failure")
+
+    async def recover(*args):
+        nonlocal recovering
+        if phase == "queued":
+            started.set()
+            await release.wait()
+        recovering = True
+        try:
+            await original_recover(*args)
+        finally:
+            recovering = False
+
+    async def reset(host):
+        nonlocal paused
+        if phase == "remove" and recovering and not paused:
+            paused = True
+            original_remove = host.remove
+
+            async def remove():
+                result = await original_remove()
+                started.set()
+                await release.wait()
+                return result
+
+            monkeypatch.setattr(host, "remove", remove)
+        result = await original_reset(host)
+        if phase == "reset" and recovering and not paused:
+            paused = True
+            started.set()
+            await release.wait()
+        return result
+
+    async def settings_mount():
+        winner_mount_started.set()
+        await original_settings_mount()
+
+    async def setup_mount():
+        winner_mount_started.set()
+        await original_setup_mount()
+
+    async with env.app.run_test(size=(120, 40)) as pilot:
+        await ready(env, pilot)
+        env.aws_config.write_text("[profile added]\nregion=us-east-1\n")
+        before = aws_bytes(env)
+        await pilot.press("tab", "tab", "enter")
+        await drain_workers(env.app)
+        monkeypatch.setattr(env.app, "_recover_content_mount_lifecycle", recover)
+        monkeypatch.setattr(env.app, "_reset_content_host", reset)
+        monkeypatch.setattr(app_module, "build_service_view", lambda *args, **kwargs: BrokenView())
+        env.app.query_one(ConnectionChoice).focus()
+        await pilot.pause()
+        await env.app.action_descend()
+        await asyncio.wait_for(started.wait(), 5)
+        try:
+            if destination == "shutdown":
+                monkeypatch.setattr(env.app, "_mount_settings_view", settings_mount)
+                monkeypatch.setattr(env.app, "_mount_no_connection_placeholder", setup_mount)
+                if phase == "queued":
+                    await wait_until(
+                        lambda: (
+                            not any(
+                                worker.group == "content-mount" and worker.is_running
+                                for worker in env.app.workers
+                            )
+                        ),
+                        what="failed selection finishes before queued recovery shutdown",
+                    )
+                quit_task = asyncio.create_task(env.app.action_quit())
+                await wait_until(
+                    lambda: env.app._service_navigation_closed, what="shutdown closes intake"
+                )
+                release.set()
+                await quit_task
+                assert not winner_mount_started.is_set()
+            else:
+                if phase == "remove":
+                    monkeypatch.setattr(env.app, "_mount_settings_view", settings_mount)
+                    monkeypatch.setattr(env.app, "_mount_no_connection_placeholder", setup_mount)
+                env.app.action_open_settings()
+                if phase == "queued":
+                    await wait_until(
+                        lambda: len(env.app.query(SettingsView)) == 1,
+                        what="Settings wins queued recovery",
+                    )
+                if destination == "setup":
+                    env.app.on_first_run_connection_list_setup_requested(
+                        FirstRunConnectionList.SetupRequested()
+                    )
+                # The failed host has been reset or removed; flush healthy chrome
+                # while the winner waits at the navigation boundary.
+                await pilot.pause()
+                if phase == "remove":
+                    assert not winner_mount_started.is_set()
+                release.set()
+                await drain_workers(env.app)
+                await pilot.pause()
+                assert len(env.app.query("#content-host")) == 1
+                assert not env.app.query("#content-mount-error")
+                if destination == "settings":
+                    assert len(env.app.query(SettingsView)) == 1
+                    assert not env.app.query(FirstRunView)
+                else:
+                    assert len(env.app.query(FirstRunView)) == 1
+                    assert "Unable to open connection" not in str(
+                        env.app.query_one("#first-run-status", Static).content
+                    )
+                    await pilot.press("enter", *"unsaved-new-form")
+                    expected_view = env.app.query_one(FirstRunView)
+                    expected_form = env.app.query_one(ConnectionFormInline)
+                    await drain_workers(env.app)
+                    assert env.app.query_one(FirstRunView) is expected_view
+                    assert env.app.query_one(ConnectionFormInline) is expected_form
+                    assert env.app.query_one(Input).value == "unsaved-new-form"
+            assert env.app.crash_report is None
+            assert aws_bytes(env) == before
+        finally:
+            release.set()
