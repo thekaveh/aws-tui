@@ -21,7 +21,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Final
 
-from aws_tui.infra.config_store import ConfigStore, ConnectionEntry
+from aws_tui.infra.config_store import Config, ConfigError, ConfigStore, ConnectionEntry
 from aws_tui.infra.keychain import KeychainBackend
 from aws_tui.infra.redaction import safe_endpoint_display
 
@@ -42,7 +42,10 @@ def _read_ini(parser: configparser.RawConfigParser, path: Path) -> bool:
     screen that could repair the connections, killed the app.
     """
     try:
-        parser.read(path, encoding="utf-8-sig")
+        # ConfigParser.read silently skips file-open errors. Open explicitly
+        # so discovery can report unreadable files while list stays tolerant.
+        with path.open(encoding="utf-8-sig") as file:
+            parser.read_file(file)
     except (configparser.Error, OSError, UnicodeDecodeError) as exc:
         _logger.warning(
             "ignoring unreadable AWS ini file",
@@ -115,6 +118,14 @@ class Connection:
         )
 
 
+@dataclass(frozen=True)
+class ConnectionDiscovery:
+    """Read-only local connections and safe invalid-source diagnostics."""
+
+    connections: tuple[Connection, ...]
+    invalid_sources: tuple[str, ...] = ()
+
+
 def _default_aws_config_path() -> Path:
     configured = os.environ.get("AWS_CONFIG_FILE")
     if configured is not None:
@@ -165,9 +176,33 @@ class ConnectionResolver:
 
     def list(self) -> builtins.list[Connection]:
         """Return the union of explicit and auto-discovered connections."""
-        explicit = self._explicit_connections()
+        return self._merge_connections(self._explicit_connections(self._config_store.load()))
+
+    def discover(self) -> ConnectionDiscovery:
+        """Read fresh local sources, retaining usable connections on file errors."""
+        invalid_sources: set[str] = set()
+        try:
+            cfg = self._config_store.load()
+        except (ConfigError, OSError, UnicodeDecodeError):
+            invalid_sources.add("app-config")
+            explicit = []
+        else:
+            explicit = self._explicit_connections(cfg, invalid_sources)
+        connections = self._merge_connections(explicit, invalid_sources)
+        return ConnectionDiscovery(
+            connections=tuple(connections),
+            invalid_sources=tuple(
+                source
+                for source in ("app-config", "aws-config", "aws-credentials")
+                if source in invalid_sources
+            ),
+        )
+
+    def _merge_connections(
+        self, explicit: builtins.list[Connection], invalid_sources: set[str] | None = None
+    ) -> builtins.list[Connection]:
         explicit_names = {c.name for c in explicit}
-        autos = [c for c in self._auto_connections() if c.name not in explicit_names]
+        autos = [c for c in self._auto_connections(invalid_sources) if c.name not in explicit_names]
         return [*explicit, *autos]
 
     def resolve(self, name: str) -> Connection:
@@ -203,8 +238,9 @@ class ConnectionResolver:
     # Explicit (from config.toml)
     # ------------------------------------------------------------------
 
-    def _explicit_connections(self) -> builtins.list[Connection]:
-        cfg = self._config_store.load()
+    def _explicit_connections(
+        self, cfg: Config, invalid_sources: set[str] | None = None
+    ) -> builtins.list[Connection]:
         out: list[Connection] = []
         for entry in cfg.connections.values():
             if entry.kind == "aws":
@@ -213,7 +249,7 @@ class ConnectionResolver:
                         name=entry.name,
                         kind="aws",
                         region=entry.region
-                        or self._profile_region(entry.profile)
+                        or self._profile_region(entry.profile, invalid_sources)
                         or _default_aws_region(),
                         source=SOURCE_CONFIG,
                         profile=entry.profile,
@@ -221,7 +257,7 @@ class ConnectionResolver:
                 )
             elif entry.kind == "s3-compatible":
                 access_key_id, secret_access_key, session_token = self._dispatch_s3_credentials(
-                    entry
+                    entry, invalid_sources
                 )
                 out.append(
                     Connection(
@@ -243,8 +279,10 @@ class ConnectionResolver:
     # Auto-discovery (from ~/.aws/config + ~/.aws/credentials)
     # ------------------------------------------------------------------
 
-    def _auto_connections(self) -> builtins.list[Connection]:
-        profiles = self._discover_aws_profiles()
+    def _auto_connections(
+        self, invalid_sources: set[str] | None = None
+    ) -> builtins.list[Connection]:
+        profiles = self._discover_aws_profiles(invalid_sources)
         return [
             Connection(
                 name=name,
@@ -256,7 +294,9 @@ class ConnectionResolver:
             for name, region in profiles.items()
         ]
 
-    def _discover_aws_profiles(self) -> dict[str, str | None]:
+    def _discover_aws_profiles(
+        self, invalid_sources: set[str] | None = None
+    ) -> dict[str, str | None]:
         """Return {profile_name: region_or_None} from AWS config + credentials.
 
         Honours the AWS CLI convention that profiles in ``~/.aws/config``
@@ -267,7 +307,8 @@ class ConnectionResolver:
 
         cfg_parser = configparser.RawConfigParser()
         if self._aws_config_path.is_file():
-            _read_ini(cfg_parser, self._aws_config_path)
+            if not _read_ini(cfg_parser, self._aws_config_path) and invalid_sources is not None:
+                invalid_sources.add("aws-config")
             for section in cfg_parser.sections():
                 if section == "default":
                     name = "default"
@@ -281,23 +322,29 @@ class ConnectionResolver:
 
         creds_parser = configparser.RawConfigParser()
         if self._aws_credentials_path.is_file():
-            _read_ini(creds_parser, self._aws_credentials_path)
+            if (
+                not _read_ini(creds_parser, self._aws_credentials_path)
+                and invalid_sources is not None
+            ):
+                invalid_sources.add("aws-credentials")
             for section in creds_parser.sections():
                 profiles.setdefault(section, None)
 
         return profiles
 
-    def _profile_region(self, profile: str | None) -> str | None:
+    def _profile_region(
+        self, profile: str | None, invalid_sources: set[str] | None = None
+    ) -> str | None:
         if profile is None:
             return None
-        return self._discover_aws_profiles().get(profile)
+        return self._discover_aws_profiles(invalid_sources).get(profile)
 
     # ------------------------------------------------------------------
     # s3-compatible credential dispatch
     # ------------------------------------------------------------------
 
     def _dispatch_s3_credentials(
-        self, entry: ConnectionEntry
+        self, entry: ConnectionEntry, invalid_sources: set[str] | None = None
     ) -> tuple[str | None, str | None, str | None]:
         spec = entry.credentials or ""
         if spec.startswith("keychain:"):
@@ -319,14 +366,14 @@ class ConnectionResolver:
             )
         if spec.startswith("aws-profile:"):
             profile = spec[len("aws-profile:") :]
-            return self._read_aws_credentials_profile(profile)
+            return self._read_aws_credentials_profile(profile, invalid_sources)
         if spec == "static":
             return entry.access_key_id, entry.secret_access_key, _blank_to_none(entry.session_token)
         # Unknown / empty spec — let the caller deal with missing keys.
         return None, None, None
 
     def _read_aws_credentials_profile(
-        self, profile: str
+        self, profile: str, invalid_sources: set[str] | None = None
     ) -> tuple[str | None, str | None, str | None]:
         if not self._aws_credentials_path.is_file():
             return None, None, None
@@ -337,6 +384,8 @@ class ConnectionResolver:
         # used ``ab%%cd``, producing SignatureDoesNotMatch in this app only.
         parser = configparser.RawConfigParser()
         if not _read_ini(parser, self._aws_credentials_path):
+            if invalid_sources is not None:
+                invalid_sources.add("aws-credentials")
             return None, None, None
         if not parser.has_section(profile):
             return None, None, None
@@ -351,6 +400,7 @@ __all__ = [
     "SOURCE_AUTO",
     "SOURCE_CONFIG",
     "Connection",
+    "ConnectionDiscovery",
     "ConnectionNotFound",
     "ConnectionResolver",
 ]
