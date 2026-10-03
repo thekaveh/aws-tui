@@ -277,10 +277,15 @@ Retry refreshes the connection rows without opening a source. Select a row to
 probe its credentials and open it. The rail shows each origin: `config`,
 `auto-aws-profile`, or `demo`.
 
+If discovery cannot access the keychain, setup stays usable. Check keychain
+access and application configuration outside the app, then Retry discovery.
+
 Discovery and setup leave AWS config and credentials files unchanged. Cancel
 closes an unsubmitted form without writing application configuration. Once a save
 is in progress, editing and Cancel are disabled until it finishes; navigating to
 Settings does not undo a committed save or automatically open its source.
+A save that finishes after navigation reports success or failure in a notice.
+After success, reopen Settings to refresh its connection rows.
 
 ## 4. Documentation
 

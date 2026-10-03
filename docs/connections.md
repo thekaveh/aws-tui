@@ -350,12 +350,19 @@ or `demo`. **Connection setup** in the rail returns from Settings to setup.
 Invalid configuration, no connections, and failed credential probes display
 separate recovery instructions. Fix configuration outside the app and retry;
 refresh failed credentials outside the app and select the row again.
+If discovery cannot read credentials from the keychain, setup remains usable
+and shows guidance to check keychain access and application configuration,
+then **Retry discovery**. Retry after repairing access does not open a source.
 
 AWS config and credentials files are read-only throughout this flow. Cancel
 closes an unsubmitted form and preserves the exact application-config bytes or
 its absence. While a save is pending, editing, Save, and Cancel are disabled.
 Navigating away does not undo a committed save; its completion does not
-supersede the newly selected screen. The setup actions, form, and rail choices
+supersede the newly selected screen. While the app remains open, a save that
+finishes after navigation reports success or failure in a notice without
+moving focus. After a successful save, reopen Settings to refresh its rows,
+or choose **Connection setup** to select the saved connection.
+The setup actions, form, and rail choices
 are reachable by keyboard at 120×40: Tab and Shift+Tab move focus, Enter
 activates the focused control, and Esc cancels an unsubmitted form.
 

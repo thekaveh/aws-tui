@@ -30,6 +30,9 @@ section; the current tree must not be tagged as v0.8.0.
   them. Explicit selection probes credentials before starting the provider.
   Origin labels, separate recovery instructions, and keyboard controls work
   at 120×40. Setup leaves AWS config and credentials files unchanged.
+  Locked or unavailable keychains leave setup actionable for an external
+  repair and Retry discovery. Saves completing after navigation report their
+  outcome without changing the current screen or opening the saved source.
 
 - **Copyable pane paths and revealed truncated names (#208).** `p` copies the
   path of the entry under the cursor and `P` copies the pane's own directory

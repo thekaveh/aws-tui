@@ -1846,8 +1846,27 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
             group="content-mount",
         )
 
+    async def _discover_first_run(self, generation: int) -> ConnectionDiscovery | None:
+        """Contain external credential failures without hiding resolver errors elsewhere."""
+        try:
+            snapshot = await asyncio.to_thread(self._app_ctx.connection_resolver.discover)
+        except Exception as exc:
+            if self._first_run_owned(generation):
+                self._app_ctx.log_sink.error(
+                    "app.first_run.discovery_failed", error_type=type(exc).__name__
+                )
+                view = self._first_run_view()
+                if view is not None:
+                    view.show_error(
+                        "Unable to discover connections. Check application configuration and keychain access, then Retry discovery."
+                    )
+            return None
+        return snapshot if self._first_run_owned(generation) else None
+
     async def _refresh_first_run_discovery(self, generation: int) -> ConnectionDiscovery | None:
-        snapshot = await asyncio.to_thread(self._app_ctx.connection_resolver.discover)
+        snapshot = await self._discover_first_run(generation)
+        if snapshot is None:
+            return None
         if not self._first_run_owned(generation):
             return None
         view = self._first_run_view()
@@ -1866,13 +1885,14 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
                 await self._mount_no_connection_placeholder()
                 if not self._first_run_owned(generation):
                     return
-            await self._refresh_first_run_discovery(generation)
-            if not self._first_run_owned(generation):
-                return
-            self._set_first_run_busy(False)
-            view = self._first_run_view()
-            if view is not None:
-                self.call_after_refresh(partial(self._focus_first_run, view, generation))
+            try:
+                await self._refresh_first_run_discovery(generation)
+            finally:
+                if self._first_run_owned(generation):
+                    self._set_first_run_busy(False)
+                    view = self._first_run_view()
+                    if view is not None:
+                        self.call_after_refresh(partial(self._focus_first_run, view, generation))
 
     def on_first_run_connection_list_setup_requested(
         self, event: FirstRunConnectionList.SetupRequested
@@ -1926,6 +1946,12 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
             await ctx.s3_connections_vm.add_async(entry)
         except Exception as exc:
             if not self._first_run_owned(generation):
+                if not self._service_navigation_closed:
+                    notifications.error(
+                        ctx.root_vm.chrome.toast_stack,
+                        subject="Connection",
+                        message="Unable to save connection. Check application configuration and keychain access, then try again.",
+                    )
                 return
             self._set_first_run_busy(False)
             if isinstance(exc, ValueError):
@@ -1940,6 +1966,12 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
                 self.call_after_refresh(partial(self._focus_first_run, view, generation))
             return
         if not self._first_run_owned(generation):
+            if not self._service_navigation_closed:
+                notifications.success(
+                    ctx.root_vm.chrome.toast_stack,
+                    subject="Connection",
+                    message="Connection saved. Reopen Settings to refresh connections, or choose Connection setup to select it.",
+                )
             return
         form.close()
         self._run_lifecycle_worker(
@@ -1970,8 +2002,8 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
                         view.show_error(PROBE_FAILED)
                     return
                 # Re-read identity after the probe; external edits must not adopt stale credentials.
-                fresh = await asyncio.to_thread(ctx.connection_resolver.discover)
-                if not self._first_run_owned(generation):
+                fresh = await self._discover_first_run(generation)
+                if fresh is None:
                     return
                 current = next((c for c in fresh.connections if c.name == name), None)
                 if fresh.invalid_sources or current != connection:
@@ -2000,8 +2032,8 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
                 await self._mount_no_connection_placeholder()
                 if not self._first_run_owned(generation):
                     return
-                await self._refresh_first_run_discovery(generation)
-                if not self._first_run_owned(generation):
+                recovered = await self._refresh_first_run_discovery(generation)
+                if recovered is None:
                     return
                 view = self._first_run_view()
                 if view is not None:
@@ -6063,7 +6095,7 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
                         or self.query_one("#content-host", Container) is not recovered_host
                     ):
                         return
-                    await self._refresh_first_run_discovery(navigation_owner[1])
+                    recovered = await self._refresh_first_run_discovery(navigation_owner[1])
                     if (
                         not is_owned()
                         or self.query_one("#content-host", Container) is not recovered_host
@@ -6072,9 +6104,10 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
                     self._set_first_run_busy(False)
                     view = self._first_run_view()
                     if view is not None:
-                        view.show_error(
-                            "Unable to open connection. Check the connection, then select it again."
-                        )
+                        if recovered is not None:
+                            view.show_error(
+                                "Unable to open connection. Check the connection, then select it again."
+                            )
                         self.call_after_refresh(
                             partial(self._focus_first_run, view, navigation_owner[1])
                         )
