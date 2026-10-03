@@ -365,6 +365,7 @@ def test_demo_iceberg_snapshot_content(theme: str) -> None:
     assert "4202" in svg
     assert "4201" in svg
     assert "append" in svg
+    _assert_iceberg_coverage_footer(svg, "snapshots")
     _assert_service_tab_labels(svg, path)
 
 
@@ -384,6 +385,7 @@ def test_demo_iceberg_metadata_snapshot_content(view: str, required: str) -> Non
     svg = html_lib.unescape(path.read_text()).replace("\xa0", " ")
 
     assert required in svg
+    _assert_iceberg_coverage_footer(svg, view)
     _assert_service_tab_labels(svg, path)
 
 
@@ -423,4 +425,20 @@ def test_demo_iceberg_profile_snapshot_content(
     assert "4202" not in svg
     for marker in required:
         assert marker in svg
+    _assert_iceberg_coverage_footer(svg, view)
     _assert_service_tab_labels(svg, path)
+
+
+def _assert_iceberg_coverage_footer(svg: str, view: str) -> None:
+    cap = {
+        "snapshots": 100,
+        "history": 100,
+        "manifests": 500,
+        "files": 1000,
+        "partitions": 500,
+        "refs": 100,
+    }[view]
+    assert f"complete {view}" in svg
+    assert f"metadata row limit {cap}" in svg
+    assert "visible" in svg
+    assert "fetched" in svg

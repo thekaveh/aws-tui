@@ -23,8 +23,10 @@ from aws_tui.domain.filesystem import (
 )
 from aws_tui.domain.glue import LakeFormationPermissionError
 from aws_tui.domain.iceberg import (
+    IcebergCoverage,
     IcebergDataFile,
     IcebergHistoryEntry,
+    IcebergInspection,
     IcebergManifest,
     IcebergPartition,
     IcebergReference,
@@ -82,17 +84,29 @@ _ROW_LIMITS: dict[IcebergView, int] = {
 
 
 class IcebergInspectorProtocol(Protocol):
-    async def list_snapshots(self, table_ref: TableRef) -> tuple[IcebergSnapshot, ...]: ...
+    async def list_snapshots(
+        self, table_ref: TableRef
+    ) -> IcebergInspection[IcebergSnapshot] | tuple[IcebergSnapshot, ...]: ...
 
-    async def list_history(self, table_ref: TableRef) -> tuple[IcebergHistoryEntry, ...]: ...
+    async def list_history(
+        self, table_ref: TableRef
+    ) -> IcebergInspection[IcebergHistoryEntry] | tuple[IcebergHistoryEntry, ...]: ...
 
-    async def list_manifests(self, table_ref: TableRef) -> tuple[IcebergManifest, ...]: ...
+    async def list_manifests(
+        self, table_ref: TableRef
+    ) -> IcebergInspection[IcebergManifest] | tuple[IcebergManifest, ...]: ...
 
-    async def list_files(self, table_ref: TableRef) -> tuple[IcebergDataFile, ...]: ...
+    async def list_files(
+        self, table_ref: TableRef
+    ) -> IcebergInspection[IcebergDataFile] | tuple[IcebergDataFile, ...]: ...
 
-    async def list_partitions(self, table_ref: TableRef) -> tuple[IcebergPartition, ...]: ...
+    async def list_partitions(
+        self, table_ref: TableRef
+    ) -> IcebergInspection[IcebergPartition] | tuple[IcebergPartition, ...]: ...
 
-    async def list_refs(self, table_ref: TableRef) -> tuple[IcebergReference, ...]: ...
+    async def list_refs(
+        self, table_ref: TableRef
+    ) -> IcebergInspection[IcebergReference] | tuple[IcebergReference, ...]: ...
 
 
 class IcebergInspectionUnavailableError(ProviderError):
@@ -108,34 +122,48 @@ class UnavailableIcebergInspector:
     async def _unavailable(self) -> tuple[Any, ...]:
         raise IcebergInspectionUnavailableError(self._message)
 
-    async def list_snapshots(self, _table_ref: TableRef) -> tuple[IcebergSnapshot, ...]:
+    async def list_snapshots(
+        self, _table_ref: TableRef
+    ) -> IcebergInspection[IcebergSnapshot] | tuple[IcebergSnapshot, ...]:
         return cast(tuple[IcebergSnapshot, ...], await self._unavailable())
 
-    async def list_history(self, _table_ref: TableRef) -> tuple[IcebergHistoryEntry, ...]:
+    async def list_history(
+        self, _table_ref: TableRef
+    ) -> IcebergInspection[IcebergHistoryEntry] | tuple[IcebergHistoryEntry, ...]:
         return cast(tuple[IcebergHistoryEntry, ...], await self._unavailable())
 
-    async def list_manifests(self, _table_ref: TableRef) -> tuple[IcebergManifest, ...]:
+    async def list_manifests(
+        self, _table_ref: TableRef
+    ) -> IcebergInspection[IcebergManifest] | tuple[IcebergManifest, ...]:
         return cast(tuple[IcebergManifest, ...], await self._unavailable())
 
-    async def list_files(self, _table_ref: TableRef) -> tuple[IcebergDataFile, ...]:
+    async def list_files(
+        self, _table_ref: TableRef
+    ) -> IcebergInspection[IcebergDataFile] | tuple[IcebergDataFile, ...]:
         return cast(tuple[IcebergDataFile, ...], await self._unavailable())
 
-    async def list_partitions(self, _table_ref: TableRef) -> tuple[IcebergPartition, ...]:
+    async def list_partitions(
+        self, _table_ref: TableRef
+    ) -> IcebergInspection[IcebergPartition] | tuple[IcebergPartition, ...]:
         return cast(tuple[IcebergPartition, ...], await self._unavailable())
 
-    async def list_refs(self, _table_ref: TableRef) -> tuple[IcebergReference, ...]:
+    async def list_refs(
+        self, _table_ref: TableRef
+    ) -> IcebergInspection[IcebergReference] | tuple[IcebergReference, ...]:
         return cast(tuple[IcebergReference, ...], await self._unavailable())
 
 
 @dataclass(slots=True)
 class _MetadataPane:
     rows: tuple[IcebergRow, ...] = field(default_factory=tuple)
+    coverage: IcebergCoverage | None = None
     visible_count: int = 0
     state: PaneState = PaneState.EMPTY
     error_text: str | None = None
     loaded: bool = False
     generation: int = 0
     stable_rows: tuple[IcebergRow, ...] = field(default_factory=tuple)
+    stable_coverage: IcebergCoverage | None = None
     stable_visible_count: int = 0
     stable_state: PaneState = PaneState.EMPTY
     stable_error_text: str | None = None
@@ -174,7 +202,7 @@ class GlueIcebergVM:
         self._shutdown_started = False
         self._shutdown_complete = False
         self._lifecycle_lock = asyncio.Lock()
-        self._metadata_tasks: set[asyncio.Task[tuple[Any, ...]]] = set()
+        self._metadata_tasks: set[asyncio.Task[Any]] = set()
         self._metadata_load_drain_count = 0
         self._binding_mutation_epoch = 0
         self._binding_generation = 0
@@ -220,6 +248,17 @@ class GlueIcebergVM:
     @property
     def active_view(self) -> IcebergView:
         return self._active_view
+
+    @property
+    def coverage(self) -> IcebergCoverage | None:
+        return self._panes[self._active_view].coverage
+
+    @property
+    def fetched_count(self) -> int:
+        return len(self._panes[self._active_view].rows)
+
+    def coverage_for(self, view: IcebergView) -> IcebergCoverage | None:
+        return self._pane(view).coverage
 
     @property
     def state(self) -> PaneState:
@@ -448,6 +487,7 @@ class GlueIcebergVM:
         for view, pane in self._panes.items():
             pane.generation += 1
             pane.rows = ()
+            pane.coverage = None
             pane.visible_count = 0
             pane.state = PaneState.EMPTY
             pane.error_text = None
@@ -466,7 +506,7 @@ class GlueIcebergVM:
         self._selected_snapshot_id = selected_snapshot_id
         self._panes["snapshots"].stable_selected_snapshot_id = selected_snapshot_id
 
-    def _cancel_metadata_tasks(self) -> tuple[asyncio.Task[tuple[Any, ...]], ...]:
+    def _cancel_metadata_tasks(self) -> tuple[asyncio.Task[Any], ...]:
         tasks = tuple(self._metadata_tasks)
         for task in tasks:
             if not task.done():
@@ -587,7 +627,7 @@ class GlueIcebergVM:
             rows = await metadata_task
             if caller_task is not None and caller_task.cancelling():
                 raise asyncio.CancelledError
-            normalized = self._normalize_rows(view, rows)
+            normalized, coverage = self._normalize_inspection(view, table_ref, rows)
         except asyncio.CancelledError:
             if self._is_current(view, request_generation, binding_generation, table_ref):
                 selection_changed = self._restore_stable(view, pane)
@@ -625,6 +665,7 @@ class GlueIcebergVM:
         if not self._is_current(view, request_generation, binding_generation, table_ref):
             return False
         pane.rows = normalized
+        pane.coverage = coverage
         pane.visible_count = min(len(normalized), self._page_size)
         pane.state = PaneState.IDLE if normalized else PaneState.EMPTY
         pane.error_text = None
@@ -642,7 +683,7 @@ class GlueIcebergVM:
         self._notify_view(view)
         return True
 
-    def _metadata_task_done(self, task: asyncio.Task[tuple[Any, ...]]) -> None:
+    def _metadata_task_done(self, task: asyncio.Task[Any]) -> None:
         self._metadata_tasks.discard(task)
         if task.cancelled():
             return
@@ -653,6 +694,7 @@ class GlueIcebergVM:
         if pane.state is PaneState.LOADING:
             return
         pane.stable_rows = pane.rows
+        pane.stable_coverage = pane.coverage
         pane.stable_visible_count = pane.visible_count
         pane.stable_state = pane.state
         pane.stable_error_text = pane.error_text
@@ -662,6 +704,7 @@ class GlueIcebergVM:
 
     def _restore_stable(self, view: IcebergView, pane: _MetadataPane) -> bool:
         pane.rows = pane.stable_rows
+        pane.coverage = pane.stable_coverage
         pane.visible_count = pane.stable_visible_count
         pane.state = pane.stable_state
         pane.error_text = pane.stable_error_text
@@ -674,6 +717,34 @@ class GlueIcebergVM:
 
     def _loader(self, view: IcebergView) -> Any:
         return getattr(self._inspector, f"list_{view}")
+
+    def _normalize_inspection(
+        self,
+        view: IcebergView,
+        table_ref: TableRef,
+        result: object,
+    ) -> tuple[tuple[IcebergRow, ...], IcebergCoverage]:
+        if type(result) is IcebergInspection:
+            coverage = result.coverage
+            rows = result.rows
+            if (
+                type(coverage) is not IcebergCoverage
+                or type(coverage.status) is not str
+                or coverage.status not in {"complete", "truncated", "unknown"}
+                or type(coverage.row_limit) is not int
+                or coverage.row_limit != _ROW_LIMITS[view]
+                or type(coverage.collection) is not str
+                or coverage.collection != view
+                or not _valid_table_ref(coverage.table_ref)
+                or coverage.table_ref != table_ref
+                or type(rows) is not tuple
+                or (coverage.status == "truncated" and len(rows) != coverage.row_limit)
+            ):
+                raise ProviderError("Iceberg metadata coverage is invalid")
+        else:
+            coverage = IcebergCoverage("unknown", _ROW_LIMITS[view], view, table_ref)
+            return self._normalize_rows(view, result), coverage
+        return self._normalize_rows(view, rows), coverage
 
     def _normalize_rows(
         self,
@@ -742,7 +813,14 @@ class GlueIcebergVM:
             self._notify_active()
 
     def _notify_active(self) -> None:
-        for property_name in ("items", "state", "error_text", "has_more"):
+        for property_name in (
+            "items",
+            "state",
+            "error_text",
+            "has_more",
+            "coverage",
+            "fetched_count",
+        ):
             self._notify(property_name)
 
     def _notify_all(self) -> None:

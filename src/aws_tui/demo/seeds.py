@@ -762,7 +762,7 @@ def _seed_iceberg_queries(
     add(
         (
             "SELECT committed_at, snapshot_id, parent_id, operation, manifest_list, summary "
-            f'FROM {metadata}$snapshots" ORDER BY committed_at DESC LIMIT 100'
+            f'FROM {metadata}$snapshots" ORDER BY committed_at DESC LIMIT 101'
         ),
         (
             ("committed_at", "timestamp"),
@@ -794,7 +794,7 @@ def _seed_iceberg_queries(
     add(
         (
             "SELECT made_current_at, snapshot_id, parent_id, is_current_ancestor "
-            f'FROM {metadata}$history" ORDER BY made_current_at DESC LIMIT 100'
+            f'FROM {metadata}$history" ORDER BY made_current_at DESC LIMIT 101'
         ),
         (
             ("made_current_at", "timestamp"),
@@ -812,7 +812,7 @@ def _seed_iceberg_queries(
             "SELECT path, length, partition_spec_id, added_snapshot_id, "
             "added_data_files_count, existing_data_files_count, "
             f'deleted_data_files_count, partition_summaries FROM {metadata}$manifests" '
-            "ORDER BY added_snapshot_id DESC, path LIMIT 500"
+            "ORDER BY added_snapshot_id DESC, path LIMIT 501"
         ),
         (
             ("path", "varchar"),
@@ -841,7 +841,7 @@ def _seed_iceberg_queries(
         (
             "SELECT content, file_path, file_format, spec_id, partition, record_count, "
             f'file_size_in_bytes, equality_ids, sort_order_id FROM {metadata}$files" '
-            "ORDER BY file_path LIMIT 1000"
+            "ORDER BY file_path LIMIT 1001"
         ),
         (
             ("content", "integer"),
@@ -869,7 +869,7 @@ def _seed_iceberg_queries(
         ),
     )
     add(
-        f'SELECT * FROM {metadata}$partitions" LIMIT 500',
+        f'SELECT * FROM {metadata}$partitions" LIMIT 501',
         (
             ("partition", f"row({partition_name} varchar)"),
             ("spec_id", "integer"),
@@ -903,7 +903,7 @@ def _seed_iceberg_queries(
         (
             "SELECT name, type, snapshot_id, max_reference_age_in_ms, "
             f'min_snapshots_to_keep, max_snapshot_age_in_ms FROM {metadata}$refs" '
-            "ORDER BY name LIMIT 100"
+            "ORDER BY name LIMIT 101"
         ),
         (
             ("name", "varchar"),

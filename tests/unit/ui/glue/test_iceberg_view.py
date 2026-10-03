@@ -868,7 +868,7 @@ async def test_peek_falls_back_to_the_first_tab_when_it_stops_being_available() 
         assert not preview_tab.has_class("-active")
         assert preview_tab.display is False
         footer = pilot.app.query_one("#glue-iceberg-footer", Static)
-        assert "limit" not in str(footer.render())
+        assert "unknown" in str(footer.render())
 
 
 @pytest.mark.asyncio
@@ -1136,3 +1136,117 @@ async def test_peek_loads_the_newly_selected_table_while_it_stays_active() -> No
             what="the newly selected table's rows to render",
         )
         assert vm.catalog.iceberg.preview.state is PaneState.IDLE
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("status", ["truncated", "complete", "unknown"])
+async def test_running_footer_distinguishes_cached_rows_and_coverage(status) -> None:
+    from aws_tui.domain.filesystem import ProviderError
+    from aws_tui.domain.iceberg import IcebergCoverage, IcebergInspection
+    from tests.unit.vm.glue.test_iceberg_vm import _coverage_rows
+
+    vm, inspector = _build_vm()
+    inspector.snapshots = _coverage_rows("snapshots", 100)
+    original = inspector._load
+
+    async def structured(view, ref):
+        rows = await original(view, ref)
+        cap = 100
+        return IcebergInspection(rows, IcebergCoverage(status, cap, view, ref))
+
+    inspector._load = structured
+    await vm.setup()
+    async with _GlueIcebergApp(vm).run_test(size=(150, 44)) as pilot:
+        await pilot.click("#glue-iceberg-tab-snapshots")
+        footer = pilot.app.query_one("#glue-iceberg-footer", Static)
+        await _wait_for_paint(
+            pilot, lambda: "50 visible" in str(footer.render()), what="coverage footer"
+        )
+        assert "100 fetched" in str(footer.render())
+        assert status in str(footer.render())
+        assert "snapshots" in str(footer.render())
+        assert "limit 100" in str(footer.render())
+        assert footer.content_size.height > 0
+        await vm.catalog.iceberg.load_more()
+        await _wait_for_paint(
+            pilot, lambda: "100 visible" in str(footer.render()), what="revealed footer"
+        )
+        assert status in str(footer.render())
+        assert len(inspector.calls) == 1
+        started = inspector.block("snapshots")
+        refreshing = asyncio.create_task(vm.catalog.iceberg.retry())
+        await started.wait()
+        await _wait_for_paint(
+            pilot, lambda: "0 visible" in str(footer.render()), what="loading footer"
+        )
+        assert "100 fetched" in str(footer.render())
+        assert status in str(footer.render())
+        refreshing.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await refreshing
+        inspector.blocked.clear()
+        inspector.errors["snapshots"] = ProviderError("refresh failed")
+        await vm.catalog.iceberg.retry()
+        await _wait_for_paint(
+            pilot, lambda: "0 visible" in str(footer.render()), what="failed refresh footer"
+        )
+        assert "100 fetched" in str(footer.render())
+        assert status in str(footer.render())
+
+
+@pytest.mark.asyncio
+async def test_narrow_footer_has_room_for_coverage_collection_and_limit() -> None:
+    vm, _ = _build_vm()
+    await vm.setup()
+    async with _GlueIcebergApp(vm).run_test(size=(80, 24)) as pilot:
+        await pilot.click("#glue-iceberg-tab-snapshots")
+        footer = pilot.app.query_one("#glue-iceberg-footer", Static)
+        await _wait_for_paint(
+            pilot, lambda: "snapshots" in str(footer.render()), what="narrow coverage"
+        )
+        assert footer.content_size.width >= len("metadata row limit 100")
+        assert footer.content_size.height >= 3
+
+
+@pytest.mark.asyncio
+async def test_empty_complete_footer_and_switching_tabs_repaints_coverage() -> None:
+    from aws_tui.domain.iceberg import IcebergCoverage, IcebergInspection
+    from aws_tui.vm.glue.iceberg_vm import _ROW_LIMITS
+
+    vm, inspector = _build_vm()
+    original = inspector._load
+
+    async def structured(view, ref):
+        rows = await original(view, ref)
+        return IcebergInspection(
+            () if view == "snapshots" else rows,
+            IcebergCoverage("complete", _ROW_LIMITS[view], view, ref),
+        )
+
+    inspector._load = structured
+    await vm.setup()
+    async with _GlueIcebergApp(vm).run_test(size=(150, 44)) as pilot:
+        footer = pilot.app.query_one("#glue-iceberg-footer", Static)
+        for view in _ROW_LIMITS:
+            await pilot.click(f"#glue-iceberg-tab-{view}")
+            await _wait_for_paint(
+                pilot,
+                lambda selected=view: f"complete {selected}" in str(footer.render()),
+                what=f"{view} coverage footer",
+            )
+            assert f"metadata row limit {_ROW_LIMITS[view]}" in str(footer.render())
+            if view == "snapshots":
+                assert "0 visible" in str(footer.render())
+                assert "0 fetched" in str(footer.render())
+
+
+@pytest.mark.asyncio
+async def test_narrow_coverage_footer_keeps_metadata_table_and_controls_usable() -> None:
+    vm, _ = _build_vm()
+    await vm.setup()
+    async with _GlueIcebergApp(vm).run_test(size=(80, 24)) as pilot:
+        await pilot.click("#glue-iceberg-tab-snapshots")
+        table = pilot.app.query_one("#glue-iceberg-table", DataTable)
+        await _wait_for_paint(pilot, lambda: table.row_count == 3, what="narrow rows")
+        assert table.content_size.height >= 2
+        assert pilot.app.query_one("#glue-iceberg-time-travel", Button).region.bottom <= 24

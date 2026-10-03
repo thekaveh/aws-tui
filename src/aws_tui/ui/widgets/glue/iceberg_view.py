@@ -105,8 +105,8 @@ class GlueIcebergView(DeferredWorkerMixin, Widget):
         height: 3fr;
         min-height: 8;
         layout: grid;
-        grid-size: 1 4;
-        grid-rows: 1 1 1fr 3;
+        grid-size: 1 5;
+        grid-rows: 1 1 1fr 3 3;
         grid-columns: 1fr;
         border-title-align: left;
     }
@@ -136,12 +136,13 @@ class GlueIcebergView(DeferredWorkerMixin, Widget):
         width: 1fr;
         height: 3;
         layout: horizontal;
+        align-horizontal: right;
     }
     GlueIcebergView #glue-iceberg-footer {
         width: 1fr;
-        height: 1;
-        padding: 1 1 0 1;
-        text-align: right;
+        height: 3;
+        padding: 0 1;
+        text-align: left;
         text-overflow: ellipsis;
     }
     GlueIcebergView #glue-iceberg-more,
@@ -184,8 +185,8 @@ class GlueIcebergView(DeferredWorkerMixin, Widget):
             zebra_stripes=True,
             header_height=1,
         )
+        yield Static("", id="glue-iceberg-footer", markup=False)
         with Horizontal(id="glue-iceberg-controls"):
-            yield Static("", id="glue-iceberg-footer", markup=False)
             yield Button(
                 "↓",
                 id="glue-iceberg-more",
@@ -486,7 +487,14 @@ class GlueIcebergView(DeferredWorkerMixin, Widget):
             status.set_class(self._vm.state is PaneState.FORBIDDEN, "-warning")
             status.set_class(self._vm.state is PaneState.ERROR, "-error")
             suffix = " · more available" if self._vm.has_more else ""
-            footer.update(f"{len(self._vm.items)} rows{suffix}")
+            visible = len(self._vm.items) if self._vm.state is PaneState.IDLE else 0
+            coverage = self._vm.coverage
+            evidence = (
+                f"\n{coverage.status} {coverage.collection}\nmetadata row limit {coverage.row_limit}"
+                if coverage is not None
+                else "\ncoverage unknown"
+            )
+            footer.update(f"{visible} visible · {self._vm.fetched_count} fetched{suffix}{evidence}")
             more.disabled = not self._vm.has_more or self._vm.state is PaneState.LOADING
             retry.display = self._vm.state in {
                 PaneState.AUTH_REQUIRED,
