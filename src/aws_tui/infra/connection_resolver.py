@@ -28,6 +28,17 @@ from aws_tui.infra.redaction import safe_endpoint_display
 _logger = logging.getLogger(__name__)
 
 
+def _is_aws_file(path: Path, source: str, invalid_sources: set[str] | None) -> bool:
+    """Collect discovery stat failures without changing list's exceptions."""
+    try:
+        return path.is_file()
+    except OSError:
+        if invalid_sources is None:
+            raise
+        invalid_sources.add(source)
+        return False
+
+
 def _read_ini(parser: configparser.RawConfigParser, path: Path) -> bool:
     """Read an AWS ini file, tolerating a malformed one.
 
@@ -183,7 +194,7 @@ class ConnectionResolver:
         invalid_sources: set[str] = set()
         try:
             cfg = self._config_store.load()
-        except (ConfigError, OSError, UnicodeDecodeError):
+        except (ConfigError, OSError, UnicodeDecodeError, TypeError):
             invalid_sources.add("app-config")
             explicit = []
         else:
@@ -306,7 +317,7 @@ class ConnectionResolver:
         profiles: dict[str, str | None] = {}
 
         cfg_parser = configparser.RawConfigParser()
-        if self._aws_config_path.is_file():
+        if _is_aws_file(self._aws_config_path, "aws-config", invalid_sources):
             if not _read_ini(cfg_parser, self._aws_config_path) and invalid_sources is not None:
                 invalid_sources.add("aws-config")
             for section in cfg_parser.sections():
@@ -321,7 +332,7 @@ class ConnectionResolver:
                 profiles[name] = region
 
         creds_parser = configparser.RawConfigParser()
-        if self._aws_credentials_path.is_file():
+        if _is_aws_file(self._aws_credentials_path, "aws-credentials", invalid_sources):
             if (
                 not _read_ini(creds_parser, self._aws_credentials_path)
                 and invalid_sources is not None
@@ -375,7 +386,7 @@ class ConnectionResolver:
     def _read_aws_credentials_profile(
         self, profile: str, invalid_sources: set[str] | None = None
     ) -> tuple[str | None, str | None, str | None]:
-        if not self._aws_credentials_path.is_file():
+        if not _is_aws_file(self._aws_credentials_path, "aws-credentials", invalid_sources):
             return None, None, None
         # ``RawConfigParser``, matching botocore. ``ConfigParser`` interpolates
         # at ``.get()`` -- outside ``_read_ini``'s guard -- so a ``%`` in a
