@@ -186,3 +186,18 @@ def test_contextual_bindings_serialize_each_actual_normalized_key() -> None:
         ("b", ("dispatch", ("auth.authenticate", "b"))),
         ("a", ("dispatch", ("pane.select_all", "a"))),
     }
+
+
+@pytest.mark.parametrize(
+    "action_id", ["pane.filter", "pane.fuzzy_find", "pane.sort", "pane.clear_filter"]
+)
+def test_listing_controls_modified_remaps_are_non_priority(action_id: str) -> None:
+    assert not _binding_priority(action_id, "ctrl+u")
+    if action_id in KeymapStore.DEFAULT_BINDINGS:
+        resolver = BindingResolver(
+            keymap=KeymapStore(overlay={action_id: "ctrl+u"}), actions=_registry(action_id)
+        )
+        bindings = resolver.to_textual_bindings()
+        assert len(bindings) == 1
+        assert bindings[0].key == "ctrl+u"
+        assert not bindings[0].priority
