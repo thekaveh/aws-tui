@@ -2357,6 +2357,14 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
 
     async def action_descend(self) -> None:
         self.record_action("pane.descend")
+        focused = self.focused
+        if (
+            len(self.screen_stack) == 1
+            and isinstance(focused, ModalButton)
+            and focused.has_class("pane-clear-filter")
+        ):
+            focused.press()
+            return
         # Forward Enter to the active modal first. Most of our modals
         # treat Enter as confirm/apply (ConfirmModal.action_confirm,
         # ThemePickerModal.action_apply). Without this, App's

@@ -81,11 +81,40 @@ async def test_hidden_find_cancel_commit_and_stale(app_context_factory, right):
 @pytest.mark.asyncio
 @pytest.mark.parametrize("choice", range(6))
 async def test_palette_sort_all_six_choices(app_context_factory, choice):
+    from datetime import UTC, datetime
+
     from textual.widgets import OptionList
 
+    from aws_tui.domain.filesystem import EntryKind, FileEntry
     from aws_tui.ui.widgets.pane_listing_controls import SortPaneModal
+    from tests.integration.test_keyboard_selection import RecordingFS
 
-    ctx = app_context_factory(fs=await seeded())
+    class DiscriminatingFS(RecordingFS):
+        async def list(self, path):
+            self.calls.append(("list", path))
+            return [
+                FileEntry(
+                    name=name,
+                    kind=EntryKind.FILE,
+                    size=size,
+                    modified=datetime(2026, 1, day, tzinfo=UTC),
+                )
+                for name, size, day in (
+                    ("gamma.txt", 20, 1),
+                    ("alpha.txt", 30, 2),
+                    ("beta.txt", 10, 3),
+                )
+            ]
+
+    expected_field, expected_descending, expected_rows = (
+        ("name", False, ["alpha.txt", "beta.txt", "gamma.txt"]),
+        ("name", True, ["gamma.txt", "beta.txt", "alpha.txt"]),
+        ("size", False, ["beta.txt", "gamma.txt", "alpha.txt"]),
+        ("size", True, ["alpha.txt", "gamma.txt", "beta.txt"]),
+        ("modified", False, ["gamma.txt", "alpha.txt", "beta.txt"]),
+        ("modified", True, ["beta.txt", "alpha.txt", "gamma.txt"]),
+    )[choice]
+    ctx = app_context_factory(fs=DiscriminatingFS())
     _use_injected_s3_connection(ctx)
     app = AwsTuiApp(ctx)
     async with app.run_test(size=(120, 40)) as pilot:
@@ -100,11 +129,15 @@ async def test_palette_sort_all_six_choices(app_context_factory, choice):
         await pilot.press(*(["down"] * choice), "enter")
         await pilot.pause()
         assert pane.selected_entry is original
+        assert pane._sort_field.value == expected_field
+        assert pane._sort_descending is expected_descending
         widget = next(w for w in app.query(Pane) if w.vm is pane)
-        assert (
-            str(widget.query_one(".pane-sort-status", Static).render())
-            == pane.viewmodel.sort_status_text
+        expected_status = (
+            f"Sort: {expected_field} {'descending' if expected_descending else 'ascending'}"
         )
+        assert str(widget.query_one(".pane-sort-status", Static).render()) == expected_status
+        assert [row.entry_vm.name for row in widget.query(EntryRow)] == expected_rows
+        assert [entry.name for entry in pane.filtered_entries] == expected_rows
         assert pane.provider.calls == baseline
 
 
@@ -251,3 +284,67 @@ async def test_refresh_invalidates_open_forms(app_context_factory, action):
         assert len(app.screen_stack) == 1
         assert not form.valid()
         assert form._subscription is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("action", ["pane.filter", "pane.fuzzy_find"])
+async def test_modified_control_remap_yields_to_editor_commands(app_context_factory, action):
+    from aws_tui.infra.keymap_store import KeymapStore
+    from aws_tui.ui.widgets.pane_listing_controls import FilterPaneModal, FindPaneModal
+
+    ctx = app_context_factory(fs=await seeded())
+    _use_injected_s3_connection(ctx)
+    ctx.keymap_store = KeymapStore(overlay={action: "ctrl+u"})
+    app = AwsTuiApp(ctx)
+    async with app.run_test(size=(120, 40)) as pilot:
+        await drain_workers(app)
+        await pilot.press("ctrl+u")
+        expected = FilterPaneModal if action == "pane.filter" else FindPaneModal
+        assert isinstance(app.screen, expected)
+        editor = app.screen.query_one(Input)
+        await pilot.press(*"alpha")
+        assert editor.value == "alpha"
+        await pilot.press("ctrl+u")
+        assert editor.value == ""
+        assert isinstance(app.screen, expected)
+        await pilot.press("escape")
+        ordinary_editor = Input(id="ordinary-listing-editor")
+        await app.screen.mount(ordinary_editor)
+        ordinary_editor.focus()
+        await pilot.press(*"beta", "ctrl+u")
+        assert ordinary_editor.value == ""
+        assert len(app.screen_stack) == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("selected_directory", [False, True])
+async def test_persistent_clear_focused_enter_never_activates(
+    app_context_factory, selected_directory
+):
+    from aws_tui.domain.filesystem import PathRef
+
+    fs = await seeded()
+    await fs.mkdir(PathRef(("loaded", "folder")))
+    ctx = app_context_factory(fs=fs)
+    _use_injected_s3_connection(ctx)
+    app = AwsTuiApp(ctx)
+    async with app.run_test(size=(80, 24)) as pilot:
+        await drain_workers(app)
+        pane = app._focused_file_pane()
+        await pane.navigate_to(PathRef(("loaded",)))
+        await pilot.press("slash", *("folder" if selected_directory else "missing"), "escape")
+        if selected_directory:
+            await pilot.press("down")
+        else:
+            assert pane.selected_entry.is_parent_link
+        await pilot.pause()
+        before_path = pane.path
+        baseline = list(fs.calls)
+        widget = next(w for w in app.query(Pane) if w.vm is pane)
+        widget.query_one(".pane-clear-filter").focus()
+        await pilot.press("enter")
+        await pilot.pause()
+        assert pane.filter_text == ""
+        assert pane.path == before_path
+        assert len(app.screen_stack) == 1
+        assert fs.calls == baseline

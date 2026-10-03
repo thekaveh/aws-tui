@@ -86,7 +86,7 @@ _EXPECTED: set[tuple[str, str, bool, bool]] = {
     ("u", "dispatch('pane.clear_selection')", False, False),
     ("ctrl+v", "dispatch('pane.exit_multiselect')", False, False),
     ("ctrl+q", "quit", False, True),
-    ("ctrl+p", "dispatch('pane.fuzzy_find')", False, True),
+    ("ctrl+p", "dispatch('pane.fuzzy_find')", False, False),
     ("slash", "dispatch('pane.filter')", False, False),
 }
 
