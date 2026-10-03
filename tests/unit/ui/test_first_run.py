@@ -408,3 +408,41 @@ async def test_long_wide_name_keeps_origin_visible_and_selects_exact_identity(
             assert choice.connection_name == name
     finally:
         vm.dispose()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("name", ["one\ntwo", "one\r\ntwo", "one\rtwo"])
+async def test_accepted_multiline_name_keeps_origin_visible_and_exact_selection(
+    tmp_path: Path, name: str
+) -> None:
+    store = ConfigStore(path=tmp_path / "app.toml")
+    store.add_connection(ConnectionEntry(name=name, kind="aws", profile="literal"))
+    resolver = ConnectionResolver(
+        config_store=store,
+        aws_config_path=tmp_path / "missing-config",
+        aws_credentials_path=tmp_path / "missing-credentials",
+    )
+    snapshot = resolver.discover()
+    assert snapshot.connections[0].name == name
+    hub = _hub()
+    vm = NavMenuVM(registry=ServiceRegistry(), hub=hub, dispatcher=NULL_DISPATCHER)
+    vm.construct()
+    nav = NavMenu(vm=vm, hub=hub)
+    app = Host(_view(tmp_path), nav)
+    app.stylesheet.add_source(ThemeStore().load("carbon"))
+    try:
+        async with app.run_test(size=(120, 40)) as pilot:
+            await nav.show_first_run_connections(snapshot)
+            await pilot.pause()
+            choice = nav.query_one(ConnectionChoice)
+            assert nav.region.width == 28
+            assert choice.region.height == 2
+            assert "config" in choice.render_line(1).text
+            assert "config" in _screen_text(app)
+            assert name.replace("\r", r"\r").replace("\n", r"\n") in choice.render_line(0).text
+            choice.focus()
+            await pilot.press("enter")
+            assert choice.connection_name == name
+            assert app.selected == [name]
+    finally:
+        vm.dispose()

@@ -41,7 +41,7 @@ class ConnectionChoice(Widget, can_focus=True):
         self._source = connection.source
 
     def render(self) -> Text:
-        name = Text(self.connection_name)
+        name = Text(self.connection_name.replace("\r", r"\r").replace("\n", r"\n"))
         if self.content_size.width:
             name.truncate(self.content_size.width, overflow="ellipsis")
         name.append("\n")
