@@ -183,8 +183,11 @@ def _file_state(path: Path) -> str:
     return "file" if stat.S_ISREG(mode) else "unreadable"
 
 
-def _profile_metadata(paths: DoctorPaths) -> tuple[dict[str, dict[str, str]], set[str]]:
+def _profile_metadata(
+    paths: DoctorPaths,
+) -> tuple[dict[str, dict[str, str]], dict[str, dict[str, str]], set[str]]:
     profiles: dict[str, dict[str, str]] = {}
+    sso_sessions: dict[str, dict[str, str]] = {}
     invalid: set[str] = set()
     for path, source, is_config in (
         (paths.aws_config_file, "aws-config", True),
@@ -204,6 +207,10 @@ def _profile_metadata(paths: DoctorPaths) -> tuple[dict[str, dict[str, str]], se
             invalid.add(source)
             continue
         for section in parser.sections():
+            if is_config and section.startswith("sso-session "):
+                name = section[len("sso-session ") :].strip()
+                sso_sessions[name] = dict(parser.items(section))
+                continue
             if is_config:
                 if section == "default":
                     name = section
@@ -216,6 +223,9 @@ def _profile_metadata(paths: DoctorPaths) -> tuple[dict[str, dict[str, str]], se
             fields = (
                 "sso_session",
                 "sso_start_url",
+                "sso_account_id",
+                "sso_role_name",
+                "sso_region",
                 "role_arn",
                 "source_profile",
                 "credential_process",
@@ -227,7 +237,7 @@ def _profile_metadata(paths: DoctorPaths) -> tuple[dict[str, dict[str, str]], se
             profiles.setdefault(name, {}).update(
                 (key, value) for key, value in parser.items(section) if key in fields
             )
-    return profiles, invalid
+    return profiles, sso_sessions, invalid
 
 
 def _has_keys(access: str | None, secret: str | None) -> bool:
@@ -240,7 +250,7 @@ def _auth_check(result: str, context: Mapping[str, str]) -> DoctorCheck:
         "missing_credentials": "Add credentials in Settings or configure the AWS profile; for SSO, run aws sso login for that profile.",
         "expired_sso": "Run aws sso login for the affected profile, then rerun doctor.",
         "unreadable_sso": "Repair the affected SSO cache or run aws sso login for that profile, then rerun doctor.",
-        "invalid_config": "Repair the source_profile chain in the AWS config; remove cycles and reference an existing profile.",
+        "invalid_config": "Repair the AWS profile configuration, including SSO fields and source_profile chains; remove cycles and reference an existing profile.",
         "unverified": "Offline checks cannot verify this credential provider. Use a named probe to check access.",
     }
     return DoctorCheck(
@@ -295,23 +305,45 @@ def _sso_result(connection: Connection, profile: str, key: str, paths: DoctorPat
         return "unreadable_sso"
 
 
+def _dynamic_fallback_eligible() -> bool:
+    """Inspect only SDK provider activation metadata, never execute providers."""
+    return bool(
+        os.environ.get("AWS_CONTAINER_CREDENTIALS_RELATIVE_URI")
+        or os.environ.get("AWS_CONTAINER_CREDENTIALS_FULL_URI")
+        or os.environ.get("AWS_EC2_METADATA_DISABLED", "false").lower() != "true"
+    )
+
+
 def _aws_auth_result(
     connection: Connection,
     profiles: dict[str, dict[str, str]],
+    sso_sessions: dict[str, dict[str, str]],
     invalid: set[str],
     paths: DoctorPaths,
 ) -> str:
     profile = connection.profile
+    ambient = profile is None
     if profile is None:
-        if _has_keys(os.environ.get("AWS_ACCESS_KEY_ID"), os.environ.get("AWS_SECRET_ACCESS_KEY")):
-            return "ok"
-        # A profile-less SDK session may use environment, container or metadata
-        # providers. Their execution belongs exclusively to an explicit probe.
-        profile = (
-            os.environ.get("AWS_PROFILE") or os.environ.get("AWS_DEFAULT_PROFILE") or "default"
-        )
+        # SDK configuration is loaded while constructing its resolver, before
+        # the environment credential provider can return credentials.
+        selected = os.environ.get("AWS_DEFAULT_PROFILE") or os.environ.get("AWS_PROFILE")
+        profile = selected or "default"
+        if selected and profile not in profiles:
+            return "unverified" if invalid else "missing_credentials"
+        if os.environ.get("AWS_ACCESS_KEY_ID"):
+            return (
+                "ok"
+                if _has_keys(
+                    os.environ.get("AWS_ACCESS_KEY_ID"), os.environ.get("AWS_SECRET_ACCESS_KEY")
+                )
+                else "missing_credentials"
+            )
         if profile not in profiles:
-            return "unverified"
+            if os.environ.get("AWS_WEB_IDENTITY_TOKEN_FILE"):
+                return "unverified"
+            return (
+                "unverified" if invalid or _dynamic_fallback_eligible() else "missing_credentials"
+            )
     visited: set[str] = set()
     derived_role = False
     while True:
@@ -348,10 +380,32 @@ def _aws_auth_result(
                     continue
             else:
                 return "unverified"
+        # Environment web identity participates only in the outer ambient
+        # profile chain; nested role-source profile builders disable it.
+        if ambient and not derived_role and os.environ.get("AWS_WEB_IDENTITY_TOKEN_FILE"):
+            return "unverified"
         key = metadata.get("sso_session") or metadata.get("sso_start_url")
-        if key:
+        active_sso = any(field in metadata for field in ("sso_account_id", "sso_role_name"))
+        if active_sso:
             if "aws-config" in invalid:
                 return "unverified"
+            # SDK session references are configuration prerequisites, distinct
+            # from token freshness. Resolve only already-read local fields.
+            resolved = dict(metadata)
+            session_name = metadata.get("sso_session")
+            if session_name is not None:
+                session_metadata = sso_sessions.get(session_name)
+                if session_metadata is None or any(
+                    field in metadata and metadata[field] != value
+                    for field, value in session_metadata.items()
+                ):
+                    return "invalid_config"
+                resolved.update(session_metadata)
+            if not key or not all(
+                field in resolved
+                for field in ("sso_account_id", "sso_role_name", "sso_start_url", "sso_region")
+            ):
+                return "invalid_config"
             result = _sso_result(connection, profile, key, paths)
             return "unverified" if derived_role and result == "ok" else result
         if any(
@@ -361,7 +415,9 @@ def _aws_auth_result(
             return "unverified"
         if _has_keys(metadata.get("aws_access_key_id"), metadata.get("aws_secret_access_key")):
             return "unverified" if derived_role else "ok"
-        return "unverified" if invalid else "missing_credentials"
+        if has_static_fields or derived_role:
+            return "unverified" if invalid else "missing_credentials"
+        return "unverified" if invalid or _dynamic_fallback_eligible() else "missing_credentials"
 
 
 def collect_local_diagnostics(paths: DoctorPaths | None = None) -> DoctorReport:
@@ -439,7 +495,7 @@ def collect_local_diagnostics(paths: DoctorPaths | None = None) -> DoctorReport:
             )
         )
 
-    profiles, invalid = _profile_metadata(paths)
+    profiles, sso_sessions, invalid = _profile_metadata(paths)
     discovery = ConnectionResolver(
         config_store=store,
         aws_config_path=paths.aws_config_file,
@@ -488,7 +544,7 @@ def collect_local_diagnostics(paths: DoctorPaths | None = None) -> DoctorReport:
                     else "missing_credentials"
                 )
         else:
-            result = _aws_auth_result(connection, profiles, invalid, paths)
+            result = _aws_auth_result(connection, profiles, sso_sessions, invalid, paths)
         checks.append(_auth_check(result, context))
     checks.append(
         DoctorCheck(

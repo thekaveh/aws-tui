@@ -38,6 +38,8 @@ def paths(tmp_path, monkeypatch):
     for key in tuple(os.environ):
         if key.startswith(("AWS_", "SYNTH_")):
             monkeypatch.delenv(key)
+    monkeypatch.setenv("AWS_EC2_METADATA_DISABLED", "true")
+    monkeypatch.setenv("BOTO_CONFIG", str(home / "absent-boto-config"))
     result = DoctorPaths(
         home / "config.toml",
         home / "cache",
@@ -68,9 +70,9 @@ def _sso(paths, modern=True, expires=None, payload=None):
     key = "synthetic-session" if modern else "https://example.invalid/start"
     _aws(
         paths,
-        "[profile dev]\n"
+        "[profile dev]\nsso_account_id = 123456789012\nsso_role_name = synthetic-role\nsso_region = us-east-1\n"
         + (
-            f"sso_session = {key}\n[sso-session {key}]\nsso_start_url = https://example.invalid/start\n"
+            f"sso_session = {key}\n[sso-session {key}]\nsso_start_url = https://example.invalid/start\nsso_region = us-east-1\n"
             if modern
             else f"sso_start_url = {key}\n"
         ),
@@ -355,6 +357,7 @@ def test_explicit_profile_does_not_inherit_global_env(paths, monkeypatch):
 
 
 def test_profileless_aws_env_presence_and_dynamic_fallback(paths, monkeypatch):
+    monkeypatch.setenv("AWS_EC2_METADATA_DISABLED", "false")
     _config(paths, '[connections.default]\nkind="aws"\n')
     assert _auth(collect_local_diagnostics(paths))[0].result == "unverified"
     monkeypatch.setenv("AWS_ACCESS_KEY_ID", "synthetic-access")
@@ -684,10 +687,16 @@ def test_role_source_prerequisites_never_prove_derived_credentials(paths, source
 @pytest.mark.parametrize("cache_state", ["healthy", "expired", "missing", "unreadable", "extreme"])
 def test_shared_credentials_sso_uses_resolved_cache_freshness(paths, modern, cache_state):
     cache = _sso(paths, modern=modern)
+    profile_body, _, session_body = paths.aws_config_file.read_text().partition("[sso-session ")
     paths.aws_credentials_file.write_text(
-        paths.aws_config_file.read_text().replace("[profile dev]", "[dev]"), encoding="utf-8"
+        profile_body.replace("[profile dev]", "[dev]"), encoding="utf-8"
     )
-    paths.aws_config_file.unlink()
+    if modern:
+        # SDK SSO session sections live in AWS config, even when all profile
+        # credential fields are in the shared credentials file.
+        _aws(paths, "[sso-session " + session_body)
+    else:
+        paths.aws_config_file.unlink()
     if cache_state == "missing":
         cache.unlink()
     elif cache_state == "unreadable":
@@ -721,6 +730,8 @@ def test_shared_credentials_override_cannot_probe_unrelated_sso_cache(paths):
     paths.aws_credentials_file.write_text(
         f"[dev]\nsso_session = replacement\nsso_start_url = {url}\n", encoding="utf-8"
     )
+    with paths.aws_config_file.open("a") as file:
+        file.write(f"[sso-session replacement]\nsso_start_url = {url}\nsso_region = us-east-1\n")
     cache = paths.sso_cache_dir / (hashlib.sha1(b"replacement").hexdigest() + ".json")
     cache.write_text(
         json.dumps(
@@ -944,5 +955,221 @@ def test_web_identity_ignores_unused_role_source_and_sso(paths, monkeypatch, nes
     assert all(check.result == "unverified" for check in _auth(report))
     assert not any(check.actionable for check in _auth(report))
     assert report.exit_code == 0
+    assert _snapshot(paths.config_file.parent) == before
+    forbidden.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    ("variant", "expected", "sdk_expected"),
+    [
+        ("profile-precedence", "missing_credentials", "ProfileNotFound"),
+        ("env-missing-profile", "missing_credentials", "ProfileNotFound"),
+        ("partial-env", "missing_credentials", "PartialCredentialsError"),
+        ("env-web-identity", "unverified", "assume-role-with-web-identity"),
+        ("unused-sso-session", "ok", "shared-credentials-file"),
+    ],
+)
+def test_effective_sdk_source_selection_offline(
+    paths, monkeypatch, variant, expected, sdk_expected
+):
+    import botocore.credentials
+    from botocore.exceptions import PartialCredentialsError, ProfileNotFound
+
+    _config(paths, '[connections.chosen]\nkind="aws"\n')
+    _static_profile(paths, "default" if variant == "partial-env" else "dev")
+    selected_profile = None
+    if variant in {"profile-precedence", "env-missing-profile"}:
+        monkeypatch.setenv("AWS_DEFAULT_PROFILE", "absent")
+        monkeypatch.setenv("AWS_PROFILE", "dev")
+        if variant == "env-missing-profile":
+            monkeypatch.setenv("AWS_ACCESS_KEY_ID", "synthetic-env-access")
+            monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "synthetic-env-secret")
+    elif variant == "partial-env":
+        monkeypatch.setenv("AWS_ACCESS_KEY_ID", "synthetic-env-access")
+    elif variant == "env-web-identity":
+        _aws(
+            paths,
+            "[default]\nsso_session = stale\nsso_account_id = 123456789012\nsso_role_name = Role\n[sso-session stale]\nsso_start_url = https://example.invalid/start\nsso_region = us-east-1\n",
+        )
+        monkeypatch.setenv(
+            "AWS_WEB_IDENTITY_TOKEN_FILE", str(paths.config_file.parent / "never-read-token")
+        )
+        monkeypatch.setenv("AWS_ROLE_ARN", "arn:aws:iam::123456789012:role/web")
+    else:
+        _aws(
+            paths,
+            "[profile dev]\nsso_session = stale\n[sso-session stale]\nsso_start_url = https://example.invalid/start\nsso_region = us-east-1\n",
+        )
+        _config(paths, '[connections.chosen]\nkind="aws"\nprofile="dev"\n')
+        selected_profile = "dev"
+
+    forbidden = Mock(side_effect=AssertionError("unexpected external/provider action"))
+    monkeypatch.setattr(botocore.session.Session, "create_client", forbidden)
+    monkeypatch.setattr(socket.socket, "connect", forbidden)
+    monkeypatch.setattr(subprocess, "Popen", forbidden)
+    monkeypatch.setattr(botocore.credentials.Credentials, "get_frozen_credentials", forbidden)
+    monkeypatch.setattr(
+        botocore.credentials.DeferredRefreshableCredentials, "get_frozen_credentials", forbidden
+    )
+    before = _snapshot(paths.config_file.parent)
+    session = botocore.session.Session(profile=selected_profile)
+    session.set_config_variable("config_file", str(paths.aws_config_file))
+    session.set_config_variable("credentials_file", str(paths.aws_credentials_file))
+    resolver = None
+    try:
+        if sdk_expected == "ProfileNotFound":
+            assert session.get_config_variable("profile") == "absent"
+            with pytest.raises(ProfileNotFound):
+                session.get_component("credential_provider")
+        else:
+            resolver = session.get_component("credential_provider")
+            if sdk_expected == "PartialCredentialsError":
+                with pytest.raises(PartialCredentialsError):
+                    session.get_credentials()
+            else:
+                assert session.get_credentials().method == sdk_expected
+    finally:
+        if resolver is not None:
+            resolver.get_provider("container-role")._fetcher._session.close()
+            resolver.get_provider("iam-role")._role_fetcher._session.close()
+    # Provider selection evidence above is separate from the fully offline collector.
+    for owner, name in [
+        (botocore.session, "Session"),
+        (aioboto3, "Session"),
+        (botocore.credentials.CredentialResolver, "load_credentials"),
+        (socket, "socket"),
+        (keyring, "get_password"),
+        (keyring, "get_keyring"),
+        (Path, "write_text"),
+        (Path, "write_bytes"),
+        (Path, "chmod"),
+        (Path, "mkdir"),
+        (Path, "unlink"),
+        (os, "chmod"),
+        (os, "replace"),
+    ]:
+        monkeypatch.setattr(owner, name, forbidden)
+    original_open = Path.open
+
+    def read_only_open(self, mode="r", *args, **kwargs):
+        assert not any(flag in mode for flag in "wax+")
+        assert self.name != "never-read-token"
+        return original_open(self, mode, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "open", read_only_open)
+    report = collect_local_diagnostics(paths)
+    assert _auth(report)[0].result == expected
+    if variant == "env-web-identity":
+        # The separately discovered explicit default profile has an active, missing SSO cache.
+        assert [check.result for check in _auth(report)] == [
+            "unverified",
+            "missing_credentials",
+            "ok",
+        ]
+    assert report.exit_code == int(
+        expected == "missing_credentials" or variant == "env-web-identity"
+    )
+    assert _snapshot(paths.config_file.parent) == before
+    assert "synthetic-env-secret" not in report.render_json() + report.render_text()
+    forbidden.assert_not_called()
+
+
+@pytest.mark.parametrize("disabled", ["true", "TRUE", "false"])
+def test_metadata_fallback_remains_offline_unverified_when_eligible(paths, monkeypatch, disabled):
+    _aws(paths, "[profile dev]\nregion = us-east-1\n")
+    monkeypatch.setenv("AWS_EC2_METADATA_DISABLED", disabled)
+    session = botocore.session.Session(profile="dev")
+    session.set_config_variable("config_file", str(paths.aws_config_file))
+    session.set_config_variable("credentials_file", str(paths.aws_credentials_file))
+    resolver = session.get_component("credential_provider")
+    try:
+        # Inspect the actual SDK activation flag without executing metadata HTTP.
+        assert resolver.get_provider("iam-role")._role_fetcher._disabled == (disabled != "false")
+    finally:
+        resolver.get_provider("container-role")._fetcher._session.close()
+        resolver.get_provider("iam-role")._role_fetcher._session.close()
+    forbidden = Mock(side_effect=AssertionError("offline provider execution"))
+    monkeypatch.setattr(botocore.session, "Session", forbidden)
+    monkeypatch.setattr(socket, "socket", forbidden)
+    before = _snapshot(paths.config_file.parent)
+    report = collect_local_diagnostics(paths)
+    assert _auth(report)[0].result == (
+        "unverified" if disabled == "false" else "missing_credentials"
+    )
+    assert report.exit_code == int(disabled != "false")
+    assert _snapshot(paths.config_file.parent) == before
+    forbidden.assert_not_called()
+
+
+@pytest.mark.parametrize("missing", ["sso_account_id", "sso_role_name"])
+def test_incomplete_active_sso_cannot_claim_fresh_cache_health(paths, monkeypatch, missing):
+    from botocore.exceptions import InvalidConfigError
+
+    _sso(paths)
+    _static_profile(paths)
+    body = paths.aws_config_file.read_text()
+    body = "\n".join(line for line in body.splitlines() if not line.startswith(missing + " ="))
+    _aws(paths, body)
+    forbidden = Mock(side_effect=AssertionError("unexpected external/provider action"))
+    monkeypatch.setattr(botocore.session.Session, "create_client", forbidden)
+    monkeypatch.setattr(socket.socket, "connect", forbidden)
+    monkeypatch.setattr(subprocess, "Popen", forbidden)
+    session = botocore.session.Session(profile="dev")
+    session.set_config_variable("config_file", str(paths.aws_config_file))
+    session.set_config_variable("credentials_file", str(paths.aws_credentials_file))
+    resolver = session.get_component("credential_provider")
+    try:
+        with pytest.raises(InvalidConfigError):
+            session.get_credentials()
+    finally:
+        resolver.get_provider("container-role")._fetcher._session.close()
+        resolver.get_provider("iam-role")._role_fetcher._session.close()
+    monkeypatch.setattr(botocore.session, "Session", forbidden)
+    before = _snapshot(paths.config_file.parent)
+    report = collect_local_diagnostics(paths)
+    assert _auth(report)[0].result == "invalid_config"
+    assert report.exit_code == 1
+    assert _snapshot(paths.config_file.parent) == before
+    forbidden.assert_not_called()
+
+
+@pytest.mark.parametrize("session_state", ["missing", "incomplete", "inconsistent"])
+def test_active_sso_invalid_session_cannot_claim_fresh_cache_health(
+    paths, monkeypatch, session_state
+):
+    from botocore.exceptions import InvalidConfigError
+
+    _sso(paths)
+    _static_profile(paths)
+    body = paths.aws_config_file.read_text()
+    if session_state == "missing":
+        body = body.partition("[sso-session ")[0]
+    elif session_state == "incomplete":
+        body = "\n".join(line for line in body.splitlines() if not line.startswith("sso_region ="))
+    else:
+        body = body.replace(
+            "sso_session = synthetic-session",
+            "sso_start_url = https://conflict.example.invalid/start\nsso_session = synthetic-session",
+        )
+    _aws(paths, body)
+    forbidden = Mock(side_effect=AssertionError("unexpected external/provider action"))
+    monkeypatch.setattr(botocore.session.Session, "create_client", forbidden)
+    monkeypatch.setattr(socket.socket, "connect", forbidden)
+    monkeypatch.setattr(subprocess, "Popen", forbidden)
+    session = botocore.session.Session(profile="dev")
+    session.set_config_variable("config_file", str(paths.aws_config_file))
+    session.set_config_variable("credentials_file", str(paths.aws_credentials_file))
+    resolver = session.get_component("credential_provider")
+    try:
+        with pytest.raises(InvalidConfigError):
+            session.get_credentials()
+    finally:
+        resolver.get_provider("container-role")._fetcher._session.close()
+        resolver.get_provider("iam-role")._role_fetcher._session.close()
+    monkeypatch.setattr(botocore.session, "Session", forbidden)
+    before = _snapshot(paths.config_file.parent)
+    report = collect_local_diagnostics(paths)
+    assert _auth(report)[0].result == "invalid_config"
+    assert report.exit_code == 1
     assert _snapshot(paths.config_file.parent) == before
     forbidden.assert_not_called()

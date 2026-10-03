@@ -22,7 +22,7 @@ from botocore.exceptions import (
 from botocore.tokens import SSOTokenProvider
 from botocore.utils import JSONFileCache
 
-from aws_tui.infra.doctor import DoctorPaths, DoctorReport
+from aws_tui.infra.doctor import DoctorPaths, DoctorReport, collect_local_diagnostics
 from aws_tui.infra.doctor_probe import probe_source
 
 SECRET = "secret-SQL-SELECT password FROM credentials"
@@ -106,6 +106,19 @@ class FakeClient:
         condition = self.factory.condition
         if condition == "denied":
             raise ClientError({"Error": {"Code": "AccessDenied", "Message": SECRET}}, operation)
+        if condition in {"internal", "throttled"}:
+            raise ClientError(
+                {
+                    "Error": {
+                        "Code": "InternalError"
+                        if condition == "internal"
+                        else "ThrottlingException",
+                        "Message": SECRET,
+                    },
+                    "ResponseMetadata": {"HTTPStatusCode": 500 if condition == "internal" else 429},
+                },
+                operation,
+            )
         if condition == "unreachable":
             raise EndpointConnectionError(endpoint_url=SECRET)
         if condition == "closed":
@@ -199,6 +212,8 @@ def inventory(root):
     [
         ("success", "ok"),
         ("denied", "denied"),
+        ("internal", "unverified"),
+        ("throttled", "unverified"),
         ("unreachable", "unreachable"),
         ("closed", "unreachable"),
         ("timeout", "timed_out"),
@@ -372,16 +387,26 @@ def test_sso_prerequisites_preserve_diagnostics(paths, clients, modern, conditio
     assert inventory(paths.config_file.parent) == before
 
 
-@pytest.mark.parametrize("condition", ["denied", "timeout", "unreachable", "unexpected"])
-def test_credential_provider_errors_close_all_clients(paths, clients, condition):
+@pytest.mark.parametrize(
+    ("condition", "expected"),
+    [
+        ("denied", "denied"),
+        ("timeout", "timed_out"),
+        ("unreachable", "unreachable"),
+        ("unexpected", "unverified"),
+        ("internal", "unverified"),
+        ("throttled", "unverified"),
+    ],
+)
+def test_credential_provider_errors_close_all_clients(paths, clients, condition, expected):
     sso(paths, nested=True)
     clients.condition = condition
-    assert probe_source("chosen", paths).result in {
-        "denied",
-        "timed_out",
-        "unreachable",
-        "unverified",
-    }
+    before = inventory(paths.config_file.parent)
+    check = probe_source("chosen", paths)
+    assert check.result == expected
+    assert check.actionable
+    assert SECRET not in DoctorReport((check,)).render_json() + DoctorReport((check,)).render_text()
+    assert inventory(paths.config_file.parent) == before
     assert clients.clients
     assert all(client.closed for client in clients.clients)
 
@@ -565,3 +590,149 @@ def test_sdk_environment_credential_source_is_supported(paths, clients, monkeypa
     assert probe_source("chosen", paths).result == "ok"
     assert ("sts", "assume_role") in clients.calls
     assert all(client.closed for client in clients.clients)
+
+
+@pytest.mark.parametrize("json_output", [False, True])
+def test_container_fallback_probe_preserves_truthful_local_report_and_cli_exit(
+    paths, clients, monkeypatch, capsys, json_output
+):
+    import sys
+
+    from botocore.httpsession import URLLib3Session
+
+    from aws_tui import app as app_module
+
+    aws(paths, "[profile chosen]\nregion = us-east-1\n")
+    monkeypatch.setenv("AWS_CONTAINER_CREDENTIALS_FULL_URI", "http://localhost:8765/credentials")
+    requests, closed = [], []
+
+    def send(self, request):
+        requests.append((self, request.method, request.url))
+        content = json.dumps(
+            {
+                "AccessKeyId": "container-access",
+                "SecretAccessKey": "container-secret",
+                "Token": "container-token",
+                "Expiration": (datetime.now(UTC) + timedelta(hours=1)).isoformat(),
+            }
+        ).encode()
+        return SimpleNamespace(status_code=200, content=content, text=content.decode())
+
+    monkeypatch.setattr(URLLib3Session, "send", send)
+    monkeypatch.setattr(URLLib3Session, "close", lambda self: closed.append(self))
+    before = inventory(paths.config_file.parent)
+
+    # Every CLI/local collection runs behind forbidden external/write boundaries.
+    def collect_offline():
+        import keyring
+
+        def forbidden(*args, **kwargs):
+            pytest.fail("offline collector crossed a provider/external/write boundary")
+
+        with monkeypatch.context() as offline:
+            for owner, name in [
+                (botocore.session, "Session"),
+                (URLLib3Session, "send"),
+                (socket, "socket"),
+                (keyring, "get_password"),
+                (keyring, "get_keyring"),
+                (Path, "write_text"),
+                (Path, "write_bytes"),
+                (Path, "chmod"),
+                (Path, "mkdir"),
+                (Path, "unlink"),
+                (os, "chmod"),
+                (os, "replace"),
+            ]:
+                offline.setattr(owner, name, forbidden)
+            original_open = Path.open
+
+            def read_only_open(self, mode="r", *args, **kwargs):
+                assert not any(flag in mode for flag in "wax+")
+                return original_open(self, mode, *args, **kwargs)
+
+            offline.setattr(Path, "open", read_only_open)
+            return collect_local_diagnostics(paths)
+
+    local = collect_offline()
+    assert [check.result for check in local.checks if check.name == "auth"] == ["unverified"]
+    assert local.exit_code == 0
+    monkeypatch.setattr(app_module, "collect_local_diagnostics", collect_offline)
+    monkeypatch.setattr(app_module, "probe_source", lambda name: probe_source(name, paths))
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["aws-tui", "doctor", "--probe", "chosen", *(["--json"] if json_output else [])],
+    )
+    with pytest.raises(SystemExit) as exit_info:
+        app_module.main()
+    assert exit_info.value.code == 0
+    output = capsys.readouterr()
+    assert output.err == ""
+    if json_output:
+        checks = json.loads(output.out)["checks"]
+        assert [check["result"] for check in checks if check["name"] == "auth"] == ["unverified"]
+        assert [check["result"] for check in checks if check["name"] == "probe"] == ["ok"]
+    else:
+        assert "auth: unverified" in output.out
+        assert "probe: ok" in output.out
+    assert [(method, url) for _, method, url in requests] == [
+        ("GET", "http://localhost:8765/credentials")
+    ]
+    assert clients.calls == [("sts", "get_caller_identity")]
+    assert clients.clients[0].session.get_credentials().method == "container-role"
+    assert all(client.closed for client in clients.clients)
+    assert all(session in closed for session, _, _ in requests)
+    assert inventory(paths.config_file.parent) == before
+    assert not any(
+        secret in output.out
+        for secret in ("container-access", "container-secret", "container-token")
+    )
+
+
+@pytest.mark.parametrize("boundary", ["service", "provider"])
+@pytest.mark.parametrize(
+    ("code", "status", "expected"),
+    [
+        ("RequestTimeout", 408, "timed_out"),
+        ("RequestTimeoutException", 400, "timed_out"),
+        ("InvalidClientTokenId", 400, "denied"),
+        ("ExpiredToken", 400, "denied"),
+        ("VendorSpecificError", 403, "denied"),
+        ("VendorSpecificError", 401, "denied"),
+        ("VendorSpecificError", 500, "unverified"),
+        ("Throttling", 400, "unverified"),
+    ],
+)
+def test_structured_client_error_classification_is_private(
+    paths, clients, monkeypatch, boundary, code, status, expected
+):
+    if boundary == "provider":
+        sso(paths, nested=True)
+    else:
+        s3(paths)
+
+    def perform(self, operation):
+        self.factory.calls.append((self.service, operation))
+        raise ClientError(
+            {
+                "Error": {"Code": code, "Message": SECRET},
+                "ResponseMetadata": {"HTTPStatusCode": status, "RequestId": SECRET},
+            },
+            operation,
+        )
+
+    monkeypatch.setattr(FakeClient, "perform", perform)
+    before = inventory(paths.config_file.parent)
+    check = probe_source("chosen", paths)
+    assert check.result == expected
+    assert check.actionable
+    output = DoctorReport((check,)).render_json() + DoctorReport((check,)).render_text()
+    assert SECRET not in output
+    assert code not in output
+    if expected == "unverified":
+        assert "service availability" in check.next_step
+        assert "permission" not in check.next_step
+    assert all(client.closed for client in clients.clients)
+    assert len(clients.calls) == 1
+    assert inventory(paths.config_file.parent) == before

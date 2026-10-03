@@ -7,6 +7,7 @@ processes, MFA and SSO token rotation, and bound/close its HTTP clients.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from contextlib import ExitStack
 from typing import Any
 
@@ -377,11 +378,48 @@ def probe_source(name: str, paths: DoctorPaths | None = None) -> DoctorCheck:
             context,
             "Check the source endpoint, TLS settings and network connectivity, then rerun doctor.",
         )
-    except ClientError:
+    except ClientError as exc:
+        # Structured fields are inspected only for classification. Neither the
+        # vendor response, its message nor its code enters the public report.
+        response = exc.response
+        error = response.get("Error", {})
+        metadata = response.get("ResponseMetadata", {})
+        code = error.get("Code") if isinstance(error, Mapping) else None
+        status = metadata.get("HTTPStatusCode") if isinstance(metadata, Mapping) else None
+        if code in ("RequestTimeout", "RequestTimeoutException") or status == 408:
+            return _check(
+                "timed_out",
+                context,
+                "The service timed out. Check service availability and retry the probe later.",
+            )
+        if status in (401, 403) or (
+            isinstance(code, str)
+            and code
+            in {
+                "AccessDenied",
+                "AccessDeniedException",
+                "Unauthorized",
+                "UnauthorizedException",
+                "UnrecognizedClientException",
+                "InvalidClientTokenId",
+                "InvalidAccessKeyId",
+                "SignatureDoesNotMatch",
+                "InvalidSignatureException",
+                "ExpiredToken",
+                "ExpiredTokenException",
+                "TokenRefreshRequired",
+                "AuthFailure",
+            }
+        ):
+            return _check(
+                "denied",
+                context,
+                "Check credentials and permission for the selected read-only operation, then rerun doctor.",
+            )
         return _check(
-            "denied",
+            "unverified",
             context,
-            "Check credentials and permission for the selected read-only operation, then rerun doctor.",
+            "The service could not complete the probe. Check service availability and retry later.",
         )
     except Exception:
         # Vendor/keychain/SDK errors can contain tokens, SQL and response data.
