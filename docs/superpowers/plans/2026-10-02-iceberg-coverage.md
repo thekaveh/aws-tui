@@ -12,7 +12,7 @@ sentinel beyond each existing display cap; preserve generation-based lifecycle.
 
 **Spec:** `docs/superpowers/specs/2026-10-02-iceberg-coverage-design.md`
 
-## Global Constraints
+## 1. Global Constraints
 
 - Caps stay snapshots/history/refs 100, manifests/partitions 500, files 1000.
 - At most one sentinel beyond the display cap; never map or render the sentinel.
@@ -23,7 +23,7 @@ sentinel beyond each existing display cap; preserve generation-based lifecycle.
 - Metadata row limits do not bound scanned bytes or Athena costs.
 - Local gates only; no GitHub Actions dispatch or live AWS mutations.
 
-### Task 1: Deliver the coverage contract from query to rendered footer
+## 2. Task 1: Deliver the coverage contract from query to rendered footer
 
 **Files:**
 - Modify: `src/aws_tui/domain/athena_runner.py`, `src/aws_tui/domain/iceberg.py`
@@ -132,7 +132,7 @@ delivery. Commit coherent Conventional Commit changes. Report exact commands,
 RED/GREEN evidence, all AC-to-test mappings, changed snapshot inspection and any
 limitations. Do not push, merge or close the issue: controller owns delivery.
 
-## Review Focus
+## 3. Review Focus
 
 Check malformed structured responses, source exhaustion when a page is sliced,
 sentinel removal before mapping, independent coverage after view switching,
