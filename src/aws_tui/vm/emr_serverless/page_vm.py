@@ -201,8 +201,10 @@ class EmrServerlessPageVM:
                 "inert", f"job run is {target.state.value}; cancellation is unavailable"
             )
         client = self._client
+        request_sent = False
 
         async def operation() -> CancelJobRunResult:
+            nonlocal request_sent
             request = ConfirmRequest(
                 title="Cancel EMR job run?",
                 paths=(
@@ -225,6 +227,7 @@ class EmrServerlessPageVM:
                 return CancelJobRunResult(
                     "stale", "selected source or job run changed; no cancellation was sent"
                 )
+            request_sent = True
             try:
                 await client.cancel_job_run(target.application_id, target.job_run_id)
             except Exception as error:
@@ -240,12 +243,17 @@ class EmrServerlessPageVM:
         self._cancel_busy = True
         try:
             self._notify_cancel_busy()
-            return await self._operations.run(operation)
+            result = await self._operations.run(operation)
         except OperationSuperseded:
-            return CancelJobRunResult("superseded")
+            result = CancelJobRunResult("superseded")
         finally:
             self._cancel_busy = False
             self._notify_cancel_busy()
+        # The owned task's completion and synchronous hub observers can both
+        # change ownership before this caller delivers the captured outcome.
+        if request_sent and not self._cancel_target_current(target, source_is_current):
+            return CancelJobRunResult("superseded")
+        return result
 
     def _cancel_owner_current(self, source_is_current: Callable[[], bool] | None) -> bool:
         return (

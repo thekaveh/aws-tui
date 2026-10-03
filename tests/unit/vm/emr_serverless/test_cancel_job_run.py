@@ -693,3 +693,147 @@ async def test_public_result_is_immutable_and_busy_is_read_only(page_with_state)
         result.status = "requested"
     with pytest.raises(AttributeError):
         page.cancel_busy = True
+
+
+class CompletionEmr(RecordingEmr):
+    """Queue a target change after the provider finishes, before caller delivery."""
+
+    def __init__(self):
+        super().__init__()
+        self.on_completion = None
+
+    async def cancel_job_run(self, application_id, job_run_id):
+        try:
+            await super().cancel_job_run(application_id, job_run_id)
+        finally:
+            if self.on_completion is not None:
+                asyncio.get_running_loop().call_soon(self.on_completion)
+
+
+@pytest.mark.parametrize("handoff", ["child_completion", "busy_release"])
+@pytest.mark.parametrize("change", ["application", "run", "source", "guard", "disappeared"])
+@pytest.mark.parametrize("error_type", [None, PermissionDeniedError])
+async def test_sent_feedback_revalidates_after_public_delivery_handoffs(
+    page_with_state, handoff, change, error_type
+):
+    fake = CompletionEmr()
+    fake.cancel_error = error_type("planted-delivery-secret") if error_type else None
+    page, fake = await page_with_state(JobRunState.RUNNING, fake=fake)
+    fake.add_application(app_id="a2", name="other")
+    fake.add_job_run(application_id="a1", job_run_id="r2", state=JobRunState.RUNNING)
+    await page.applications.refresh()
+    await page.refresh_job_runs()
+    fake.calls.clear()
+    changed = asyncio.Event()
+    current = True
+    snapshot = None
+
+    def change_identity():
+        nonlocal current, snapshot
+        if change == "application":
+            page.applications.select("a2")
+        elif change == "run":
+            page.job_runs.select("r2")
+        elif change == "source":
+            page._source = ServiceSourceContext("other", "other-profile", "us-west-2")
+        elif change == "guard":
+            current = False
+        else:
+            page.job_runs.set_application(None)
+        snapshot = (page.job_runs.runs, page.job_run_detail.detail, page.job_run_detail.state)
+        changed.set()
+
+    subscription = None
+    if handoff == "child_completion":
+        fake.on_completion = change_identity
+    else:
+
+        def observe_release(message):
+            if (
+                isinstance(message, PropertyChangedMessage)
+                and message.sender_object is page
+                and message.property_name == "cancel_busy"
+                and not page.cancel_busy
+            ):
+                change_identity()
+
+        subscription = page.hub.messages.subscribe(on_next=observe_release)
+    try:
+        ask = AsyncMock(return_value=True)
+        result = await page.cancel_selected_run(ask, source_is_current=lambda: current)
+        assert changed.is_set(), "the identity change must precede public result delivery"
+        assert result.status == "superseded"
+        assert result.message is None
+        assert cancel_calls(fake) == [("a1", "r1")]
+        ask.assert_awaited_once()
+        assert not page.cancel_busy
+        assert snapshot == (
+            page.job_runs.runs,
+            page.job_run_detail.detail,
+            page.job_run_detail.state,
+        )
+    finally:
+        if subscription is not None:
+            subscription.dispose()
+
+
+@pytest.mark.parametrize("error_type", [None, PermissionDeniedError])
+async def test_busy_release_owner_close_suppresses_sent_feedback(page_with_state, error_type):
+    fake = RecordingEmr()
+    fake.cancel_error = error_type("planted-delivery-secret") if error_type else None
+    page, fake = await page_with_state(JobRunState.RUNNING, fake=fake)
+    closed = asyncio.Event()
+
+    def observe_release(message):
+        if (
+            isinstance(message, PropertyChangedMessage)
+            and message.sender_object is page
+            and message.property_name == "cancel_busy"
+            and not page.cancel_busy
+        ):
+            page._operations.close()
+            closed.set()
+
+    subscription = page.hub.messages.subscribe(on_next=observe_release)
+    try:
+        result = await page.cancel_selected_run(AsyncMock(return_value=True))
+        assert closed.is_set()
+        assert result.status == "superseded"
+        assert result.message is None
+        assert cancel_calls(fake) == [("a1", "r1")]
+        assert not page.cancel_busy
+    finally:
+        subscription.dispose()
+
+
+@pytest.mark.parametrize("accepted", [False, True])
+async def test_unsent_dismissed_and_stale_results_survive_busy_release_change(
+    page_with_state, accepted
+):
+    page, fake = await page_with_state(JobRunState.RUNNING)
+
+    async def ask(request):
+        if accepted:
+            page.job_runs.set_application(None)
+        return accepted
+
+    def observe_release(message):
+        if (
+            isinstance(message, PropertyChangedMessage)
+            and message.sender_object is page
+            and message.property_name == "cancel_busy"
+            and not page.cancel_busy
+        ):
+            page._source = ServiceSourceContext("other", "other-profile", "us-west-2")
+
+    subscription = page.hub.messages.subscribe(on_next=observe_release)
+    try:
+        result = await page.cancel_selected_run(ask)
+        assert result.status == ("stale" if accepted else "dismissed")
+        assert result.message == (
+            "selected source or job run changed; no cancellation was sent" if accepted else None
+        )
+        assert cancel_calls(fake) == []
+        assert not page.cancel_busy
+    finally:
+        subscription.dispose()
