@@ -425,3 +425,83 @@ async def test_busy_transition_removes_entry_from_open_palette(tmp_path: Path) -
         assert "emr.cancel" in palette_ids(app)
         assert fake.cancel_calls == []
         await pilot.press("escape")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("adoption", ["recovery", "initial_mount", "navigation_mount"])
+@pytest.mark.parametrize(
+    ("prior_state", "prepared_state"),
+    [
+        (JobRunState.CANCELLED, JobRunState.RUNNING),
+        (JobRunState.RUNNING, JobRunState.CANCELLED),
+    ],
+)
+async def test_prepared_emr_adoption_refreshes_current_owner_availability(
+    tmp_path: Path,
+    adoption: str,
+    prior_state: JobRunState,
+    prepared_state: JobRunState,
+) -> None:
+    async with cancellation_app(tmp_path) as (app, pilot, prior_page, fake):
+        fake.transition(prior_state)
+        await prior_page.vm.refresh_job_run_detail()
+        prior_eligible = prior_state is JobRunState.RUNNING
+        assert prior_page.vm.can_cancel_selected_run() is prior_eligible
+        assert cancel_hint(app).enabled is prior_eligible
+        # Populate the real palette before preparing the replacement, so its
+        # idempotent population cannot conceal a missing adoption refresh.
+        await pilot.press("ctrl+k")
+        assert isinstance(app.screen, CommandPalette)
+        assert ("emr.cancel" in palette_ids(app)) is prior_eligible
+        await pilot.press("escape")
+        assert app._command_palette_populated
+
+        fake.transition(prepared_state)
+        connection = prior_page.vm.connection
+        recovery = await app._stage_service_credential_recovery(
+            resolved=connection,
+            service_id="emr-serverless",
+            hosted=prior_page.vm,
+        )
+        assert recovery is not None
+        prepared = recovery.vm
+        eligible = prepared_state is JobRunState.RUNNING
+        assert prepared.can_cancel_selected_run() is eligible
+        assert app.app_ctx.root_vm.content_host.current is prior_page.vm
+        assert cancel_hint(app).enabled is prior_eligible
+        read_calls = list(fake.calls)
+
+        if adoption == "recovery":
+            await app._commit_staged_service_recovery(
+                recovery, connection=connection, service_id="emr-serverless"
+            )
+        else:
+            await app.app_ctx.root_vm.adopt_prepared_service_vm(
+                connection, TokenState.CONNECTED, "emr-serverless", prepared
+            )
+            recovery.commit_selection()
+            if adoption == "initial_mount":
+                assert await app._mount_initial_service_view()
+            else:
+                assert await app._mount_service_view("emr-serverless")
+        await drain_workers(app)
+        await pilot.pause()
+
+        current_page = app.query_one(EmrServerlessPage)
+        assert current_page.vm is prepared
+        assert app.app_ctx.root_vm.content_host.current is prepared
+        assert prepared.source.connection_key == ("active", "us-east-1")
+        assert prepared.job_runs.selected_id == "r1"
+        assert (
+            prepared.can_cancel_selected_run(),
+            cancel_hint(app).enabled,
+            "emr.cancel" in palette_ids(app),
+        ) == (eligible, eligible, eligible)
+        # Adoption of an already-read VM needs no subsequent provider read or
+        # property notification to project the mounted owner's availability.
+        assert list(fake.calls) == read_calls
+        await pilot.press("ctrl+k")
+        assert isinstance(app.screen, CommandPalette)
+        assert ("emr.cancel" in palette_ids(app)) is eligible
+        await pilot.press("escape")
+        assert fake.cancel_calls == []

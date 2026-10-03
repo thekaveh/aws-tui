@@ -1778,7 +1778,7 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
                     focus_coordinator=ctx.focus_coordinator,
                 )
                 await self._replace_content_widget(host, replacement)
-                if _svc_id in {"glue", "athena"}:
+                if _svc_id in {"glue", "athena", "emr-serverless"}:
                     self._recompute_hint_disables()
             return True
         except Exception as exc:
@@ -3197,7 +3197,7 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
                     service=service_id,
                     error_type=type(exc).__name__,
                 )
-        if service_id in {"glue", "athena"}:
+        if service_id in {"glue", "athena", "emr-serverless"}:
             self._recompute_hint_disables()
 
     async def _recover_s3_credentials(
@@ -5974,7 +5974,7 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
                 focus_coordinator=ctx.focus_coordinator,
             )
             await self._replace_content_widget(host, replacement)
-            if service_id in {"glue", "athena"}:
+            if service_id in {"glue", "athena", "emr-serverless"}:
                 self._recompute_hint_disables()
         except Exception as exc:
             ctx.log_sink.error(
