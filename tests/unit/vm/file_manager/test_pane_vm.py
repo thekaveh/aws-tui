@@ -24,7 +24,7 @@ from aws_tui.domain.filesystem import (
     ProviderUnreachableError,
     ThrottledError,
 )
-from aws_tui.vm.file_manager.pane_vm import PaneState, PaneVM
+from aws_tui.vm.file_manager.pane_vm import PaneSortField, PaneState, PaneVM
 
 
 def _hub() -> MessageHub[Message]:
@@ -797,13 +797,19 @@ async def test_marked_entries_are_scoped_to_the_visible_filtered_rows() -> None:
     assert len(pane.marked_entries) == len(pane.entries)
 
     pane.set_filter_command.execute("a.txt")
+    pane.set_sort(PaneSortField.NAME, descending=True)
 
     assert [entry.entry.name for entry in pane.filtered_entries] == ["a.txt"]
     assert [entry.entry.name for entry in pane.marked_entries] == ["a.txt"]
     # The footer count follows the same property, so it matches the screen.
     assert pane.viewmodel.selection_count == 1
 
-    pane.set_filter_command.execute("")
+    hidden = pane.find_entries("c.json")[0]
+    assert hidden.is_marked
+    assert pane.select_found_entry(hidden, revision=pane.listing_revision)
+    assert pane.selected_entry is hidden
+    assert pane.filter_text == ""
+    assert pane.viewmodel.selection_count == len(pane.entries)
 
     # Marks on hidden rows are retained, not discarded — they simply do not
     # participate while hidden.
