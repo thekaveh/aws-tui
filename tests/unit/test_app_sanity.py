@@ -987,14 +987,19 @@ async def test_no_connection_placeholder_mount_awaits_content_host(
         mounted.append(widget)
 
     app = object.__new__(app_module.AwsTuiApp)
-    app._app_ctx = SimpleNamespace(config_store=SimpleNamespace(path=config_path))
+    app._app_ctx = SimpleNamespace(config_store=SimpleNamespace(path=config_path), hub=object())
     monkeypatch.setattr(app, "query_one", lambda *_args, **_kwargs: FakeHost())
     monkeypatch.setattr(app, "_replace_content_widget", replace)
 
     await app._mount_no_connection_placeholder()
 
     assert len(mounted) == 1
-    assert str(config_path) in str(getattr(mounted[0], "content", ""))
+    from aws_tui.ui.widgets.first_run import FirstRunView
+
+    assert isinstance(mounted[0], FirstRunView)
+    assert any(
+        str(config_path) in str(getattr(child, "content", "")) for child in mounted[0].compose()
+    )
 
 
 def test_app_uses_public_service_page_operations() -> None:

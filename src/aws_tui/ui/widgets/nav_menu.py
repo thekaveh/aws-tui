@@ -28,6 +28,7 @@ DETAIL → LOGS — wired in :mod:`aws_tui.app`).
 
 from __future__ import annotations
 
+import asyncio
 import contextlib
 from typing import TYPE_CHECKING, ClassVar
 
@@ -40,8 +41,10 @@ from textual.widget import Widget
 from textual.widgets import Static
 from vmx import Message, MessageHub, PropertyChangedMessage
 
+from aws_tui.ui.widgets.first_run import FirstRunConnectionList
 from aws_tui.ui.widgets.nav_row import NavRow
 from aws_tui.vm.chrome.focus_coordinator_vm import FocusSlot
+from aws_tui.vm.connection_discovery import ConnectionDiscoveryDisplay
 from aws_tui.vm.nav_menu_vm import SETTINGS_NAV_ID
 
 if TYPE_CHECKING:
@@ -205,6 +208,30 @@ class NavMenu(Widget, can_focus=True):
                 screen.remove_class("-rail-active")
         self._repaint_rows()
 
+    async def show_first_run_connections(self, snapshot: ConnectionDiscoveryDisplay | None) -> None:
+        """Replace the optional discovery section; None restores the ordinary rail."""
+        for section in list(self.query(FirstRunConnectionList)):
+            # AwaitRemove gathers widget message pumps; caller cancellation must
+            # not cancel those pumps and poison later application pruning.
+            removal = asyncio.ensure_future(section.remove())
+            cancelled = False
+            while not removal.done():
+                try:
+                    await asyncio.shield(removal)
+                except asyncio.CancelledError:
+                    cancelled = True
+            removal.result()
+            if cancelled:
+                raise asyncio.CancelledError
+        self.styles.width = NAV_MENU_WIDTH if snapshot is None else 28
+        self.query_one("#menu-spacer").display = snapshot is None
+        if snapshot is not None:
+            await self.mount(FirstRunConnectionList(snapshot=snapshot), before="#menu-spacer")
+
+    def activate_first_run_focused(self) -> bool:
+        """Route explicit setup/choice activation before regular service commit."""
+        return any(section.activate_focused() for section in self.query(FirstRunConnectionList))
+
     # ── Actions ──────────────────────────────────────────────────────────────
 
     def _cursor_index(self) -> int:
@@ -213,6 +240,10 @@ class NavMenu(Widget, can_focus=True):
         return self._index_of(self._vm.selected_id, default=0)
 
     def action_cursor_up(self) -> None:
+        for section in self.query(FirstRunConnectionList):
+            if section.has_focus_within:
+                section.action_cursor_up()
+                return
         if not self._items:
             return
         cur = self._cursor_index()
@@ -222,6 +253,10 @@ class NavMenu(Widget, can_focus=True):
         self._after_cursor_move(target_id)
 
     def action_cursor_down(self) -> None:
+        for section in self.query(FirstRunConnectionList):
+            if section.has_focus_within:
+                section.action_cursor_down()
+                return
         if not self._items:
             return
         cur = self._cursor_index()
@@ -281,6 +316,8 @@ class NavMenu(Widget, can_focus=True):
            this is a silent no-op and step 2's mount-time auto-focus
            is the safety net.
         """
+        if self.activate_first_run_focused():
+            return
         if not self._items:
             return
         target_id = self._items[self._cursor_index()].descriptor.id

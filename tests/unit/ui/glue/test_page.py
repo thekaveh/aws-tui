@@ -59,6 +59,8 @@ def _build_vm(fake: InMemoryGlue | None = None) -> tuple[GluePageVM, InMemoryGlu
 
 
 class _GlueApp(App[None]):
+    _first_run_view = AwsTuiApp._first_run_view
+
     CSS = """
     Screen { layout: horizontal; }
     GluePage { width: 1fr; }

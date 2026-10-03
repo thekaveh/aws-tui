@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+import os
+from dataclasses import FrozenInstanceError
 from pathlib import Path
+from typing import IO, Any, cast
 
 import pytest
 
-from aws_tui.infra.config_store import ConfigStore, ConnectionEntry
+from aws_tui.infra.config_store import ConfigError, ConfigStore, ConnectionEntry
 from aws_tui.infra.connection_resolver import (
     Connection,
     ConnectionNotFound,
@@ -713,3 +716,395 @@ def test_percent_in_a_secret_key_is_read_verbatim(tmp_path: Path, store: ConfigS
     )
     # Verbatim, exactly as the AWS CLI would sign with it.
     assert resolver._read_aws_credentials_profile("doubled")[1] == "ab%%cd"
+
+
+class TestDiscovery:
+    @pytest.mark.parametrize("invalid_source", ["aws-config", "aws-credentials"])
+    @pytest.mark.parametrize("explicit_credentials", [False, True])
+    def test_aws_stat_failure_reports_source_and_retains_other_connections(
+        self,
+        tmp_path: Path,
+        store: ConfigStore,
+        monkeypatch: pytest.MonkeyPatch,
+        invalid_source: str,
+        explicit_credentials: bool,
+    ) -> None:
+        config, credentials = _write_aws_files(
+            tmp_path,
+            config_body="[profile usable]\nregion = eu-west-1\n",
+            credentials_body="[shared]\naws_access_key_id = EXAMPLE\naws_secret_access_key = secret\n",
+        )
+        if explicit_credentials:
+            store.add_connection(
+                ConnectionEntry(
+                    name="local",
+                    kind="s3-compatible",
+                    endpoint_url="http://localhost:9000",
+                    credentials="aws-profile:shared",
+                )
+            )
+        blocked = config if invalid_source == "aws-config" else credentials
+        before = (config.read_bytes(), credentials.read_bytes())
+        original_stat = Path.stat
+
+        def checked_stat(path: Path, *args: Any, **kwargs: Any) -> os.stat_result:
+            if path == blocked:
+                raise PermissionError("directory-search-denied")
+            return original_stat(path, *args, **kwargs)
+
+        resolver = ConnectionResolver(
+            config_store=store, aws_config_path=config, aws_credentials_path=credentials
+        )
+        with monkeypatch.context() as patch:
+            patch.setattr(Path, "stat", checked_stat)
+
+            snapshot = resolver.discover()
+
+            assert snapshot.invalid_sources == (invalid_source,)
+            expected = ["local"] if explicit_credentials else []
+            expected.append("shared" if invalid_source == "aws-config" else "usable")
+            assert [c.name for c in snapshot.connections] == expected
+            if explicit_credentials:
+                assert snapshot.connections[0].access_key_id == (
+                    "EXAMPLE" if invalid_source == "aws-config" else None
+                )
+            assert "directory-search-denied" not in repr(snapshot)
+            with pytest.raises(PermissionError):
+                resolver.list()
+            with pytest.raises(PermissionError):
+                resolver.resolve(expected[-1])
+
+        assert (config.read_bytes(), credentials.read_bytes()) == before
+        assert resolver.discover().invalid_sources == ()
+
+    def test_array_app_kind_reports_bad_config_without_hiding_profiles(
+        self, tmp_path: Path, store: ConfigStore
+    ) -> None:
+        body = "[connections.bad]\nkind = []\n"
+        store.path.write_text(body, encoding="utf-8")
+        config, credentials = _write_aws_files(
+            tmp_path, config_body="[profile usable]\nregion = eu-west-1\n"
+        )
+        before = config.read_bytes()
+        resolver = ConnectionResolver(
+            config_store=store, aws_config_path=config, aws_credentials_path=credentials
+        )
+
+        snapshot = resolver.discover()
+
+        assert snapshot.invalid_sources == ("app-config",)
+        assert [(c.name, c.source, c.region) for c in snapshot.connections] == [
+            ("usable", "auto-aws-profile", "eu-west-1")
+        ]
+        assert store.path.read_text(encoding="utf-8") == body
+        assert config.read_bytes() == before
+        assert not credentials.exists()
+        with pytest.raises(TypeError, match="unhashable"):
+            resolver.list()
+        with pytest.raises(TypeError, match="unhashable"):
+            resolver.resolve("usable")
+
+    def test_credential_backend_type_error_is_not_disguised_as_bad_app_config(
+        self, tmp_path: Path, store: ConfigStore
+    ) -> None:
+        class FailingKeychain(InMemoryKeychain):
+            def get(self, service: str, key: str) -> str | None:
+                raise TypeError("credential-backend-failure")
+
+        store.add_connection(
+            ConnectionEntry(
+                name="local",
+                kind="s3-compatible",
+                endpoint_url="http://localhost:9000",
+                credentials="keychain:local",
+            )
+        )
+        resolver = ConnectionResolver(
+            config_store=store,
+            keychain=FailingKeychain(),
+            aws_config_path=tmp_path / "missing-config",
+            aws_credentials_path=tmp_path / "missing-credentials",
+        )
+
+        with pytest.raises(TypeError, match="credential-backend-failure"):
+            resolver.discover()
+
+    @pytest.mark.parametrize("invalid_source", ["aws-config", "aws-credentials"])
+    def test_existing_aws_file_read_failure_is_reported(
+        self,
+        tmp_path: Path,
+        store: ConfigStore,
+        monkeypatch: pytest.MonkeyPatch,
+        invalid_source: str,
+    ) -> None:
+        config, credentials = _write_aws_files(
+            tmp_path, config_body="[profile configured]\n", credentials_body="[shared]\n"
+        )
+        blocked = config if invalid_source == "aws-config" else credentials
+        before = (config.read_bytes(), credentials.read_bytes())
+        original_open = Path.open
+
+        def checked_open(path: Path, *args: Any, **kwargs: Any) -> IO[Any]:
+            if path == blocked:
+                raise PermissionError("private-error-text")
+            return cast(IO[Any], original_open(path, *args, **kwargs))
+
+        with monkeypatch.context() as patch:
+            patch.setattr(Path, "open", checked_open)
+            resolver = ConnectionResolver(
+                config_store=store, aws_config_path=config, aws_credentials_path=credentials
+            )
+            snapshot = resolver.discover()
+            assert snapshot.invalid_sources == (invalid_source,)
+            assert [c.name for c in snapshot.connections] == [
+                "shared" if invalid_source == "aws-config" else "configured"
+            ]
+            assert snapshot.connections == tuple(resolver.list())
+            assert "private-error-text" not in repr(snapshot)
+
+        assert (config.read_bytes(), credentials.read_bytes()) == before
+
+    def test_empty_snapshot_leaves_missing_files_absent(
+        self, tmp_path: Path, store: ConfigStore
+    ) -> None:
+        config = tmp_path / ".aws" / "config"
+        credentials = tmp_path / ".aws" / "credentials"
+        resolver = ConnectionResolver(
+            config_store=store, aws_config_path=config, aws_credentials_path=credentials
+        )
+
+        snapshot = resolver.discover()
+
+        from aws_tui.infra.connection_resolver import ConnectionDiscovery
+
+        assert isinstance(snapshot, ConnectionDiscovery)
+        assert snapshot.connections == ()
+        assert snapshot.invalid_sources == ()
+        assert not store.path.exists()
+        assert not config.parent.exists()
+
+    @pytest.mark.parametrize("body", [b"[broken", b"connections = 1\n", b"\xff"])
+    def test_bad_app_config_does_not_hide_usable_profiles(
+        self, tmp_path: Path, store: ConfigStore, body: bytes
+    ) -> None:
+        store.path.write_bytes(body)
+        config, credentials = _write_aws_files(
+            tmp_path, config_body="[profile added]\nregion = eu-west-1\n"
+        )
+        before = config.read_bytes()
+        resolver = ConnectionResolver(
+            config_store=store, aws_config_path=config, aws_credentials_path=credentials
+        )
+
+        snapshot = resolver.discover()
+
+        assert snapshot.invalid_sources == ("app-config",)
+        assert [(c.name, c.source, c.region) for c in snapshot.connections] == [
+            ("added", "auto-aws-profile", "eu-west-1")
+        ]
+        assert store.path.read_bytes() == body
+        assert config.read_bytes() == before
+        assert not credentials.exists()
+        with pytest.raises((ConfigError, UnicodeDecodeError)):
+            resolver.list()
+        with pytest.raises((ConfigError, UnicodeDecodeError)):
+            resolver.resolve("added")
+
+    def test_app_read_failure_is_safe_and_does_not_hide_profiles(
+        self, tmp_path: Path, store: ConfigStore, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        config, credentials = _write_aws_files(tmp_path, config_body="[profile added]\n")
+        resolver = ConnectionResolver(
+            config_store=store, aws_config_path=config, aws_credentials_path=credentials
+        )
+
+        def fail_load():
+            raise PermissionError("private-error-text")
+
+        monkeypatch.setattr(store, "load", fail_load)
+        snapshot = resolver.discover()
+
+        assert snapshot.invalid_sources == ("app-config",)
+        assert [c.name for c in snapshot.connections] == ["added"]
+        assert "private-error-text" not in repr(snapshot)
+        with pytest.raises(PermissionError):
+            resolver.list()
+
+    @pytest.mark.parametrize("invalid_source", ["aws-config", "aws-credentials"])
+    def test_malformed_aws_ini_retains_profiles_and_bytes(
+        self, tmp_path: Path, store: ConfigStore, invalid_source: str
+    ) -> None:
+        config, credentials = _write_aws_files(
+            tmp_path,
+            config_body="[profile configured]\nregion = eu-west-1\n",
+            credentials_body="[credential-only]\naws_access_key_id = EXAMPLE\n",
+        )
+        broken = config if invalid_source == "aws-config" else credentials
+        duplicate = "region" if invalid_source == "aws-config" else "aws_access_key_id"
+        with broken.open("a", encoding="utf-8") as file:
+            file.write(f"{duplicate} = private-error-text\n")
+        before = (config.read_bytes(), credentials.read_bytes())
+        resolver = ConnectionResolver(
+            config_store=store, aws_config_path=config, aws_credentials_path=credentials
+        )
+
+        snapshot = resolver.discover()
+
+        assert snapshot.invalid_sources == (invalid_source,)
+        assert [(c.name, c.region) for c in snapshot.connections] == [
+            ("configured", "eu-west-1"),
+            ("credential-only", "us-east-1"),
+        ]
+        assert snapshot.connections == tuple(resolver.list())
+        assert (config.read_bytes(), credentials.read_bytes()) == before
+        assert "private-error-text" not in repr(snapshot)
+
+    def test_explicit_name_wins_and_region_is_inherited(
+        self, tmp_path: Path, store: ConfigStore
+    ) -> None:
+        config, credentials = _write_aws_files(
+            tmp_path,
+            config_body="[profile prod]\nregion = eu-west-1\n[profile dev]\nregion = us-west-2\n",
+        )
+        store.add_connection(ConnectionEntry(name="prod", kind="aws", profile="prod"))
+        resolver = ConnectionResolver(
+            config_store=store, aws_config_path=config, aws_credentials_path=credentials
+        )
+
+        snapshot = resolver.discover()
+
+        assert snapshot.invalid_sources == ()
+        assert [(c.name, c.source, c.region) for c in snapshot.connections] == [
+            ("prod", "config", "eu-west-1"),
+            ("dev", "auto-aws-profile", "us-west-2"),
+        ]
+        assert snapshot.connections == tuple(resolver.list())
+
+    def test_external_repair_refreshes_diagnostics_and_connections(
+        self, tmp_path: Path, store: ConfigStore
+    ) -> None:
+        store.path.write_text("[broken", encoding="utf-8")
+        config, credentials = _write_aws_files(
+            tmp_path,
+            config_body="[profile prod]\nregion = eu-west-1\nregion = us-east-1\n",
+            credentials_body="[shared]\naws_access_key_id = EXAMPLE\naws_access_key_id = OTHER\n",
+        )
+        resolver = ConnectionResolver(
+            config_store=store, aws_config_path=config, aws_credentials_path=credentials
+        )
+        original = resolver.discover()
+        assert original.invalid_sources == ("app-config", "aws-config", "aws-credentials")
+
+        store.path.write_text('[connections.prod]\nkind = "aws"\nregion = "ap-south-1"\n')
+        config.write_text("[profile added]\nregion = eu-west-2\n", encoding="utf-8")
+        credentials.unlink()
+        repaired = resolver.discover()
+
+        assert repaired.invalid_sources == ()
+        assert [(c.name, c.source, c.region) for c in repaired.connections] == [
+            ("prod", "config", "ap-south-1"),
+            ("added", "auto-aws-profile", "eu-west-2"),
+        ]
+        assert original.invalid_sources == ("app-config", "aws-config", "aws-credentials")
+        assert [c.name for c in original.connections] == ["prod", "shared"]
+        assert not credentials.exists()
+
+    def test_snapshot_and_connections_are_immutable(
+        self, tmp_path: Path, store: ConfigStore
+    ) -> None:
+        config, credentials = _write_aws_files(tmp_path, config_body="[profile prod]\n")
+        snapshot = ConnectionResolver(
+            config_store=store, aws_config_path=config, aws_credentials_path=credentials
+        ).discover()
+
+        assert isinstance(snapshot.connections, tuple)
+        assert isinstance(snapshot.invalid_sources, tuple)
+        with pytest.raises(FrozenInstanceError):
+            snapshot.connections = ()  # type: ignore[misc]
+        with pytest.raises(FrozenInstanceError):
+            snapshot.invalid_sources = ("app-config",)  # type: ignore[misc]
+        with pytest.raises(FrozenInstanceError):
+            snapshot.connections[0].name = "changed"  # type: ignore[misc]
+
+    @pytest.mark.parametrize(
+        "source", ["static", "env:TEST_", "keychain:local", "aws-profile:shared"]
+    )
+    def test_credentials_match_list_and_files_are_unchanged(
+        self, tmp_path: Path, store: ConfigStore, monkeypatch: pytest.MonkeyPatch, source: str
+    ) -> None:
+        config, credentials = _write_aws_files(
+            tmp_path,
+            config_body="[profile shared]\nregion = eu-west-1\n",
+            credentials_body=(
+                "[shared]\naws_access_key_id = EXAMPLE\naws_secret_access_key = ab%%cd\n"
+                "aws_session_token = session\n"
+            ),
+        )
+        monkeypatch.setenv("TEST_ACCESS_KEY_ID", "EXAMPLE")
+        monkeypatch.setenv("TEST_SECRET_ACCESS_KEY", "ab%%cd")
+        monkeypatch.setenv("TEST_SESSION_TOKEN", "session")
+        keychain = InMemoryKeychain()
+        for key, value in (
+            ("access_key_id", "EXAMPLE"),
+            ("secret_access_key", "ab%%cd"),
+            ("session_token", "session"),
+        ):
+            keychain.set("local", key, value)
+        store.add_connection(
+            ConnectionEntry(
+                name="local",
+                kind="s3-compatible",
+                endpoint_url="http://localhost:9000",
+                credentials=source,
+                access_key_id="EXAMPLE",
+                secret_access_key="ab%%cd",
+                session_token="session",
+            )
+        )
+        before = (store.path.read_bytes(), config.read_bytes(), credentials.read_bytes())
+        resolver = ConnectionResolver(
+            config_store=store,
+            keychain=keychain,
+            aws_config_path=config,
+            aws_credentials_path=credentials,
+        )
+
+        snapshot = resolver.discover()
+
+        assert snapshot.invalid_sources == ()
+        assert snapshot.connections == tuple(resolver.list())
+        local = snapshot.connections[0]
+        assert (local.access_key_id, local.secret_access_key, local.session_token) == (
+            "EXAMPLE",
+            "ab%%cd",
+            "session",
+        )
+        assert (store.path.read_bytes(), config.read_bytes(), credentials.read_bytes()) == before
+
+    def test_repeated_aws_reads_report_each_invalid_source_only_once(
+        self, tmp_path: Path, store: ConfigStore
+    ) -> None:
+        config, credentials = _write_aws_files(
+            tmp_path,
+            config_body="[profile shared]\nregion = eu-west-1\nregion = us-east-1\n",
+            credentials_body="[shared]\naws_access_key_id = EXAMPLE\naws_access_key_id = OTHER\n",
+        )
+        store.add_connection(ConnectionEntry(name="prod", kind="aws", profile="shared"))
+        store.add_connection(
+            ConnectionEntry(
+                name="local",
+                kind="s3-compatible",
+                endpoint_url="http://localhost:9000",
+                credentials="aws-profile:shared",
+            )
+        )
+        resolver = ConnectionResolver(
+            config_store=store, aws_config_path=config, aws_credentials_path=credentials
+        )
+
+        snapshot = resolver.discover()
+
+        assert snapshot.invalid_sources == ("aws-config", "aws-credentials")
+        assert snapshot.connections == tuple(resolver.list())
+        assert snapshot.connections[0].region == "eu-west-1"
+        assert snapshot.connections[1].access_key_id is None

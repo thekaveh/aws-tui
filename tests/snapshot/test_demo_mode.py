@@ -14,7 +14,7 @@ from textual.worker import WorkerCancelled
 
 from aws_tui.domain.data_catalog import TableRef
 from aws_tui.infra.aws_session import TokenState
-from aws_tui.ui.widgets.pane import Pane
+from aws_tui.ui.widgets.pane import EntryRow, Pane, _column_header_for, _name_width_for
 from aws_tui.ui.widgets.toast import Toast
 from aws_tui.vm.chrome.toast_vm import ToastLevel, ToastVM
 from aws_tui.vm.file_manager.pane_vm import PaneState
@@ -64,7 +64,8 @@ async def _drain_workers(pilot) -> None:  # type: ignore[no-untyped-def]
         the downstream call_after_refresh → InvokeLater → screen
         callback chain is non-deterministic across the 10 sequential
         test runs (different asyncio scheduling pressure per theme).
-        Poll the mounted footer until it matches the public VM projection.
+        Poll the mounted footer until it matches the public VM projection,
+        then await responsive header/row columns at the actual pane geometry.
         This keeps the snapshot dependent on the same subscription and
         deferred-render path as production.
 
@@ -135,6 +136,48 @@ async def _drain_workers(pilot) -> None:  # type: ignore[no-untyped-def]
     await pilot.pause()
     await pilot.pause()
     await pilot.wait_for_scheduled_animations()
+
+    # Layout assigns outer geometry before posting Resize. Resize in turn
+    # defers the header update and row repaint through call_after_refresh.
+    # Worker/animation barriers do not guarantee that either step has landed.
+    # Observe the public rendered projection; do not reflow it ourselves.
+    def columns_ready() -> bool:
+        for pane in pilot.app.query(Pane):
+            width = _name_width_for(pane.region.width)
+            header = pane.query_one(".column-header", Static)
+            if pane.region.width == 0 or pane.name_column_width != width:
+                return False
+            expected_header = _column_header_for(width)
+            if str(header.render()) != expected_header:
+                return False
+            if header.render_line(0).text.ljust(header.size.width) != expected_header[
+                : header.size.width
+            ].ljust(header.size.width):
+                return False
+            rows = list(pane.query(EntryRow))
+            if pane.vm.viewmodel.placeholder_text is None and len(rows) != len(
+                pane.vm.filtered_entries
+            ):
+                return False
+            for row in rows:
+                if not row.is_mounted or row.size.width == 0:
+                    return False
+                # render_line observes the content Textual exports, including
+                # a cached row that has not received its deferred repaint yet.
+                # At narrower fixtures Rich wraps whole words (including
+                # the time) rather than exposing a raw character slice.
+                expected = row.render().wrap(pilot.app.console, row.size.width)[0].plain
+                expected = expected.ljust(row.size.width)
+                # Strips may omit unused trailing cells; those cells display
+                # as spaces, without changing any column or visible content.
+                if row.render_line(0).text.ljust(row.size.width) != expected:
+                    return False
+        return True
+
+    await wait_until(
+        columns_ready,
+        what="pane Resize and rendered header/row columns at current outer geometry",
+    )
 
 
 async def _show_demo_iceberg(pilot, view: IcebergView = "snapshots") -> None:  # type: ignore[no-untyped-def]

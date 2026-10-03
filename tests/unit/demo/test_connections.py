@@ -72,3 +72,14 @@ def test_demo_connection_resolver_resolve_unknown_name_raises() -> None:
     resolver = DemoConnectionResolver()
     with pytest.raises(ConnectionNotFound):
         resolver.resolve("not-a-real-connection")
+
+
+def test_demo_discovery_returns_real_connections_with_demo_origins() -> None:
+    resolver = DemoConnectionResolver()
+
+    snapshot = resolver.discover()
+
+    assert snapshot.connections == tuple(resolver.list()) == demo_connections()
+    assert len(snapshot.connections) == 4
+    assert all(c.source == "demo" for c in snapshot.connections)
+    assert snapshot.invalid_sources == ()
