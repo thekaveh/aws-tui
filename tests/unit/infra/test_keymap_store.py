@@ -211,8 +211,19 @@ def test_selection_defaults_and_independent_alias_remapping() -> None:
     store = KeymapStore()
     assert store.resolve("pane.clear_selection") == ("u",)
     assert store.resolve("pane.exit_multiselect") == ("ctrl+v",)
-    remapped = KeymapStore(overlay={"pane.toggle_select": "x", "pane.select_all": "b"})
+    remapped = KeymapStore(
+        overlay={"pane.toggle_select": "x", "pane.select_all": "b", "emr.cancel": "z"}
+    )
     assert remapped.resolve("pane.quick_look") == ("space",)
     assert remapped.resolve("auth.authenticate") == ("a",)
     assert remapped.resolve("pane.toggle_select") == ("x",)
     assert remapped.resolve("pane.select_all") == ("b",)
+
+
+def test_emr_cancel_has_one_dedicated_printable_default() -> None:
+    store = KeymapStore()
+    assert store.resolve("emr.cancel") == ("x",)
+    assert [action for action, keys in store.DEFAULT_BINDINGS.items() if "x" in keys] == [
+        "emr.cancel"
+    ]
+    assert KeymapStore(overlay={"emr.cancel": "z"}).resolve("emr.cancel") == ("z",)

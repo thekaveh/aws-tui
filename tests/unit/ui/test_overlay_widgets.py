@@ -3,6 +3,7 @@ quick look. The runtime transfers UI is :class:`TransfersOverlay`."""
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import AsyncIterator
 
 import pytest
@@ -13,7 +14,7 @@ from vmx import MessageHub, RxDispatcher
 from aws_tui.infra.keymap_store import KeymapStore
 from aws_tui.infra.theme_store import ThemeStore
 from aws_tui.ui.widgets.command_palette import CommandPalette, CommandPaletteItem
-from aws_tui.ui.widgets.confirm_modal import ConfirmModal
+from aws_tui.ui.widgets.confirm_modal import ConfirmModal, TextualDialogService
 from aws_tui.ui.widgets.help_modal import HelpModal
 from aws_tui.ui.widgets.quick_look import QuickLook
 from aws_tui.vm.chrome.command_palette_vm import (
@@ -164,6 +165,37 @@ async def test_confirm_modal_renders_request() -> None:
             modal = app.screen
             assert isinstance(modal, ConfirmModal)
             assert "-danger" in modal.classes
+    finally:
+        vm.dispose()
+        hub.dispose()
+
+
+async def test_dialog_mount_cancellation_preserves_caller_cancelled_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    hub: MessageHub = MessageHub()
+    vm = ConfirmationVM(hub=hub, dispatcher=RxDispatcher.immediate())
+    vm.construct()
+    app: App[None] = App()
+    original_mount = ConfirmModal.on_mount
+    try:
+        async with app.run_test() as pilot:
+            dialogs = TextualDialogService(app, vm, hub=hub)
+
+            def cancel_on_mount(modal: ConfirmModal) -> None:
+                original_mount(modal)
+                assert not modal._mounted_event.is_set()
+                task.cancel()
+
+            monkeypatch.setattr(ConfirmModal, "on_mount", cancel_on_mount)
+            task = asyncio.create_task(vm.ask(ConfirmRequest("Confirm"), dialog_service=dialogs))
+            with pytest.raises(asyncio.CancelledError):
+                await task
+            await pilot.pause()
+            assert task.cancelled()
+            assert not vm.is_open
+            assert vm.request is None
+            assert not any(isinstance(screen, ConfirmModal) for screen in app.screen_stack)
     finally:
         vm.dispose()
         hub.dispose()

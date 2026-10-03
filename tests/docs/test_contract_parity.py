@@ -29,7 +29,13 @@ _MODELED_OPERATIONS = {
         "ListPreparedStatements",
         "GetPreparedStatement",
     },
-    "emr-serverless": {"ListApplications", "ListJobRuns", "GetJobRun", "StartJobRun"},
+    "emr-serverless": {
+        "ListApplications",
+        "ListJobRuns",
+        "GetJobRun",
+        "StartJobRun",
+        "CancelJobRun",
+    },
     "glue": {
         "GetDatabases",
         "GetTables",
@@ -88,6 +94,7 @@ _CONSUMED_INPUT_MEMBERS = {
         "states",
     },
     ("emr-serverless", "GetJobRun"): {"applicationId", "jobRunId"},
+    ("emr-serverless", "CancelJobRun"): {"applicationId", "jobRunId"},
     ("glue", "GetTables"): {"CatalogId", "DatabaseName", "NextToken"},
     ("glue", "GetCrawlerMetrics"): {"CrawlerNameList"},
     ("s3", "ListObjectsV2"): {"Bucket", "Prefix", "Delimiter", "ContinuationToken"},
@@ -481,3 +488,28 @@ def test_known_gap_row_for_glue_job_runs_reflects_reachable_paging() -> None:
     assert "`glue.load_more`" in row
     assert "is not registered" not in row
     assert "unreachable rather than merely inconvenient" not in row
+
+
+def test_emr_cancellation_documented_contract() -> None:
+    service = _text("docs/services/emr-serverless.md")
+    keys = _text("docs/keybindings.md")
+    ledger = _text("docs/contract-ledger.md")
+    for value in (
+        "SUBMITTED",
+        "PENDING",
+        "SCHEDULED",
+        "QUEUED",
+        "RUNNING",
+        "CANCELLING",
+        "CANCELLED",
+        "emr-serverless:CancelJobRun",
+        "cancellation requested",
+        "one attempt",
+        "refresh",
+    ):
+        assert value in service
+    assert "`emr.cancel`" in keys
+    assert "`x`" in keys
+    assert "`CancelJobRun`" in ledger
+    for value in ("applicationId", "jobRunId", "total_max_attempts=1", "standard", "10", "60"):
+        assert value in ledger

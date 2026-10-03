@@ -23,6 +23,13 @@ section; the current tree must not be tagged as v0.8.0.
 
 ### Added
 
+- Confirmed cancellation for one selected active EMR Serverless job run via
+  `x` / `emr.cancel`, the Commands hint, or the service command palette. The
+  danger dialog identifies the exact source, application and run. Requests use
+  one service attempt and require `emr-serverless:CancelJobRun`; acknowledgement
+  reports cancellation requested while existing polling observes actual state.
+  Demo cancellation stops the selected run's state walk without resurrection.
+
 - **Read-only diagnostics (#246).** `aws-tui doctor` reports local setup
   failures and repair steps before the TUI starts; `--json` provides schema
   version 1 and `--probe NAME` explicitly checks one source. Running help
