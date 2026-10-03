@@ -8,16 +8,30 @@ via Textual's ``set_interval`` — there's no domain-tier
 
 from __future__ import annotations
 
-from collections.abc import Callable, Coroutine
+from collections.abc import Awaitable, Callable, Coroutine
 from dataclasses import dataclass
 from typing import Any, Literal
 
-from vmx import ComponentVMOf, Message, MessageHub
+from vmx import ComponentVMOf, Message, MessageHub, PropertyChangedMessage
 from vmx.services.dispatcher import Dispatcher
 
 from aws_tui.domain.emr_logs import EmrServerlessLogsClient, LogFilter
-from aws_tui.domain.emr_serverless import EmrServerlessClientProtocol, JobRunState
+from aws_tui.domain.emr_serverless import (
+    CANCELLABLE_JOB_RUN_STATES,
+    EmrServerlessClientProtocol,
+    JobRunState,
+)
+from aws_tui.domain.filesystem import (
+    AuthRequiredError,
+    NotFoundError,
+    PermissionDeniedError,
+    ProviderUnreachableError,
+    ThrottledError,
+    ValidationError,
+)
 from aws_tui.infra.connection_resolver import Connection
+from aws_tui.vm._observable import send_value_free
+from aws_tui.vm.chrome.confirm_vm import ConfirmPath, ConfirmRequest
 from aws_tui.vm.emr_serverless.applications_vm import ApplicationsVM
 from aws_tui.vm.emr_serverless.job_run_detail_vm import JobRunDetailVM
 from aws_tui.vm.emr_serverless.job_run_logs_vm import JobRunLogsVM
@@ -38,6 +52,34 @@ class EmrCredentialRecoverySnapshot:
     run_state_filter: frozenset[JobRunState]
     log_file_key: str | None
     log_filter: LogFilter
+
+
+@dataclass(frozen=True, slots=True)
+class CancelJobRunResult:
+    status: Literal[
+        "requested",
+        "dismissed",
+        "busy",
+        "inert",
+        "stale",
+        "superseded",
+        "denied",
+        "not_found",
+        "throttled",
+        "unreachable",
+        "auth_required",
+        "invalid",
+        "error",
+    ]
+    message: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class _CancelTarget:
+    application_id: str
+    job_run_id: str
+    source: ServiceSourceContext
+    state: JobRunState
 
 
 class EmrServerlessPageVM:
@@ -63,6 +105,7 @@ class EmrServerlessPageVM:
         self._disposed: bool = False
         self._shutdown_started: bool = False
         self._operations = OperationOwner()
+        self._cancel_busy = False
         self._inner: ComponentVMOf[None] = (
             ComponentVMOf[None]
             .builder()
@@ -124,6 +167,173 @@ class EmrServerlessPageVM:
             and detail.application_id == application_id
             and detail.job_run_id == job_run_id
         )
+
+    @property
+    def cancel_busy(self) -> bool:
+        return self._cancel_busy
+
+    def can_cancel_selected_run(self) -> bool:
+        target = self._cancel_target()
+        return (
+            not self._disposed
+            and not self._shutdown_started
+            and self._operations.accepting
+            and not self._cancel_busy
+            and target is not None
+            and target.state in CANCELLABLE_JOB_RUN_STATES
+        )
+
+    async def cancel_selected_run(
+        self,
+        ask: Callable[[ConfirmRequest], Awaitable[bool]],
+        *,
+        source_is_current: Callable[[], bool] | None = None,
+    ) -> CancelJobRunResult:
+        if not self._cancel_owner_current(source_is_current):
+            return CancelJobRunResult("inert", "EMR page is unavailable; no cancellation was sent")
+        if self._cancel_busy:
+            return CancelJobRunResult("busy")
+        target = self._cancel_target()
+        if target is None:
+            return CancelJobRunResult("inert", "select an EMR job run to request cancellation")
+        if target.state not in CANCELLABLE_JOB_RUN_STATES:
+            return CancelJobRunResult(
+                "inert", f"job run is {target.state.value}; cancellation is unavailable"
+            )
+        client = self._client
+
+        async def operation() -> CancelJobRunResult:
+            request = ConfirmRequest(
+                title="Cancel EMR job run?",
+                paths=(
+                    ConfirmPath("Source", target.source.label),
+                    ConfirmPath("Application", target.application_id),
+                    ConfirmPath("Run", target.job_run_id),
+                ),
+                confirm_label="Request cancellation",
+                cancel_label="Keep running",
+                danger=True,
+            )
+            if not await ask(request):
+                return CancelJobRunResult("dismissed")
+            latest = self._cancel_target()
+            if (
+                not self._cancel_target_current(target, source_is_current)
+                or latest is None
+                or latest.state not in CANCELLABLE_JOB_RUN_STATES
+            ):
+                return CancelJobRunResult(
+                    "stale", "selected source or job run changed; no cancellation was sent"
+                )
+            try:
+                await client.cancel_job_run(target.application_id, target.job_run_id)
+            except Exception as error:
+                if not self._cancel_target_current(target, source_is_current):
+                    return CancelJobRunResult("superseded")
+                return self._cancel_error_result(error)
+            if not self._cancel_target_current(target, source_is_current):
+                return CancelJobRunResult("superseded")
+            return CancelJobRunResult("requested", "cancellation requested")
+
+        # Reserve before any await: queued UI work shares the same reservation
+        # through both the confirmation and the single captured provider call.
+        self._cancel_busy = True
+        try:
+            self._notify_cancel_busy()
+            return await self._operations.run(operation)
+        except OperationSuperseded:
+            return CancelJobRunResult("superseded")
+        finally:
+            self._cancel_busy = False
+            self._notify_cancel_busy()
+
+    def _cancel_owner_current(self, source_is_current: Callable[[], bool] | None) -> bool:
+        return (
+            not self._disposed
+            and not self._shutdown_started
+            and self._operations.accepting
+            and (source_is_current is None or source_is_current())
+        )
+
+    def _cancel_target_current(
+        self, target: _CancelTarget, source_is_current: Callable[[], bool] | None
+    ) -> bool:
+        latest = self._cancel_target()
+        return (
+            self._cancel_owner_current(source_is_current)
+            and latest is not None
+            and (latest.source, latest.application_id, latest.job_run_id)
+            == (target.source, target.application_id, target.job_run_id)
+        )
+
+    def _notify_cancel_busy(self) -> None:
+        if not self._disposed:
+            send_value_free(
+                self._hub, PropertyChangedMessage.create(self, "emr.page", "cancel_busy")
+            )
+
+    @staticmethod
+    def _cancel_error_result(error: Exception) -> CancelJobRunResult:
+        if isinstance(error, PermissionDeniedError):
+            return CancelJobRunResult(
+                "denied",
+                "CancelJobRun permission denied; check emr-serverless:CancelJobRun permission",
+            )
+        if isinstance(error, NotFoundError):
+            return CancelJobRunResult(
+                "not_found", "application or job run was not found; refresh the selected job run"
+            )
+        if isinstance(error, ThrottledError):
+            return CancelJobRunResult(
+                "throttled",
+                "EMR Serverless throttled the cancellation request; wait before a deliberate retry",
+            )
+        if isinstance(error, ProviderUnreachableError):
+            return CancelJobRunResult(
+                "unreachable",
+                "cancellation outcome is unconfirmed because of a network failure; refresh job state before a deliberate retry",
+            )
+        if isinstance(error, AuthRequiredError):
+            return CancelJobRunResult(
+                "auth_required",
+                "authentication is required to request cancellation; refresh credentials before a deliberate retry",
+            )
+        if isinstance(error, ValidationError):
+            return CancelJobRunResult(
+                "invalid",
+                "EMR Serverless rejected the cancellation request; refresh job state before a deliberate retry",
+            )
+        return CancelJobRunResult(
+            "error", "cancellation request failed; refresh job state before a deliberate retry"
+        )
+
+    def _cancel_target(self) -> _CancelTarget | None:
+        app_id = self.applications.selected_id
+        run_id = self.job_runs.selected_id
+        summary = next((run for run in self.job_runs.runs if run.job_run_id == run_id), None)
+        if (
+            summary is None
+            or app_id is None
+            or self.job_runs.application_id != app_id
+            or summary.application_id != app_id
+        ):
+            return None
+        state = summary.state
+        detail = self.job_run_detail.detail
+        if (
+            detail is not None
+            and detail.application_id == app_id
+            and detail.job_run_id == summary.job_run_id
+            and (
+                detail.updated_at > summary.updated_at
+                or (
+                    detail.updated_at == summary.updated_at
+                    and detail.state not in CANCELLABLE_JOB_RUN_STATES
+                )
+            )
+        ):
+            state = detail.state
+        return _CancelTarget(app_id, summary.job_run_id, self._source, state)
 
     # ── Lifecycle ───────────────────────────────────────────────────────────
 
@@ -393,4 +603,4 @@ class EmrServerlessPageVM:
         return not self._disposed and not self._shutdown_started
 
 
-__all__ = ["EmrCredentialRecoverySnapshot", "EmrServerlessPageVM"]
+__all__ = ["CancelJobRunResult", "EmrCredentialRecoverySnapshot", "EmrServerlessPageVM"]
