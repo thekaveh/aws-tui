@@ -671,8 +671,9 @@ async def test_invalid_aws_source_does_not_autoopen_other_usable_profiles(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("hold_descendants", [False, True])
 async def test_mount_recovery_discovery_cannot_update_new_setup_generation(
-    app_context_factory, monkeypatch
+    app_context_factory, monkeypatch, hold_descendants
 ):  # type: ignore[no-untyped-def]
     from textual.widget import Widget
 
@@ -681,6 +682,8 @@ async def test_mount_recovery_discovery_cannot_update_new_setup_generation(
 
     env = setup_context(app_context_factory, monkeypatch)
     started, release = asyncio.Event(), asyncio.Event()
+    partial_mount_started, descendants_release = asyncio.Event(), asyncio.Event()
+    original_mount_composed = FirstRunView.mount_composed_widgets
     original_recover = env.app._recover_content_mount_lifecycle
     original_refresh = env.app._refresh_first_run_discovery
     recovering = False
@@ -707,6 +710,23 @@ async def test_mount_recovery_discovery_cannot_update_new_setup_generation(
             await release.wait()
         return snapshot
 
+    async def mount_composed(view, widgets):
+        # Textual registers the view before composing and mounting its descendants.
+        partial_mount_started.set()
+        await descendants_release.wait()
+        await original_mount_composed(view, widgets)
+
+    def new_setup_ready():
+        try:
+            views = env.app.query(FirstRunView)
+            return len(views) == 1 and any(
+                b.button_id == "first-run-add" and not b.is_disabled
+                for b in views[0].query(ModalButton)
+            )
+        finally:
+            # Let real descendant mounting continue only after readiness was polled.
+            descendants_release.set()
+
     async with env.app.run_test(size=(120, 40)) as pilot:
         await ready(env, pilot)
         env.aws_config.write_text("[profile added]\nregion=us-east-1\n")
@@ -720,16 +740,19 @@ async def test_mount_recovery_discovery_cannot_update_new_setup_generation(
         await pilot.press("enter")
         await asyncio.wait_for(started.wait(), 5)
         await pilot.press("comma")
+        if hold_descendants:
+            monkeypatch.setattr(FirstRunView, "mount_composed_widgets", mount_composed)
         # Recovery holds the mount lock; intent advances before the winner mounts.
         env.app.on_first_run_connection_list_setup_requested(
             FirstRunConnectionList.SetupRequested()
         )
         release.set()
+        if hold_descendants:
+            await asyncio.wait_for(partial_mount_started.wait(), 5)
+            assert len(env.app.query(FirstRunView)) == 1
+            assert not any(b.button_id == "first-run-add" for b in env.app.query(ModalButton))
         await wait_until(
-            lambda: (
-                len(env.app.query(FirstRunView)) == 1
-                and not button(env.app, "first-run-add").is_disabled
-            ),
+            new_setup_ready,
             what="new setup generation ready",
         )
         release.set()
