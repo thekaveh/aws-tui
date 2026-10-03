@@ -242,7 +242,11 @@ class S3ObjectDetailsVM:
         path = selection.selected_path
         self._started_generation = generation
 
-        async def read() -> tuple[S3ObjectDetailsState, tuple[ObjectDetailField, ...]]:
+        async def read() -> tuple[S3ObjectDetailsState, tuple[ObjectDetailField, ...]] | None:
+            # OperationOwner starts a separate task: the pane can change after
+            # outer validation but before this coroutine reaches provider I/O.
+            if not self._current(generation, selection):
+                return None
             # Redact ordinary failures *inside* the owned coroutine, including
             # projection errors, so owner cleanup never logs raw domain text.
             try:
@@ -253,7 +257,7 @@ class S3ObjectDetailsVM:
                 return S3ObjectDetailsState.ERROR, (ObjectDetailField("Error", safe, None),)
 
         try:
-            state, projected = await self._owner.run(read)
+            outcome = await self._owner.run(read)
         except OperationSuperseded:
             return
         except asyncio.CancelledError:
@@ -261,19 +265,25 @@ class S3ObjectDetailsVM:
             if caller is not None and caller.cancelling():
                 raise
             return
-        if not self._current(generation, selection):
+        if outcome is None or not self._current(generation, selection):
             return
+        state, projected = outcome
         self._fields = projected
         self._state = state
         for prop in ("fields", "state"):
             self._notify(prop, generation)
 
     def _notify(self, prop: str, generation: int) -> None:
+        # Pane lifecycle transitions need not emit pane-property events.
+        # Check the actual snapshot at every synchronous publication boundary.
+        self._reconcile()
         if self._closed or self._disposed or generation != self._generation:
             return
         send_value_free(self._hub, PropertyChangedMessage.create(self, self._inner.name, prop))
+        self._reconcile()
         if not self._closed and not self._disposed and generation == self._generation:
             self._on_property_changed.on_next(prop)
+            self._reconcile()
 
     def close(self) -> None:
         """Synchronously invalidate the target and cancel all owned reads."""

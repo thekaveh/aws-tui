@@ -591,3 +591,83 @@ async def test_future_outcome_and_s3_compatible_source(context: Context) -> None
     fs.queue_details(future)
     await load(vm)
     assert fields(vm)["Content type"].value == "future-result"
+
+
+async def test_destruct_between_load_and_owned_read_issues_no_provider_io(context: Context) -> None:
+    fs, pane, vm = context
+    fs.queue_details(details())
+    loaded_generation = vm.request_generation
+    load_started = asyncio.Event()
+    pane_destructed = asyncio.Event()
+
+    async def start_load() -> None:
+        load_started.set()
+        await vm.load_revision(loaded_generation)
+
+    def destruct_before_owned_read() -> None:
+        assert load_started.is_set()
+        pane.destruct()
+        pane_destructed.set()
+
+    # The load task validates first, then OperationOwner schedules its separate
+    # task behind this queued real lifecycle transition.
+    loading = asyncio.create_task(start_load())
+    asyncio.get_running_loop().call_soon(destruct_before_owned_read)
+    await wait(pane_destructed)
+    await asyncio.wait_for(loading, timeout=1)
+    assert not pane.is_constructed
+    assert fs.details_paths == []
+    assert vm.state is S3ObjectDetailsState.UNAVAILABLE
+    assert vm.fields == ()
+    assert vm.request_generation > loaded_generation
+
+
+@pytest.mark.parametrize("channel", ["subject", "hub"])
+async def test_synchronous_observer_destruct_at_publication_invalidates_ready(
+    context: Context, channel: str
+) -> None:
+    fs, pane, vm = context
+    fs.queue_details(details())
+    pane_destructed = False
+    observed: list[tuple[str, S3ObjectDetailsState, bool, int]] = []
+
+    def destruct(prop: str) -> None:
+        nonlocal pane_destructed
+        if prop == "fields" and vm.state is S3ObjectDetailsState.READY and not pane_destructed:
+            pane_destructed = True
+            pane.destruct()
+
+    if channel == "subject":
+        subscription = vm.on_property_changed.subscribe(destruct)
+    else:
+        subscription = vm._hub.messages.subscribe(
+            lambda message: (
+                destruct(message.property_name)
+                if isinstance(message, PropertyChangedMessage) and message.sender_object is vm
+                else None
+            )
+        )
+    witness = vm.on_property_changed.subscribe(
+        lambda prop: observed.append((prop, vm.state, pane.is_constructed, len(vm.fields)))
+    )
+    try:
+        await load(vm)
+        assert pane_destructed
+        assert not pane.is_constructed
+        assert vm.state is S3ObjectDetailsState.UNAVAILABLE
+        assert vm.fields == ()
+        # A subject dispatch is one synchronous fan-out. The witness may see
+        # the triggering fields event, but the old READY state notification
+        # must not continue after dispatch returns and lifecycle reconciliation.
+        assert not any(
+            prop == "state" and state is S3ObjectDetailsState.READY and not constructed
+            for prop, state, constructed, _ in observed
+        )
+        assert observed[-1][1:] == (S3ObjectDetailsState.UNAVAILABLE, False, 0)
+        if channel == "hub":
+            # Hub callbacks return before dispatch to the per-VM stream, so
+            # even the triggering READY fields event must be suppressed here.
+            assert all(state is not S3ObjectDetailsState.READY for _, state, _, _ in observed)
+    finally:
+        subscription.dispose()
+        witness.dispose()
