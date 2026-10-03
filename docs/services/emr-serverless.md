@@ -92,6 +92,11 @@ available for `SUBMITTED`, `PENDING`, `SCHEDULED`, `QUEUED`, and `RUNNING`.
 receive another request. The hint is disabled and the palette entry is removed
 when the selected run is ineligible or a request is pending.
 
+If your custom keymap already uses `x` for another action, explicitly remap
+`emr.cancel` to a distinct unused key, such as `z`. See
+[Migrating custom x bindings](../keybindings.md#21-migrating-custom-x-bindings)
+for the configuration example and the entire-overlay fallback on collision.
+
 The danger confirmation **Cancel EMR job run?** names the exact source
 (connection/profile/region), application id, and run id. It starts on
 **Keep running**; choose **Request cancellation** to proceed. Escape sends no

@@ -56,12 +56,13 @@ def test_keybinding_overlay_becomes_the_runtime_keymap(tmp_path: Path) -> None:
     cache = tmp_path / "cache"
     _write_config(
         cfg,
-        '[keybindings]\n"pane.delete" = "x"\n',
+        '[keybindings]\n"pane.delete" = "x"\n"emr.cancel" = "z"\n',
     )
     cache.mkdir()
     ctx = build_app_context(config_dir=cfg, cache_dir=cache)
     try:
         assert ctx.keymap_store.resolve("pane.delete") == ("x",)
+        assert ctx.keymap_store.resolve("emr.cancel") == ("z",)
         assert ctx.root_vm.chrome.hint_legend._keymap is ctx.keymap_store
     finally:
         ctx.close_unstarted()
@@ -112,6 +113,37 @@ def test_keybinding_collision_logs_clear_error_and_falls_back(
             "'y'" in error and "'glue.copy_table_ref'" in error and "'pane.copy'" in error
             for error in collision_errors
         )
+    finally:
+        ctx.close_unstarted()
+
+
+def test_custom_x_collision_discards_the_entire_overlay(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    cfg = tmp_path / "config"
+    cache = tmp_path / "cache"
+    _write_config(
+        cfg,
+        '[keybindings]\n"pane.delete" = "x"\n"app.help" = "ctrl+h"\n',
+    )
+    cache.mkdir()
+    warnings: list[tuple[str, dict[str, str]]] = []
+    monkeypatch.setattr(
+        "aws_tui.composition._logger.warning",
+        lambda event, *, extra: warnings.append((event, extra)),
+    )
+
+    ctx = build_app_context(config_dir=cfg, cache_dir=cache)
+    try:
+        assert ctx.keymap_store.all() == KeymapStore().all()
+        assert ctx.keymap_store.resolve("pane.delete") == ("d",)
+        assert ctx.keymap_store.resolve("emr.cancel") == ("x",)
+        assert ctx.keymap_store.resolve("app.help") == ("?",)
+        event, extra = warnings[-1]
+        assert event == "composition.keymap_overlay.invalid"
+        assert extra["error_type"] == "KeybindingCollision"
+        assert all(value in extra["error"] for value in ("'x'", "'emr.cancel'", "'pane.delete'"))
     finally:
         ctx.close_unstarted()
 

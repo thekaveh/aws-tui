@@ -237,6 +237,7 @@ A binding can be a single keystroke or a list of fallback keystrokes:
 "app.cycle_theme" = "T"
 "app.swap_source" = "S"
 "emr.next_application" = "A"
+"emr.cancel" = "x"
 "glue.catalog" = "1"
 "glue.jobs" = "2"
 "glue.crawlers" = "3"
@@ -268,10 +269,29 @@ claiming bare `y`, which is reserved by `glue.copy_table_ref`.
 The bindings that are wired today include `q`,
 `Ctrl+C`, `Tab` / `Shift+Tab`, `↑/↓` (and `j/k`), `Enter`,
 `Backspace`, `left`, `→`, `r`, `a`, `?`, `:`, `t`, `T`, `,` (comma → Settings),
-`c`, `d`, `S` (Shift+S), `A` (Shift+A), Glue `1` / `2` / `3`, Athena
+`c`, `d`, `x`, `S` (Shift+S), `A` (Shift+A), Glue `1` / `2` / `3`, Athena
 `1` / `2` / `3` / `4`, `F`, `G`, `y`, `Q`, `W`, `C`, `D`, `i`, `V`,
 `Ctrl+Enter`, `Esc`, `l`, `p`, `P` (Shift+P), `Space`, `f`,
 `Shift+↑`, and `Shift+↓`.
+
+### 2.1. Migrating custom x bindings
+
+EMR cancellation uses `x` by default. If your existing custom map assigns `x`
+to another action, explicitly remap `emr.cancel` to a distinct unused key.
+For example, keep deletion on `x` and move cancellation to `z`:
+
+```toml
+[keybindings]
+"pane.delete" = "x"
+"emr.cancel" = "z"
+```
+
+Collision validation applies to the whole keymap across services, including
+actions for pages that are not currently mounted. Without the explicit remap,
+the conflicting `x` binding is rejected: the app logs the validation error and
+falls back to the entire default keymap. Other custom bindings in the same
+overlay are also discarded. Choose a different unused key if your map already
+uses `z`.
 
 ## 3. Action IDs
 

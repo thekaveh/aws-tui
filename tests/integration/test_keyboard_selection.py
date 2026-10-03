@@ -278,9 +278,9 @@ async def test_separate_alias_overlays_preserve_explicit_meanings(
     _use_injected_s3_connection(ctx)
     ctx.keymap_store = KeymapStore(
         overlay=(
-            {"pane.toggle_select": "x", "pane.select_all": "b"}
+            {"pane.toggle_select": "x", "pane.select_all": "b", "emr.cancel": "z"}
             if remap_selection
-            else {"pane.quick_look": "x", "auth.authenticate": "b"}
+            else {"pane.quick_look": "x", "auth.authenticate": "b", "emr.cancel": "z"}
         )
     )
     app = AwsTuiApp(ctx)
@@ -453,7 +453,7 @@ async def test_partly_overlapping_aliases_keep_exclusive_keys_explicit(
         if exclusive_action.startswith("pane.") and exclusive_action != "pane.select_all"
         else "a"
     )
-    ctx.keymap_store = KeymapStore(overlay={exclusive_action: [shared, "x"]})
+    ctx.keymap_store = KeymapStore(overlay={exclusive_action: [shared, "x"], "emr.cancel": "z"})
     app = AwsTuiApp(ctx)
     async with app.run_test(size=(120, 40)) as pilot:
         await drain_workers(app)
