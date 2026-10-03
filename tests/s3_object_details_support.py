@@ -8,6 +8,10 @@ from dataclasses import dataclass, field
 from types import TracebackType
 from typing import Any
 
+from aws_tui.demo.in_memory_fs import InMemoryFS
+from aws_tui.domain.filesystem import PathRef
+from aws_tui.domain.s3_object_details import S3ObjectDetails
+
 
 @dataclass
 class ReadBarrier:
@@ -103,3 +107,59 @@ class RecordingSession:
     ) -> None:
         self.exit_count += 1
         self.exit_types.append(exc_type)
+
+
+@dataclass
+class DetailsReadBarrier:
+    """Hold a details outcome, optionally finishing despite cancellation."""
+
+    outcome: S3ObjectDetails | Exception
+    cancellation_resistant: bool = False
+    entered: asyncio.Event = field(default_factory=asyncio.Event)
+    release: asyncio.Event = field(default_factory=asyncio.Event)
+    cancelled: asyncio.Event = field(default_factory=asyncio.Event)
+    finished: asyncio.Event = field(default_factory=asyncio.Event)
+
+    async def read(self) -> S3ObjectDetails:
+        self.entered.set()
+        try:
+            try:
+                await self.release.wait()
+            except asyncio.CancelledError:
+                self.cancelled.set()
+                if not self.cancellation_resistant:
+                    raise
+                await self.release.wait()
+            if isinstance(self.outcome, Exception):
+                raise self.outcome
+            return self.outcome
+        finally:
+            self.finished.set()
+
+
+DetailsOutcome = S3ObjectDetails | Exception | DetailsReadBarrier | asyncio.Future[S3ObjectDetails]
+
+
+class DetailsInMemoryFS(InMemoryFS):
+    """Real listing/selection fixture with an optional details capability."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.details_paths: list[PathRef] = []
+        self.details_outcomes: deque[DetailsOutcome] = deque()
+
+    def queue_details(self, *outcomes: DetailsOutcome) -> None:
+        self.details_outcomes.extend(outcomes)
+
+    async def read_object_details(self, path: PathRef) -> S3ObjectDetails:
+        self.details_paths.append(path)
+        if not self.details_outcomes:
+            raise AssertionError(f"Unqueued details read: {path}")
+        outcome = self.details_outcomes.popleft()
+        if isinstance(outcome, DetailsReadBarrier):
+            return await outcome.read()
+        if isinstance(outcome, asyncio.Future):
+            return await outcome
+        if isinstance(outcome, Exception):
+            raise outcome
+        return outcome
