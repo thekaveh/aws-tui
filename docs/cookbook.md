@@ -10,6 +10,7 @@
 5. [Browse AWS Glue safely](#5-browse-aws-glue-safely)
 6. [Run Athena queries safely](#6-run-athena-queries-safely)
 7. [Inspect and query Glue tables through Athena](#7-inspect-and-query-glue-tables-through-athena)
+8. [Diagnose local setup and source access](#8-diagnose-local-setup-and-source-access)
 
 ---
 
@@ -1031,3 +1032,68 @@ machine downloads DuckDB's `httpfs`, `aws`, and `iceberg` extensions from
 without egress to that domain the first query fails until the cache is
 populated (see [Installation](install.md)). Forbidden, not-found, not-Iceberg, and expired-credential failures
 surface through the same placeholder styling as the six metadata tabs.
+
+## 8. Diagnose local setup and source access
+
+Use diagnostics when startup fails or a source cannot authenticate:
+
+```sh
+aws-tui doctor
+aws-tui doctor --json
+aws-tui doctor --probe dev
+aws-tui doctor --json --probe 'local-s3'
+```
+
+### 8.1. Read the offline report
+
+The default command reads local app and AWS configuration, validates the
+keymap, discovers sources, checks credential presence, and inspects SSO cache
+freshness. It opens no socket, calls no keyring or credential provider, runs
+no subprocess, and creates or changes no files, directories, or permissions.
+It works even when malformed configuration prevents the TUI from starting.
+`AWS_TUI_DEMO=1` still inspects the actual local configuration; `--demo` and
+`--version` cannot be combined with `doctor`.
+
+JSON reports have integer `schema_version: 1` and a `checks` array. Each
+check has `name`, `result`, `context`, `next_step`, and `actionable`. Context
+uses safe source ordinals, kind, and origin rather than raw source names;
+secrets and sensitive output are filtered. Text and JSON share the same
+checks and repair instructions.
+
+| Exit | Meaning |
+|---|---|
+| `0` | No actionable failure found; access may still be unverified. |
+| `1` | At least one actionable configuration or authentication failure. |
+| `2` | Invalid command usage, such as `--probe` without a name. |
+
+An absent optional app config, a skipped probe, or offline `unverified`
+credentials is informational. Follow each `next_step` for failures; local
+credential presence alone does not verify network access or permissions.
+
+### 8.2. Explicitly probe one source
+
+`--probe NAME` requires one exact configured connection name or discovered
+AWS profile name. It retains every local diagnostic check and replaces the
+default skipped probe with that source's result. Unknown names fail without
+trying another source. AWS sources perform STS `GetCallerIdentity`;
+S3-compatible sources perform S3 `ListBuckets`. Responses are discarded,
+and success confirms only that operation. An explicitly selected
+S3-compatible source may read its configured keychain credentials.
+
+Probes use the standard SDK credential chain with connect and read timeouts
+of 5 seconds and `total_max_attempts=1`, including credential-provider clients.
+These are per-request limits, not a total deadline for a multi-step chain.
+No credentials or SSO tokens are persisted. Cached SSO is used without OIDC
+refresh or rotation. Expired SSO, `credential_process`, and interactive MFA
+require authentication in another terminal; the probe does not launch a
+process or prompt for MFA. Dynamic providers may require network requests
+only after an explicit probe request.
+
+### 8.3. Locate runtime evidence
+
+Press `?` in the running TUI and scroll down to **Diagnostics** for the
+doctor command, active log file, and crash directory. Those locations come
+from the running app's log and crash path selection, including custom
+context paths and legacy/platform-native cache resolution. Diagnostic path
+text displays brackets literally and escapes control characters. Doctor
+also reports effective local paths without creating them.

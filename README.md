@@ -266,7 +266,25 @@ then the first connection in resolver order — which lists every explicit
 `[connections.*]` entry, s3-compatible ones included, ahead of any
 auto-discovered AWS profile.
 
-### 3.1. First-time launch
+### 3.1. Diagnose local setup
+
+Run `aws-tui doctor` before launching the TUI, or `aws-tui doctor --json`
+for a machine-readable report with integer `schema_version: 1`. Each check
+includes `name`, `result`, `context`, and `next_step`. The default command
+inspects local configuration, keybindings, credential presence, and SSO cache
+freshness without opening a socket, reading the keychain, running credential
+processes, or writing files or permissions. `AWS_TUI_DEMO=1` still diagnoses
+your real local setup.
+
+Exit status is `0` when no actionable failure was found, `1` when a check
+needs repair, and `2` for invalid command usage. Informational `unverified`
+and skipped checks do not prove access. To explicitly test one configured
+connection or discovered AWS profile, use `aws-tui doctor --probe NAME`.
+See the [diagnostic recipe](docs/cookbook.md#8-diagnose-local-setup-and-source-access)
+for operations, timeouts, and authentication limits. Press `?` in the TUI
+to see the active log file and crash directory.
+
+### 3.2. First-time launch
 
 When no connection resolves, the main screen opens **Connection setup**.
 Choose **Add S3-compatible connection** to use the same validated form as

@@ -9,7 +9,9 @@ overlay.
 from __future__ import annotations
 
 from contextlib import suppress
+from pathlib import Path
 from typing import ClassVar
+from unicodedata import category
 
 from textual.app import ComposeResult
 from textual.binding import Binding, BindingType
@@ -19,6 +21,8 @@ from textual.screen import ModalScreen
 from textual.widgets import Static
 
 from aws_tui.infra.keymap_store import KeymapStore
+from aws_tui.infra.paths import cache_home
+from aws_tui.infra.redaction import redact_text
 
 _KEY_LABELS: dict[str, str] = {
     "backspace": "Backspace",
@@ -92,9 +96,17 @@ class HelpModal(ModalScreen[None]):
         Binding("escape,question_mark,q,colon", "dismiss", "Close", show=True, priority=True),
     ]
 
-    def __init__(self, *, keymap: KeymapStore | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        keymap: KeymapStore | None = None,
+        log_path: Path | None = None,
+        crash_path: Path | None = None,
+    ) -> None:
         super().__init__()
         self._keymap = keymap or KeymapStore()
+        self._log_path = log_path if log_path is not None else cache_home() / "log" / "aws-tui.log"
+        self._crash_path = crash_path if crash_path is not None else cache_home() / "crash"
 
     def compose(self) -> ComposeResult:
         with Vertical(id="help-frame"):
@@ -147,11 +159,34 @@ class HelpModal(ModalScreen[None]):
                     "  https://thekaveh.github.io/aws-tui/cookbook/",
                     classes="help-dim",
                 )
+                yield Static("Diagnostics", classes="help-section")
+                yield Static(
+                    "  aws-tui doctor — offline setup checks\n"
+                    "  aws-tui doctor --json\n"
+                    "  aws-tui doctor --probe NAME — explicit read-only access check",
+                    classes="help-dim",
+                    markup=False,
+                )
+                yield Static(
+                    f"  Log file: {self._display_path(self._log_path)}\n"
+                    f"  Crash directory: {self._display_path(self._crash_path)}",
+                    classes="help-dim",
+                    markup=False,
+                )
             help_keys = self._action_keys("app.help")
             yield Static(f"press {help_keys} / Esc to close", id="help-footer")
 
     def action_move_up(self) -> None:
         self._scroll_body(-1)
+
+    @staticmethod
+    def _display_path(path: Path) -> str:
+        """Keep path punctuation literal and escape terminal controls."""
+        return redact_text(
+            "".join(
+                ascii(char)[1:-1] if category(char).startswith("C") else char for char in str(path)
+            )
+        )
 
     def action_move_down(self) -> None:
         self._scroll_body(1)
