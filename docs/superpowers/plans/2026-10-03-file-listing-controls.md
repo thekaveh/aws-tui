@@ -6,7 +6,7 @@
 
 **Architecture:** PaneVM retains loaded entry identities and derives visibility and order. Textual modal forms route to VM methods and the persistent pane status reflects active filters/sorts. No filesystem operation is required to change presentation.
 
-**Tech Stack:** Python 3.12+, VMx, Textual, pytest/Pilot, pytest-textual-snapshot.
+**Tech Stack:** Python 3.11–3.13, VMx, Textual, pytest/Pilot, pytest-textual-snapshot.
 
 **Spec:** `docs/superpowers/specs/2026-10-03-file-listing-controls-design.md`
 
