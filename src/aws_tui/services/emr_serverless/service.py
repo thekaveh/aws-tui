@@ -105,6 +105,9 @@ class _FailedEmrClient:
     async def get_job_run(self, application_id: str, job_run_id: str) -> JobRunDetail:
         raise self._fresh_error()
 
+    async def cancel_job_run(self, application_id: str, job_run_id: str) -> None:
+        raise self._fresh_error()
+
     async def start_job_run(
         self,
         application_id: str,

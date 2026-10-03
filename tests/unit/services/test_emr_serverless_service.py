@@ -12,7 +12,7 @@ from vmx.messages.protocols import Message
 
 from aws_tui.domain.emr_logs import EmrServerlessLogsClient
 from aws_tui.domain.emr_serverless import EMR_BOTO_CONFIG
-from aws_tui.domain.filesystem import AuthRequiredError
+from aws_tui.domain.filesystem import AuthRequiredError, ProviderUnreachableError
 from aws_tui.infra.connection_resolver import Connection
 from aws_tui.services.emr_serverless import service as service_module
 from aws_tui.services.emr_serverless.service import EmrServerlessService
@@ -211,3 +211,15 @@ async def test_degraded_clients_raise_fresh_errors_on_every_call(
     assert first_logs is not second_logs
     assert str(first_application) == str(second_application)
     assert str(first_logs) == str(second_logs)
+
+
+@pytest.mark.parametrize("error_type", [AuthRequiredError, ProviderUnreachableError])
+@pytest.mark.asyncio
+async def test_failed_emr_client_cancellation_preserves_original_typed_error(error_type) -> None:
+    client = service_module._FailedEmrClient(error_type("original error"))
+    errors = []
+    for _ in range(2):
+        with pytest.raises(error_type, match="original error") as caught:
+            await client.cancel_job_run("a1", "r1")
+        errors.append(caught.value)
+    assert errors[0] is not errors[1]
