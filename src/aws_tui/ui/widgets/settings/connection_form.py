@@ -92,11 +92,18 @@ class ConnectionFormSubmitted(TextualMessage):
         form: S3CompatForm,
         mode: Literal["add", "edit"],
         original_name: str | None,
+        control: ConnectionFormInline | None = None,
     ) -> None:
         super().__init__()
         self.form: S3CompatForm = form
         self.mode: Literal["add", "edit"] = mode
         self.original_name: str | None = original_name
+        self._control = control
+
+    @property
+    def control(self) -> ConnectionFormInline | None:
+        """Public sender for owners to scope bubbled submissions to their form."""
+        return self._control
 
 
 class ConnectionFormCancelled(TextualMessage):
@@ -158,9 +165,10 @@ class ConnectionFormInline(Widget):
         ("escape", "cancel", "Cancel"),
     ]
 
-    def __init__(self, *, hub: MessageHub[Message]) -> None:
+    def __init__(self, *, hub: MessageHub[Message], submit_label: str = "save") -> None:
         super().__init__()
         self._hub: MessageHub[Message] = hub
+        self._submit_label = submit_label
         self._ctx: _OpenContext | None = None
         # Form VM: composes VMx FormVM over S3CompatForm. A
         # blank model on construction; reset to actual values via
@@ -230,7 +238,7 @@ class ConnectionFormInline(Widget):
                     )
             with Horizontal(classes="form-footer"):
                 yield ModalButton("cancel", button_id="form-cancel-btn")
-                yield ModalButton("save", button_id="form-save-btn", classes="-primary")
+                yield ModalButton(self._submit_label, button_id="form-save-btn", classes="-primary")
 
     def on_mount(self) -> None:
         self._errors_sub = self._form_vm.on_errors_changed.subscribe(
@@ -244,6 +252,11 @@ class ConnectionFormInline(Widget):
         self._form_vm.dispose()
 
     # ── Public API ─────────────────────────────────────────────────────────
+
+    @property
+    def has_errors(self) -> bool:
+        """Whether the existing validation model currently rejects submission."""
+        return self._form_vm.has_errors
 
     def open_for_add(self) -> None:
         """Show the form in Add mode (all fields empty, name unlocked)."""
@@ -304,6 +317,7 @@ class ConnectionFormInline(Widget):
         self.remove_class("-open")
         self._submitting = False
         self._ctx = None
+        self._refresh_save_button()
 
     def cycle_focus(self, *, reverse: bool = False) -> bool:
         """Cycle within the open form when one of its controls owns focus."""
@@ -391,7 +405,7 @@ class ConnectionFormInline(Widget):
             node = getattr(node, "parent", None)
 
     def action_cancel(self) -> None:
-        if self._ctx is None:
+        if self._ctx is None or self._submitting or self.is_disabled:
             return
         self.close()
         self.post_message(ConnectionFormCancelled())
@@ -435,7 +449,14 @@ class ConnectionFormInline(Widget):
         # NOT also require is_dirty. Pristine-but-valid stays
         # enabled, preserving the prior "save always available when
         # all fields valid" semantics the form had pre-round-3.
-        save_btn.disabled = self._form_vm.has_errors
+        save_btn.disabled = self._submitting or self._form_vm.has_errors
+        for button in self.query(ModalButton):
+            if button.button_id == "form-cancel-btn":
+                button.disabled = self._submitting
+        for inp in self.query(Input):
+            inp.disabled = self._submitting or (
+                self._ctx is not None and self._ctx.mode == "edit" and inp.id == "form-name"
+            )
 
     def mark_name_invalid(self) -> None:
         """Add ``-invalid`` to the name Input so the user sees the error.
@@ -452,6 +473,7 @@ class ConnectionFormInline(Widget):
         """
         self.query_one("#form-name", Input).add_class("-invalid")
         self._submitting = False
+        self._refresh_save_button()
 
     def clear_submitting(self) -> None:
         """Clear the ``_submitting`` re-entrancy flag.
@@ -463,6 +485,7 @@ class ConnectionFormInline(Widget):
         user can edit field values and retry.
         """
         self._submitting = False
+        self._refresh_save_button()
 
     def _submit(self) -> None:
         """Validate fields and post :class:`ConnectionFormSubmitted`.
@@ -491,7 +514,7 @@ class ConnectionFormInline(Widget):
         / :meth:`open_for_edit` so the next form interaction starts
         fresh.
         """
-        if self._ctx is None:
+        if self._ctx is None or self.is_disabled:
             return
         if self._form_vm.has_errors:
             # Defense in depth — the save button should already be
@@ -501,6 +524,7 @@ class ConnectionFormInline(Widget):
         if self._submitting:
             return
         self._submitting = True
+        self._refresh_save_button()
         # Pull the live model from the form VM. set_field has been
         # threading every keystroke into the working model, so it's
         # current — just hand it off. The initial force_path_style
@@ -509,7 +533,9 @@ class ConnectionFormInline(Widget):
         model = self._form_vm.model
         ctx = self._ctx
         self.post_message(
-            ConnectionFormSubmitted(form=model, mode=ctx.mode, original_name=ctx.original_name)
+            ConnectionFormSubmitted(
+                form=model, mode=ctx.mode, original_name=ctx.original_name, control=self
+            )
         )
 
 

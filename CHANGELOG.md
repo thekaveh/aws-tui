@@ -23,6 +23,17 @@ section; the current tree must not be tagged as v0.8.0.
 
 ### Added
 
+- **In-session connection setup (#243).** Empty or invalid local connection
+  configuration opens actionable setup with the existing S3-compatible form.
+  Save and open persists through the Settings connection owner and opens S3;
+  Retry discovery refreshes local AWS profile rows without probing or opening
+  them. Explicit selection probes credentials before starting the provider.
+  Origin labels, separate recovery instructions, and keyboard controls work
+  at 120×40. Setup leaves AWS config and credentials files unchanged.
+  Locked or unavailable keychains leave setup actionable for an external
+  repair and Retry discovery. Saves completing after navigation report their
+  outcome without changing the current screen or opening the saved source.
+
 - **Copyable pane paths and revealed truncated names (#208).** `p` copies the
   path of the entry under the cursor and `P` copies the pane's own directory
   path; the pane's top border is a click target for the same copy. A name or

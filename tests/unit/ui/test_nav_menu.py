@@ -402,3 +402,35 @@ async def test_active_service_stays_selected_when_focus_moves_into_content() -> 
     finally:
         coordinator.dispose()
         vm.dispose()
+
+
+@pytest.mark.asyncio
+async def test_optional_discovery_section_restores_normal_rail_navigation() -> None:
+    from aws_tui.infra.connection_resolver import ConnectionDiscovery
+    from aws_tui.ui.widgets.first_run import FirstRunConnectionList
+
+    vm, hub = _vm_with_services()
+    nav = NavMenu(vm=vm, hub=hub)
+    try:
+        async with _Host(nav).run_test(size=(120, 40)) as pilot:
+            await pilot.pause()
+            normal_rows = list(nav.query(NavRow))
+            normal_ids = [row.descriptor_id for row in normal_rows]
+            await nav.show_first_run_connections(ConnectionDiscovery(()))
+            await pilot.pause()
+            assert nav.region.width == 28
+            assert len(nav.query(FirstRunConnectionList)) == 1
+            assert [row.descriptor_id for row in nav.query(NavRow)] == normal_ids
+            nav.focus()
+            await pilot.press("down")
+            assert vm.selected_id == vm.items[1].descriptor.id
+            selected = vm.selected_id
+            await nav.show_first_run_connections(None)
+            await pilot.pause()
+            assert nav.region.width == 12
+            assert list(nav.query(NavRow)) == normal_rows
+            assert vm.selected_id == selected
+            assert nav.query_one("#menu-spacer").display
+            assert nav.activate_first_run_focused() is False
+    finally:
+        vm.dispose()

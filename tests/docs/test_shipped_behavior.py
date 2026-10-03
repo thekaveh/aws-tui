@@ -101,9 +101,14 @@ def test_current_docs_do_not_claim_deleted_first_run_or_resume_modals() -> None:
     assert "FirstRunModal" not in current
     assert "ResumeModal" not in current
     assert "overlays like command palette / confirm / quick look / crash / first-run" not in current
-    assert "first-run persistence store credentials" not in unreleased
-    assert "First-run S3-compatible save failures" not in unreleased
-    assert "Settings and first-run now share" not in unreleased
+    for path in ("README.md", "docs/connections.md"):
+        text = _text(path)
+        assert "**Save and open**" in text
+        assert "**Retry discovery**" in text
+        assert "No first-run" not in text
+        assert "local-only placeholder" not in text
+    assert "In-session connection setup (#243)" in unreleased
+    assert "Setup leaves AWS config and credentials files unchanged" in unreleased
 
 
 def test_contributing_documents_gitflow_base_branches() -> None:
@@ -148,7 +153,9 @@ def test_installed_help_and_current_docs_use_executable_contracts() -> None:
     recording = _text("docs/recording-todo.md")
 
     docs_url = "https://thekaveh.github.io/aws-tui/"
-    assert docs_url in app
+    first_run = _text("src/aws_tui/ui/widgets/first_run.py")
+    assert "from aws_tui.ui.widgets.first_run import" in app
+    assert docs_url in first_run
     assert docs_url in help_modal
     assert "See [b]docs/connections.md[/] in the repo" not in app
     assert '"  docs/connections.md' not in help_modal

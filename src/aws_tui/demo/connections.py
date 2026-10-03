@@ -15,7 +15,7 @@ Four connections (spec § "Demo connection resolver"):
 
 from __future__ import annotations
 
-from aws_tui.infra.connection_resolver import Connection
+from aws_tui.infra.connection_resolver import Connection, ConnectionDiscovery
 
 
 def demo_connections() -> tuple[Connection, ...]:
@@ -62,6 +62,10 @@ class DemoConnectionResolver:
 
     def list(self) -> tuple[Connection, ...]:
         return demo_connections()
+
+    def discover(self) -> ConnectionDiscovery:
+        """Return the actual demo connections with no invalid local sources."""
+        return ConnectionDiscovery(connections=tuple(self.list()))
 
     def default(self) -> Connection | None:
         return demo_connections()[0]
