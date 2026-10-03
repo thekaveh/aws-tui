@@ -97,6 +97,7 @@ class BoundedQueryResult:
     detail: QueryExecutionDetail
     columns: tuple[ResultColumn, ...]
     rows: tuple[tuple[str | None, ...], ...] = field(repr=False)
+    source_exhausted: bool | None = None
 
 
 @dataclass(eq=False, repr=False, slots=True)
@@ -302,7 +303,7 @@ class AthenaQueryRunner:
                 "Athena query was cancelled",
             )
         try:
-            columns, rows = await self._bounded_results(ref, max_rows=max_rows)
+            columns, rows, source_exhausted = await self._bounded_results(ref, max_rows=max_rows)
         except asyncio.CancelledError:
             del detail
             raise
@@ -314,7 +315,7 @@ class AthenaQueryRunner:
             prepared_error = _prepared_provider_error(exc, phase="results")
             del exc
             raise prepared_error from None
-        return BoundedQueryResult(detail, columns, rows)
+        return BoundedQueryResult(detail, columns, rows, source_exhausted)
 
     async def _poll(
         self,
@@ -339,7 +340,7 @@ class AthenaQueryRunner:
         ref: QueryExecutionRef,
         *,
         max_rows: int,
-    ) -> tuple[tuple[ResultColumn, ...], tuple[tuple[str | None, ...], ...]]:
+    ) -> tuple[tuple[ResultColumn, ...], tuple[tuple[str | None, ...], ...], bool]:
         columns: tuple[ResultColumn, ...] | None = None
         rows: list[tuple[str | None, ...]] = []
         token: str | None = None
@@ -370,6 +371,7 @@ class AthenaQueryRunner:
             page_rows = page.rows
             rows.extend(page_rows[:remaining])
             next_token = page.next_token
+            source_exhausted = next_token is None and len(page_rows) <= remaining
             if len(rows) >= max_rows or next_token is None:
                 break
             if not page_rows:
@@ -384,7 +386,7 @@ class AthenaQueryRunner:
                 )
             seen_tokens.add(next_token)
             token = next_token
-        return columns or (), tuple(rows)
+        return columns or (), tuple(rows), source_exhausted
 
     def _retain_cleanup(
         self,

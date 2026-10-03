@@ -31,6 +31,7 @@ from aws_tui.domain.glue import (
 from aws_tui.domain.iceberg import (
     IcebergDataFile,
     IcebergHistoryEntry,
+    IcebergInspection,
     IcebergInspector,
     IcebergManifest,
     IcebergPartition,
@@ -127,22 +128,22 @@ class _ContextualIcebergInspector:
         self._resolved_workgroup: str | None = None
         self._resolve_lock = asyncio.Lock()
 
-    async def list_snapshots(self, table_ref: TableRef) -> tuple[IcebergSnapshot, ...]:
+    async def list_snapshots(self, table_ref: TableRef) -> IcebergInspection[IcebergSnapshot]:
         return await (await self._inspector(table_ref)).list_snapshots(table_ref)
 
-    async def list_history(self, table_ref: TableRef) -> tuple[IcebergHistoryEntry, ...]:
+    async def list_history(self, table_ref: TableRef) -> IcebergInspection[IcebergHistoryEntry]:
         return await (await self._inspector(table_ref)).list_history(table_ref)
 
-    async def list_manifests(self, table_ref: TableRef) -> tuple[IcebergManifest, ...]:
+    async def list_manifests(self, table_ref: TableRef) -> IcebergInspection[IcebergManifest]:
         return await (await self._inspector(table_ref)).list_manifests(table_ref)
 
-    async def list_files(self, table_ref: TableRef) -> tuple[IcebergDataFile, ...]:
+    async def list_files(self, table_ref: TableRef) -> IcebergInspection[IcebergDataFile]:
         return await (await self._inspector(table_ref)).list_files(table_ref)
 
-    async def list_partitions(self, table_ref: TableRef) -> tuple[IcebergPartition, ...]:
+    async def list_partitions(self, table_ref: TableRef) -> IcebergInspection[IcebergPartition]:
         return await (await self._inspector(table_ref)).list_partitions(table_ref)
 
-    async def list_refs(self, table_ref: TableRef) -> tuple[IcebergReference, ...]:
+    async def list_refs(self, table_ref: TableRef) -> IcebergInspection[IcebergReference]:
         return await (await self._inspector(table_ref)).list_refs(table_ref)
 
     async def _inspector(self, table_ref: TableRef) -> IcebergInspector:

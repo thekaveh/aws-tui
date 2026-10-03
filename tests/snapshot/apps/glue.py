@@ -6,12 +6,13 @@ from typing import Literal
 from textual.app import App, ComposeResult
 from textual.containers import Container, Horizontal
 from textual.pilot import Pilot
-from textual.widgets import DataTable, OptionList
+from textual.widgets import DataTable, OptionList, Static
 from vmx import NULL_DISPATCHER, MessageHub
 from vmx.messages.protocols import Message
 
 from aws_tui.domain.data_catalog import TableFormat
 from aws_tui.domain.filesystem import PermissionDeniedError
+from aws_tui.domain.iceberg import IcebergCoverage, IcebergInspection
 from aws_tui.infra.connection_resolver import Connection
 from aws_tui.infra.duckdb import DuckDbPort
 from aws_tui.infra.keymap_store import KeymapStore
@@ -28,7 +29,16 @@ from aws_tui.vm.glue.page_vm import GluePageVM, GlueView
 from aws_tui.vm.service_source_vm import ServiceSourceContext
 from tests.helpers import wait_until
 from tests.unit.vm.glue._fake_glue import InMemoryGlue
-from tests.unit.vm.glue.test_iceberg_vm import RecordingInspector
+from tests.unit.vm.glue.test_iceberg_vm import RecordingInspector, _coverage_rows
+
+
+class _CoverageInspector(RecordingInspector):
+    async def _load(self, view, ref):
+        await super()._load(view, ref)
+        return IcebergInspection(
+            _coverage_rows("snapshots", 100), IcebergCoverage("truncated", 100, view, ref)
+        )
+
 
 GlueFixture = Literal["populated", "empty", "forbidden", "iceberg"]
 
@@ -75,6 +85,7 @@ class GluePageApp(App[None]):
         focus_tabs: bool = False,
         show_legend: bool = False,
         duckdb_port: DuckDbPort | None = None,
+        coverage_fixture: bool = False,
     ) -> None:
         super().__init__()
         self.CSS = ThemeStore().load(theme)
@@ -84,7 +95,9 @@ class GluePageApp(App[None]):
         self._keymap = KeymapStore()
         self._vm = GluePageVM(
             client=_client(fixture),
-            iceberg_inspector=RecordingInspector() if fixture == "iceberg" else None,
+            iceberg_inspector=(_CoverageInspector() if coverage_fixture else RecordingInspector())
+            if fixture == "iceberg"
+            else None,
             connection=Connection(
                 name="analytics-prod",
                 kind="aws",
@@ -141,6 +154,16 @@ class GluePageApp(App[None]):
             self.query_one("#glue-run-state-filter").open()
         if self._focus_tabs:
             self.query_one("#glue-view-tabs", ServiceTabStrip).focus()
+
+    async def reveal_cached_metadata(self, pilot: Pilot) -> None:
+        while self._vm.catalog.iceberg.has_more:
+            await self._vm.catalog.iceberg.load_more()
+        footer = self.query_one("#glue-iceberg-footer", Static)
+        await wait_until(
+            lambda: "100 visible" in str(footer.render()),
+            what="exhausted metadata cache footer repainted",
+        )
+        await pilot.pause()
 
     async def focus_iceberg_table(self, pilot: Pilot) -> None:
         await pilot.pause()

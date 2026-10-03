@@ -266,8 +266,10 @@ def test_iceberg_public_contract_exports_exact_record_set() -> None:
     from aws_tui.domain import iceberg
 
     assert iceberg.__all__ == [
+        "IcebergCoverage",
         "IcebergDataFile",
         "IcebergHistoryEntry",
+        "IcebergInspection",
         "IcebergInspector",
         "IcebergManifest",
         "IcebergMetadataShapeError",
@@ -392,9 +394,9 @@ async def test_inspector_quotes_identifiers_and_maps_snapshots() -> None:
     assert runner.sql == (
         "SELECT committed_at, snapshot_id, parent_id, operation, manifest_list, summary "
         'FROM "AwsDataCatalog"."analytics"."order-events$snapshots" '
-        "ORDER BY committed_at DESC LIMIT 100"
+        "ORDER BY committed_at DESC LIMIT 101"
     )
-    assert rows == (
+    assert rows.rows == (
         IcebergSnapshot(
             committed_at=datetime(2026, 7, 26, 12, 30, tzinfo=UTC),
             snapshot_id=42,
@@ -404,7 +406,7 @@ async def test_inspector_quotes_identifiers_and_maps_snapshots() -> None:
             summary=(("added-records", "100"), ("owner", "analytics")),
         ),
     )
-    assert runner.calls[0][3] == 100
+    assert runner.calls[0][3] == 101
     assert "order-events" not in runner.calls[0][2]
 
 
@@ -467,14 +469,14 @@ async def test_inspector_uses_exact_projection_order_and_hard_limit(
     )
     inspector = IcebergInspector(runner=runner, context=CONTEXT)
 
-    assert await getattr(inspector, method)(TABLE) == ()
+    assert (await getattr(inspector, method)(TABLE)).rows == ()
 
     assert runner.sql == (
         f"SELECT {projection} "
         f'FROM "AwsDataCatalog"."analytics"."order-events${suffix}" '
-        f"ORDER BY {order_by} LIMIT {limit}"
+        f"ORDER BY {order_by} LIMIT {limit + 1}"
     )
-    assert runner.calls[0][3] == limit
+    assert runner.calls[0][3] == limit + 1
 
 
 @pytest.mark.asyncio
@@ -542,7 +544,7 @@ async def test_inspector_maps_history_manifests_files_and_refs_strictly() -> Non
 
     for method, result, expected in cases:
         inspector = IcebergInspector(runner=RecordingRunner(result), context=CONTEXT)
-        assert await getattr(inspector, method)(TABLE) == (expected,)
+        assert (await getattr(inspector, method)(TABLE)).rows == (expected,)
 
 
 _PARTITION_COLUMNS = (
@@ -599,7 +601,7 @@ async def test_partitions_derive_dynamic_spec_and_validate_fixed_metrics() -> No
     rows = await inspector.list_partitions(TABLE)
 
     assert spec == IcebergPartitionSpec(("event_date", "region_bucket"))
-    assert rows == (
+    assert rows.rows == (
         IcebergPartition(
             values=(("event_date", "2026-07-26"), ("region_bucket", "7")),
             record_count=10,
@@ -614,9 +616,9 @@ async def test_partitions_derive_dynamic_spec_and_validate_fixed_metrics() -> No
         ),
     )
     assert runner.calls[0][0].endswith(
-        'FROM "AwsDataCatalog"."analytics"."order-events$partitions" LIMIT 500'
+        'FROM "AwsDataCatalog"."analytics"."order-events$partitions" LIMIT 501'
     )
-    assert all(call[3] == 500 for call in runner.calls)
+    assert all(call[3] == 501 for call in runner.calls)
 
 
 @pytest.mark.asyncio
@@ -657,7 +659,7 @@ async def test_partitions_accept_official_iceberg_positional_struct_rendering() 
         context=CONTEXT,
     ).list_partitions(TABLE)
 
-    assert rows[0].values == (
+    assert rows.rows[0].values == (
         ("event_date", "2026-07-26"),
         ("region_bucket", "7"),
     )
@@ -687,7 +689,7 @@ async def test_unpartitioned_table_omits_partition_and_spec_id() -> None:
     inspector = IcebergInspector(runner=RecordingRunner(result), context=CONTEXT)
 
     assert await inspector.partition_spec(TABLE) == IcebergPartitionSpec(())
-    assert await inspector.list_partitions(TABLE) == (
+    assert (await inspector.list_partitions(TABLE)).rows == (
         IcebergPartition(
             values=(),
             record_count=10,
@@ -982,3 +984,169 @@ def test_a_deeply_nested_partition_struct_is_rejected_not_a_crash() -> None:
 
     with pytest.raises(IcebergMetadataShapeError, match="nested too deeply"):
         _partition_field_names(deeply_nested)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("count", [0, 99, 100, 101])
+async def test_snapshot_coverage_boundary(count: int) -> None:
+    from dataclasses import replace
+
+    result = _query_result(
+        ("committed_at", "snapshot_id", "parent_id", "operation", "manifest_list", "summary"),
+        tuple(
+            ("2026-07-26 00:00:00 UTC", str(i), None, "append", "s3://m", "{}")
+            for i in range(count)
+        ),
+    )
+    # Old bounded results have no exhaustion field; set evidence when available.
+    if hasattr(result, "source_exhausted"):
+        result = replace(result, source_exhausted=True)
+    runner = RecordingRunner(result)
+    inspected = await IcebergInspector(runner=runner, context=CONTEXT).list_snapshots(TABLE)
+    assert inspected.coverage.status == ("truncated" if count > 100 else "complete")
+    assert inspected.coverage.row_limit == 100
+    assert inspected.coverage.collection == "snapshots"
+    assert inspected.coverage.table_ref == TABLE
+    assert len(inspected.rows) == min(count, 100)
+    assert runner.calls[0][3] == 101
+    assert runner.sql.endswith("LIMIT 101")
+
+
+_COVERAGE_FIXTURES = {
+    "snapshots": (
+        100,
+        "committed_at snapshot_id parent_id operation manifest_list summary",
+        ("2026-07-26 00:00:00 UTC", "1", None, "append", "s3://m", "{}"),
+    ),
+    "history": (
+        100,
+        "made_current_at snapshot_id parent_id is_current_ancestor",
+        ("2026-07-26 00:00:00 UTC", "1", None, "true"),
+    ),
+    "manifests": (
+        500,
+        "path length partition_spec_id added_snapshot_id added_data_files_count existing_data_files_count deleted_data_files_count partition_summaries",
+        ("s3://m", "1", "0", "1", "1", "0", "0", None),
+    ),
+    "files": (
+        1000,
+        "content file_path file_format spec_id partition record_count file_size_in_bytes equality_ids sort_order_id",
+        ("0", "s3://f", "PARQUET", "0", None, "1", "1", None, None),
+    ),
+    "partitions": (
+        500,
+        "record_count file_count total_data_file_size_in_bytes position_delete_record_count position_delete_file_count equality_delete_record_count equality_delete_file_count last_updated_at last_updated_snapshot_id",
+        ("1", "1", "1", None, None, None, None, None, None),
+    ),
+    "refs": (
+        100,
+        "name type snapshot_id max_reference_age_in_ms min_snapshots_to_keep max_snapshot_age_in_ms",
+        ("main", "BRANCH", "1", None, None, None),
+    ),
+}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("view", list(_COVERAGE_FIXTURES))
+@pytest.mark.parametrize("offset", [-10000, -1, 0, 1])
+async def test_all_collection_coverage_boundaries(view, offset) -> None:
+    from dataclasses import replace
+
+    cap, columns, row = _COVERAGE_FIXTURES[view]
+    count = max(0, cap + offset)
+    result = _query_result(tuple(columns.split()), (row,) * count)
+    if hasattr(result, "source_exhausted"):
+        result = replace(result, source_exhausted=True)
+    runner = RecordingRunner(result)
+    inspected = await getattr(IcebergInspector(runner=runner, context=CONTEXT), f"list_{view}")(
+        TABLE
+    )
+    assert inspected.coverage.status == ("truncated" if count > cap else "complete")
+    assert inspected.coverage.row_limit == cap
+    assert inspected.coverage.collection == view
+    assert inspected.coverage.table_ref == TABLE
+    assert len(inspected.rows) == min(count, cap)
+    assert runner.calls[0][3] == cap + 1
+    assert runner.sql.endswith(f"LIMIT {cap + 1}")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("view", list(_COVERAGE_FIXTURES))
+async def test_missing_exhaustion_evidence_is_unknown(view) -> None:
+    _, columns, row = _COVERAGE_FIXTURES[view]
+    runner = RecordingRunner(_query_result(tuple(columns.split()), (row,)))
+    inspected = await getattr(IcebergInspector(runner=runner, context=CONTEXT), f"list_{view}")(
+        TABLE
+    )
+    assert inspected.coverage.status == "unknown"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("view", list(_COVERAGE_FIXTURES))
+async def test_sentinel_is_trimmed_before_mapping(view) -> None:
+    cap, columns, row = _COVERAGE_FIXTURES[view]
+    runner = RecordingRunner(_query_result(tuple(columns.split()), (row,) * cap + (("invalid",),)))
+    inspected = await getattr(IcebergInspector(runner=runner, context=CONTEXT), f"list_{view}")(
+        TABLE
+    )
+    assert inspected.coverage.status == "truncated"
+    assert len(inspected.rows) == cap
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("view", list(_COVERAGE_FIXTURES))
+async def test_inspector_rejects_over_bound_result(view) -> None:
+    cap, columns, row = _COVERAGE_FIXTURES[view]
+    runner = RecordingRunner(_query_result(tuple(columns.split()), (row,) * (cap + 2)))
+    with pytest.raises(IcebergMetadataShapeError):
+        await getattr(IcebergInspector(runner=runner, context=CONTEXT), f"list_{view}")(TABLE)
+
+
+@pytest.mark.asyncio
+async def test_partition_spec_trims_sentinel_before_shape_mapping() -> None:
+    cap, columns, row = _COVERAGE_FIXTURES["partitions"]
+    runner = RecordingRunner(_query_result(tuple(columns.split()), (row,) * cap + (("bad",),)))
+    assert await IcebergInspector(runner=runner, context=CONTEXT).partition_spec(
+        TABLE
+    ) == IcebergPartitionSpec(())
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("changes", [{"source_exhausted": "true"}, {"columns": None}, {"rows": []}])
+async def test_inspector_rejects_malformed_bounded_evidence(changes) -> None:
+    from dataclasses import replace
+
+    _, columns, row = _COVERAGE_FIXTURES["snapshots"]
+    result = replace(_query_result(tuple(columns.split()), (row,)), **changes)
+    with pytest.raises(IcebergMetadataShapeError):
+        await IcebergInspector(runner=RecordingRunner(result), context=CONTEXT).list_snapshots(
+            TABLE
+        )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("exhausted", [True, False, None])
+async def test_exact_cap_needs_exhaustion_evidence_and_is_never_truncated(exhausted) -> None:
+    from dataclasses import replace
+
+    cap, columns, row = _COVERAGE_FIXTURES["snapshots"]
+    result = replace(
+        _query_result(tuple(columns.split()), (row,) * cap), source_exhausted=exhausted
+    )
+    inspected = await IcebergInspector(
+        runner=RecordingRunner(result), context=CONTEXT
+    ).list_snapshots(TABLE)
+    assert inspected.coverage.status == ("complete" if exhausted is True else "unknown")
+
+
+def test_coverage_and_inspection_are_frozen_slot_values() -> None:
+    from aws_tui.domain.iceberg import IcebergCoverage, IcebergInspection
+
+    coverage = IcebergCoverage("complete", 100, "snapshots", TABLE)
+    inspection = IcebergInspection((), coverage)
+    assert hasattr(coverage, "__slots__")
+    assert hasattr(inspection, "__slots__")
+    with pytest.raises(FrozenInstanceError):
+        coverage.status = "unknown"
+    with pytest.raises(FrozenInstanceError):
+        inspection.rows = ()

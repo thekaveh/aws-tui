@@ -251,16 +251,13 @@ def test_glue_iceberg_metadata_content_guards() -> None:
 
 
 def test_glue_iceberg_preview_content_guards() -> None:
-    # The `#glue-iceberg-footer` "N rows · limit ..." text is never captured
-    # by the SVG export for any Iceberg pane -- the six sibling panes' own
-    # footer guards (above) don't assert it either. The distinguishing
-    # content between these three states is the DataTable body and the
-    # status line, both of which do render.
+    # The shared footer is visible alongside the preview body and controls.
     loaded = _snapshot("test_glue_iceberg_preview_loaded_snapshot")
     assert "Peek" in loaded
     assert "event_id" in loaded
     assert "event_name" in loaded
     assert "8821" in loaded
+    assert "2&#160;rows&#160;·&#160;limit&#160;100" in loaded
     assert "click" in loaded
     assert "8822" in loaded
     assert "view" in loaded
@@ -283,3 +280,19 @@ def test_glue_narrow_catalog_keeps_table_type_on_its_resource_row() -> None:
     catalog = _snapshot("test_glue_service_narrow_snapshot[catalog]")
     sessions_row = next(line for line in catalog.splitlines() if ">sessions" in line)
     assert "EXTERNAL_TA" in sessions_row
+
+
+def test_glue_iceberg_truncated_coverage_snapshot(snap_compare) -> None:
+    app = GluePageApp(theme="carbon", fixture="iceberg", coverage_fixture=True)
+    assert snap_compare(app, terminal_size=WIDE, run_before=app.reveal_cached_metadata)
+
+
+def test_glue_iceberg_coverage_footer_content_guards() -> None:
+    truncated = _snapshot("test_glue_iceberg_truncated_coverage_snapshot")
+    assert "100&#160;visible&#160;·&#160;100&#160;fetched" in truncated
+    assert "truncated&#160;snapshots" in truncated
+    assert "more&#160;available" not in truncated
+    assert "metadata&#160;row&#160;limit&#160;100" in truncated
+    narrow = _snapshot("test_glue_iceberg_narrow_snapshot")
+    assert "unknown&#160;snapshots" in narrow
+    assert "metadata&#160;row&#160;limit&#160;100" in narrow

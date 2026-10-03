@@ -1451,3 +1451,152 @@ async def test_begin_shutdown_unbinds_the_preview() -> None:
     vm.begin_shutdown()
 
     assert vm.preview.available is False
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "view", ["snapshots", "history", "manifests", "files", "partitions", "refs"]
+)
+@pytest.mark.parametrize("status", ["complete", "unknown", "truncated"])
+async def test_coverage_survives_cached_reveal_and_refresh_error(view, status) -> None:
+    from aws_tui.domain import iceberg
+    from aws_tui.vm.glue.iceberg_vm import _ROW_LIMITS
+
+    class StructuredInspector(RecordingInspector):
+        async def _load(self, view, ref):
+            rows = await super()._load(view, ref)
+            cap = _ROW_LIMITS[view]
+            if status == "truncated":
+                rows = _coverage_rows(view, cap)
+            return iceberg.IcebergInspection(rows, iceberg.IcebergCoverage(status, cap, view, ref))
+
+    vm, inspector, _ = make_vm(StructuredInspector())
+    await vm.bind_table(ICEBERG_REF, table_format=TableFormat.ICEBERG)
+    assert await vm.select_view(view)
+    coverage = vm.coverage_for(view)
+    assert coverage.status == status
+    expected_count = _ROW_LIMITS[view] if status == "truncated" else len(getattr(inspector, view))
+    assert vm.fetched_count == expected_count
+    while vm.has_more:
+        assert await vm.load_more()
+    assert vm.coverage == coverage
+    assert len(inspector.calls) == 1
+    inspector.errors[view] = ProviderError("failed refresh")
+    assert not await vm.retry()
+    assert vm.coverage == coverage
+    started = inspector.block(view)
+    inspector.errors.clear()
+    task = asyncio.create_task(vm.retry())
+    await started.wait()
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert vm.coverage == coverage
+    await vm.bind_table(OTHER_REF, table_format=TableFormat.ICEBERG)
+    assert vm.coverage is None
+    assert vm.fetched_count == 0
+
+
+def _coverage_rows(view, count):
+    source = RecordingInspector()
+    row = getattr(source, view)[0]
+    replacements = {
+        "snapshots": lambda i: replace(row, snapshot_id=i),
+        "history": lambda i: replace(row, snapshot_id=i),
+        "manifests": lambda i: replace(row, path=f"s3://m/{i}"),
+        "files": lambda i: replace(row, file_path=f"s3://f/{i}"),
+        "partitions": lambda i: replace(row, values=(("day", str(i)),)),
+        "refs": lambda i: replace(row, name=f"ref-{i}"),
+    }
+    return tuple(replacements[view](i) for i in range(count))
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "invalid", ["table", "collection", "cap", "status", "truncated_count", "bool_cap"]
+)
+async def test_structured_coverage_rejects_invalid_payload(invalid) -> None:
+    from aws_tui.domain import iceberg
+
+    class InvalidInspector(RecordingInspector):
+        async def _load(self, view, ref):
+            rows = await super()._load(view, ref)
+            coverage = iceberg.IcebergCoverage("complete", 100, view, ref)
+            changes = {
+                "table": {"table_ref": OTHER_REF},
+                "collection": {"collection": "refs"},
+                "cap": {"row_limit": 99},
+                "bool_cap": {"row_limit": True},
+                "status": {"status": "wrong"},
+                "truncated_count": {"status": "truncated"},
+            }
+            return iceberg.IcebergInspection(rows, replace(coverage, **changes[invalid]))
+
+    vm, _, _ = make_vm(InvalidInspector())
+    await vm.bind_table(ICEBERG_REF, table_format=TableFormat.ICEBERG)
+    assert not await vm.select_view("snapshots")
+    assert vm.coverage is None
+    assert vm.fetched_count == 0
+    assert vm.state is PaneState.ERROR
+
+
+@pytest.mark.asyncio
+async def test_legacy_tuple_has_unknown_coverage() -> None:
+    vm, _, _ = make_vm()
+    await vm.bind_table(ICEBERG_REF, table_format=TableFormat.ICEBERG)
+    await vm.select_view("snapshots")
+    assert vm.coverage.status == "unknown"
+
+
+@pytest.mark.asyncio
+async def test_coverage_is_independent_across_views_and_retry_success() -> None:
+    from aws_tui.domain.iceberg import IcebergCoverage, IcebergInspection
+    from aws_tui.vm.glue.iceberg_vm import _ROW_LIMITS
+
+    class Inspector(RecordingInspector):
+        async def _load(self, view, ref):
+            rows = await super()._load(view, ref)
+            return IcebergInspection(
+                rows, IcebergCoverage("complete", _ROW_LIMITS[view], view, ref)
+            )
+
+    vm, inspector, _ = make_vm(Inspector())
+    await vm.bind_table(ICEBERG_REF, table_format=TableFormat.ICEBERG)
+    for view in _ROW_LIMITS:
+        assert await vm.select_view(view)
+        assert vm.coverage == vm.coverage_for(view)
+        assert vm.coverage.collection == view
+    for view in _ROW_LIMITS:
+        assert vm.coverage_for(view).collection == view
+    await vm.select_view("snapshots")
+    inspector.errors["snapshots"] = ProviderError("failed")
+    assert not await vm.retry()
+    inspector.errors.clear()
+    assert await vm.retry()
+    assert vm.coverage.status == "complete"
+
+
+@pytest.mark.asyncio
+async def test_old_structured_completion_cannot_replace_rebound_coverage() -> None:
+    from aws_tui.domain.iceberg import IcebergCoverage, IcebergInspection
+
+    class Inspector(RecordingInspector):
+        async def _load(self, view, ref):
+            await super()._load(view, ref)
+            return IcebergInspection((_snapshot(7),), IcebergCoverage("complete", 100, view, ref))
+
+    vm, inspector, _ = make_vm(Inspector())
+    await vm.bind_table(ICEBERG_REF, table_format=TableFormat.ICEBERG)
+    started = inspector.block("snapshots")
+    inspector.ignore_cancellation_for = "snapshots"
+    old = asyncio.create_task(vm.select_view("snapshots"))
+    await started.wait()
+    binding = asyncio.create_task(vm.bind_table(OTHER_REF, table_format=TableFormat.ICEBERG))
+    await inspector.cancellation_seen.wait()
+    inspector.release("snapshots")
+    assert not await old
+    await binding
+    assert vm.coverage is None
+    inspector.blocked.clear()
+    assert await vm.select_view("snapshots")
+    assert vm.coverage.table_ref == OTHER_REF
