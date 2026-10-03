@@ -48,6 +48,14 @@ a matching discover snapshot with its existing four demo connections.
 
 ## 4. Content view, rail, and provenance
 
+The UI must not import infra.connection_resolver, including type-only imports.
+Use vm/connection_discovery.py read-only structural protocols: ConnectionDisplay
+has name and source properties; ConnectionDiscoveryDisplay has connections
+(tuple of ConnectionDisplay) and invalid_sources (tuple of str) properties.
+Existing frozen Connection and ConnectionDiscovery satisfy them structurally.
+The view consumes these minimum presentation contracts, with no resolver-type
+re-export, credential exposure, copies, casts, or architecture-rule exception.
+
 FirstRunView contains three separately focusable actions with literal labels:
 Add S3-compatible connection; AWS profile setup; Retry discovery. It shows the
 application config path and clear guidance that discovery does not open sources.

@@ -139,3 +139,86 @@ async def test_submit_does_not_close_form_so_parent_can_keep_open_on_error(
         "ConnectionFormInline._submit() closed the form — parent can no "
         "longer keep it open on duplicate-name / persistence errors"
     )
+
+
+@pytest.mark.asyncio
+async def test_public_caption_errors_pending_controls_and_edit_name_lock() -> None:
+    from typing import cast
+
+    from textual.app import App, ComposeResult
+    from textual.widgets import Input
+    from vmx import Message, MessageHub
+
+    from aws_tui.ui.widgets.modal_button import ModalButton
+    from aws_tui.ui.widgets.settings.connection_form import ConnectionFormInline
+    from aws_tui.vm.settings.s3_compat_form import S3CompatForm
+
+    hub = cast("MessageHub[Message]", MessageHub())
+    form = ConnectionFormInline(hub=hub, submit_label="Save and open")
+
+    class Host(App[None]):
+        def compose(self) -> ComposeResult:
+            yield form
+
+    async with Host().run_test() as pilot:
+        form.open_for_add()
+        await pilot.pause()
+        assert form.has_errors
+        save = next(b for b in form.query(ModalButton) if b.button_id == "form-save-btn")
+        assert str(save.render()) == "Save and open"
+        defaults = S3CompatForm(
+            name="local",
+            endpoint_url="http://localhost:9000",
+            region="us-east-1",
+            access_key_id="K",
+            secret_access_key="S",
+            force_path_style=True,
+            verify_tls=True,
+        )
+        form.open_for_edit(name="local", defaults=defaults)
+        await pilot.pause()
+        assert not form.has_errors
+        save.focus()
+        await pilot.press("enter")
+        assert all(i.disabled for i in form.query(Input))
+        assert all(b.disabled for b in form.query(ModalButton))
+        form.clear_submitting()
+        assert form.query_one("#form-name", Input).disabled
+        assert not form.query_one("#form-region", Input).disabled
+        assert not save.disabled
+        save.focus()
+        await pilot.press("enter")
+        form.mark_name_invalid()
+        assert form.query_one("#form-name", Input).disabled
+        assert form.query_one("#form-name", Input).has_class("-invalid")
+        assert not form.query_one("#form-region", Input).disabled
+        assert not save.disabled
+        save.focus()
+        await pilot.press("enter")
+        form.close()
+        assert not form.query_one("#form-name", Input).disabled
+        assert not form.query_one("#form-region", Input).disabled
+
+
+@pytest.mark.asyncio
+async def test_settings_default_caption_remains_save() -> None:
+    from typing import cast
+
+    from textual.app import App, ComposeResult
+    from vmx import Message, MessageHub
+
+    from aws_tui.ui.widgets.modal_button import ModalButton
+    from aws_tui.ui.widgets.settings.connection_form import ConnectionFormInline
+
+    form = ConnectionFormInline(hub=cast("MessageHub[Message]", MessageHub()))
+
+    class Host(App[None]):
+        def compose(self) -> ComposeResult:
+            yield form
+
+    async with Host().run_test() as pilot:
+        await pilot.pause()
+        assert (
+            str(next(b for b in form.query(ModalButton) if b.button_id == "form-save-btn").render())
+            == "save"
+        )

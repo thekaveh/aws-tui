@@ -38,6 +38,7 @@
 |---|---|
 | src/aws_tui/infra/connection_resolver.py | Immutable discovery diagnostic snapshot using existing parser/merge logic. |
 | src/aws_tui/demo/connections.py | Same snapshot API over real demo connections. |
+| src/aws_tui/vm/connection_discovery.py | Read-only structural presentation contracts; no resolver re-exports. |
 | src/aws_tui/ui/widgets/first_run.py | Focusable ConnectionChoice, optional rail list, setup view, typed UI intents. |
 | src/aws_tui/ui/widgets/nav_menu.py | Public first-run section update/activation; regular service rail unaffected. |
 | src/aws_tui/ui/widgets/settings/connection_form.py | Optional public submit label, has_errors, safe pending-submit controls. |
@@ -105,16 +106,17 @@ list converted to a tuple without invented empty behavior.
 
 ## 5. Task 2: First-run widgets and optional navigation section
 
-**Files:** Create first_run.py and test_first_run.py; modify nav_menu.py, connection_form.py and their UI unit suites.
+**Files:** Create vm/connection_discovery.py, first_run.py and test_first_run.py; modify nav_menu.py, connection_form.py and their UI unit suites.
 
 **Interfaces:**
-- Consume ConnectionDiscovery and Connection, existing form/messages and shared ModalButton.
-- Produce ConnectionChoice(connection: Connection), retaining exact connection name and rendering literal source as plain text.
+- Consume existing real ConnectionDiscovery/Connection structurally through readonly VM-facing protocols, existing form/messages and shared ModalButton.
+- Produce ConnectionDisplay(Protocol) with readonly name: str and source: str; ConnectionDiscoveryDisplay(Protocol) with readonly connections: tuple[ConnectionDisplay, ...] and invalid_sources: tuple[str, ...]. UI imports these from vm/connection_discovery.py; no infra imports, re-exports, casts or type ignores.
+- Produce ConnectionChoice(connection: ConnectionDisplay), retaining exact connection name and rendering literal source as plain text.
 - Produce FirstRunConnectionList with setup and connection rows; nested typed Textual messages SetupRequested() and ConnectionSelected(name: str).
 - Produce FirstRunView(config_path: Path, hub: MessageHub[Message], id: str = "content-first-run").
-- Public view methods: show_discovery(snapshot: ConnectionDiscovery) -> None; show_error(text: str) -> None; set_busy(busy: bool) -> None; focus_default() -> None; cycle_focus(*, reverse: bool = False) -> bool; activate_focused() -> bool.
+- Public view methods: show_discovery(snapshot: ConnectionDiscoveryDisplay) -> None; show_error(text: str) -> None; set_busy(busy: bool) -> None; focus_default() -> None; cycle_focus(*, reverse: bool = False) -> bool; activate_focused() -> bool.
 - View emits nested RetryRequested(). Add and setup guidance are view-local. Existing ConnectionFormSubmitted and ConnectionFormCancelled keep existing signatures and bubble/cancel appropriately.
-- NavMenu public async show_first_run_connections(snapshot: ConnectionDiscovery | None) -> None; None hides/removes section and restores normal width. Public activate_first_run_focused() -> bool routes the setup/choice controls before regular service commit.
+- NavMenu public async show_first_run_connections(snapshot: ConnectionDiscoveryDisplay | None) -> None; None hides/removes section and restores normal width. Public activate_first_run_focused() -> bool routes the setup/choice controls before regular service commit.
 - Form public optional keyword submit_label: str = "save" and readonly has_errors: bool. Existing Settings default unchanged.
 
 - [ ] Step 1: Write UI tests before product changes. Mount real widgets under a Textual harness with real hub and resolver snapshots. Assert three literal separately focusable action labels, actual ConnectionFormInline, invalid Save disabled, setup instructions without CLI execution, cancel prior status, public Enter activation, all origin tokens, escaped markup, busy/duplicate/cancel semantics, 28/12 actual rail widths and >20 rows keyboard scrolling. Representative row test:
@@ -138,7 +140,7 @@ snapshots; failure copy is provided by Task 3. Use focus assertions and physical
 Pilot keys; no sleep-based focus guesses.
 
 - [ ] Step 2: Execute new UI tests against pre-widget source; retain /tmp/aws-tui-243-widgets-red.log and verify meaningful RED.
-- [ ] Step 3: Implement the bounded public widget interfaces. Compose three ModalButtons, status/path guidance, AWS setup instructions, and the actual form with submit_label="Save and open". Canonical status strings:
+- [ ] Step 3: Implement the bounded public widget interfaces through the readonly presentation protocols (existing concrete frozen snapshots satisfy them). Compose three ModalButtons, status/path guidance, AWS setup instructions, and the actual form with submit_label="Save and open". Canonical status strings:
 
 ```python
 INVALID_CONFIGURATION = "Invalid configuration. Fix the configuration file, then Retry discovery."
