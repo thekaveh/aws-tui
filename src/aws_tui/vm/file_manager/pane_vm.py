@@ -22,6 +22,7 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Iterable
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from enum import StrEnum
 
 import reactivex as rx
@@ -62,6 +63,14 @@ _ROOT_PATH: PathRef = PathRef(())
 def _visible_error_text(exc: BaseException) -> str | None:
     text = str(exc)
     return redact_text(text) if text else None
+
+
+class PaneSortField(StrEnum):
+    """Primary ordering for the loaded visible listing."""
+
+    NAME = "name"
+    SIZE = "size"
+    MODIFIED = "modified"
 
 
 class PaneState(StrEnum):
@@ -111,6 +120,8 @@ class PaneViewModel:
     cursor_index: int
     selection_count: int
     filter_text: str
+    filter_status_text: str
+    sort_status_text: str
     error_text: str | None
     summary: str
     breadcrumb_text: str
@@ -285,6 +296,8 @@ class PaneVM:
         # entry in ``_filtered``; writes set the composite's current
         # to ``_entries[_filtered[N]].inner``. See ``_cursor_index``
         # property below.
+        self._sort_field: PaneSortField | None = None
+        self._sort_descending: bool = False
         self._filter_text: str = ""
         self._state: PaneState = PaneState.IDLE
         self._error_text: str | None = None
@@ -584,6 +597,13 @@ class PaneVM:
             cursor_index=self._cursor_index,
             selection_count=marked,
             filter_text=self._filter_text,
+            filter_status_text=self._filter_status_text(),
+            sort_status_text=(
+                f"Sort: {self._sort_field.value} "
+                f"{'descending' if self._sort_descending else 'ascending'}"
+                if self._sort_field is not None
+                else ""
+            ),
             error_text=self._error_text,
             summary=_summary_text(
                 # Exclude the synthetic ``..`` row: it is navigation chrome,
@@ -607,6 +627,68 @@ class PaneVM:
             copy_path=self._format_border_title(),
             copy_selected_path=self._format_selected_path(),
         )
+
+    def _filter_status_text(self) -> str:
+        if not self._filter_text:
+            return ""
+        total = sum(not entry.is_parent_link for entry in self._entries)
+        count = sum(not entry.is_parent_link for entry in self.filtered_entries)
+        status = f"Filter: {self._filter_text} · {count} / {total} matches"
+        return f"{status} · No matches" if count == 0 else status
+
+    @property
+    def listing_revision(self) -> int:
+        """Revision invalidating results when a listing is replaced or disposed."""
+        return self._reload_generation
+
+    def set_sort(self, field: PaneSortField, *, descending: bool = False) -> None:
+        self._sort_field = field
+        self._sort_descending = descending
+        self._sync_filtered_from_composite()
+        self._sync_cursor_selection()
+        self._notify("filtered_entries")
+        self._notify("viewmodel")
+
+    def find_entries(self, query: str) -> tuple[EntryVM, ...]:
+        """Rank loaded real rows without visiting the provider."""
+        if self._disposed or self._state not in {PaneState.IDLE, PaneState.EMPTY}:
+            return ()
+        folded = query.casefold()
+        ranked: list[tuple[int, str, str, EntryVM]] = []
+        for entry in self._entries:
+            if entry.is_parent_link:
+                continue
+            name = entry.name.casefold()
+            if name.startswith(folded):
+                rank = 0
+            elif folded in name:
+                rank = 1
+            else:
+                characters = iter(name)
+                if not all(
+                    any(candidate == character for candidate in characters) for character in folded
+                ):
+                    continue
+                rank = 2
+            ranked.append((rank, name, entry.name, entry))
+        ranked.sort(key=lambda match: match[:3])
+        return tuple(match[3] for match in ranked)
+
+    def select_found_entry(self, entry: EntryVM, *, revision: int) -> bool:
+        """Select a live result; hidden results first restore the loaded listing."""
+        if (
+            self._disposed
+            or self._state not in {PaneState.IDLE, PaneState.EMPTY}
+            or revision != self.listing_revision
+            or entry.is_parent_link
+            or not any(candidate is entry for candidate in self._entries)
+        ):
+            return False
+        if not any(candidate is entry for candidate in self.filtered_entries):
+            self._set_filter_text("")
+        index = next(i for i, candidate in enumerate(self.filtered_entries) if candidate is entry)
+        self.move_cursor_to(index)
+        return True
 
     def _format_selected_path(self) -> str | None:
         """Full location of the cursor entry, for the clipboard.
@@ -754,9 +836,13 @@ class PaneVM:
         """Replace ``path`` and re-list."""
         self._path = path
         self._cursor_index = 0
+        filter_reset = bool(self._filter_text)
         self._filter_text = ""
         self._notify("path")
         await self._reload()
+        if filter_reset:
+            self._notify("filter_text")
+            self._notify("viewmodel")
 
     async def refresh(self) -> None:
         await self._reload()
@@ -820,6 +906,7 @@ class PaneVM:
         self._path_protocol = staged.path_protocol
         self._connection_key = staged.connection_key
         self._path = staged.path
+        filter_reset = bool(self._filter_text)
         self._filter_text = ""
         self._is_multiselect_mode = False
         self._error_text = None
@@ -827,6 +914,8 @@ class PaneVM:
         self._replace_entries(materialized)
         self._set_state(PaneState.IDLE if materialized else PaneState.EMPTY)
         self._notify("path")
+        if filter_reset:
+            self._notify("filter_text")
         self._notify("viewmodel")
 
     async def swap_provider(
@@ -860,11 +949,15 @@ class PaneVM:
         self._connection_key = connection_key
         self._path = _ROOT_PATH
         self._cursor_index = 0
+        filter_reset = bool(self._filter_text)
         self._filter_text = ""
         self._is_multiselect_mode = False
         self._notify("path")
         self._notify("viewmodel")
         await self._reload()
+        if filter_reset:
+            self._notify("filter_text")
+            self._notify("viewmodel")
 
     async def activate(self, target_index: int) -> None:
         """Activate the entry at ``target_index`` in :attr:`filtered_entries`.
@@ -1336,10 +1429,11 @@ class PaneVM:
         if new == self._filter_text:
             return
         self._filter_text = new
-        self._notify("filter_text")
         self._recompute_filtered()
         self._cursor_index = 0
         self._sync_cursor_selection()
+        self._notify("filter_text")
+        self._notify("filtered_entries")
         self._notify("viewmodel")
 
     def _filter_predicate(self, inner: ComponentVMOf[EntryState]) -> bool:
@@ -1350,7 +1444,7 @@ class PaneVM:
         filter matches against ``inner.model.entry.name`` via
         ``_filter_matches``.
         """
-        if not self._filter_text:
+        if inner.model.entry.name == ".." or not self._filter_text:
             return True
         return _filter_matches(inner.model.entry.name, self._filter_text)
 
@@ -1372,7 +1466,35 @@ class PaneVM:
         if not visible_set:
             self._filtered = ()
             return
-        self._filtered = tuple(i for i, e in enumerate(self._entries) if e.inner in visible_set)
+        indices = [i for i, entry in enumerate(self._entries) if entry.inner in visible_set]
+        if self._sort_field is not None:
+            parents = [i for i in indices if self._entries[i].is_parent_link]
+            real = [i for i in indices if not self._entries[i].is_parent_link]
+            real.sort(key=lambda i: (self._entries[i].name.casefold(), self._entries[i].name))
+            if self._sort_field is PaneSortField.NAME:
+                if self._sort_descending:
+                    real.reverse()
+            else:
+
+                def metadata(index: int) -> int | datetime | None:
+                    entry = self._entries[index].entry
+                    if self._sort_field is PaneSortField.SIZE:
+                        return entry.size
+                    modified = entry.modified
+                    if modified is None:
+                        return None
+                    return (
+                        modified.replace(tzinfo=UTC)
+                        if modified.tzinfo is None
+                        else modified.astimezone(UTC)
+                    )
+
+                known = [i for i in real if metadata(i) is not None]
+                unknown = [i for i in real if metadata(i) is None]
+                known.sort(key=lambda i: metadata(i) or 0, reverse=self._sort_descending)
+                real = known + unknown
+            indices = parents + real
+        self._filtered = tuple(indices)
 
     # ── Command bridges (sync triggers that delegate to async work) ────────
 

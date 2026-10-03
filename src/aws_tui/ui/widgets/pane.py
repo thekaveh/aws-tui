@@ -30,13 +30,14 @@ from reactivex.abc import DisposableBase
 from rich.markup import escape as _markup_escape
 from rich.text import Text
 from textual.app import ComposeResult
-from textual.containers import VerticalScroll
+from textual.containers import Horizontal, VerticalScroll
 from textual.css.query import NoMatches
-from textual.events import Resize
+from textual.events import Click, Resize
 from textual.widget import Widget
 from textual.widgets import Static
 from vmx import Message, MessageHub
 
+from aws_tui.ui.widgets.modal_button import ModalButton
 from aws_tui.vm.file_manager.entry_vm import EntryVM
 from aws_tui.vm.file_manager.pane_vm import PaneVM
 
@@ -217,7 +218,7 @@ class EntryRow(Widget):
             self._apply_state_classes()
             self.refresh()
 
-    async def on_click(self, event: object) -> None:
+    async def on_click(self, event: Click) -> None:
         """Click handling:
 
         - **Shift+click**: toggle the row's marked flag (multi-select).
@@ -297,7 +298,9 @@ class EntryRow(Widget):
 # mounted and clickable while the VM's cursor indices addressed the filtered
 # list — the user saw one listing and the VM addressed another.
 # ``_refresh_all`` updates chrome as well, so nothing is lost by promoting it.
-_BODY_REFRESH_PROPS: frozenset[str] = frozenset({"entries", "state", "path", "filter_text"})
+_BODY_REFRESH_PROPS: frozenset[str] = frozenset(
+    {"entries", "state", "path", "filter_text", "filtered_entries"}
+)
 
 # Property names that only require updating the breadcrumb / header /
 # footer Static widgets — cheap, no re-mount.
@@ -328,6 +331,10 @@ class Pane(Widget):
         height: 1fr;
         border-title-align: left;
     }
+    Pane .pane-filter-bar { height: auto; display: none; }
+    Pane .pane-filter-status { height: auto; width: 1fr; }
+    Pane .pane-clear-filter { min-width: 7; width: 7; height: 1; margin: 0; padding: 0; border: none; }
+    Pane .pane-sort-status { height: auto; display: none; }
     """
 
     def __init__(
@@ -373,6 +380,18 @@ class Pane(Widget):
         # VerticalScroll instead of Vertical so long listings scroll on
         # mousewheel / trackpad without extra wiring, and so the cursor
         # can be scrolled into view via scroll_to_widget().
+        with Horizontal(classes="pane-filter-bar"):
+            yield Static(vm.filter_status_text, classes="pane-filter-status", markup=False)
+            clear = ModalButton("Clear", button_id="clear-filter", classes="pane-clear-filter")
+            # Theme button defaults are three rows high; pane chrome is compact.
+            clear.styles.height = 1
+            clear.styles.width = 7
+            clear.styles.min_width = 7
+            clear.styles.padding = 0
+            clear.styles.margin = 0
+            clear.styles.border = ("none", "transparent")
+            yield clear
+        yield Static(vm.sort_status_text, classes="pane-sort-status", markup=False)
         yield VerticalScroll(id="pane-body")
         yield Static(vm.summary, classes="pane-footer")
 
@@ -510,7 +529,7 @@ class Pane(Widget):
             self._path_tooltip_text = None
             self.tooltip = None
 
-    async def on_click(self, event: object) -> None:
+    async def on_click(self, event: Click) -> None:
         """Clicking anywhere in a pane switches focus to it (when applicable).
 
         A click on the top border row is the path-copy affordance. EntryRow
@@ -518,6 +537,10 @@ class Pane(Widget):
         also 0, so a genuine border hit is identified by the event's own widget
         rather than by offset alone.
         """
+        if isinstance(event.widget, ModalButton) and event.widget.button_id == "clear-filter":
+            self._vm.set_filter_command.execute("")
+            event.stop()
+            return
         offset = getattr(event, "offset", None)
         if getattr(event, "widget", None) is self and offset is not None and offset.y == 0:
             self.copy_current_path()
@@ -623,6 +646,11 @@ class Pane(Widget):
         # field stays as a fallback for non-Pane consumers.
         header.update(_column_header_for(self._name_column_width))
         footer.update(vm.summary)
+        self.query_one(".pane-filter-status", Static).update(vm.filter_status_text)
+        self.query_one(".pane-filter-bar").display = bool(vm.filter_status_text)
+        sort = self.query_one(".pane-sort-status", Static)
+        sort.update(vm.sort_status_text)
+        sort.display = bool(vm.sort_status_text)
         self._apply_border_title()
 
     def _refresh_all(self) -> None:

@@ -180,7 +180,8 @@ profile or S3 endpoint.
   Glue and **Open Athena result in S3** for a validated successful Athena
   execution. Service commands appear only for their active service. Dynamic
   `connection switch <name>` / `theme switch <name>`
-  entries and consolidation with Textual's `Ctrl+P` palette remain deferred.
+  entries remain deferred. `Ctrl+P` finds a loaded file entry; `/` edits the
+  loaded name filter. **Sort loaded entries** offers six orders in the palette.
   Integrated commands include **Query table in Athena**, **Query Iceberg
   snapshot in Athena**, and **Open query table in Glue**; each preserves the
   active connection name and region.

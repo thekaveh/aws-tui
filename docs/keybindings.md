@@ -65,8 +65,8 @@ explicit meaning.
 | Action | Default | Notes |
 |---|---|---|
 | Quick Look | `Space` | In normal file-pane mode, streams the first 64 KB of the cursor file; multi-select toggles its mark |
-| Fuzzy find | `pane.fuzzy_find` action — *(deferred)* | Spec'd on `Ctrl+P`; not wired |
-| Filter pane | `pane.filter` action — *(deferred)* | Spec'd on `/`; not wired |
+| Fuzzy find | `Ctrl+P` | Find and select a loaded entry |
+| Filter pane | `/` | Edit the loaded name filter live |
 | Command palette | `:` / `Ctrl+K` | Opens the fuzzy app-command palette |
 | Theme picker (modal) | `t` | |
 | Cycle to next theme (no modal) | `Shift+T` (`T`) | |
@@ -296,8 +296,8 @@ unbound until a handler ships.
 | `pane.switch_focus` | `tab` | yes | Cycle the active page's focus ring |
 | `pane.switch_focus_back` | `shift+tab` | yes | Cycle the active page's focus ring in reverse |
 | `pane.quick_look` | `space` (normal mode) | yes | Stream first 64 KB |
-| `pane.filter` | `/` | *(deferred)* | Local pane filter |
-| `pane.fuzzy_find` | `ctrl+p` | *(deferred)* | Fuzzy find paths / buckets |
+| `pane.filter` | `/` | yes | Local loaded-name filter |
+| `pane.fuzzy_find` | `ctrl+p` | yes | Find loaded entries |
 | `pane.enter_multiselect` | `v` | yes | Enter focused-pane multi-select mode without marking |
 | `pane.toggle_select` | `space` | yes | Toggle cursor mark; physical shared Space opens Quick Look outside multi-select |
 | `pane.select_all` | `a` | yes | Add marks to filtered real rows; physical shared a retries credentials in error/source contexts |
@@ -394,3 +394,26 @@ palette, but do not need a default key. The same rule applies to
 `athena.open_result_location`. The Glue table and snapshot Athena handoffs are
 keyed, palette-visible actions; keyboard, palette, and button entry points all
 dispatch their registered action IDs before the VM publishes the typed request.
+
+## 6. Loaded listing controls
+
+`/` opens the focused file pane's case-insensitive name filter. Typing updates
+rows immediately; Escape or Done retains the query. Clear in the editor or pane
+restores all loaded rows. The pane displays the literal query and real-entry
+match counts; `..` stays first and reachable even with zero matches.
+
+`Ctrl+P` searches every loaded real entry, including hidden rows. Prefix and
+substring matches precede subsequence matches. Enter selects without opening,
+reading, or navigating. Escape changes nothing. Selecting a hidden result clears
+the filter and reactivates retained hidden marks; find never changes marks.
+Obsolete results after a listing replacement cannot be committed.
+
+Choose **Sort loaded entries** in `:` / `Ctrl+K` for Name, Size, or Modified,
+each ascending or descending. There is no default sort shortcut. The parent
+stays first; missing size/time metadata stays last in both directions. Metadata
+ties use ascending name order. Name compares casefolded text then original text.
+Filtering and sorting preserve cursor identity where visible and make no provider
+calls. Navigation, source replacement, and committed credential recovery reset
+the filter; refreshing the same directory preserves it. The chosen sort lasts
+for the pane lifetime, including navigation, refresh, and source changes. Only visible real marks
+contribute to transfer targets until Clear restores hidden marks.

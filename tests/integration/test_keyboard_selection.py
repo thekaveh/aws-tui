@@ -183,7 +183,7 @@ async def test_confirm_contains_selection_actions_and_exact_active_targets(
         await ctx.root_vm.content_host.current.right.swap_provider(destination)
         await pilot.pause()
         await pilot.press("v", "space", "down", "space")
-        pane.set_filter_command.execute("beta" if filtered else "gamma")
+        await pilot.press("slash", *("beta" if filtered else "gamma"), "escape")
         if not filtered:
             assert marks(pane) == set()
             pane.set_filter_command.execute("")
