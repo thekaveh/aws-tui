@@ -23,7 +23,6 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, ClassVar, Literal, cast
 
 from reactivex.abc import DisposableBase
-from rich.markup import escape
 from textual import events
 
 if TYPE_CHECKING:
@@ -49,7 +48,7 @@ from aws_tui.domain.filesystem import (
 )
 from aws_tui.domain.s3_uri import parse_s3_uri
 from aws_tui.infra.aws_session import TokenState
-from aws_tui.infra.connection_resolver import Connection, ConnectionNotFound
+from aws_tui.infra.connection_resolver import Connection, ConnectionDiscovery, ConnectionNotFound
 from aws_tui.infra.crash_dump import CrashDump
 from aws_tui.infra.keymap_store import textual_key_name
 from aws_tui.infra.redaction import redact_text
@@ -69,6 +68,12 @@ from aws_tui.ui.widgets.crash_modal import CrashModal
 from aws_tui.ui.widgets.dual_pane import DualPane
 from aws_tui.ui.widgets.emr_serverless.application_picker import ApplicationPicker
 from aws_tui.ui.widgets.emr_serverless.page import EmrServerlessPage
+from aws_tui.ui.widgets.first_run import (
+    FIRST_RUN_FORM_CSS,
+    PROBE_FAILED,
+    FirstRunConnectionList,
+    FirstRunView,
+)
 from aws_tui.ui.widgets.glue.page import GluePage
 from aws_tui.ui.widgets.help_modal import HelpModal
 from aws_tui.ui.widgets.hint_legend import HintLegend
@@ -78,7 +83,10 @@ from aws_tui.ui.widgets.pane_listing_controls import FilterPaneModal, FindPaneMo
 from aws_tui.ui.widgets.quick_look import QuickLook
 from aws_tui.ui.widgets.service_source_header import ServiceSourceHeader
 from aws_tui.ui.widgets.service_view_factory import build_service_view
-from aws_tui.ui.widgets.settings.connection_form import ConnectionFormInline
+from aws_tui.ui.widgets.settings.connection_form import (
+    ConnectionFormInline,
+    ConnectionFormSubmitted,
+)
 from aws_tui.ui.widgets.settings_view import SettingsView
 from aws_tui.ui.widgets.theme_picker_modal import ThemePickerModal
 from aws_tui.ui.widgets.toast import ToastStack
@@ -688,7 +696,8 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
     # user sees a blank screen at startup. The pre-#94 standalone
     # ServicesHamburger widget + the toggle/collapse modes were both
     # dropped in the always-visible nav rework.
-    CSS = """
+    CSS = (
+        """
     Screen {
         /* ``dropdown`` is declared between ``base`` and
            ``notifications`` so the EMR application picker's
@@ -726,6 +735,8 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
         width: 1fr;
     }
     """
+        + FIRST_RUN_FORM_CSS
+    )
 
     # Minimum-viable input router (input-router-deferred from M6). The
     # Bindings are installed at runtime in ``__init__`` from
@@ -1090,6 +1101,7 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
             )
         else:
             await self._mount_no_connection_placeholder()
+            self._request_first_run_discovery()
 
         if ctx.demo:
             self.call_after_refresh(self._focus_demo_launch_nav)
@@ -1112,7 +1124,8 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
             # (``_UnfocusedMixin``); deferred via ``call_after_refresh`` so
             # it runs AFTER Textual's first focus pass instead of being
             # silently undone by it.
-            self.call_after_refresh(partial(self._drop_initial_focus, self.screen))
+            if initial_conn is not None:
+                self.call_after_refresh(partial(self._drop_initial_focus, self.screen))
 
     def _drop_initial_focus(self, boot_screen: object) -> None:
         """Clear Textual's automatic first-focus pass — but only if the
@@ -1146,6 +1159,10 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
     def _restore_focus_after_modal(self, slot: FocusSlot) -> None:
         coordinator = self._app_ctx.focus_coordinator
         if len(self.screen_stack) > 1 or coordinator.is_modal:
+            return
+        view = self._first_run_view()
+        if view is not None:
+            view.focus_default()
             return
         coordinator.set_focused_slot(slot)
         self._project_focus_slot(slot)
@@ -1677,7 +1694,7 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
            for users whose ``[default]`` profile has no creds but whose
            working profile is the env var.
         3. The first auto-discovered profile (legacy fallback).
-        4. ``None`` — the no-connection placeholder branch.
+        4. ``None`` — the connection setup branch.
         """
         ctx = self._app_ctx
         try:
@@ -1696,9 +1713,12 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
         # raw Python traceback before any UI lands. The first ``load()``
         # above is already guarded, but the resolver's internal load was
         # not. Fall back to an empty list so the boot chain reaches the
-        # no-connection placeholder branch and the user gets a usable UI
+        # connection setup branch and the user gets a usable UI
         # + the ``app.config_load.failed`` log line for diagnostics.
         try:
+            snapshot = ctx.connection_resolver.discover()
+            if snapshot.invalid_sources:
+                return None
             connections = ctx.connection_resolver.list()
         except Exception as exc:
             ctx.log_sink.error(
@@ -1779,28 +1799,221 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
             return False
 
     async def _mount_no_connection_placeholder(self) -> None:
-        """Render a clear "configure one and relaunch" message when no
-        AWS / S3-compatible connection resolves at startup.
-        """
+        """Mount the existing form and local setup guidance without opening a source."""
         ctx = self._app_ctx
-        config_path = escape(str(ctx.config_store.path))
         host = self.query_one("#content-host", Container)
-        await self._replace_content_widget(
-            host,
-            Static(
-                "\n  No AWS profile or S3-compatible connection found.\n\n"
-                "  To get started, do ONE of the following and relaunch:\n\n"
-                "    1. Run [b]aws configure[/]                      (interactive AWS keys setup)\n"
-                "    2. Run [b]aws configure sso[/]                  (interactive SSO setup)\n"
-                f"    3. Edit [b]{config_path}[/]     (add an AWS or S3-compatible connection)\n\n"
-                "  See [b]https://thekaveh.github.io/aws-tui/connections/[/] for the [b][connections.<name>][/] schema and\n"
-                "  vendor quirks (MinIO, R2, B2, Wasabi).\n\n"
-                "  Press [b]q[/] to quit.",
-                id="content-placeholder",
-                classes="content-placeholder",
-                markup=True,
+        await self._replace_content_widget(host, FirstRunView(ctx.config_store.path, ctx.hub))
+
+    def _first_run_view(self) -> FirstRunView | None:
+        if not self.screen_stack:
+            return None
+        return next(
+            (
+                view
+                for view in self.query(FirstRunView)
+                if view.is_mounted and view.query(ConnectionFormInline)
             ),
+            None,
         )
+
+    def _first_run_owned(self, generation: int) -> bool:
+        return not self._service_navigation_closed and self._service_navigation_is_owned_by(
+            "first-run", generation
+        )
+
+    def _focus_first_run(self, view: FirstRunView, generation: int) -> None:
+        if (
+            self._first_run_owned(generation)
+            and len(self.screen_stack) == 1
+            and self._first_run_view() is view
+        ):
+            view.focus_default()
+
+    def _set_first_run_busy(self, busy: bool) -> None:
+        view = self._first_run_view()
+        if view is not None:
+            view.set_busy(busy)
+        for section in self.query(FirstRunConnectionList):
+            section.disabled = busy
+
+    def _request_first_run_discovery(self, *, mount: bool = False) -> None:
+        if self._service_navigation_closed:
+            return
+        generation = self._advance_service_navigation("first-run", cancel_table_tasks=True)
+        self._set_first_run_busy(True)
+        self._run_lifecycle_worker(
+            partial(self._first_run_discovery_worker, generation, mount=mount),
+            group="content-mount",
+        )
+
+    async def _refresh_first_run_discovery(self, generation: int) -> ConnectionDiscovery | None:
+        snapshot = await asyncio.to_thread(self._app_ctx.connection_resolver.discover)
+        if not self._first_run_owned(generation):
+            return None
+        view = self._first_run_view()
+        if view is not None:
+            view.show_discovery(snapshot)
+        await self.query_one(NavMenu).show_first_run_connections(snapshot)
+        if not self._first_run_owned(generation):
+            return None
+        return snapshot
+
+    async def _first_run_discovery_worker(self, generation: int, *, mount: bool) -> None:
+        async with self._service_navigation_lock:
+            if not self._first_run_owned(generation):
+                return
+            if mount:
+                await self._mount_no_connection_placeholder()
+                if not self._first_run_owned(generation):
+                    return
+            await self._refresh_first_run_discovery(generation)
+            if not self._first_run_owned(generation):
+                return
+            self._set_first_run_busy(False)
+            view = self._first_run_view()
+            if view is not None:
+                self.call_after_refresh(partial(self._focus_first_run, view, generation))
+
+    def on_first_run_connection_list_setup_requested(
+        self, event: FirstRunConnectionList.SetupRequested
+    ) -> None:
+        event.stop()
+        self._request_first_run_discovery(mount=True)
+
+    def on_first_run_view_retry_requested(self, event: FirstRunView.RetryRequested) -> None:
+        event.stop()
+        self._request_first_run_discovery()
+
+    def on_first_run_connection_list_connection_selected(
+        self, event: FirstRunConnectionList.ConnectionSelected
+    ) -> None:
+        event.stop()
+        if self._service_navigation_closed:
+            return
+        generation = self._advance_service_navigation("first-run", cancel_table_tasks=True)
+        self._set_first_run_busy(True)
+        self._run_lifecycle_worker(
+            partial(self._first_run_select, event.name, generation), group="content-mount"
+        )
+
+    def on_connection_form_submitted(self, event: ConnectionFormSubmitted) -> None:
+        view = self._first_run_view()
+        form = event.control
+        if (
+            view is None
+            or form is None
+            or not form.is_attached
+            or form is not view.query_one(ConnectionFormInline)
+            or view not in form.ancestors_with_self
+        ):
+            return
+        event.stop()
+        if self._service_navigation_closed or event.mode != "add":
+            return
+        generation = self._advance_service_navigation("first-run", cancel_table_tasks=True)
+        self._set_first_run_busy(True)
+        # Persistence has its own worker: navigation away must not cancel a committed save.
+        self._run_lifecycle_worker(
+            partial(self._first_run_save, event, form, generation), group="first-run-save"
+        )
+
+    async def _first_run_save(
+        self, event: ConnectionFormSubmitted, form: ConnectionFormInline, generation: int
+    ) -> None:
+        ctx = self._app_ctx
+        entry = ctx.s3_connections_vm.entry_from_form(event.form)
+        try:
+            await ctx.s3_connections_vm.add_async(entry)
+        except Exception as exc:
+            if not self._first_run_owned(generation):
+                return
+            self._set_first_run_busy(False)
+            if isinstance(exc, ValueError):
+                form.mark_name_invalid()
+                text = "Connection name already exists. Choose another name and Save and open."
+            else:
+                form.clear_submitting()
+                text = "Unable to save connection. Check application configuration and keychain access, then Save and open again."
+            view = self._first_run_view()
+            if view is not None:
+                view.show_error(text)
+                self.call_after_refresh(partial(self._focus_first_run, view, generation))
+            return
+        if not self._first_run_owned(generation):
+            return
+        form.close()
+        self._run_lifecycle_worker(
+            partial(self._first_run_select, entry.name, generation), group="content-mount"
+        )
+
+    async def _first_run_select(self, name: str, generation: int) -> None:
+        ctx = self._app_ctx
+        async with self._service_navigation_lock:
+            if not self._first_run_owned(generation):
+                return
+            try:
+                snapshot = await self._refresh_first_run_discovery(generation)
+                if snapshot is None:
+                    return
+                connection = next((c for c in snapshot.connections if c.name == name), None)
+                if snapshot.invalid_sources or connection is None:
+                    return
+                try:
+                    state = (await asyncio.to_thread(ctx.aws_session.probe_token, connection)).state
+                except Exception:
+                    state = TokenState.MISSING
+                if not self._first_run_owned(generation):
+                    return
+                if state != TokenState.CONNECTED:
+                    view = self._first_run_view()
+                    if view is not None:
+                        view.show_error(PROBE_FAILED)
+                    return
+                # Re-read identity after the probe; external edits must not adopt stale credentials.
+                fresh = await asyncio.to_thread(ctx.connection_resolver.discover)
+                if not self._first_run_owned(generation):
+                    return
+                current = next((c for c in fresh.connections if c.name == name), None)
+                if fresh.invalid_sources or current != connection:
+                    await self._refresh_first_run_discovery(generation)
+                    return
+                suppression = (asyncio.current_task(), "s3")
+                self._service_navigation_suppressed_selection = suppression
+                try:
+                    await ctx.root_vm.switch_connection_and_service(connection, state, "s3")
+                    if not self._first_run_owned(generation):
+                        return
+                    if not await self._mount_service_view("s3", required_connection=connection):
+                        raise RuntimeError("service mount failed")
+                    if not self._first_run_owned(generation):
+                        return
+                finally:
+                    if self._service_navigation_suppressed_selection is suppression:
+                        self._service_navigation_suppressed_selection = None
+                await self.query_one(NavMenu).show_first_run_connections(None)
+                if not self._first_run_owned(generation):
+                    return
+            except Exception as exc:
+                if not self._first_run_owned(generation):
+                    return
+                ctx.log_sink.error("app.first_run.open_failed", error_type=type(exc).__name__)
+                await self._mount_no_connection_placeholder()
+                if not self._first_run_owned(generation):
+                    return
+                await self._refresh_first_run_discovery(generation)
+                if not self._first_run_owned(generation):
+                    return
+                view = self._first_run_view()
+                if view is not None:
+                    view.show_error(
+                        "Unable to open connection. Check the connection, then select it again."
+                    )
+            finally:
+                if self._first_run_owned(generation):
+                    self._set_first_run_busy(False)
+                    view = self._first_run_view()
+                    if view is not None:
+                        self.call_after_refresh(partial(self._focus_first_run, view, generation))
 
     async def _cancel_transfer_workers_before_content_swap(self) -> None:
         """Stop copy and delete workers before disposing the active file panes.
@@ -2093,6 +2306,14 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
         self._cycle_focus(reverse=True)
 
     def _cycle_focus(self, *, reverse: bool) -> None:
+        view = self._first_run_view()
+        if view is not None:
+            if not view.cycle_focus(reverse=reverse):
+                if reverse:
+                    self.screen.focus_previous()
+                else:
+                    self.screen.focus_next()
+            return
         with contextlib.suppress(Exception):
             form = self.query_one(ConnectionFormInline)
             if form.cycle_focus(reverse=reverse):
@@ -2405,6 +2626,9 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
             # Help modal open, Enter descended into the highlighted
             # directory, and on a service page it committed a row
             # activation the user never saw.
+            return
+        view = self._first_run_view()
+        if view is not None and view.activate_focused():
             return
         # If Textual focus is in the NavMenu, forward Enter to its
         # own commit action (re-fires the switch on the
@@ -5479,8 +5703,30 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
                 finally:
                     if self._service_navigation_suppressed_selection is suppression:
                         self._service_navigation_suppressed_selection = None
+            for section in self.query(FirstRunConnectionList):
+                section.disabled = False
             if selected == SETTINGS_NAV_ID:
+                view = self._first_run_view()
+                focused = self.focused
+                if (
+                    view is not None
+                    and focused is not None
+                    and (
+                        view in focused.ancestors_with_self
+                        or any(
+                            isinstance(node, FirstRunConnectionList)
+                            for node in focused.ancestors_with_self
+                        )
+                    )
+                ):
+                    # Pruning a focused setup control otherwise transfers focus to the
+                    # rail, whose existing ownership gate prevents Settings focus.
+                    self.set_focus(None)
                 await self._mount_settings_view()
+            elif self._app_ctx.root_vm.active_connection is None:
+                await self._mount_no_connection_placeholder()
+                if self._service_navigation_is_owned_by("external", generation):
+                    self._request_first_run_discovery()
             else:
                 await self._mount_service_view(selected)
 
@@ -5775,6 +6021,21 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
                 error_type=type(error).__name__,
             )
             recovered_host = await self._reset_content_host(host)
+            owner = self._service_navigation_owner
+            if owner is not None and owner[0] == "first-run" and self._first_run_owned(owner[1]):
+                await self._mount_no_connection_placeholder()
+                if self._first_run_owned(owner[1]):
+                    await self._refresh_first_run_discovery(owner[1])
+                    if not self._first_run_owned(owner[1]):
+                        return
+                    self._set_first_run_busy(False)
+                    view = self._first_run_view()
+                    if view is not None:
+                        view.show_error(
+                            "Unable to open connection. Check the connection, then select it again."
+                        )
+                        self.call_after_refresh(partial(self._focus_first_run, view, owner[1]))
+                return
             await recovered_host.mount(
                 Static(
                     "Unable to render this view.",

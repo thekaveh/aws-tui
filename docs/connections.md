@@ -77,10 +77,12 @@ The two-slot scheme keeps rollback-safe committed generations without
 accumulating keychain entries.
 Hand-authored legacy `keychain:<service>` references and `static` entries remain
 readable; editing a static entry through Settings migrates it to keychain-backed
-storage. No first-run credential form is currently shipped.
+storage. Connection setup uses the same validated form and persistence owner as
+Settings; **Save and open** also explicitly selects the saved connection.
 
 ## 3. Auto-Discovery and SSO Cache Probe
-`ConnectionResolver.list()` unions on **every launch**:
+`ConnectionResolver.list()` reads current local sources whenever called. Launch
+and **Retry discovery** use those sources:
 
 1. `[connections.*]` entries in `<config-dir>/config.toml`
 2. AWS profiles in `~/.aws/config` and `~/.aws/credentials` —
@@ -329,11 +331,33 @@ For a bucket with no existing rules the merged document is exactly:
 ```
 
 ## 7. First-run flow
-If `ConfigStore.load()` returns no `[connections.*]` and
-`~/.aws/{config,credentials}` is also empty, v0.8.x opens the main
-screen with a local-only placeholder. No first-run modal is currently
-shipped. Use `aws configure sso` / `aws sso login` for AWS profiles, or
-open Settings with `,` to add an S3-compatible endpoint.
+When no connection resolves, the main screen shows **Connection setup** with
+three separately focusable actions:
+
+1. **Add S3-compatible connection** opens the existing Settings form. Validation
+   keeps **Save and open** disabled until the required fields are valid. Saving
+   stores credentials in the OS keychain, persists a `keychain:` reference in the
+   application config, and opens S3 without restarting.
+2. **AWS profile setup** displays instructions for `aws configure` or
+   `aws configure sso`. Run those commands and any required `aws sso login`
+   outside aws-tui, then return to the app.
+3. **Retry discovery** refreshes local connection metadata and the navigation
+   rail. It does not probe credentials or start provider requests. Select a
+   listed connection to probe and open it.
+
+The rail displays the literal origin of each row: `config`, `auto-aws-profile`,
+or `demo`. **Connection setup** in the rail returns from Settings to setup.
+Invalid configuration, no connections, and failed credential probes display
+separate recovery instructions. Fix configuration outside the app and retry;
+refresh failed credentials outside the app and select the row again.
+
+AWS config and credentials files are read-only throughout this flow. Cancel
+closes an unsubmitted form and preserves the exact application-config bytes or
+its absence. While a save is pending, editing, Save, and Cancel are disabled.
+Navigating away does not undo a committed save; its completion does not
+supersede the newly selected screen. The setup actions, form, and rail choices
+are reachable by keyboard at 120×40: Tab and Shift+Tab move focus, Enter
+activates the focused control, and Esc cancels an unsubmitted form.
 
 ## 8. Interrupted-transfer diagnostic journal
 aws-tui writes a durable JSONL `begin` record under

@@ -115,7 +115,7 @@ list converted to a tuple without invented empty behavior.
 - Produce FirstRunConnectionList with setup and connection rows; nested typed Textual messages SetupRequested() and ConnectionSelected(name: str).
 - Produce FirstRunView(config_path: Path, hub: MessageHub[Message], id: str = "content-first-run").
 - Public view methods: show_discovery(snapshot: ConnectionDiscoveryDisplay) -> None; show_error(text: str) -> None; set_busy(busy: bool) -> None; focus_default() -> None; cycle_focus(*, reverse: bool = False) -> bool; activate_focused() -> bool.
-- View emits nested RetryRequested(). Add and setup guidance are view-local. Existing ConnectionFormSubmitted and ConnectionFormCancelled keep existing signatures and bubble/cancel appropriately.
+- View emits nested RetryRequested(). Add and setup guidance are view-local. Existing ConnectionFormSubmitted and ConnectionFormCancelled preserve backward-compatible constructors and bubble/cancel appropriately. Submitted messages add optional explicit ConnectionFormInline origin metadata through public control; the emitter supplies self, and legacy calls may omit it. Form model, mode, and original_name behavior is unchanged.
 - NavMenu public async show_first_run_connections(snapshot: ConnectionDiscoveryDisplay | None) -> None; None hides/removes section and restores normal width. Public activate_first_run_focused() -> bool routes the setup/choice controls before regular service commit.
 - Form public optional keyword submit_label: str = "save" and readonly has_errors: bool. Existing Settings default unchanged.
 

@@ -134,6 +134,7 @@ async def test_submit_does_not_close_form_so_parent_can_keep_open_on_error(
     # Submission fired
     assert len(submissions) == 1
     assert submissions[0].form.session_token == "TOKEN"
+    assert submissions[0].control is form
     # CRITICAL: form must NOT have closed itself
     assert form.has_class("-open"), (
         "ConnectionFormInline._submit() closed the form — parent can no "
@@ -222,3 +223,21 @@ async def test_settings_default_caption_remains_save() -> None:
             str(next(b for b in form.query(ModalButton) if b.button_id == "form-save-btn").render())
             == "save"
         )
+
+
+def test_submitted_legacy_constructor_preserves_model_without_control() -> None:
+    from aws_tui.ui.widgets.settings.connection_form import ConnectionFormSubmitted
+    from aws_tui.vm.settings.s3_compat_form import S3CompatForm
+
+    model = S3CompatForm(
+        name="local",
+        endpoint_url="http://localhost:9000",
+        region="us-east-1",
+        access_key_id="KEY",
+        secret_access_key="SECRET",
+    )
+    event = ConnectionFormSubmitted(form=model, mode="add", original_name=None)
+    assert event.control is None
+    assert event.form is model
+    assert event.mode == "add"
+    assert event.original_name is None

@@ -63,6 +63,13 @@ AWS profile setup reveals instructions for aws configure and aws configure sso,
 followed by Retry discovery, without executing either command.
 
 The view embeds the actual ConnectionFormInline and opens it with open_for_add().
+ConnectionFormSubmitted retains its existing form, mode, and original_name
+semantics and adds optional explicit control: ConnectionFormInline | None. The
+form emitter supplies itself; legacy manually constructed messages may omit
+control. App scopes handling to the exact mounted setup form through this public
+origin metadata, leaving bubbled Settings submissions with their panel.
+ConnectionFormCancelled retains its existing constructor and cancellation behavior.
+
 Add a public optional submit_label constructor argument, default save for Settings,
 and readonly has_errors property. This view uses Save and open and explains that
 this saves and explicitly selects the new source. Validation continues to disable

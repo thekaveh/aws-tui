@@ -22,6 +22,12 @@ from aws_tui.ui.widgets.settings.connection_form import (
 )
 from aws_tui.vm.connection_discovery import ConnectionDiscoveryDisplay, ConnectionDisplay
 
+# App/theme styles outrank widget defaults. Share the scoped structural override
+# with the production App and its chrome-shaped snapshot harness.
+FIRST_RUN_FORM_CSS = """
+FirstRunView ConnectionFormInline Input { height: 2; border-top: none; margin-bottom: 0; }
+"""
+
 INVALID_CONFIGURATION = "Invalid configuration. Fix the configuration file, then Retry discovery."
 NO_CONNECTIONS = "No AWS profiles or S3-compatible connections found. Add a connection or set up an AWS profile, then Retry discovery."
 PROBE_FAILED = "Credential probe failed. Refresh credentials outside aws-tui, then select the connection again."
@@ -153,7 +159,7 @@ class FirstRunView(VerticalScroll):
         yield Static("Connection setup", markup=False)
         yield Static(self._status, id="first-run-status", markup=False)
         yield Static(
-            f"Application configuration: {self._config_path}\nDiscovery reads local configuration. Select a connection to open it.",
+            f"Application configuration: {self._config_path}\nDiscovery reads local configuration. Select a connection to open it.\nConnection guide: https://thekaveh.github.io/aws-tui/connections/",
             markup=False,
         )
         yield ModalButton("Add S3-compatible connection", button_id="first-run-add")

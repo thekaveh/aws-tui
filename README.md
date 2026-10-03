@@ -268,11 +268,19 @@ auto-discovered AWS profile.
 
 ### 3.1. First-time launch
 
-If you have **no** `[connections.*]` in `<config-dir>/config.toml`
-**and** `~/.aws/{config,credentials}` is empty, v0.8.x opens the main
-screen with a local-only placeholder. Add an AWS profile with
-`aws configure sso` / `aws sso login`, or open Settings with `,` and
-add an S3-compatible connection. No first-run modal is currently shipped.
+When no connection resolves, the main screen opens **Connection setup**.
+Choose **Add S3-compatible connection** to use the same validated form as
+Settings, then **Save and open** to save it and open S3 in the current session.
+Choose **AWS profile setup** for external setup instructions; after running
+`aws configure` or `aws configure sso` outside aws-tui, choose **Retry discovery**.
+Retry refreshes the connection rows without opening a source. Select a row to
+probe its credentials and open it. The rail shows each origin: `config`,
+`auto-aws-profile`, or `demo`.
+
+Discovery and setup leave AWS config and credentials files unchanged. Cancel
+closes an unsubmitted form without writing application configuration. Once a save
+is in progress, editing and Cancel are disabled until it finishes; navigating to
+Settings does not undo a committed save or automatically open its source.
 
 ## 4. Documentation
 

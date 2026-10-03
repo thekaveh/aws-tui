@@ -92,11 +92,18 @@ class ConnectionFormSubmitted(TextualMessage):
         form: S3CompatForm,
         mode: Literal["add", "edit"],
         original_name: str | None,
+        control: ConnectionFormInline | None = None,
     ) -> None:
         super().__init__()
         self.form: S3CompatForm = form
         self.mode: Literal["add", "edit"] = mode
         self.original_name: str | None = original_name
+        self._control = control
+
+    @property
+    def control(self) -> ConnectionFormInline | None:
+        """Public sender for owners to scope bubbled submissions to their form."""
+        return self._control
 
 
 class ConnectionFormCancelled(TextualMessage):
@@ -526,7 +533,9 @@ class ConnectionFormInline(Widget):
         model = self._form_vm.model
         ctx = self._ctx
         self.post_message(
-            ConnectionFormSubmitted(form=model, mode=ctx.mode, original_name=ctx.original_name)
+            ConnectionFormSubmitted(
+                form=model, mode=ctx.mode, original_name=ctx.original_name, control=self
+            )
         )
 
 
