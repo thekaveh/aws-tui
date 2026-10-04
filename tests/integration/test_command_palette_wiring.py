@@ -25,6 +25,7 @@ _SOURCE = {"Switch source", "Retry active source credentials"}
 # resolve through ``_focused_file_pane()``, and only the S3 service hosts a
 # ``DualPaneVM``, so they are inert on every other page.
 _PANE = {
+    "S3 object details",
     "Filter loaded entries",
     "Find loaded entry",
     "Sort loaded entries",

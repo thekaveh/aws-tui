@@ -163,3 +163,27 @@ class DetailsInMemoryFS(InMemoryFS):
         if isinstance(outcome, Exception):
             raise outcome
         return outcome
+
+
+class HeldDetailsClipboard:
+    """Recording native-port replacement with explicit helper-thread teardown."""
+
+    def __init__(self) -> None:
+        from threading import Event
+
+        self.entered = Event()
+        self.release = Event()
+        self.finished = Event()
+        self.writes: list[str] = []
+
+    def write(self, text: str):
+        from aws_tui.infra.clipboard import ClipboardResult
+
+        self.writes.append(text)
+        self.entered.set()
+        try:
+            if not self.release.wait(5):
+                raise AssertionError("details clipboard barrier was not released")
+            return ClipboardResult(ok=True, mechanism="held-fixture")
+        finally:
+            self.finished.set()

@@ -116,6 +116,15 @@ def _refuse_osc52(_app: AwsTuiApp, _value: str) -> None:
         ),
         pytest.param(
             False,
+            "pbcopy",
+            "CalledProcessError",
+            True,
+            "clipboard-failed-path",
+            ToastLevel.WARNING,
+            id="native-helper-and-terminal-both-failed",
+        ),
+        pytest.param(
+            False,
             "none",
             None,
             False,
@@ -171,6 +180,9 @@ async def test_copy_path_reports_each_outcome_distinctly(
         toast = ctx.root_vm.chrome.toast_stack.toasts[-1].model
         assert toast.id == toast_id
         assert toast.level is level
+        if osc52_raises:
+            assert "terminal was sent" not in toast.text
+            assert "terminal refused OSC 52" in toast.text
 
 
 @pytest.mark.asyncio
