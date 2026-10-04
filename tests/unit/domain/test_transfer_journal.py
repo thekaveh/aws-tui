@@ -10,6 +10,11 @@ from pathlib import Path
 
 import pytest
 
+from aws_tui.domain.transfer_history import (
+    TransferConnectionIdentity,
+    TransferHistoryDescriptor,
+    TransferHistoryStore,
+)
 from aws_tui.domain.transfer_journal import TransferJournal
 
 pytestmark = pytest.mark.unit
@@ -386,3 +391,223 @@ def test_directory_fsync_happens_on_creation_and_only_on_creation(
         f"{len(directory_syncs) - 1} extra directory fsyncs on appends — the "
         "per-append cost the creation flag exists to avoid is back"
     )
+
+
+def safe_descriptor() -> TransferHistoryDescriptor:
+    return TransferHistoryDescriptor(
+        operation="copy",
+        source_connection=TransferConnectionIdentity("local", "Local", "a" * 64),
+        destination_connection=TransferConnectionIdentity("aws", "Production", "b" * 64),
+        source_uri="file:///tmp/a [literal] name",
+        destination_uri="s3://bucket/a [literal] name",
+        bytes_total=0,
+    )
+
+
+def safe_begin(journal: TransferJournal) -> str:
+    descriptor = safe_descriptor()
+    return journal.begin(
+        source_uri=descriptor.source_uri,
+        destination_uri=descriptor.destination_uri or "",
+        bytes_total=descriptor.bytes_total,
+        descriptor=descriptor,
+    )
+
+
+def test_recovery_distinguishes_begin_only_and_durable_attempt(tmp_path: Path) -> None:
+    journal = TransferJournal(base_dir=tmp_path / "journal")
+    transfer_id = safe_begin(journal)
+    [before] = TransferJournal(base_dir=tmp_path / "journal").load_history()
+    assert before.id == transfer_id
+    assert before.status == "outcome_unknown"
+    assert before.publication == "never_attempted"
+    assert before.finished_at is None
+    assert before.bytes_total == 0
+    journal.mark_attempted(transfer_id)
+    [after] = TransferJournal(base_dir=tmp_path / "journal").load_history()
+    assert after.status == "outcome_unknown"
+    assert after.publication == "possibly_published"
+    assert after.updated_at >= before.updated_at
+    assert after.failure_reason == "interrupted"
+
+
+@pytest.mark.parametrize("status", ["completed", "skipped", "failed", "cancelled"])
+def test_durable_terminal_summary_survives_restart(tmp_path: Path, status: str) -> None:
+    history = TransferHistoryStore(base_dir=tmp_path / "history")
+    journal = TransferJournal(base_dir=tmp_path / "journal", history_store=history)
+    transfer_id = safe_begin(journal)
+    if status != "skipped":
+        journal.mark_attempted(transfer_id)
+    journal.mark_terminal(transfer_id, status=status, bytes_done=0, bytes_total=0)
+    [record] = TransferJournal(
+        base_dir=tmp_path / "journal", history_store=TransferHistoryStore(tmp_path / "history")
+    ).load_history()
+    assert record.id == transfer_id
+    assert record.status == status
+    assert record.finished_at is not None
+    expected = (
+        "confirmed_terminal"
+        if status == "completed"
+        else ("never_attempted" if status == "skipped" else "possibly_published")
+    )
+    assert record.publication == expected
+    assert record.bytes_total == 0
+    assert record.failure_reason == {"failed": "provider_error", "cancelled": "cancelled"}.get(
+        status
+    )
+    assert not (tmp_path / "journal" / f"{transfer_id}.jsonl").exists()
+
+
+def test_terminal_persistence_precedes_purge_and_dominates_leftover_journal(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    journal = TransferJournal(base_dir=tmp_path / "journal")
+    transfer_id = safe_begin(journal)
+    journal.mark_attempted(transfer_id)
+
+    def crash_before_purge(tid: str) -> None:
+        assert journal.load_history()[0].status == "completed"
+        raise OSError("simulated crash")
+
+    monkeypatch.setattr(journal, "purge", crash_before_purge)
+    with pytest.raises(OSError, match="simulated crash"):
+        journal.mark_terminal(transfer_id, status="completed", bytes_done=10, bytes_total=10)
+    assert (tmp_path / "journal" / f"{transfer_id}.jsonl").exists()
+    [record] = TransferJournal(base_dir=tmp_path / "journal").load_history()
+    assert record.status == "completed"
+    assert record.bytes_done == 10
+
+
+def test_failed_summary_write_leaves_recoverable_attempt(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    history = TransferHistoryStore(tmp_path / "history")
+    journal = TransferJournal(base_dir=tmp_path / "journal", history_store=history)
+    transfer_id = safe_begin(journal)
+    journal.mark_attempted(transfer_id)
+
+    def fail_save(record: object) -> None:
+        raise OSError("disk full")
+
+    monkeypatch.setattr(history, "save", fail_save)
+    with pytest.raises(OSError, match="disk full"):
+        journal.mark_terminal(transfer_id, status="failed")
+    [record] = journal.load_history()
+    assert record.status == "outcome_unknown"
+    assert record.publication == "possibly_published"
+
+
+def test_new_recovery_skips_legacy_and_unverifiable_descriptors(tmp_path: Path) -> None:
+    journal = TransferJournal(base_dir=tmp_path)
+    legacy = journal.begin(
+        source_uri="s3://bucket/legacy", destination_uri="file:///tmp/a", upload_id="secret-mpu"
+    )
+    valid = safe_begin(journal)
+    invalid = safe_begin(journal)
+    path = tmp_path / f"{invalid}.jsonl"
+    value = json.loads(path.read_text())
+    value["descriptor"]["source_connection"]["fingerprint"] = "https://secret-endpoint"
+    path.write_text(json.dumps(value) + "\n")
+    assert {entry.transfer_id for entry in journal.find_unfinished()} == {legacy, valid, invalid}
+    assert [record.id for record in journal.load_history()] == [valid]
+    assert "secret-mpu" not in repr(journal.load_history())
+
+
+def test_safe_begin_rejects_conflicting_diagnostic_paths(tmp_path: Path) -> None:
+    journal = TransferJournal(base_dir=tmp_path)
+    with pytest.raises(ValueError, match="must match safe descriptor"):
+        journal.begin(
+            source_uri="file:///wrong",
+            destination_uri="s3://bucket/wrong",
+            descriptor=safe_descriptor(),
+        )
+    assert list(tmp_path.glob("*.jsonl")) == []
+
+
+def test_journal_symlink_never_written_read_or_purged(tmp_path: Path) -> None:
+    journal = TransferJournal(base_dir=tmp_path / "journal")
+    transfer_id = safe_begin(journal)
+    target = tmp_path / "journal" / f"{transfer_id}.jsonl"
+    outside = tmp_path / "outside.jsonl"
+    outside.write_text(target.read_text())
+    target.unlink()
+    target.symlink_to(outside)
+    assert journal.load_history() == ()
+    assert journal.find_unfinished() == []
+    with pytest.raises((ValueError, OSError)):
+        journal.mark_attempted(transfer_id)
+    journal.purge(transfer_id)
+    assert target.is_symlink()
+    assert outside.exists()
+
+
+def test_unattempted_queued_cancellation_is_durable_and_never_published(tmp_path: Path) -> None:
+    journal = TransferJournal(base_dir=tmp_path)
+    transfer_id = safe_begin(journal)
+    journal.mark_terminal(transfer_id, status="cancelled", bytes_total=None)
+    [record] = TransferJournal(base_dir=tmp_path).load_history()
+    assert record.status == "cancelled"
+    assert record.publication == "never_attempted"
+    assert record.bytes_total is None
+    assert record.bytes_done == 0
+
+
+def test_terminal_summary_does_not_copy_multipart_or_exception_secrets(tmp_path: Path) -> None:
+    journal = TransferJournal(base_dir=tmp_path)
+    descriptor = safe_descriptor()
+    transfer_id = journal.begin(
+        source_uri=descriptor.source_uri,
+        destination_uri=descriptor.destination_uri or "",
+        bytes_total=descriptor.bytes_total,
+        upload_id="SEEDED_MULTIPART_SECRET",
+        descriptor=descriptor,
+    )
+    journal.mark_attempted(transfer_id)
+    with pytest.raises(ValueError, match="invalid status"):
+        journal.mark_terminal(
+            transfer_id,
+            status="failed",
+            failure_reason="secret at https://raw-endpoint?credential=SECRET",
+        )  # type: ignore[arg-type]
+    journal.mark_terminal(transfer_id, status="failed", failure_reason="provider_error")
+    encoded = (tmp_path / "history" / f"{transfer_id}.json").read_text()
+    assert "SEEDED_MULTIPART_SECRET" not in encoded
+    assert "raw-endpoint" not in encoded
+    assert "credential" not in encoded
+
+
+def test_safe_recovery_skips_truncated_oversized_and_unsupported_descriptors(
+    tmp_path: Path,
+) -> None:
+    journal = TransferJournal(base_dir=tmp_path)
+    good = safe_begin(journal)
+    torn = safe_begin(journal)
+    with (tmp_path / f"{torn}.jsonl").open("a") as stream:
+        stream.write('{"kind":"attempted"')
+    oversized = safe_begin(journal)
+    with (tmp_path / f"{oversized}.jsonl").open("a") as stream:
+        stream.write(" " * 65537)
+    unsupported = safe_begin(journal)
+    path = tmp_path / f"{unsupported}.jsonl"
+    payload = json.loads(path.read_text())
+    payload["descriptor"]["schema_version"] = 0
+    path.write_text(json.dumps(payload) + "\n")
+    assert [record.id for record in journal.load_history()] == [good]
+
+
+def test_recovery_skips_recursive_json_without_losing_valid_entry(tmp_path: Path) -> None:
+    journal = TransferJournal(base_dir=tmp_path)
+    good = safe_begin(journal)
+    (tmp_path / "0000000000000001.jsonl").write_text("[" * 30000 + "0" + "]" * 30000 + "\n")
+    assert [record.id for record in journal.load_history()] == [good]
+
+
+def test_legacy_diagnostic_replay_still_streams_large_journals(tmp_path: Path) -> None:
+    journal = TransferJournal(base_dir=tmp_path)
+    transfer_id = journal.begin(source_uri="s", destination_uri="d")
+    journal.record_part(transfer_id, part_index=1, etag="e" * 65537, bytes_written=1)
+    [entry] = journal.find_unfinished()
+    assert entry.transfer_id == transfer_id
+    assert entry.completed_parts == (1,)
+    assert entry.completed_etags == ("e" * 65537,)
+    assert journal.load_history() == ()
