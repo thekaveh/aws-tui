@@ -2810,7 +2810,8 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
         if len(self.screen_stack) > 1:
             focused = self.focused
             if isinstance(focused, TextArea):
-                focused.insert("\n")
+                if not focused.read_only:
+                    focused.insert("\n")
                 return
             if isinstance(self.screen, CrashModal):
                 self.screen.action_default()

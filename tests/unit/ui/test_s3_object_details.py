@@ -80,7 +80,14 @@ async def test_literal_table_keeps_full_text_and_viewer_is_read_only(app_context
         assert viewer.read_only
         assert viewer.soft_wrap
         viewer.focus()
-        await pilot.press("x", "delete", "backspace", "ctrl+c")
+        await pilot.press("x", "delete", "backspace", "enter")
+        await pilot.pause()
+        assert app.focused is viewer
+        assert viewer.text == value
+        assert modal.vm.fields[0].value == value
+        assert modal.vm.fields[0].copy_value == value
+        assert modal.query_one(DataTable).get_row_at(0)[1].plain == value
+        await pilot.press("ctrl+c")
         await wait_until(lambda: clipboard.last is not None, what="viewer copies full property")
         assert viewer.text == value
         assert clipboard.last == value
