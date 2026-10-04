@@ -1,0 +1,47 @@
+# Durable transfer history and explicit recovery — issue #249
+
+## Intent and authority
+
+The owner requests iterative unsupervised ticket delivery through develop then main, with applicable local checks only. This issue gives users durable transfer outcomes and explicit interrupted-work inspection after restart. All nine current acceptance criteria bind this design. Related #244 is delivered; #237 is open but is not a prerequisite. No live AWS mutation, automatic replay, byte-offset/multipart resume, hosted Actions, releases or package publication is authorized here. Routine design/execution choices use the owner's standing instruction, overriding skill approval checkpoints.
+
+## Approach and alternatives
+
+Use private, versioned, atomic per-transfer JSON summaries beside existing diagnostic JSONL journals. This minimizes dependencies and allows independent corrupt files to be skipped. A SQLite index would offer transactions but adds migration/locking complexity unnecessarily; retaining only terminal JSONL files would conflate diagnostic upload state with safe user-facing history and make bounded retention harder. The existing crash journal remains diagnostic and legacy replay remains compatible; only fully validated current-schema entries become recovery records.
+
+## Data and persistence
+
+Add immutable TransferConnectionIdentity (kind, name, opaque SHA256 routing fingerprint) and TransferHistoryRecord containing id, operation kind (copy/move/delete), source/destination connection identities, literal scheme-prefixed paths, UTC started/updated/finished timestamps, bytes done/total, status (completed/skipped/failed/cancelled/outcome_unknown), publication certainty (never_attempted/possibly_published/confirmed_terminal), and fixed-category failure reason. Do not persist credential values, raw provider exceptions, raw endpoints, request headers, client objects or multipart IDs in summaries. Fingerprint includes existing routing identity including region/profile/source/endpoint/transport flags but excludes rotating credential values. Local identities are explicit. Paths are file paths, not signed URLs; URI user-info or query-bearing transport URLs are invalid. Unknown and zero/empty values remain distinct. Plain filenames retain spaces and brackets and render as literal text.
+
+The store has a documented default limit of 100 newest summaries, stable newest-first ordering (updated timestamp then id), private directory/file permissions where supported, strict schema/type/date/id checks, per-file size bound and atomic replace plus flush/fsync. Writes/trim/load/clear are serialized within the store. Missing, unreadable, malformed, truncated, unsupported-schema and legacy files never abort a load. Cross-instance writes must not destroy unrelated records; no symlink traversal. Clear-history deletes only validated owned metadata files, never source/destination bytes or unowned artifacts.
+
+Crash journals contain a new versioned safe transfer descriptor in begin and a durable attempted marker written before any transfer provider mutation. Begin-only means never attempted. Attempted without a confirmed terminal outcome means outcome-unknown and possibly published. Terminal summaries are persisted before diagnostic purge, so a crash between the two cannot downgrade a confirmed record. Terminal success/skip/failure/cancellation are durable, including unconsumed queued entries. Generic failure after an attempt remains potentially published despite a confirmed failed outcome. Ambiguity is an independent axis: a failure must never be inferred to mean no destination write happened. Existing legacy JSONL replay APIs stay compatible, but legacy/unverifiable descriptors are skipped by the new recovery loader.
+
+## Worker and lifecycle boundaries
+
+Transfer writes, trimming, startup scan and clear-history run off the event loop using owned async workers and asyncio.to_thread. Hub updates and VM mutations remain on the event loop. Await each durable begin/attempt before launching corresponding provider work, await terminal persistence before considering the batch settled, and drain actual in-flight disk work on cancellation/shutdown. Reuse existing cancel/progress semantics and never let an old response update a new source or closed modal. A store failure gives fixed safe feedback and cannot be presented as durable success; startup scan failure must not crash the app. Startup uses the real Textual worker manager; no synchronous scan in compose/on_mount or a message handler.
+
+Bound pane connection identity is captured from the provider's original connection at build/swap/recovery, atomically with current_connection_key, never looked up by display name after the provider is already bound. A remote provider with unavailable original identity is displayed but cannot be retried. Demo uses isolated synthetic providers and never resolves a real AWS provider.
+
+## Recovery and retry
+
+History and recovery lists retain separate categories for never-attempted, possibly-published and confirmed terminal outcomes. Journal existence and destination existence/size alone never prove success. Recheck is a user-requested read of both original endpoints after fresh identity resolution; it may report existence and establish destination absence for a new retry decision, but cannot turn an uncertain prior publication into confirmed success. Missing/changed connections, source errors or unavailable identity refuse operations with safe fixed explanations.
+
+Retry is explicitly user-requested for copy only. Re-resolve both recorded remote connections by kind/name plus fingerprint through the live registry; use newly built providers and original exact paths, not current panes. Read source and destination again. Moves/deletes, completed outcomes and unresolved possibly-published work are refused; no automatic retry exists. After an explicit recheck proves destination absent, a possibly-published copy may become eligible while its historical outcome stays unknown. A fresh confirmation states endpoints and a fresh conflict policy: default ERROR (refuse overwrite), with explicit SKIP/RENAME/OVERWRITE choices if the existing UI can present them safely. Before mutation, re-resolve identities and re-read both ends after the decision; changed observed state invalidates the decision rather than silently redirecting/overwriting. Retry starts a new transfer id and uses the existing durable/cancel/progress path. Clearing metadata never cleans destination or source objects. No destructive artifact cleanup is offered because current providers do not persist verifiable ownership proofs.
+
+## UI
+
+A new app.transfer_history action uses free Ctrl+T, strict existing collision checks and a palette entry. The Transfers overlay exposes discoverable History and Recovery controls/keys, remaining usable after active rows expire and on an empty initial history. A bounded modal uses literal labels, newest-first selectable records, history/recovery modes, full scrollable detail, recheck/retry/clear controls, confirmation for clear, Escape/Tab focus restoration, and scoped modal key containment. Existing progress rows and cancellation remain unchanged. Safe statuses include outcome unknown and publication uncertainty, never an inferred success. Loading/error/empty states are explicit. Normal/narrow pilot and snapshot evidence must render history and interrupted work without mutating AWS. Document retention, clear semantics, retry refusal/revalidation and limitations in cookbook/keybinding/reference/changelog surfaces; regenerate existing local site/wiki sources without publishing.
+
+## Acceptance mapping and verification
+
+1 Field completeness/secrets: domain/store serialization and seeded credential/unsafe-error fixture tests.
+2 Restart/limit/clear: all four terminal statuses, newest-first over-limit reload and metadata-only clear tests.
+3 Corruption: mixed fixture directory including malformed/truncated/legacy/missing/unreadable/oversized/symlink records, healthy records survive.
+4 Startup: actual composed Textual app worker load, drain app.workers._workers and check unknown recovery outcomes while UI stays responsive.
+5 Certainty: begin-only, attempted, terminal and duplicate terminal/journal cases; no inferred success.
+6 Retry: stub registry exact identity refusal, endpoint stat reads, changed state after decision, fresh conflict callback and original path/provider tests.
+7 Safety: moves/deletes/ambiguous retry refusal, zero replay at startup and metadata-only cleanup with unrelated artifacts preserved.
+8 Overlay: existing transfer cancellation/progress tests, actual-app key/control open/close/focus tests and new representative snapshots.
+9 Worker writes: running Textual pilot instruments actual store writes/trimming/clear, checks worker context and off-main-loop thread, drains cancellation/disk operations.
+
+Final reviewed-head gates use full existing local suite/coverage/snapshots, all-file hooks, architecture/type checks, docs generation/parity/strict build, unchanged-input audit reuse or fresh required audit as appropriate, build/content/Twine and synthetic installed-wheel smoke. Exact-main postchecks and source parity precede issue closure, board Done and owned branch cleanup. macOS evidence is not Windows evidence; #283 remains open without its required three clean Windows promotions.
