@@ -141,43 +141,87 @@ async def _drain_workers(pilot) -> None:  # type: ignore[no-untyped-def]
     # defers the header update and row repaint through call_after_refresh.
     # Worker/animation barriers do not guarantee that either step has landed.
     # Observe the public rendered projection; do not reflow it ourselves.
-    def columns_ready() -> bool:
-        for pane in pilot.app.query(Pane):
-            width = _name_width_for(pane.region.width)
-            header = pane.query_one(".column-header", Static)
-            if pane.region.width == 0 or pane.name_column_width != width:
-                return False
-            expected_header = _column_header_for(width)
-            if str(header.render()) != expected_header:
-                return False
-            if header.render_line(0).text.ljust(header.size.width) != expected_header[
-                : header.size.width
-            ].ljust(header.size.width):
-                return False
-            rows = list(pane.query(EntryRow))
-            if pane.vm.viewmodel.placeholder_text is None and len(rows) != len(
-                pane.vm.filtered_entries
-            ):
-                return False
-            for row in rows:
-                if not row.is_mounted or row.size.width == 0:
-                    return False
-                # render_line observes the content Textual exports, including
-                # a cached row that has not received its deferred repaint yet.
-                # At narrower fixtures Rich wraps whole words (including
-                # the time) rather than exposing a raw character slice.
-                expected = row.render().wrap(pilot.app.console, row.size.width)[0].plain
-                expected = expected.ljust(row.size.width)
-                # Strips may omit unused trailing cells; those cells display
-                # as spaces, without changing any column or visible content.
-                if row.render_line(0).text.ljust(row.size.width) != expected:
-                    return False
-        return True
+    last_mismatch: dict[str, object] | None = None
 
-    await wait_until(
-        columns_ready,
-        what="pane Resize and rendered header/row columns at current outer geometry",
-    )
+    def columns_ready() -> bool:
+        nonlocal last_mismatch
+        last_mismatch = _pane_columns_mismatch(pilot)
+        return last_mismatch is None
+
+    try:
+        await wait_until(
+            columns_ready,
+            what="pane Resize and rendered header/row columns at current outer geometry",
+        )
+    except AssertionError as exc:
+        raise AssertionError(f"{exc}; mismatch={last_mismatch!r}") from exc
+
+
+def _pane_columns_mismatch(pilot) -> dict[str, object] | None:  # type: ignore[no-untyped-def]
+    """Identify the first mismatch using the original public render observations."""
+    for pane in pilot.app.query(Pane):
+        width = _name_width_for(pane.region.width)
+        header = pane.query_one(".column-header", Static)
+        context: dict[str, object] = {
+            "pane": pane.id,
+            "geometry": str(pane.region),
+            "name_width": pane.name_column_width,
+            "expected_width": width,
+        }
+        if pane.region.width == 0 or pane.name_column_width != width:
+            return {**context, "reason": "pane-width"}
+        expected_header = _column_header_for(width)
+        header_source = str(header.render())
+        if header_source != expected_header:
+            return {
+                **context,
+                "reason": "header-source",
+                "actual": header_source,
+                "expected": expected_header,
+            }
+        header_cached = header.render_line(0).text.ljust(header.size.width)
+        header_expected = expected_header[: header.size.width].ljust(header.size.width)
+        if header_cached != header_expected:
+            return {
+                **context,
+                "reason": "header-cache",
+                "header_width": header.size.width,
+                "actual": header_cached,
+                "expected": header_expected,
+            }
+        rows = list(pane.query(EntryRow))
+        if pane.vm.viewmodel.placeholder_text is None and len(rows) != len(
+            pane.vm.filtered_entries
+        ):
+            return {
+                **context,
+                "reason": "row-count",
+                "actual": len(rows),
+                "expected": len(pane.vm.filtered_entries),
+            }
+        for row in rows:
+            if not row.is_mounted or row.size.width == 0:
+                return {
+                    **context,
+                    "reason": "row-mount",
+                    "row": row.entry_vm.name,
+                    "mounted": row.is_mounted,
+                    "row_width": row.size.width,
+                }
+            # Keep the same wrapping/cached-strip contract as columns_ready.
+            expected = row.render().wrap(pilot.app.console, row.size.width)[0].plain
+            expected = expected.ljust(row.size.width)
+            actual = row.render_line(0).text.ljust(row.size.width)
+            if actual != expected:
+                return {
+                    **context,
+                    "reason": "row-cache",
+                    "row": row.entry_vm.name,
+                    "row_width": row.size.width,
+                    "actual": actual,
+                    "expected": expected,
+                }
+    return None
 
 
 async def _show_demo_iceberg(pilot, view: IcebergView = "snapshots") -> None:  # type: ignore[no-untyped-def]
