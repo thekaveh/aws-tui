@@ -23,6 +23,12 @@ section; the current tree must not be tagged as v0.8.0.
 
 ### Added
 
+- Read-only current S3 object properties via `Ctrl+O`, `pane.object_details`
+  and **S3 object details** in the Commands palette. A literal property table
+  and wrapping full-value viewer expose metadata, tags, encryption and reported
+  checksums with truthful unavailable states and lossless copying. Reads occur
+  only on demand; selection/source changes discard stale results.
+
 - Confirmed cancellation for one selected active EMR Serverless job run via
   `x` / `emr.cancel`, the Commands hint, or the service command palette. The
   danger dialog identifies the exact source, application and run. Requests use

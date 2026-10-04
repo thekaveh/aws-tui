@@ -81,6 +81,7 @@ _EXPECTED: set[tuple[str, str, bool, bool]] = {
     ("shift+up", "dispatch('pane.mark_up')", False, True),
     ("shift+down", "dispatch('pane.mark_down')", False, True),
     ("space", "dispatch('pane.quick_look', 'space')", False, False),
+    ("ctrl+o", "dispatch('pane.object_details')", False, True),
     ("v", "dispatch('pane.enter_multiselect')", False, False),
     ("space", "dispatch('pane.toggle_select', 'space')", False, False),
     ("a", "dispatch('pane.select_all', 'a')", False, False),

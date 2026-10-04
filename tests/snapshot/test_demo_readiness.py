@@ -23,6 +23,50 @@ from tests.snapshot.apps.demo_mode import DemoModeApp
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "after_timeout", [None, {"reason": "row-count", "actual": 0, "expected": 7}]
+)
+async def test_demo_timeout_reports_last_observed_columns_mismatch(
+    monkeypatch: pytest.MonkeyPatch,
+    after_timeout: dict[str, object] | None,
+) -> None:
+    """Diagnostic sampling retains the last false state without observing again."""
+    first: dict[str, object] = {"reason": "pane-width", "name_width": 24, "expected_width": 18}
+    last: dict[str, object] = {"reason": "header-source", "actual": "old", "expected": "new"}
+    current: dict[str, object] | None = first
+    observations: list[dict[str, object] | None] = []
+    timeout = AssertionError("never settled within 15.0s: pane columns")
+    original_wait = demo.wait_until
+
+    def observe_columns(pilot) -> dict[str, object] | None:  # type: ignore[no-untyped-def]
+        observations.append(current)
+        return current
+
+    async def fail_columns(predicate: Callable[[], bool], *, what: str) -> None:
+        nonlocal current
+        if what != "pane Resize and rendered header/row columns at current outer geometry":
+            await original_wait(predicate, what=what)
+            return
+        assert not predicate()
+        current = last
+        assert not predicate()
+        # The app may settle or expose another condition after the last poll.
+        current = after_timeout
+        raise timeout
+
+    app = DemoModeApp(theme="nord")
+    async with app.run_test(size=demo.TERMINAL_SIZE) as pilot:
+        await demo._drain_workers(pilot)
+        monkeypatch.setattr(demo, "_pane_columns_mismatch", observe_columns)
+        monkeypatch.setattr(demo, "wait_until", fail_columns)
+        with pytest.raises(AssertionError) as caught:
+            await demo._drain_workers(pilot)
+        assert str(caught.value) == f"{timeout}; mismatch={last!r}"
+        assert caught.value.__cause__ is timeout
+        assert observations == [first, last]
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("pending_stage", ["resize", "reflow"])
 async def test_demo_capture_waits_for_responsive_columns(
     monkeypatch: pytest.MonkeyPatch,
@@ -94,6 +138,13 @@ async def test_demo_capture_waits_for_responsive_columns(
             assert all(
                 pane.name_column_width == _name_width_for(pane.region.width) for pane in panes
             )
+        mismatch = demo._pane_columns_mismatch(pilot)
+        assert mismatch is not None
+        assert mismatch["reason"] == (
+            "pane-width" if pending_stage == "resize" else "header-source"
+        )
+        assert mismatch["pane"] in {"pane-left", "pane-right"}
+        assert mismatch["expected_width"] == 18
         # This is the same user-visible clipping as the failed golden, not
         # just a different internal value or SVG background segmentation.
         local_rows = list(app.query_one("#pane-right", Pane).query(EntryRow))
@@ -105,6 +156,7 @@ async def test_demo_capture_waits_for_responsive_columns(
             assert not capture_ready.done(), "capture accepted stale responsive header/row columns"
             release()
             await asyncio.wait_for(capture_ready, timeout=15)
+            assert demo._pane_columns_mismatch(pilot) is None
             assert all(pane.name_column_width == 18 for pane in panes)
             assert all("12:00" in row.render_line(0).text for row in local_rows)
             svg = app.export_screenshot()

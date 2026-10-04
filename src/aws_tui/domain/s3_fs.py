@@ -53,6 +53,7 @@ from aws_tui.domain.filesystem import (
     ThrottledError,
     TransferProgress,
 )
+from aws_tui.domain.s3_object_details import S3ObjectDetails
 
 # Family of transport-layer failures that the user should see as
 # "endpoint unreachable" rather than a generic provider error. We
@@ -393,6 +394,90 @@ class S3FS:
             size=int(resp.get("ContentLength", 0)),
             modified=_to_aware(resp.get("LastModified")),
             etag=_s3_revision_token(resp),
+        )
+
+    async def read_object_details(self, path: PathRef) -> S3ObjectDetails:
+        """Read current-object headers and tags, with independent section failures."""
+        if path.is_root or (self._bucket is None and len(path.segments) < 2):
+            raise ProviderError("S3 object details require an object path")
+        bucket, key = self._resolve(path)
+        checksums_error: str | None = None
+        tags_error: str | None = None
+        tags: tuple[tuple[str, str], ...] | None = None
+        try:
+            async with self._client() as s3:
+                try:
+                    head = await s3.head_object(Bucket=bucket, Key=key, ChecksumMode="ENABLED")
+                except _TRANSPORT_FAILURE_EXCEPTIONS as exc:
+                    checksums_error = str(ProviderUnreachableError(str(exc)))
+                    head = await s3.head_object(Bucket=bucket, Key=key)
+                except ClientError as exc:
+                    mapped = _map_client_error(exc, key)
+                    if not isinstance(
+                        mapped, (PermissionDeniedError, ProviderUnreachableError, ThrottledError)
+                    ) and not _unsupported_checksum_mode(exc):
+                        raise mapped from exc
+                    checksums_error = str(mapped)
+                    head = await s3.head_object(Bucket=bucket, Key=key)
+
+                # "null" is a literal S3 version ID for this read; mutation's
+                # operation-owned version normalization deliberately differs.
+                tag_args = {"Bucket": bucket, "Key": key}
+                if head.get("VersionId"):
+                    tag_args["VersionId"] = head["VersionId"]
+                try:
+                    tagged = await s3.get_object_tagging(**tag_args)
+                    if "TagSet" in tagged:
+                        tags = tuple((tag["Key"], tag["Value"]) for tag in tagged["TagSet"])
+                except Exception as exc:
+                    # Cancellation derives from BaseException and must unwind
+                    # the client context instead of returning partial success.
+                    tags_error = _details_section_error(exc, key)
+        except _AUTH_FAILURE_EXCEPTIONS as exc:
+            raise _auth_error(exc) from exc
+        except _TRANSPORT_FAILURE_EXCEPTIONS as exc:
+            raise ProviderUnreachableError(str(exc)) from exc
+        except ClientError as exc:
+            raise _map_client_error(exc, key) from exc
+
+        encryption = tuple(
+            (field, str(head[field]).lower() if isinstance(head[field], bool) else str(head[field]))
+            for field in (
+                "ServerSideEncryption",
+                "SSEKMSKeyId",
+                "BucketKeyEnabled",
+                "SSECustomerAlgorithm",
+            )
+            if head.get(field) is not None
+        )
+        checksums = tuple(
+            (field, head[field])
+            for field in (
+                "ChecksumCRC32",
+                "ChecksumCRC32C",
+                "ChecksumCRC64NVME",
+                "ChecksumSHA1",
+                "ChecksumSHA256",
+            )
+            if head.get(field) is not None
+        )
+        return S3ObjectDetails(
+            bucket=bucket,
+            key=key,
+            content_type=head.get("ContentType"),
+            content_encoding=head.get("ContentEncoding"),
+            size=head.get("ContentLength"),
+            modified=_to_aware(head.get("LastModified")),
+            storage_class=head.get("StorageClass"),
+            etag=head.get("ETag"),
+            version_id=head.get("VersionId"),
+            encryption=encryption or None,
+            metadata=tuple(head["Metadata"].items()) if "Metadata" in head else None,
+            tags=tags,
+            tags_error=tags_error,
+            checksums=checksums or None,
+            checksum_type=head.get("ChecksumType"),
+            checksums_error=checksums_error,
         )
 
     # ------------------------------------------------------------------
@@ -1377,6 +1462,30 @@ def _map_client_error(exc: ClientError, target: str) -> ProviderError:
     }:
         return ProviderUnreachableError(f"{code}: {target}")
     return ProviderError(f"{code}: {target}")
+
+
+def _unsupported_checksum_mode(exc: ClientError) -> bool:
+    """Recognize explicit checksum-mode incompatibility, not unrelated bad requests."""
+    code = _error_code(exc)
+    if code in {"NotImplemented", "NotSupported", "UnsupportedOperation"}:
+        return True
+    message = str(exc.response.get("Error", {}).get("Message", "")).lower()
+    return (
+        code in {"InvalidArgument", "InvalidRequest"}
+        and "checksum" in message
+        and ("not supported" in message or "unsupported" in message)
+    )
+
+
+def _details_section_error(exc: Exception, target: str) -> str:
+    """Apply the existing taxonomy to unavailable sections, including safe auth hints."""
+    if isinstance(exc, _AUTH_FAILURE_EXCEPTIONS):
+        return str(_auth_error(exc))
+    if isinstance(exc, _TRANSPORT_FAILURE_EXCEPTIONS):
+        return str(ProviderUnreachableError(str(exc)))
+    if isinstance(exc, ClientError):
+        return str(_map_client_error(exc, target))
+    return str(exc)
 
 
 def _clean_etag(raw: str | None) -> str | None:

@@ -64,6 +64,7 @@ explicit meaning.
 
 | Action | Default | Notes |
 |---|---|---|
+| S3 object details | `Ctrl+O` | Read-only current S3 object properties; Copy / Ctrl+C copies the full selected field |
 | Quick Look | `Space` | In normal file-pane mode, streams the first 64 KB of the cursor file; multi-select toggles its mark |
 | Fuzzy find | `Ctrl+P` | Find and select a loaded entry |
 | Filter pane | `/` | Edit the loaded name filter live |
@@ -263,6 +264,12 @@ The default map is declared in `infra/keymap_store.py`. At composition
 time, aws-tui validates the overlay and `BindingResolver` installs keys
 only for registered actions. Unknown action IDs are logged and the app
 continues with the default keymap so a typo does not crash startup.
+The new `pane.object_details` action defaults to `ctrl+o`. Existing custom
+keybinding overlays inherit this default; if an existing action already uses
+`ctrl+o`, move that action or remap `"pane.object_details" = "ctrl+i"` in
+`[keybindings]` to avoid a collision. The named **S3 object details** palette
+entry follows the same focused-row and read-only guards.
+
 For example, use `"pane.copy" = "ctrl+y"` to move pane copy without
 claiming bare `y`, which is reserved by `glue.copy_table_ref`.
 
@@ -316,6 +323,7 @@ unbound until a handler ships.
 | `pane.mark_down` | `shift+down` | yes | Extend the marked selection downward |
 | `pane.switch_focus` | `tab` | yes | Cycle the active page's focus ring |
 | `pane.switch_focus_back` | `shift+tab` | yes | Cycle the active page's focus ring in reverse |
+| `pane.object_details` | `ctrl+o` | yes | Inspect current S3 object properties without content download or mutation |
 | `pane.quick_look` | `space` (normal mode) | yes | Stream first 64 KB |
 | `pane.filter` | `/` | yes | Local loaded-name filter |
 | `pane.fuzzy_find` | `ctrl+p` | yes | Find loaded entries |

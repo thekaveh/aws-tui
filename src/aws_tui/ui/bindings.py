@@ -47,6 +47,7 @@ _ACTION_DESCRIPTIONS: dict[str, str] = {
     "pane.switch_focus": "Switch pane",
     "pane.switch_focus_back": "Switch pane back",
     "pane.quick_look": "Quick look",
+    "pane.object_details": "S3 object details",
     "pane.filter": "Filter",
     "pane.fuzzy_find": "Find",
     "pane.enter_multiselect": "Multi-select",
