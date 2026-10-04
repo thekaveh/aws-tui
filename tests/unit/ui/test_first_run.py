@@ -6,11 +6,12 @@ from pathlib import Path
 from typing import ClassVar, cast
 
 import pytest
+from rich.text import Text
 from textual.app import App, ComposeResult
 from textual.binding import Binding, BindingType
 from textual.containers import Horizontal
 from textual.widget import Widget
-from textual.widgets import Input
+from textual.widgets import Input, Static
 from vmx import NULL_DISPATCHER, Message, MessageHub
 
 from aws_tui.demo.connections import DemoConnectionResolver
@@ -123,6 +124,51 @@ def _screen_text(app: App[None]) -> str:
     return "\n".join(strip.text for strip in app.screen._compositor.render_strips())
 
 
+def _configuration_widget(view: FirstRunView) -> Static:
+    return next(
+        widget
+        for widget in view.query(Static)
+        if str(widget.content).startswith("Application configuration:")
+    )
+
+
+def _visible_wrapped_text(widget: Widget) -> str:
+    """Join this widget's visible rows, retaining literal text across soft wraps."""
+    region = widget.content_region
+    assert region.width
+    assert region.height
+    assert widget.screen.region.contains_region(region)
+    assert isinstance(widget.parent, Widget)
+    assert widget.parent.content_region.contains_region(region)
+    screen_rows = widget.screen._compositor.render_strips()
+    rows = []
+    for y in range(region.height):
+        rendered = widget.render_line(y)
+        assert rendered.cell_length <= region.width
+        row = screen_rows[region.y + y].crop(region.x, region.x + rendered.cell_length).text
+        # The public rendered projection must match the actual visible frame;
+        # widget.render() alone would also pass for hidden or clipped content.
+        # Use the rendered row's extent to exclude frame padding without
+        # stripping any meaningful spaces from the literal path.
+        assert row == rendered.text
+        rows.append(row)
+    return "".join(rows)
+
+
+def _assert_visible_configuration_path(view: FirstRunView, path: Path) -> None:
+    config = _configuration_widget(view)
+    expected = f"Application configuration: {path}"
+    # Corroborate every literal character, including spaces that Rich consumes
+    # at a soft word-wrap boundary, then require its complete visible projection.
+    assert expected in str(config.render())
+    wrapped = Text(expected).wrap(view.app.console, config.content_size.width)
+    visible = _visible_wrapped_text(config)
+    # Rich's wrap result retains boundary separators that Textual omits from
+    # painted strips. Normalize only those expected physical-row endings.
+    assert "".join(row.plain.rstrip(" ") for row in wrapped) in visible
+    assert path.name in visible
+
+
 @pytest.mark.parametrize("source", ["config", "auto-aws-profile", "demo"])
 def test_row_renders_literal_origin(source: str) -> None:
     row = ConnectionChoice(connection=_connection(source=source))
@@ -134,7 +180,24 @@ def test_row_renders_literal_origin(source: str) -> None:
 
 
 @pytest.mark.asyncio
-async def test_actions_keyboard_setup_retry_form_and_cancel(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    "config_directory",
+    [
+        None,
+        Path(
+            "/private/var/folders/p5/j1k3_17d3vbfkq8xxyzg01f40000gn/T/"
+            "pytest-of-kaveh/pytest-2/test_actions_keyboard_setup_re0"
+        ),
+        Path("/tmp/connection setup [literal]/configuration directory"),
+        Path("/" + "a" * 113 + " b"),
+    ],
+    ids=["temporary-path", "archived-gate", "literal-spaces", "space-at-wrap-boundary"],
+)
+async def test_actions_keyboard_setup_retry_form_and_cancel(
+    tmp_path: Path, config_directory: Path | None
+) -> None:
+    if config_directory is not None:
+        tmp_path = config_directory
     view = _view(tmp_path)
     app = Host(view)
     async with app.run_test(size=(120, 40)) as pilot:
@@ -149,7 +212,7 @@ async def test_actions_keyboard_setup_retry_form_and_cancel(tmp_path: Path) -> N
         ]
         assert _focused(app) is buttons[0]
         assert "No AWS profiles or S3-compatible connections found." in _screen_text(app)
-        assert "config[local].toml" in _screen_text(app)
+        _assert_visible_configuration_path(view, tmp_path / "config[local].toml")
         await pilot.press("tab")
         assert _focused(app) is buttons[1]
         assert app.cycles[-1] is True
@@ -175,6 +238,37 @@ async def test_actions_keyboard_setup_retry_form_and_cancel(tmp_path: Path) -> N
         assert app.cancellations
         assert "No AWS profiles or S3-compatible connections found." in _screen_text(app)
         assert not app.submissions
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "damage", ["missing", "literal-brackets", "literal-spaces", "clipped", "offscreen"]
+)
+async def test_visible_configuration_oracle_rejects_missing_or_clipped_path(
+    tmp_path: Path, damage: str
+) -> None:
+    tmp_path = tmp_path / "directory with spaces"
+    view = _view(tmp_path)
+    app = Host(view)
+    async with app.run_test(size=(120, 40)) as pilot:
+        config = _configuration_widget(view)
+        expected = tmp_path / "config[local].toml"
+        _assert_visible_configuration_path(view, expected)
+        if damage == "missing":
+            config.update(str(config.content).replace("config[local].toml", ""))
+        elif damage == "literal-brackets":
+            config.update(str(config.content).replace("config[local].toml", "config.toml"))
+        elif damage == "literal-spaces":
+            config.update(
+                str(config.content).replace("directory with spaces", "directorywithspaces")
+            )
+        elif damage == "clipped":
+            config.styles.height = 1
+        else:
+            view.styles.height = 8
+        await pilot.pause()
+        with pytest.raises(AssertionError):
+            _assert_visible_configuration_path(view, expected)
 
 
 @pytest.mark.asyncio
