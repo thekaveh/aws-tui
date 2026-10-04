@@ -101,6 +101,49 @@ async def test_real_navigation_focus_refuses_previously_selected_file(app_contex
         assert "focused S3 object" in ctx.root_vm.chrome.toast_stack.toasts[-1].model.text
 
 
+async def test_real_configured_connection_choice_refuses_previous_object(app_context_factory):
+    from aws_tui.ui.widgets.first_run import ConnectionChoice, FirstRunConnectionList
+
+    app, fs, ctx = await make_app(app_context_factory)
+    async with app.run_test(size=(120, 40)) as pilot:
+        pane = await select_file(app, pilot)
+        previous_entry = pane.vm.selected_entry
+        previous_row = next(row for row in pane.query(EntryRow) if row.entry_vm is previous_entry)
+        snapshot = ctx.connection_resolver.discover()
+        assert snapshot.invalid_sources == ()
+        assert len(snapshot.connections) == 1
+        connection = snapshot.connections[0]
+        assert (connection.name, connection.source, connection.kind) == (
+            "test",
+            "config",
+            "s3-compatible",
+        )
+        assert connection.endpoint_url == "http://localhost:9000"
+        await app.query_one(NavMenu).show_first_run_connections(snapshot)
+        choice = app.query_one(ConnectionChoice)
+        assert isinstance(choice.parent, FirstRunConnectionList)
+        assert choice.connection_name == connection.name
+        assert choice._source == connection.source
+        choice.focus()
+        await pilot.pause()
+        assert app.focused is choice
+        assert choice.has_focus
+        assert choice.is_attached
+        assert pane.vm.selected_entry is previous_entry
+        assert previous_entry.name == "a.txt"
+        assert previous_row.is_attached
+        assert fs.details_paths == []
+        await pilot.press("ctrl+o")
+        await pilot.pause()
+        assert app.focused is choice
+        assert len(app.screen_stack) == 1
+        assert pane.vm.selected_entry is previous_entry
+        assert fs.details_paths == []
+        toast = ctx.root_vm.chrome.toast_stack.toasts[-1]
+        assert toast.model.id == "s3-details-unavailable"
+        assert "Select a focused S3 object" in toast.model.text
+
+
 @pytest.mark.parametrize(
     "value", ['[bold]雪[/bold] "quote"\n' + "x" * 9000, ""], ids=["long-literal", "empty"]
 )
@@ -351,6 +394,88 @@ async def test_real_source_or_page_replacement_invalidates_details(
         assert fs.details_paths == [PathRef(("bucket", "a.txt"))]
 
 
+async def test_resistant_source_replacement_drains_without_stale_publication(app_context_factory):
+    import asyncio
+
+    from aws_tui.infra.aws_session import TokenState
+    from aws_tui.infra.connection_resolver import Connection
+    from aws_tui.ui.widgets.help_modal import HelpModal
+    from aws_tui.ui.widgets.s3_object_details import S3ObjectDetailsModal
+    from aws_tui.vm.file_manager.s3_object_details_vm import S3ObjectDetailsState
+    from tests.s3_object_details_support import DetailsReadBarrier
+
+    barrier = DetailsReadBarrier(
+        S3ObjectDetails(bucket="bucket", key="a.txt", content_type="STALE SOURCE"),
+        cancellation_resistant=True,
+    )
+    clipboard = InMemoryClipboard()
+    app, fs, ctx = await make_app(app_context_factory, clipboard=clipboard)
+    fs.queue_details(barrier)
+    async with app.run_test(size=(120, 40)) as pilot:
+        switch = None
+        try:
+            old_pane = await select_file(app, pilot)
+            old_dual = app._dual_pane()
+            old_provider = old_pane.vm.provider
+            old_source = old_pane.vm.current_connection_key
+            await pilot.press("ctrl+o")
+            await wait_until(barrier.entered.is_set, what="resistant source read entered")
+            screen = app.screen
+            assert isinstance(screen, S3ObjectDetailsModal)
+            replacement = Connection(
+                name="replacement",
+                kind="s3-compatible",
+                source="config",
+                endpoint_url="http://localhost:9001",
+                access_key_id="k",
+                secret_access_key="s",
+                region="us-east-1",
+            )
+            switch = asyncio.create_task(
+                ctx.root_vm.switch_connection_and_service(replacement, TokenState.CONNECTED, "s3")
+            )
+            await wait_until(
+                lambda: screen.vm.state is S3ObjectDetailsState.CLOSED,
+                what="resistant old source invalidated",
+            )
+            await wait_until(lambda: app.screen is not screen, what="old inspector dismissed")
+            await wait_until(barrier.cancelled.is_set, what="resistant read cancellation requested")
+            assert not barrier.finished.is_set()
+            assert screen.vm.fields == ()
+            assert ctx.root_vm.active_connection is replacement
+            assert ctx.root_vm.content_host.current is not old_dual
+            assert old_pane.vm.provider is old_provider
+            assert old_pane.vm.current_connection_key == old_source
+            await pilot.press("question_mark")
+            await wait_until(lambda: isinstance(app.screen, HelpModal), what="current UI usable")
+            await pilot.press("escape")
+            await pilot.pause()
+            barrier.release.set()
+            await wait_until(barrier.finished.is_set, what="resistant old source reply drained")
+            await switch
+            await drain_workers(app)
+            await pilot.pause()
+            assert not isinstance(app.screen, S3ObjectDetailsModal)
+            assert screen.vm.state is S3ObjectDetailsState.CLOSED
+            assert screen.vm.fields == ()
+            assert screen._subscription is None
+            assert screen._source_subscription is None
+            assert clipboard.writes == []
+            assert all(
+                "STALE SOURCE" not in toast.model.text
+                for toast in ctx.root_vm.chrome.toast_stack.toasts
+            )
+            assert fs.details_paths == [PathRef(("bucket", "a.txt"))]
+            assert app._crash_report is None
+        finally:
+            barrier.release.set()
+            if barrier.entered.is_set():
+                await wait_until(barrier.finished.is_set, what="held source fixture final drain")
+            if switch is not None:
+                await switch
+            await drain_workers(app)
+
+
 async def test_close_cancels_held_read_and_clears_unavailable_copy(app_context_factory):
     from aws_tui.vm.file_manager.s3_object_details_vm import S3ObjectDetailsState
     from tests.s3_object_details_support import DetailsReadBarrier
@@ -443,11 +568,10 @@ def make_recording_app(factory, state="ready", *, clipboard=None):
 @pytest.mark.parametrize("state", ["ready", "partial", "error"])
 @pytest.mark.parametrize("size", [(120, 40), (80, 24)], ids=["normal", "narrow"])
 async def test_recorded_s3_fields_partial_errors_and_rendered_artifacts(
-    app_context_factory, state, size
+    app_context_factory, state, size, tmp_path, monkeypatch
 ):
     import json
     from html import unescape
-    from pathlib import Path
 
     from aws_tui.ui.widgets.s3_object_details import S3ObjectDetailsModal
     from aws_tui.vm.file_manager.s3_object_details_vm import S3ObjectDetailsState
@@ -524,9 +648,11 @@ async def test_recorded_s3_fields_partial_errors_and_rendered_artifacts(
         if state == "ready":
             assert "[bold]" in rendered
             assert "[/bold]" in rendered
-        destination = Path(".superpowers/sdd/2026-10-03-s3-object-details/rendered")
-        destination.mkdir(exist_ok=True)
-        (destination / f"{state}-{size[0]}x{size[1]}.svg").write_text(svg)
+        monkeypatch.chdir(tmp_path)
+        destination = tmp_path / f"{state}-{size[0]}x{size[1]}.svg"
+        destination.write_text(svg, encoding="utf-8")
+        assert destination.read_text(encoding="utf-8") == svg
+        assert not (tmp_path / ".superpowers").exists()
         assert all(
             operation in {"list_buckets", "list_objects_v2", "head_object", "get_object_tagging"}
             for operation, _ in session.s3.calls
