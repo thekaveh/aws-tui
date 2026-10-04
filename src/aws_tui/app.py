@@ -46,6 +46,7 @@ from aws_tui.domain.filesystem import (
     PermissionDeniedError,
     ProviderUnreachableError,
 )
+from aws_tui.domain.s3_object_details import S3ObjectDetailsProvider
 from aws_tui.domain.s3_uri import parse_s3_uri
 from aws_tui.infra.aws_session import TokenState
 from aws_tui.infra.connection_resolver import Connection, ConnectionDiscovery, ConnectionNotFound
@@ -81,8 +82,10 @@ from aws_tui.ui.widgets.help_modal import HelpModal
 from aws_tui.ui.widgets.hint_legend import HintLegend
 from aws_tui.ui.widgets.modal_button import ModalButton
 from aws_tui.ui.widgets.nav_menu import NavMenu
+from aws_tui.ui.widgets.pane import EntryRow, Pane
 from aws_tui.ui.widgets.pane_listing_controls import FilterPaneModal, FindPaneModal, SortPaneModal
 from aws_tui.ui.widgets.quick_look import QuickLook
+from aws_tui.ui.widgets.s3_object_details import S3ObjectDetailsModal
 from aws_tui.ui.widgets.service_source_header import ServiceSourceHeader
 from aws_tui.ui.widgets.service_view_factory import build_service_view
 from aws_tui.ui.widgets.settings.connection_form import (
@@ -110,6 +113,7 @@ from aws_tui.vm.credential_recovery import (
 from aws_tui.vm.emr_serverless.page_vm import EmrServerlessPageVM
 from aws_tui.vm.file_manager.dual_pane_vm import DualPaneVM, FocusedPane
 from aws_tui.vm.file_manager.pane_vm import PaneState
+from aws_tui.vm.file_manager.s3_object_details_vm import S3ObjectDetailsVM
 from aws_tui.vm.glue.iceberg_vm import IcebergView
 from aws_tui.vm.glue.page_vm import GluePageVM, GlueView
 from aws_tui.vm.messages import (
@@ -258,6 +262,7 @@ _PANE_SELECTION_ACTIONS = frozenset(
 )
 
 _PALETTE_COMMANDS: tuple[PaletteEntry, ...] = (
+    PaletteEntry("pane.object_details", "S3 object details", "pane", service_ids=_PANE_SERVICE_IDS),
     PaletteEntry(
         "pane.enter_multiselect", "Enter multi-select mode", "pane", service_ids=_PANE_SERVICE_IDS
     ),
@@ -860,6 +865,7 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
         self._actions.register("pane.mark_up", self.action_mark_up)
         self._actions.register("pane.mark_down", self.action_mark_down)
         self._actions.register("pane.quick_look", self.action_quick_look)
+        self._actions.register("pane.object_details", self.action_object_details)
         self._actions.register("pane.enter_multiselect", self.action_enter_multiselect)
         self._actions.register("pane.toggle_select", self.action_toggle_select)
         self._actions.register("pane.select_all", self.action_select_all)
@@ -899,6 +905,7 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
         self._shutdown_complete = False
         self._shutdown_errors: tuple[tuple[str, str], ...] = ()
         self._command_palette_populated: bool = False
+        self._object_details_focus_restoration: Callable[[], None] | None = None
         self._emr_cancel_available = False
         self._pane_state_sub: DisposableBase | None = None
         self._connection_state_sub: DisposableBase | None = None
@@ -1153,6 +1160,7 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
         """Project Textual's screen stack into VMx modal precedence."""
         coordinator = self._app_ctx.focus_coordinator
         if len(self.screen_stack) > 1:
+            self._object_details_focus_restoration = None
             coordinator.modal_open()
         else:
             was_modal = coordinator.is_modal
@@ -1161,6 +1169,8 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
                 self.call_after_refresh(self._restore_focus_after_modal, coordinator.focused_slot)
 
     def _restore_focus_after_modal(self, slot: FocusSlot) -> None:
+        details_restore = getattr(self, "_object_details_focus_restoration", None)
+        self._object_details_focus_restoration = None
         coordinator = self._app_ctx.focus_coordinator
         if len(self.screen_stack) > 1 or coordinator.is_modal:
             return
@@ -1170,6 +1180,8 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
             return
         coordinator.set_focused_slot(slot)
         self._project_focus_slot(slot)
+        if details_restore is not None:
+            details_restore()
 
     def _dispose_table_clipboard_subscription(self) -> None:
         subscription = getattr(self, "_table_clipboard_sub", None)
@@ -2216,6 +2228,142 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
     def action_exit_multiselect(self) -> None:
         self._execute_pane_selection("pane.exit_multiselect", "exit_multiselect_command")
 
+    def _object_details_origin(self) -> tuple[PaneVM, object, object, object, int, EntryRow] | None:
+        """Resolve physical ownership before consulting the pane cursor.
+
+        File rows use cursor focus and deliberately leave Textual focus unset.
+        A focused source/navigation control must never inherit that cursor.
+        """
+        dual = self._dual_pane()
+        if dual is None:
+            return None
+        focused = self.focused
+        pane = None
+        if focused is not None:
+            if isinstance(focused, (Input, TextArea)):
+                return None
+            owner = next(
+                (node for node in focused.ancestors_with_self if isinstance(node, Pane)), None
+            )
+            if owner is None:
+                return None
+            pane = owner.vm
+            row = next(
+                (node for node in focused.ancestors_with_self if isinstance(node, EntryRow)), None
+            )
+            if row is not None and row.entry_vm is not pane.selected_entry:
+                return None
+        else:
+            slot = self._app_ctx.focus_coordinator.focused_slot
+            if slot not in {FocusSlot.S3_LEFT, FocusSlot.S3_RIGHT}:
+                return None
+            pane = dual.left if slot is FocusSlot.S3_LEFT else dual.right
+        entry = pane.selected_entry
+        if (
+            pane not in (dual.left, dual.right)
+            or pane.state is not PaneState.IDLE
+            or pane.path_protocol != "s3:"
+            or pane.current_connection_key is None
+            or pane.current_connection_key[0] not in {"aws", "s3-compatible"}
+            or entry is None
+            or entry.kind is not EntryKind.FILE
+            or entry.is_parent_link
+            or not isinstance(pane.provider, S3ObjectDetailsProvider)
+        ):
+            return None
+        rendered_row = next(
+            (
+                row
+                for row in self.screen.query(EntryRow)
+                if row.entry_vm is entry
+                and any(isinstance(owner, Pane) and owner.vm is pane for owner in row.ancestors)
+            ),
+            None,
+        )
+        if rendered_row is None or not rendered_row.is_attached:
+            return None
+        return (
+            pane,
+            entry,
+            pane.provider,
+            pane.current_connection_key,
+            pane.listing_revision,
+            rendered_row,
+        )
+
+    def action_object_details(self) -> None:
+        """Open current-object properties only from the visible owning pane."""
+        if len(self.screen_stack) > 1 or self._app_ctx.focus_coordinator.is_modal:
+            return
+        self._open_object_details(self._object_details_origin())
+
+    def _open_object_details(
+        self, origin: tuple[PaneVM, object, object, object, int, EntryRow] | None
+    ) -> None:
+        if len(self.screen_stack) > 1 or self._app_ctx.focus_coordinator.is_modal:
+            return
+        if origin is None or self._object_details_origin() != origin:
+            notifications.advise(
+                self._app_ctx.root_vm.chrome.toast_stack,
+                subject="Source",
+                message="Select a focused S3 object to inspect its details",
+                toast_id="s3-details-unavailable",
+            )
+            return
+        pane = origin[0]
+        self.record_action("pane.object_details")
+        vm = S3ObjectDetailsVM(
+            pane=pane, hub=self._app_ctx.hub, dispatcher=self._app_ctx.dispatcher
+        )
+        vm.construct()
+        screen = S3ObjectDetailsModal(
+            vm, copy_value=partial(self._put_on_clipboard, label="S3 object detail")
+        )
+        dual = self._dual_pane()
+        host = self._app_ctx.root_vm.content_host
+        focused_origin = self.focused
+
+        def restore_focus() -> None:
+            if (
+                self._object_details_origin() == origin
+                and focused_origin is not None
+                and focused_origin.is_attached
+                and focused_origin.screen is self.screen
+            ):
+                self.set_focus(focused_origin)
+
+        # Content/page replacement can destruct panes without a pane property
+        # event. Watch host publication as well as source/provider changes.
+        def lifetime_changed(_message: object) -> None:
+            if (
+                host.current is not dual
+                or pane.provider is not origin[2]
+                or pane.current_connection_key != origin[3]
+            ):
+                screen.action_close()
+
+        subscription = self._app_ctx.hub.messages.subscribe(lifetime_changed)
+        screen._source_subscription = subscription
+
+        def dismissed(_result: None) -> None:
+            subscription.dispose()
+            self._object_details_focus_restoration = (
+                restore_focus if len(self.screen_stack) == 1 else None
+            )
+            if (
+                host.current is not dual
+                or pane.provider is not origin[2]
+                or pane.current_connection_key != origin[3]
+            ):
+                focused = self.focused
+                if focused is not None and any(
+                    isinstance(owner, Pane) and owner.vm is pane
+                    for owner in focused.ancestors_with_self
+                ):
+                    self.set_focus(None)
+
+        self.push_screen(screen, dismissed)
+
     def action_quick_look(self) -> None:
         """Open a 64 KB Quick Look preview for the focused pane's cursor file.
 
@@ -2257,7 +2405,9 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
                 # PaletteVM invokes before CommandPalette dismisses its screen.
                 # Defer synchronous pane actions so strict modal guards and
                 # focused-pane restoration still apply at invocation time.
-                partial(self._schedule_palette_selection, entry.id)
+                partial(self._schedule_palette_object_details)
+                if entry.id == "pane.object_details"
+                else partial(self._schedule_palette_selection, entry.id)
                 if entry.id
                 in _PANE_SELECTION_ACTIONS
                 | {"pane.filter", "pane.fuzzy_find", "pane.sort", "pane.clear_filter"}
@@ -2265,6 +2415,29 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
             )
         self._command_palette_populated = True
         self._recompute_hint_disables()
+
+    def _schedule_palette_object_details(self) -> None:
+        self.call_after_refresh(self._finish_palette_object_details)
+
+    def _finish_palette_object_details(self) -> None:
+        origin = self._palette_object_details_origin
+        dual = self._dual_pane()
+        if origin is not None and dual is not None:
+            pane, entry, provider, source, revision, row = origin
+            if (
+                pane in (dual.left, dual.right)
+                and pane.selected_entry is entry
+                and pane.provider is provider
+                and pane.current_connection_key == source
+                and pane.listing_revision == revision
+                and row.is_attached
+            ):
+                # Pop may temporarily autofocus the navigation rail before
+                # the coordinator's deferred restoration. Restore the captured
+                # slot only after validating its exact live row/source.
+                self._app_ctx.focus_coordinator.set_focused_slot(self._palette_object_details_slot)
+                self.set_focus(self._palette_object_details_focus)
+        self._open_object_details(origin)
 
     def _schedule_palette_selection(self, action_id: str) -> None:
         self.call_after_refresh(self._actions.invoke, action_id)
@@ -2277,6 +2450,9 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
                 with contextlib.suppress(Exception):
                     screen.query_one("#palette-input", Input).focus()
                 return
+        self._palette_object_details_origin = self._object_details_origin()
+        self._palette_object_details_slot = self._app_ctx.focus_coordinator.focused_slot
+        self._palette_object_details_focus = self.focused
         self._populate_command_palette()
         vm = self._app_ctx.command_palette_vm
         vm.set_active_service(self._app_ctx.root_vm.content_host.current_id)
@@ -2634,7 +2810,8 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
         if len(self.screen_stack) > 1:
             focused = self.focused
             if isinstance(focused, TextArea):
-                focused.insert("\n")
+                if not focused.read_only:
+                    focused.insert("\n")
                 return
             if isinstance(self.screen, CrashModal):
                 self.screen.action_default()
@@ -3316,7 +3493,11 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
                 stack,
                 subject="Source",
                 message=f"could not copy {label} to the system clipboard",
-                action=f"{write.mechanism} failed; the terminal was sent OSC 52 instead",
+                action=(
+                    f"{write.mechanism} failed; the terminal was sent OSC 52 instead"
+                    if terminal_written
+                    else f"{write.mechanism} failed; the terminal refused OSC 52"
+                ),
                 toast_id=f"clipboard-failed-{slug}",
             )
             return

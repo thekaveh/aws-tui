@@ -120,6 +120,7 @@ class KeymapStore:
         "pane.switch_focus": ("tab",),
         "pane.switch_focus_back": ("shift+tab",),
         "pane.quick_look": ("space",),
+        "pane.object_details": ("ctrl+o",),
         "pane.filter": ("/",),
         "pane.fuzzy_find": ("ctrl+p",),
         "pane.enter_multiselect": ("v",),

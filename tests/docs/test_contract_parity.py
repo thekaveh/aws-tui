@@ -99,7 +99,8 @@ _CONSUMED_INPUT_MEMBERS = {
     ("glue", "GetCrawlerMetrics"): {"CrawlerNameList"},
     ("s3", "ListObjectsV2"): {"Bucket", "Prefix", "Delimiter", "ContinuationToken"},
     ("s3", "DeleteObjects"): {"Bucket", "Delete"},
-    ("s3", "GetObjectTagging"): {"Bucket", "Key"},
+    ("s3", "GetObjectTagging"): {"Bucket", "Key", "VersionId"},
+    ("s3", "HeadObject"): {"Bucket", "Key", "ChecksumMode"},
     ("s3", "UploadPartCopy"): {
         "Bucket",
         "Key",
@@ -512,4 +513,41 @@ def test_emr_cancellation_documented_contract() -> None:
     assert "`x`" in keys
     assert "`CancelJobRun`" in ledger
     for value in ("applicationId", "jobRunId", "total_max_attempts=1", "standard", "10", "60"):
+        assert value in ledger
+
+
+def test_s3_object_details_documented_read_only_contract() -> None:
+    service = _text("docs/services/s3.md")
+    keys = _text("docs/keybindings.md")
+    ledger = _text("docs/contract-ledger.md")
+    for value in (
+        "Ctrl+O",
+        "pane.object_details",
+        "read-only",
+        "Unavailable",
+        "empty",
+        "s3:GetObject",
+        "s3:GetObjectTagging",
+        "s3:GetObjectVersionTagging",
+        "kms:Decrypt",
+        "kms:GenerateDataKey",
+        "ETag",
+        "checksums",
+        "Not\nperformed",
+        "source or page replacement",
+        "no per-row `head_object` or `get_object_tagging`",
+        "without downloading",
+        "mutating S3 call",
+    ):
+        assert value in service
+    assert "`pane.object_details` | `ctrl+o`" in keys
+    assert "Existing custom" in keys
+    for value in (
+        "ChecksumMode=ENABLED",
+        "VersionId",
+        "literal `null`",
+        "checksum verification is not performed",
+        "No content verification",
+        "listing hot-path",
+    ):
         assert value in ledger
