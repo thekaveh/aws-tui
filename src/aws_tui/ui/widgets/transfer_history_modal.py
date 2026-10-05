@@ -367,7 +367,7 @@ class TransferHistoryModal(ModalScreen[None]):
                 self._feedback = (
                     f"Destination {'absent' if inspection.destination is None else 'present'}. "
                     + (
-                        "A new copy may be requested; prior outcome remains unknown."
+                        "A new copy may be requested; prior outcome unchanged."
                         if inspection.retry_eligible
                         else "Retry refused; prior outcome unchanged."
                     )

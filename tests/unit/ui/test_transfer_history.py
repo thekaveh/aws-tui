@@ -442,6 +442,30 @@ async def test_terminal_save_error_preserves_completed_copy_and_safe_separate_wa
         assert "seeded-secret-NEVER-SHOW" not in app.export_screenshot()
 
 
+@pytest.mark.parametrize("status", ["cancelled", "failed"])
+async def test_recheck_preserves_known_outcome_and_publication(tmp_path, status):
+    app, tid, source, destination, _ = history_app(tmp_path, attempted=True)
+    vm = app.app_ctx.transfer_history_vm
+    app.app_ctx.transfer_journal.mark_terminal(tid, status=status, bytes_done=0, bytes_total=7)
+    async with app.run_test(size=(80, 24)) as pilot:
+        modal = await open_history(app, pilot)
+        before = vm.records[0]
+        assert before.status == status
+        assert before.publication == "possibly_published"
+        await pilot.click("#history-recheck")
+        await drain_workers(app)
+        assert vm.records == (before,)
+        details = modal.query_one("#transfer-history-details").text
+        assert f"Outcome: {status}" in details
+        assert "Publication: possibly published" in details
+        assert not app.app_ctx.transfers_vm.transfers
+        assert not list(destination.iterdir())
+        assert (source / NAME).read_bytes() == b"payload"
+        assert str(modal.query_one("#history-status").content) == (
+            "Destination absent. A new copy may be requested; prior outcome unchanged."
+        )
+
+
 async def test_uncertain_copy_recheck_absent_then_new_retry_and_cancel_progress(
     tmp_path, monkeypatch
 ):
@@ -469,9 +493,14 @@ async def test_uncertain_copy_recheck_absent_then_new_retry_and_cancel_progress(
     async with app.run_test(size=(80, 24)) as pilot:
         try:
             modal = await open_history(app, pilot, recovery=True)
+            before = app.app_ctx.transfer_history_vm.records[0]
+            assert before.publication == "possibly_published"
             await pilot.click("#history-recheck")
             await drain_workers(app)
-            assert "Destination absent" in str(modal.query_one("#history-status").content)
+            assert str(modal.query_one("#history-status").content) == (
+                "Destination absent. A new copy may be requested; prior outcome unchanged."
+            )
+            assert app.app_ctx.transfer_history_vm.records == (before,)
             assert app.app_ctx.transfer_history_vm.records[0].status == "outcome_unknown"
             await pilot.click("#history-retry")
             await wait_until(
