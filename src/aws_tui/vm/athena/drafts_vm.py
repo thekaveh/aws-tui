@@ -351,6 +351,8 @@ class AthenaDraftsVM:
                 session._saved_sql = capture.record.sql
                 session._saved_context = QueryContext(*capture.record.context)
                 session._state = "saved" if capture.record.sql.strip() else "empty"
+                if not capture.record.sql.strip():
+                    session._capture = None
             elif result.code not in {"cancelled", "disabled"}:
                 session._save_failed_revision = capture.captured_editor_revision
                 session._state = "error"
@@ -651,6 +653,18 @@ class AthenaDraftSession:
         if self._detached:
             return
         bound_origin = self._bound_context
+        coordinator, capture = self._runtime._coordinator, self._capture
+        if (
+            not sql.strip()
+            and bound_origin is None
+            and capture is not None
+            and not capture.record.sql.strip()
+            and coordinator is not None
+            and coordinator.is_current(
+                capture.record.id, capture.captured_write_revision, capture.permit
+            )
+        ):
+            bound_origin = QueryContext(*capture.record.context)
         self._editor_revision += 1
         self._save_failed_revision = None
         self._sql = sql

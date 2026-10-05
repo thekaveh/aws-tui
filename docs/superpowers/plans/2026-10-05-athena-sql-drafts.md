@@ -842,6 +842,8 @@ class _WriteCoordinator:
             self.current.pop(identity, None)
 ```
 
+Successive blank revisions retain deletion ownership only from a still-current blank capture, using its immutable origin and a fresh editor/write revision. Successful deletion releases the session capture; a canceled, fenced, or superseded capture supplies no deletion ownership. Clearing still releases the execution context guard immediately.
+
 A new editor revision that cannot schedule revokes only its session's currently owned capture (timer and permit); `_revoke_session_capture` fences that ID only if `is_current` still matches its exact write revision and permit. It must not cancel another session's newer writer. A `context_changed` notification alone preserves the captured payload. Completion acknowledges the original saved SQL/context but retains `context_required` while the current selection differs from the bound origin; returning to that exact origin can reveal the acknowledged saved state without a new write.
 
 Construct this coordinator lazily on the first enabled async operation, so composition and synchronous disabled VMs do not require a running event loop or start a thread. The session's exact edit transition is:
@@ -855,6 +857,7 @@ self._bound_context: QueryContext | None = None
 self._saved_sql: str | None = None
 self._saved_context: QueryContext | None = None
 self._deleted_revision: int | None = None
+self._capture: _EditCapture | None = None
 self._detached = False
 self._active = active
 self._state: DraftState = "off"
@@ -864,6 +867,18 @@ def edited(self, sql: str, context: QueryContext) -> None:
     if self._detached:
         return
     bound_origin = self._bound_context
+    coordinator, capture = self._runtime._coordinator, self._capture
+    if (
+        not sql.strip()
+        and bound_origin is None
+        and capture is not None
+        and not capture.record.sql.strip()
+        and coordinator is not None
+        and coordinator.is_current(
+            capture.record.id, capture.captured_write_revision, capture.permit
+        )
+    ):
+        bound_origin = QueryContext(*capture.record.context)
     self._editor_revision += 1
     self._sql = sql
     self._context = context
@@ -942,12 +957,14 @@ def schedule_session(self, session: AthenaDraftSession, sql: str,
             session._saved_sql = capture.record.sql
             session._saved_context = QueryContext(*capture.record.context)
             session._state = "saved" if capture.record.sql.strip() else "empty"
+            if not capture.record.sql.strip():
+                session._capture = None
         elif result.code not in {"cancelled", "disabled"}:
             session._state = "error"
         if session._context_needs_guard():
             session._state = "context_required"
         session._notify("state")
-    self._coordinator.schedule(
+    session._capture = self._coordinator.schedule(
         sql=sql, context=context, captured_editor_revision=captured_editor_revision,
         completed=completed,
     )

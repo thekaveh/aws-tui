@@ -564,6 +564,134 @@ async def test_clear_without_bound_origin_preserves_selected_context_record(tmp_
     await runtime.shutdown()
 
 
+@pytest.mark.parametrize("selection", ["same", "different", "incomplete"])
+async def test_successive_blank_edits_delete_origin_and_preserve_selected_writer(
+    tmp_path, selection
+):
+    runtime, store = runtime_at(tmp_path)
+    origin = QueryContext(*CTX)
+    other = QueryContext(*(*CTX[:4], "other"))
+    selected = {
+        "same": origin,
+        "different": other,
+        "incomplete": QueryContext(CTX[0], "", CTX[2], CTX[3], CTX[4]),
+    }[selection]
+    past = datetime(2000, 1, 1, tzinfo=UTC)
+    origin_record = replace(record(CTX, "SELECT origin"), created_at=past, updated_at=past)
+    other_record = replace(
+        record(other.cache_key, "SELECT other old"), created_at=past, updated_at=past
+    )
+    assert store.save(origin_record, permit=DraftPermit()).code is None
+    assert store.save(other_record, permit=DraftPermit()).code is None
+    session, writer = runtime.open_session(), runtime.open_session()
+    session.recovered(origin_record)
+    writer.edited("SELECT other newer", other)
+    writer_capture = writer._capture
+    assert writer_capture is not None
+    try:
+        session.edited("", selected)
+        first_clear = session._capture
+        assert first_clear is not None
+        session.edited(" \n\t", selected)
+        latest_revision = session.editor_revision
+        await writer.flush(deadline=asyncio.get_running_loop().time() + 2)
+        await session.flush(deadline=asyncio.get_running_loop().time() + 2)
+
+        assert {item.context: item.sql for item in store.list().records} == {
+            other.cache_key: "SELECT other newer"
+        }
+        assert session.state == "empty"
+        assert session.editor_revision == latest_revision
+        assert session._saved_sql == " \n\t"
+        assert session._saved_context == origin
+        assert session.bound_context is None
+        assert writer.state == "saved"
+        assert not writer_capture.permit.cancelled
+    finally:
+        await runtime.shutdown()
+
+
+async def test_superseded_origin_deletion_is_not_revived_by_another_blank_edit(tmp_path):
+    runtime, store = runtime_at(tmp_path)
+    origin = QueryContext(*CTX)
+    other = QueryContext(*(*CTX[:4], "other"))
+    past = datetime(2000, 1, 1, tzinfo=UTC)
+    origin_record = replace(record(CTX, "SELECT origin"), created_at=past, updated_at=past)
+    assert store.save(origin_record, permit=DraftPermit()).code is None
+    old, writer = runtime.open_session(), runtime.open_session()
+    old.recovered(origin_record)
+    old.edited("", other)
+    deletion = old._capture
+    assert deletion is not None
+    writer.edited("SELECT origin newer", origin)
+    assert deletion.permit.cancelled
+    old.edited(" \t", other)
+
+    assert (await runtime.shutdown()).unpersisted == 0
+    assert {item.context: item.sql for item in store.list().records} == {
+        origin.cache_key: "SELECT origin newer"
+    }
+    assert old.state == "empty"
+    assert writer.state == "saved"
+
+
+async def test_completed_origin_deletion_releases_ownership_before_later_blank_edit(tmp_path):
+    runtime, store = runtime_at(tmp_path)
+    origin = QueryContext(*CTX)
+    other = QueryContext(*(*CTX[:4], "other"))
+    session = runtime.open_session()
+    session.edited("SELECT origin", origin)
+    await session.flush(deadline=asyncio.get_running_loop().time() + 2)
+    session.edited("", other)
+    await session.flush(deadline=asyncio.get_running_loop().time() + 2)
+    assert session.state == "empty"
+    assert not store.list().records
+    past = datetime(2000, 1, 1, tzinfo=UTC)
+    external_record = replace(record(CTX, "SELECT origin newer"), created_at=past, updated_at=past)
+    assert store.save(external_record, permit=DraftPermit()).code is None
+    session.edited(" \t", other)
+
+    assert (await runtime.shutdown()).unpersisted == 0
+    assert store.list().records[0].sql == "SELECT origin newer"
+    assert session.state == "empty"
+
+
+@pytest.mark.parametrize("fence", ["delete", "clear", "disable", "recover", "dispose"])
+async def test_fenced_origin_deletion_is_not_revived_by_successive_blank_edits(tmp_path, fence):
+    runtime, store = runtime_at(tmp_path)
+    origin = QueryContext(*CTX)
+    other = QueryContext(*(*CTX[:4], "other"))
+    past = datetime(2000, 1, 1, tzinfo=UTC)
+    origin_record = replace(record(CTX, "SELECT origin"), created_at=past, updated_at=past)
+    assert store.save(origin_record, permit=DraftPermit()).code is None
+    session = runtime.open_session()
+    session.recovered(origin_record)
+    session.edited("", other)
+    deletion = session._capture
+    assert deletion is not None
+    if fence == "delete":
+        assert await runtime.delete(origin_record.id)
+    elif fence == "clear":
+        assert await runtime.clear()
+    elif fence == "disable":
+        assert await runtime.set_enabled(False)
+        assert await runtime.set_enabled(True)
+    elif fence == "recover":
+        session.recovered(record(other.cache_key, "SELECT other"))
+    else:
+        runtime.dispose()
+    assert deletion.permit.cancelled
+    external_record = replace(origin_record, sql="SELECT external newer")
+    assert store.save(external_record, permit=DraftPermit()).code is None
+
+    session.edited(" \t", other)
+    await runtime.shutdown()
+
+    assert {item.context: item.sql for item in store.list().records} == {
+        origin.cache_key: "SELECT external newer"
+    }
+
+
 async def test_readonly_demo_never_invokes_store(tmp_path, monkeypatch):
     from vmx import NULL_DISPATCHER, MessageHub
 
