@@ -21,6 +21,7 @@ import inspect
 import os
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 import textual
@@ -121,7 +122,7 @@ def test_main_settles_the_default_before_app_run(monkeypatch: pytest.MonkeyPatch
 
     def fake_build_app_context(*, demo: bool) -> object:
         observed.append(("context", constants.SMOOTH_SCROLL))
-        return object()
+        return SimpleNamespace(athena_drafts_shutdown_warning=None)
 
     class FakeApp:
         crash_report = None
