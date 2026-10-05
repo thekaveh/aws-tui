@@ -22,6 +22,7 @@ from aws_tui.domain.data_catalog import DatabaseSummary, TableRef
 from aws_tui.domain.filesystem import ProviderError
 from aws_tui.domain.query import QueryContext
 from aws_tui.domain.sql_policy import ReadOnlySqlPolicy, select_starter_sql
+from aws_tui.infra.athena_draft_store import SqlDraft
 from aws_tui.infra.connection_resolver import Connection
 from aws_tui.vm._observable import ObserverSafeSubject, send_value_free
 from aws_tui.vm.athena._domain_validation import (
@@ -40,6 +41,8 @@ from aws_tui.vm.athena._pager_compat import (
     SnapshotTokenPager,
     seed_token_pager,
 )
+from aws_tui.vm.athena.draft_recovery import validate_draft_context
+from aws_tui.vm.athena.drafts_vm import AthenaDraftsVM
 from aws_tui.vm.athena.history_vm import AthenaHistorySnapshot, AthenaHistoryVM
 from aws_tui.vm.athena.query_vm import AthenaQuerySnapshot, AthenaQueryVM
 from aws_tui.vm.athena.results_vm import AthenaResultsVM
@@ -108,6 +111,10 @@ class _PageWorker(Generic[T]):
     pager: SnapshotTokenPager[T, str] = field(init=False, repr=False)
 
 
+async def _unverified_source() -> bool:
+    return False
+
+
 class AthenaPageVM:
     def __init__(
         self,
@@ -120,7 +127,15 @@ class AthenaPageVM:
         dispatcher: Dispatcher,
         selection_store: ServiceSelectionStore | None = None,
         sleep: Sleep = anyio.sleep,
+        drafts: AthenaDraftsVM | None = None,
+        drafts_active: bool = True,
+        source_is_current: Callable[[], Awaitable[bool]] | None = None,
     ) -> None:
+        self._drafts = drafts
+        self._draft_session = drafts.open_session(active=drafts_active) if drafts else None
+        self._source_is_current = source_is_current or _unverified_source
+        self._draft_restore_running = False
+        self._draft_recovery_error: str | None = None
         self._client = client
         self._policy = policy
         self._connection = connection
@@ -192,6 +207,9 @@ class AthenaPageVM:
             hub=hub,
             dispatcher=dispatcher,
             sleep=sleep,
+            draft_session=self._draft_session,
+            validate_draft_execution=self._validate_draft_execution,
+            drafts_enabled=lambda: drafts is not None and drafts.enabled,
         )
         self.history = AthenaHistoryVM(
             client=client,
@@ -205,6 +223,125 @@ class AthenaPageVM:
             hub=hub,
             dispatcher=dispatcher,
         )
+
+    @property
+    def drafts(self) -> AthenaDraftsVM | None:
+        return self._drafts
+
+    @property
+    def draft_recovery_error(self) -> str | None:
+        return self._draft_recovery_error
+
+    async def _validate_draft_execution(self, context: QueryContext) -> bool:
+        return await validate_draft_context(
+            context=context,
+            client=self._client,
+            source_is_current=self._source_is_current,
+        )
+
+    async def restore_draft(
+        self,
+        draft_id: str,
+        confirm_replace: Callable[[], Awaitable[bool]],
+    ) -> bool:
+        drafts, session = self._drafts, self._draft_session
+        if (
+            drafts is None
+            or session is None
+            or not drafts.enabled
+            or self._draft_restore_running
+            or not self._is_alive()
+            or self.query.is_executing
+            or self.query.is_submitting
+            or self.query.is_context_resolving
+        ):
+            return False
+        self._draft_restore_running = True
+        prior_guard = self.query.draft_recovery_guard
+        self.query.set_draft_recovery_guard(True)
+        before_guard = self.query._draft_recovery_guard_revision
+        self._draft_recovery_error = None
+        before_context = self.context
+        before_page = self._snapshot_restore_token()
+        before_query = self.query.snapshot_generation
+        before_editor = session.editor_revision
+        accepted = declined = cancelled = False
+
+        def unchanged() -> bool:
+            return (
+                self._is_alive()
+                and drafts.enabled
+                and self.context == before_context
+                and self.query.context == before_context
+                and self._snapshot_restore_token() == before_page
+                and self.query.snapshot_generation == before_query
+                and session.editor_revision == before_editor
+                and self.query._draft_recovery_guard_revision == before_guard
+                and not self.query.is_executing
+                and not self.query.is_submitting
+                and not self.query.is_context_resolving
+            )
+
+        async def read_selected() -> SqlDraft | None:
+            await drafts.refresh()
+            if drafts.error_text is not None:
+                return None
+            return next((row for row in drafts.items if row.id == draft_id), None)
+
+        async def current_context_valid() -> bool:
+            return await self._validate_draft_execution(before_context)
+
+        try:
+            selected = await read_selected()
+            if selected is None or selected.context != before_context.cache_key:
+                return False
+            if not unchanged() or not await current_context_valid() or not unchanged():
+                return False
+            if (
+                session.has_unsaved_text(self.query.sql, before_context)
+                and not await confirm_replace()
+            ):
+                declined = True
+                return False
+            latest = await read_selected()
+            if latest != selected or not unchanged():
+                return False
+            if not await current_context_valid() or not unchanged():
+                return False
+            async with self.query.snapshot_restore_guard(before_query):
+                if not unchanged():
+                    return False
+                self.query.install_draft_sql(selected)
+                self._select_view_state("query")
+                self._draft_recovery_error = None
+                self.query.set_draft_recovery_guard(False)
+                accepted = True
+                return True
+        except asyncio.CancelledError:
+            cancelled = True
+            if self.query._draft_recovery_guard_revision == before_guard:
+                self.query.set_draft_recovery_guard(prior_guard)
+            raise
+        except Exception:
+            # A lifecycle guard may reject after its lock was awaited. Discard
+            # operational callback errors too; no raw error reaches the UI worker.
+            return False
+        finally:
+            self._draft_restore_running = False
+            if declined:
+                if self.query._draft_recovery_guard_revision == before_guard:
+                    self.query.set_draft_recovery_guard(prior_guard)
+            elif not accepted and self._is_alive() and not cancelled:
+                self._draft_recovery_error = "Draft context is unavailable or changed. Select the exact original context and retry."
+                self.query.set_draft_recovery_guard(True)
+            self._notify("draft_recovery_error")
+
+    def keep_current_editor(self) -> None:
+        if self._draft_restore_running:
+            return
+        self._draft_recovery_error = None
+        self.query.set_draft_recovery_guard(False)
+        self._notify("draft_recovery_error")
 
     @property
     def connection(self) -> Connection:
