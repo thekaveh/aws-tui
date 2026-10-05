@@ -1,3 +1,5 @@
+import asyncio
+import threading
 from dataclasses import replace
 
 import pytest
@@ -151,6 +153,102 @@ async def test_off_setup_baseline_rejects_later_credentials_selector_remap(tmp_p
         await page.shutdown()
 
 
+@pytest.mark.parametrize("remap", [False, True])
+async def test_failed_initial_source_check_stays_unavailable_after_enable(tmp_path, remap):
+    from aws_tui.composition import make_source_check_factory
+
+    runtime, _ = runtime_at(tmp_path, enabled=False)
+    config = ConfigStore(path=tmp_path / "config.toml")
+    entry = ConnectionEntry(
+        name="analytics", kind="aws", region="us-west-2", credentials="env:TEAM_"
+    )
+    config.add_connection(entry)
+    connection = Connection(name="analytics", kind="aws", region="us-west-2", source="config")
+
+    class Resolver:
+        unavailable = True
+
+        def resolve_selected(self, name):
+            assert name == "analytics"
+            if self.unavailable:
+                raise RuntimeError("source unavailable")
+            return connection
+
+    resolver = Resolver()
+    factory = make_source_check_factory(config, resolver)
+    check = factory(connection)
+    client = PageClient()
+    page = make_page_vm(client, drafts=runtime, source_is_current=check)
+    try:
+        await page.setup()
+        page.query.set_sql("SELECT 1")
+        await page.query.execute_command.execute_async()
+        assert len(client.start_calls) == 1
+        client.start_calls.clear()
+        page.query.set_sql("")
+        assert runtime._worker._thread is None
+        assert not (tmp_path / "athena-drafts").exists()
+        if remap:
+            config.update_connection("analytics", replace(entry, credentials="env:OTHER_"))
+        resolver.unavailable = False
+        assert await runtime.set_enabled(True)
+        page.query.set_sql("SELECT 1")
+        await page.query.execute_command.execute_async()
+        assert not client.start_calls
+        assert page.query.validation_error == "Draft context is unavailable or changed."
+        assert not await check()
+        assert await factory(connection)()
+    finally:
+        await runtime.shutdown()
+        await page.shutdown()
+
+
+async def test_cancelled_initial_source_check_cannot_adopt_remapped_baseline(tmp_path):
+    from aws_tui.composition import make_source_check_factory
+
+    config = ConfigStore(path=tmp_path / "config.toml")
+    entry = ConnectionEntry(name="analytics", kind="aws", credentials="env:TEAM_")
+    config.add_connection(entry)
+    connection = Connection(name="analytics", kind="aws", region="us-west-2", source="config")
+    loop = asyncio.get_running_loop()
+    started = asyncio.Event()
+    completed = asyncio.Event()
+    release = threading.Event()
+
+    class Resolver:
+        calls = 0
+
+        def resolve_selected(self, name):
+            assert name == "analytics"
+            self.calls += 1
+            if self.calls == 1:
+                loop.call_soon_threadsafe(started.set)
+                assert release.wait(timeout=5)
+                loop.call_soon_threadsafe(completed.set)
+            return connection
+
+    resolver = Resolver()
+    factory = make_source_check_factory(config, resolver)
+    check = factory(connection)
+    initial = asyncio.create_task(check())
+    try:
+        await asyncio.wait_for(started.wait(), timeout=2)
+        initial.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await initial
+        config.update_connection("analytics", replace(entry, credentials="env:OTHER_"))
+        release.set()
+        await asyncio.wait_for(completed.wait(), timeout=2)
+        assert not await check()
+        assert await factory(connection)()
+    finally:
+        release.set()
+        if not initial.done():
+            initial.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await initial
+
+
 @pytest.mark.parametrize(
     "change", ["removed", "shadowed", "route", "selector", "failure", "race", "rotation"]
 )
@@ -191,6 +289,11 @@ async def test_source_factory_exact_lookup_and_private_identity(tmp_path, change
     else:
         resolver.current = None
     assert await check() == (change == "rotation")
+    if change == "failure":
+        resolver.current = connection
+        assert await check()
+        config.update_connection("analytics", replace(entry, credentials="env:OTHER_"))
+        assert not await check()
 
 
 async def test_enabled_composition_uses_config_relative_store_and_shared_service(

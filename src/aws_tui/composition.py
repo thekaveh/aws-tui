@@ -110,6 +110,7 @@ def make_source_check_factory(
     def factory(captured: Connection) -> Callable[[], Awaitable[bool]]:
         expected_route = connection_route(captured)
         baseline: tuple[object, ...] | None = None
+        initialization_attempted = False
         check_lock = asyncio.Lock()
 
         def read_identity() -> tuple[object, ...] | None:
@@ -124,8 +125,12 @@ def make_source_check_factory(
                 return None
 
         async def check() -> bool:
-            nonlocal baseline
+            nonlocal baseline, initialization_attempted
             async with check_lock:
+                if initialization_attempted and baseline is None:
+                    return False
+                # Failed or cancelled initialization leaves this page unavailable.
+                initialization_attempted = True
                 current = await asyncio.to_thread(read_identity)
                 if current is None:
                     return False

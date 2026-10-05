@@ -1444,7 +1444,7 @@ Expected: all pass. The implementer self-reviews the no-fallback path, direct-co
 
 - Consumes Tasks 1–3 and `ConnectionResolver.resolve_selected(name)` exact lookup, captured `Connection`, `RecoveryServiceVM.commit_selection`. The Task 4 normal/crash tests extend `tests/unit/vm/athena/test_draft_recovery.py` using its exact Task 3 imports from `tests.athena_drafts_helpers`, `tests.unit.vm.athena.test_page_vm` and `tests.helpers`; define `always_current` and `accept_replace` locally as shown below.
 - Add `AppContext.athena_drafts_vm: AthenaDraftsVM` and `AppContext.athena_drafts_shutdown_warning: str | None`.
-- Add optional `drafts: AthenaDraftsVM | None = None` and `source_check_factory: Callable[[Connection], Callable[[], Awaitable[bool]]] | None = None` to `AthenaService`. Each page gets its own check closure; PageVM setup calls it before accepting drafts-enabled editor actions to establish a credential-material-free baseline.
+- Add optional `drafts: AthenaDraftsVM | None = None` and `source_check_factory: Callable[[Connection], Callable[[], Awaitable[bool]]] | None = None` to `AthenaService`. Each page gets its own check closure; PageVM setup attempts its credential-material-free baseline even while persistence is off. Failed or cancelled first initialization leaves that closure unavailable; a new page/check closure may initialize normally.
 - Add optional `athena_drafts: AthenaDraftsVM | None = None` and `.athena_drafts` property to `SettingsVM`; SettingsVM does not dispose the app-owned runtime.
 - Ordinary build opens an active query session; recovery build opens an inactive session. `commit_selection` commits selection state then invokes `page.activate_drafts()`, a new sync PageVM helper forwarding `session.activate(query.sql, query.context)`. Discarded candidates only detach.
 
@@ -1523,7 +1523,7 @@ Expected: missing composition properties/signatures or lifetime assertions fail.
 
 Place the shared runtime into `AppContext.__slots__`, constructor and composition return. `close_unstarted` invokes nonblocking dispose/close intake. Register rollback in the same ExitStack used for other composition owners. Inject the runtime into `_mount_settings_view`'s SettingsVM. Because Settings content changes often, its dispose must release only its subscriptions, never disable persistence or terminate runtime work.
 
-Use the following source identity functions in composition (or a private infrastructure helper consumed only by composition). They compare no credential material and make the baseline timing explicit: one factory closure per page; its first check occurs during page setup before draft recovery/edit execution is available. Subsequent checks refuse routing changes relative to that initialized page.
+Use the following source identity functions in composition (or a private infrastructure helper consumed only by composition). They compare no credential material and make the baseline timing explicit: one factory closure per page; its first check occurs during page setup before draft recovery/edit execution is available, including when persistence starts off. Record the initialization attempt under `check_lock` before the first awaited read. If it fails or is cancelled, that closure remains unavailable on all subsequent checks; only a fresh page/check closure may establish a baseline. Once initialization succeeds, later temporary lookup failures may recover only to that same baseline. Subsequent checks refuse routing changes relative to that initialized page.
 
 ```python
 import asyncio
@@ -1553,6 +1553,7 @@ def make_source_check_factory(
     def factory(captured: Connection) -> Callable[[], Awaitable[bool]]:
         expected_route = connection_route(captured)
         baseline: tuple[object, ...] | None = None
+        initialization_attempted = False
         check_lock = asyncio.Lock()
 
         def read_identity() -> tuple[object, ...] | None:
@@ -1567,8 +1568,12 @@ def make_source_check_factory(
                 return None
 
         async def check() -> bool:
-            nonlocal baseline
+            nonlocal baseline, initialization_attempted
             async with check_lock:
+                if initialization_attempted and baseline is None:
+                    return False
+                # Failed or cancelled initialization leaves this page unavailable.
+                initialization_attempted = True
                 current = await asyncio.to_thread(read_identity)
                 if current is None:
                     return False
