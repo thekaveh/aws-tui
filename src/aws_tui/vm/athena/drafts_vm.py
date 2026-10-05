@@ -249,6 +249,7 @@ class AthenaDraftsVM:
         enabled: bool,
         read_only: bool,
         directory: Path,
+        preference_error: bool = False,
         hub: MessageHub[Message],
         dispatcher: Dispatcher,
     ) -> None:
@@ -264,7 +265,7 @@ class AthenaDraftsVM:
         self._disposed = False
         self._saving_suspended = False
         self._items: tuple[SqlDraft, ...] = ()
-        self._error_text: str | None = None
+        self._error_text: str | None = _OPERATION_ERROR if preference_error else None
         self._busy = False
         self._cleanup_required = False
         self._terminal: DraftFlushReport | None = None

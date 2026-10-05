@@ -17,7 +17,9 @@ The composition builds:
 
 from __future__ import annotations
 
+import asyncio
 import logging
+from collections.abc import Awaitable, Callable
 from contextlib import ExitStack, suppress
 from pathlib import Path
 from typing import TYPE_CHECKING, cast
@@ -30,9 +32,10 @@ from vmx.services.dispatcher import Dispatcher
 
 from aws_tui.domain.transfer_history import TransferConnectionIdentity
 from aws_tui.domain.transfer_journal import TransferJournal
+from aws_tui.infra.athena_draft_store import AthenaDraftStore
 from aws_tui.infra.aws_session import AwsSession
 from aws_tui.infra.clipboard import ClipboardPort, NativeClipboard
-from aws_tui.infra.config_store import ConfigStore
+from aws_tui.infra.config_store import Config, ConfigStore, ConnectionEntry, Defaults, Keybindings
 from aws_tui.infra.connection_resolver import Connection, ConnectionResolver
 from aws_tui.infra.duckdb import DuckDbPort, NativeDuckDb
 from aws_tui.infra.keychain import KeychainBackend, Keyring
@@ -49,6 +52,7 @@ from aws_tui.services.athena.service import AthenaService
 from aws_tui.services.emr_serverless.service import EmrServerlessService
 from aws_tui.services.glue.service import GlueService
 from aws_tui.services.s3.service import S3Service
+from aws_tui.vm.athena.drafts_vm import AthenaDraftsVM
 from aws_tui.vm.chrome.command_palette_vm import CommandPaletteVM
 from aws_tui.vm.chrome.confirm_vm import ConfirmationVM
 from aws_tui.vm.chrome.focus_coordinator_vm import FocusCoordinatorVM
@@ -71,10 +75,75 @@ from aws_tui.vm.table_clipboard_vm import TableClipboardVM
 _logger = logging.getLogger("aws_tui.composition")
 
 
+def entry_source_identity(entry: ConnectionEntry | None) -> tuple[object, ...]:
+    if entry is None:
+        return (False, None, None, None, None, None, None, None)
+    return (
+        True,
+        entry.kind,
+        entry.profile,
+        entry.region,
+        entry.endpoint_url,
+        entry.credentials,
+        entry.force_path_style,
+        entry.verify_tls,
+    )
+
+
+def connection_route(connection: Connection) -> tuple[object, ...]:
+    return (
+        connection.kind,
+        connection.name,
+        connection.region,
+        connection.source,
+        connection.profile,
+        connection.endpoint_url,
+        connection.force_path_style,
+        connection.verify_tls,
+    )
+
+
+def make_source_check_factory(
+    config: ConfigStore,
+    resolver: ConnectionResolver,
+) -> Callable[[Connection], Callable[[], Awaitable[bool]]]:
+    def factory(captured: Connection) -> Callable[[], Awaitable[bool]]:
+        expected_route = connection_route(captured)
+        baseline: tuple[object, ...] | None = None
+        check_lock = asyncio.Lock()
+
+        def read_identity() -> tuple[object, ...] | None:
+            try:
+                before = entry_source_identity(config.load().connections.get(captured.name))
+                current = resolver.resolve_selected(captured.name)
+                after = entry_source_identity(config.load().connections.get(captured.name))
+                if before != after or connection_route(current) != expected_route:
+                    return None
+                return after
+            except Exception:
+                return None
+
+        async def check() -> bool:
+            nonlocal baseline
+            async with check_lock:
+                current = await asyncio.to_thread(read_identity)
+                if current is None:
+                    return False
+                if baseline is None:
+                    baseline = current
+                return current == baseline
+
+        return check
+
+    return factory
+
+
 class AppContext:
     """The bag of pre-wired objects the Textual app consumes."""
 
     __slots__ = (
+        "athena_drafts_shutdown_warning",
+        "athena_drafts_vm",
         "aws_session",
         "clipboard",
         "clipboard_vm",
@@ -125,6 +194,7 @@ class AppContext:
         dispatcher: Dispatcher,
         initial_theme: str,
         s3_connections_vm: S3ConnectionsVM,
+        athena_drafts_vm: AthenaDraftsVM | None = None,
         focus_coordinator: FocusCoordinatorVM | None = None,
         table_clipboard_vm: TableClipboardVM | None = None,
         clipboard: ClipboardPort | None = None,
@@ -135,6 +205,21 @@ class AppContext:
         demo_emrs: dict[str, InMemoryEmr] | None = None,
         unreachable_connections: set[tuple[str, str]] | None = None,
     ) -> None:
+        self.athena_drafts_vm = (
+            athena_drafts_vm
+            if athena_drafts_vm is not None
+            else AthenaDraftsVM(
+                store=AthenaDraftStore(
+                    config=config_store, directory=config_store.path.parent / "athena-drafts"
+                ),
+                enabled=False,
+                read_only=demo,
+                directory=config_store.path.parent / "athena-drafts",
+                hub=hub,
+                dispatcher=dispatcher,
+            )
+        )
+        self.athena_drafts_shutdown_warning: str | None = None
         self.root_vm = root_vm
         self.registry = registry
         self.config_store = config_store
@@ -252,6 +337,7 @@ class AppContext:
         workers and AWS clients can exist.
         """
         for disposable in (
+            self.athena_drafts_vm,
             self.transfer_history_vm,
             self.s3_connections_vm,
             self.command_palette_vm,
@@ -342,6 +428,7 @@ def _build_app_context(
     # silent no-ops so the user's real config.toml is never mutated.
     config_store = ConfigStore(path=config_dir / "config.toml", read_only=demo)
     keybindings_overlay: dict[str, str | list[str]] = {}
+    config_load_failed = False
     try:
         _cfg = config_store.load()
         initial_theme = _cfg.defaults.theme
@@ -354,6 +441,8 @@ def _build_app_context(
         # rebinding, not mutation through the reference.
         keybindings_overlay = dict(_cfg.keybindings.bindings)
     except Exception as exc:
+        config_load_failed = True
+        _cfg = Config(connections={}, defaults=Defaults(), keybindings=Keybindings())
         # Falling back silently is dishonest — first-run with a
         # malformed config.toml looks identical to a clean install.
         # Log once so an operator can find the cause in the log.
@@ -471,68 +560,85 @@ def _build_app_context(
     else:
         resolved_duckdb_port = NativeDuckDb()
 
-    # ── Registry ───────────────────────────────────────────────────────────
-    registry = ServiceRegistry()
-    s3_service = S3Service(
-        transfer_journal=transfer_journal,
-        hub=hub,
-        dispatcher=dispatcher,
-        s3_fs_factory=s3_fs_factory,
-    )
-    # cast to Service: S3Service satisfies the protocol structurally; mypy
-    # rejects ClassVar `descriptor` here so we widen explicitly.
-    registry.register(cast("Service", s3_service))
-
-    emr_service = EmrServerlessService(
-        hub=hub,
-        dispatcher=dispatcher,
-        emr_client_factory=emr_client_factory,
-    )
-    registry.register(cast("Service", emr_service))
-
-    glue_service = GlueService(
-        hub=hub,
-        dispatcher=dispatcher,
-        aws_session=aws_session,
-        glue_client_factory=glue_client_factory,
-        athena_client_factory=athena_client_factory,
-        selection_store=service_selections,
-        duckdb_port=resolved_duckdb_port,
-    )
-    registry.register(cast("Service", glue_service))
-
-    athena_service = AthenaService(
-        hub=hub,
-        dispatcher=dispatcher,
-        aws_session=aws_session,
-        athena_client_factory=athena_client_factory,
-        selection_store=service_selections,
-    )
-    registry.register(cast("Service", athena_service))
-
-    # ── Root VM ───────────────────────────────────────────────────────────
-    root_vm = RootVM(
-        registry=registry,
-        keymap=keymap_store,
-        theme=theme_store,
-        log=log_sink,
-        dispatcher=dispatcher,
-        hub=hub,
-    )
-
-    # ── Overlay VMs (lifetime managed at the app level, not in RootVM) ────
-    command_palette_vm = CommandPaletteVM(hub=hub, dispatcher=dispatcher)
-    confirm_vm = ConfirmationVM(hub=hub, dispatcher=dispatcher)
-    quick_look_vm = QuickLookVM(hub=hub, dispatcher=dispatcher)
-    transfers_vm = TransfersVM(hub=hub, dispatcher=dispatcher)
-    s3_connections_vm = S3ConnectionsVM(
-        resolver=connection_resolver,
-        config_store=config_store,
-        keychain=keychain,
-        hub=hub,
-        dispatcher=dispatcher,
-    )
     with ExitStack() as rollback:
+        athena_draft_store = AthenaDraftStore(
+            config=config_store,
+            directory=config_store.path.parent / "athena-drafts",
+        )
+        athena_drafts_vm = AthenaDraftsVM(
+            store=athena_draft_store,
+            enabled=(not demo and _cfg.athena_sql_drafts),
+            read_only=demo,
+            directory=config_store.path.parent / "athena-drafts",
+            preference_error=config_load_failed,
+            hub=hub,
+            dispatcher=dispatcher,
+        )
+        rollback.callback(athena_drafts_vm.dispose)
+        source_check_factory = make_source_check_factory(config_store, connection_resolver)
+        # ── Registry ───────────────────────────────────────────────────────────
+        registry = ServiceRegistry()
+        s3_service = S3Service(
+            transfer_journal=transfer_journal,
+            hub=hub,
+            dispatcher=dispatcher,
+            s3_fs_factory=s3_fs_factory,
+        )
+        # cast to Service: S3Service satisfies the protocol structurally; mypy
+        # rejects ClassVar `descriptor` here so we widen explicitly.
+        registry.register(cast("Service", s3_service))
+
+        emr_service = EmrServerlessService(
+            hub=hub,
+            dispatcher=dispatcher,
+            emr_client_factory=emr_client_factory,
+        )
+        registry.register(cast("Service", emr_service))
+
+        glue_service = GlueService(
+            hub=hub,
+            dispatcher=dispatcher,
+            aws_session=aws_session,
+            glue_client_factory=glue_client_factory,
+            athena_client_factory=athena_client_factory,
+            selection_store=service_selections,
+            duckdb_port=resolved_duckdb_port,
+        )
+        registry.register(cast("Service", glue_service))
+
+        athena_service = AthenaService(
+            hub=hub,
+            dispatcher=dispatcher,
+            aws_session=aws_session,
+            athena_client_factory=athena_client_factory,
+            selection_store=service_selections,
+            drafts=athena_drafts_vm,
+            source_check_factory=source_check_factory,
+        )
+        registry.register(cast("Service", athena_service))
+
+        # ── Root VM ───────────────────────────────────────────────────────────
+        root_vm = RootVM(
+            registry=registry,
+            keymap=keymap_store,
+            theme=theme_store,
+            log=log_sink,
+            dispatcher=dispatcher,
+            hub=hub,
+        )
+
+        # ── Overlay VMs (lifetime managed at the app level, not in RootVM) ────
+        command_palette_vm = CommandPaletteVM(hub=hub, dispatcher=dispatcher)
+        confirm_vm = ConfirmationVM(hub=hub, dispatcher=dispatcher)
+        quick_look_vm = QuickLookVM(hub=hub, dispatcher=dispatcher)
+        transfers_vm = TransfersVM(hub=hub, dispatcher=dispatcher)
+        s3_connections_vm = S3ConnectionsVM(
+            resolver=connection_resolver,
+            config_store=config_store,
+            keychain=keychain,
+            hub=hub,
+            dispatcher=dispatcher,
+        )
         focus_coordinator = FocusCoordinatorVM(hub=hub, dispatcher=dispatcher)
         rollback.callback(focus_coordinator.dispose)
         focus_coordinator.construct()
@@ -558,6 +664,7 @@ def _build_app_context(
             dispatcher=dispatcher,
             initial_theme=initial_theme,
             s3_connections_vm=s3_connections_vm,
+            athena_drafts_vm=athena_drafts_vm,
             focus_coordinator=focus_coordinator,
             table_clipboard_vm=table_clipboard_vm,
             clipboard=clipboard,

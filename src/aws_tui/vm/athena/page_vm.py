@@ -467,10 +467,21 @@ class AthenaPageVM:
         self.history.construct()
         self.saved.construct()
 
+    def activate_drafts(self) -> None:
+        if self._draft_session is not None:
+            self._draft_session.activate(self.query.sql, self.query.context)
+
     async def setup(self) -> None:
         async with self._setup_lock:
             if self._disposed or self._shutdown_started:
                 return
+            # Establish the source baseline even while persistence is off, so
+            # later Enable cannot adopt a remapped credentials selector.
+            if self._drafts is not None:
+                source_current = await self._source_is_current()
+                if self._drafts.enabled and not source_current:
+                    self._draft_recovery_error = "Draft context is unavailable or changed."
+                    self.query.set_draft_recovery_guard(True)
             stored_view = self._selection_store.get(
                 self._selection_scope,
                 "active_view",

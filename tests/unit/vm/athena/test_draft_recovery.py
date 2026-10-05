@@ -538,3 +538,58 @@ async def test_cancellation_does_not_clear_a_newer_recovery_guard(tmp_path, monk
     assert client.start_calls == []
     page.keep_current_editor()
     await close(page, runtime)
+
+
+async def always_current() -> bool:
+    return True
+
+
+async def accept_replace() -> bool:
+    return True
+
+
+async def test_normal_exit_flush_restores_into_fresh_page(tmp_path):
+    runtime, _store = runtime_at(tmp_path)
+    client = PageClient()
+    page = make_page_vm(client, drafts=runtime, source_is_current=always_current)
+    await page.setup()
+    page.query.set_sql("SELECT 'NORMAL_EXIT'")
+    report = await runtime.shutdown()
+    await page.shutdown()
+    assert report.unpersisted == 0
+    fresh_runtime, fresh_store = runtime_at(tmp_path)
+    fresh_page = make_page_vm(client, drafts=fresh_runtime, source_is_current=always_current)
+    await fresh_page.setup()
+    assert fresh_page.query.sql == ""
+    saved = fresh_store.list().records[0]
+    before = len(client.start_calls)
+    assert await fresh_page.restore_draft(saved.id, accept_replace)
+    assert fresh_page.query.sql == "SELECT 'NORMAL_EXIT'"
+    assert len(client.start_calls) == before
+    await fresh_runtime.shutdown()
+    await fresh_page.shutdown()
+
+
+async def test_abrupt_exit_file_restores_without_source_shutdown(tmp_path):
+    from tests.helpers import wait_until
+
+    runtime, _store = runtime_at(tmp_path)
+    client = PageClient()
+    page = make_page_vm(client, drafts=runtime, source_is_current=always_current)
+    await page.setup()
+    page.query.set_sql("SELECT 'ABRUPT_EXIT'")
+    await wait_until(lambda: page.query.draft_state == "saved", what="debounced draft committed")
+    saved_bytes = next((tmp_path / "athena-drafts").glob("*.json")).read_bytes()
+    fresh_runtime, fresh_store = runtime_at(tmp_path)
+    fresh_page = make_page_vm(client, drafts=fresh_runtime, source_is_current=always_current)
+    await fresh_page.setup()
+    saved = fresh_store.list().records[0]
+    before = len(client.start_calls)
+    assert await fresh_page.restore_draft(saved.id, accept_replace)
+    assert fresh_page.query.sql == "SELECT 'ABRUPT_EXIT'"
+    assert len(client.start_calls) == before
+    assert saved_bytes == next((tmp_path / "athena-drafts").glob("*.json")).read_bytes()
+    await fresh_runtime.shutdown()
+    await fresh_page.shutdown()
+    await runtime.shutdown()  # Cleanup only, after recovery assertions.
+    await page.shutdown()

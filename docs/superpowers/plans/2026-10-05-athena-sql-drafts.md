@@ -1660,9 +1660,11 @@ async def _unavailable_draft_source() -> bool:
     return False
 
 
-# AthenaPageVM.setup: before admitting drafts-enabled edit/recovery execution:
-if self._drafts is not None and self._drafts.enabled:
-    if not await self._source_is_current():
+# AthenaPageVM.setup: establish identity even while persistence starts off.
+# This reads source/configuration only; apply the editor guard only when enabled.
+if self._drafts is not None:
+    source_current = await self._source_is_current()
+    if self._drafts.enabled and not source_current:
         self._draft_recovery_error = "Draft context is unavailable or changed."
         self.query.set_draft_recovery_guard(True)
 

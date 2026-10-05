@@ -6074,7 +6074,12 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
 
         ctx = self._app_ctx
         await self._cancel_transfer_workers_before_content_swap()
-        settings_vm = SettingsVM(s3=ctx.s3_connections_vm, hub=ctx.hub, dispatcher=ctx.dispatcher)
+        settings_vm = SettingsVM(
+            s3=ctx.s3_connections_vm,
+            athena_drafts=ctx.athena_drafts_vm,
+            hub=ctx.hub,
+            dispatcher=ctx.dispatcher,
+        )
         try:
             host = self.query_one("#content-host", Container)
             await ctx.root_vm.content_host.set_content(settings_vm, service_id=SETTINGS_NAV_ID)
@@ -6692,6 +6697,20 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
             await host_shutdown
 
         await await_cleanup("transfer_history.shutdown", ctx.transfer_history_vm.shutdown)
+
+        async def shutdown_drafts() -> None:
+            report = await ctx.athena_drafts_vm.shutdown()
+            if report.unpersisted:
+                ctx.athena_drafts_shutdown_warning = (
+                    "Some Athena SQL edits were not confirmed saved before exit."
+                )
+                ctx.log_sink.warning(
+                    "athena.drafts.unpersisted",
+                    count=report.unpersisted,
+                    timed_out=report.timed_out,
+                )
+
+        await await_cleanup("athena_drafts.shutdown", shutdown_drafts)
         await await_cleanup("content_host.shutdown", shutdown_hosted_content)
         await await_cleanup("aws_session.aclose_all_clients", ctx.aws_session.aclose_all_clients)
 
@@ -6720,6 +6739,7 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
             ("quick_look_vm.dispose", ctx.quick_look_vm),
             ("confirm_vm.dispose", ctx.confirm_vm),
             ("transfers_vm.dispose", ctx.transfers_vm),
+            ("athena_drafts_vm.dispose", ctx.athena_drafts_vm),
             ("transfer_history_vm.dispose", ctx.transfer_history_vm),
             ("table_clipboard_vm.dispose", ctx.table_clipboard_vm),
             ("clipboard_vm.dispose", ctx.clipboard_vm),
@@ -6858,6 +6878,9 @@ def main() -> None:
                 file=sys.stderr,
             )
             raise SystemExit(1)
+    finally:
+        if context.athena_drafts_shutdown_warning is not None:
+            print(context.athena_drafts_shutdown_warning, file=sys.stderr)
 
 
 if __name__ == "__main__":
