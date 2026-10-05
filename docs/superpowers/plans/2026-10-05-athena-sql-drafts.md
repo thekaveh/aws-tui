@@ -384,6 +384,8 @@ def _atomic_record(directory: Path, name: str, payload: bytes, permit: DraftPerm
         if permit.cancelled:
             return False
         _private_directory(directory, create=False)
+        if permit.cancelled:
+            return False
         os.replace(temporary, directory / name)
         if os.name == "posix":
             flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0)

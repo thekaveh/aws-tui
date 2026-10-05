@@ -415,7 +415,10 @@ def test_failed_replace_preserves_original_and_cleans_temp(tmp_path, monkeypatch
     assert not tuple((tmp_path / "athena-drafts").glob(".draft-*.tmp"))
 
 
-@pytest.mark.parametrize("phase", ["before-entry", "before-replace", "inside-replace"])
+@pytest.mark.parametrize(
+    "phase",
+    ["before-entry", "before-replace", "during-directory-validation", "inside-replace"],
+)
 def test_permit_cancellation_preserves_pre_replace_record(tmp_path, monkeypatch, phase):
     store = _enabled(tmp_path)
     assert store.save(record(), permit=DraftPermit()).code is None
@@ -430,6 +433,23 @@ def test_permit_cancellation_preserves_pre_replace_record(tmp_path, monkeypatch,
             permit.cancel()
 
         monkeypatch.setattr(os, "fsync", sync)
+    elif phase == "during-directory-validation":
+        original_directory_check = module._private_directory
+        original_replace = os.replace
+        replacements = []
+
+        def validate_directory(directory, *, create):
+            result = original_directory_check(directory, create=create)
+            if tuple(directory.glob(".draft-*.tmp")):
+                permit.cancel()
+            return result
+
+        def replace_record(src, dst):
+            replacements.append((src, dst))
+            original_replace(src, dst)
+
+        monkeypatch.setattr(module, "_private_directory", validate_directory)
+        monkeypatch.setattr(os, "replace", replace_record)
     else:
         original = os.replace
 
@@ -446,6 +466,8 @@ def test_permit_cancellation_preserves_pre_replace_record(tmp_path, monkeypatch,
         record(sql="SELECT 2" if phase == "inside-replace" else "SELECT 1"),
     )
     assert not tuple((tmp_path / "athena-drafts").glob(".draft-*.tmp"))
+    if phase == "during-directory-validation":
+        assert replacements == []
 
 
 @pytest.mark.skipif(os.name != "posix", reason="POSIX FIFO/socket and no-follow flags")

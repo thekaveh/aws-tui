@@ -232,6 +232,8 @@ def _atomic_record(directory: Path, name: str, payload: bytes, permit: DraftPerm
         if permit.cancelled:
             return False
         _private_directory(directory, create=False)
+        if permit.cancelled:
+            return False
         # Cancellation cannot roll back a physical replace once entered.
         temporary.replace(directory / name)
         if os.name == "posix":
