@@ -29,6 +29,7 @@ _ACTION_DESCRIPTIONS: dict[str, str] = {
     "app.command_palette": "Command palette",
     "app.help": "Help",
     "app.themes": "Theme picker",
+    "app.transfer_history": "Transfer history and recovery",
     "app.cycle_theme": "Cycle theme",
     "app.swap_source": "Switch source",
     "glue.choose_run_state": "Choose Glue run state",

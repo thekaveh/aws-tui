@@ -24,6 +24,7 @@ from typing import TYPE_CHECKING, Any, ClassVar, Literal, cast
 
 from reactivex.abc import DisposableBase
 from textual import events
+from vmx import PropertyChangedMessage
 
 if TYPE_CHECKING:
     from aws_tui.domain.filesystem import FileEntry, FileSystemProvider, PathRef
@@ -95,6 +96,7 @@ from aws_tui.ui.widgets.settings.connection_form import (
 from aws_tui.ui.widgets.settings_view import SettingsView
 from aws_tui.ui.widgets.theme_picker_modal import ThemePickerModal
 from aws_tui.ui.widgets.toast import ToastStack
+from aws_tui.ui.widgets.transfer_history_modal import TransferHistoryModal
 from aws_tui.ui.widgets.transfers_overlay import TransfersOverlay
 from aws_tui.version import __version__
 from aws_tui.vm.athena.page_vm import AthenaPageSnapshot, AthenaPageVM
@@ -282,6 +284,7 @@ _PALETTE_COMMANDS: tuple[PaletteEntry, ...] = (
         "pane.exit_multiselect", "Exit multi-select mode", "pane", service_ids=_PANE_SERVICE_IDS
     ),
     PaletteEntry("app.themes", "Theme picker", "app"),
+    PaletteEntry("app.transfer_history", "Transfer history and recovery", "app"),
     PaletteEntry("app.cycle_theme", "Cycle theme", "app"),
     PaletteEntry(
         "app.swap_source",
@@ -781,6 +784,7 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
         self._actions.register("auth.authenticate", self.action_authenticate)
         self._actions.register("app.help", self.action_help)
         self._actions.register("app.themes", self.action_themes)
+        self._actions.register("app.transfer_history", self.action_transfer_history)
         self._actions.register("app.cycle_theme", self.action_cycle_theme)
         self._actions.register("app.open_settings", self.action_open_settings)
         self._actions.register("pane.copy", self.action_copy)
@@ -1002,7 +1006,13 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
             yield Container(id="content-host")
         yield HintLegend(ctx.root_vm.chrome.hint_legend, hub=ctx.hub, id="hint-legend")
         yield ToastStack(ctx.root_vm.chrome.toast_stack, hub=ctx.hub, id="toast-stack")
-        yield TransfersOverlay(ctx.transfers_vm, hub=ctx.hub, id="transfers-overlay")
+        yield TransfersOverlay(
+            ctx.transfers_vm,
+            hub=ctx.hub,
+            history_vm=ctx.transfer_history_vm,
+            open_history=self._open_transfer_history,
+            id="transfers-overlay",
+        )
 
     def on_resize(self, event: events.Resize) -> None:
         self._sync_compact_chrome(event.size.height)
@@ -1034,6 +1044,8 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
         # Construct the VM tree.
         ctx.root_vm.construct()
         ctx.transfers_vm.construct()
+        self._history_sub = ctx.hub.messages.subscribe(on_next=self._on_history_message)
+        self._run_lifecycle_worker(ctx.transfer_history_vm.load, group="transfer-history-load")
         ctx.confirm_vm.construct()
         ctx.quick_look_vm.construct()
         ctx.command_palette_vm.construct()
@@ -2166,6 +2178,42 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
                 else "auth.authenticate"
             )
         return self._actions.invoke(action_id)
+
+    async def action_transfer_history(self) -> None:
+        self.record_action("app.transfer_history")
+        if len(self.screen_stack) == 1:
+            self.query_one(TransfersOverlay).open_history("history")
+
+    def _open_transfer_history(self, mode: Literal["history", "recovery"]) -> None:
+        if len(self.screen_stack) == 1:
+            self.push_screen(
+                TransferHistoryModal(
+                    self._app_ctx.transfer_history_vm, hub=self._app_ctx.hub, mode=mode
+                )
+            )
+
+    def _on_history_message(self, message: object) -> None:
+        vm = self._app_ctx.transfer_history_vm
+        if not isinstance(message, PropertyChangedMessage) or message.sender_object not in (
+            vm,
+            vm.runtime,
+        ):
+            return
+        if message.property_name == "error_text":
+            text = vm.runtime.error_text if message.sender_object is vm.runtime else vm.error_text
+            if text:
+                notifications.advise(
+                    self._app_ctx.root_vm.chrome.toast_stack,
+                    subject="Transfer",
+                    message=text,
+                    toast_id="transfer-history-warning",
+                )
+
+    def _refresh_transfer_history(self) -> None:
+        if self._shutdown_task is None:
+            self._run_lifecycle_worker(
+                self._app_ctx.transfer_history_vm.load, group="transfer-history-load"
+            )
 
     def _on_palette_action_message(self, message: object) -> None:
         if not isinstance(message, PaletteActionFailedMessage):
@@ -3727,6 +3775,7 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
                 message=f"copy failed: {exc}",
             )
         finally:
+            self._refresh_transfer_history()
             if used_cursor_fallback:
                 _flash_cursor_fallback_marks(src_pane, targets, marked=False)
 
@@ -3827,6 +3876,7 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
                 message=f"delete failed: {exc}",
             )
         finally:
+            self._refresh_transfer_history()
             if used_cursor_fallback:
                 _flash_cursor_fallback_marks(src_pane, targets, marked=False)
 
@@ -6641,6 +6691,7 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
                     continue
             await host_shutdown
 
+        await await_cleanup("transfer_history.shutdown", ctx.transfer_history_vm.shutdown)
         await await_cleanup("content_host.shutdown", shutdown_hosted_content)
         await await_cleanup("aws_session.aclose_all_clients", ctx.aws_session.aclose_all_clients)
 
@@ -6652,6 +6703,7 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
             "_cursor_sub",
             "_service_navigation_sub",
             "_palette_failure_sub",
+            "_history_sub",
         ):
             run_cleanup(
                 f"subscription.{attribute.removeprefix('_')}.dispose",
@@ -6668,6 +6720,7 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
             ("quick_look_vm.dispose", ctx.quick_look_vm),
             ("confirm_vm.dispose", ctx.confirm_vm),
             ("transfers_vm.dispose", ctx.transfers_vm),
+            ("transfer_history_vm.dispose", ctx.transfer_history_vm),
             ("table_clipboard_vm.dispose", ctx.table_clipboard_vm),
             ("clipboard_vm.dispose", ctx.clipboard_vm),
             ("root_vm.dispose", ctx.root_vm),

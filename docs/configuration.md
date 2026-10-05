@@ -49,3 +49,16 @@ but not yet wired (see the
 aws-tui is English-only in v0.8.x. User-facing strings are intentionally
 hardcoded until a localization pass introduces translation bundles and
 locale-aware formatting.
+
+## 4. Transfer history and keybindings
+
+Transfer summaries and current-schema interrupted journals live under the
+application cache directory. Retention defaults to the newest 100 summaries;
+there is no configuration setting for transfer resume or automatic retry.
+**Clear history** removes validated owned metadata only and preserves active
+operations and source/destination files. See [Cookbook](cookbook.md#4-inspect-transfer-history-and-recovery-after-a-restart).
+
+The global `app.transfer_history` action defaults to `Ctrl+T`. Remap it through
+`[keybindings]` as with other actions, or set it to `[]` to disable its shortcut.
+An existing custom binding using `Ctrl+T` must be moved or the history action
+remapped to avoid a new collision. See [Keybindings](keybindings.md#7-transfer-history-binding-migration).

@@ -10,7 +10,7 @@
 
 **Spec:** docs/superpowers/specs/2026-10-04-durable-transfer-history-design.md
 
-## Global Constraints
+## 1. Global Constraints
 
 - All nine current #249 ACs bind; owner's standing unsupervised delivery authorizes routine design and execution without intermediate approval. Scope ends with protected develop/main PRs, local postchecks/parity, cleanup/closure/boardDone.
 - Applicable local checks only; Actions stay disabled; no live AWS mutation or remote release/package/docs publication. Python >=3.11,<3.14 and existing dependencies/gates/coverage floor/goldens remain.
@@ -23,7 +23,7 @@
 - UI exposes History and Recovery from Transfers overlay and Ctrl+T/palette, including empty/expired overlay; literal full details, safe loading/error states, keyboard accessibility/modal containment/focus restoration, active progress/cancel unchanged.
 - Every worker must not spawn subagents. Controller owns reviewers and delivery. No root product-code fixes. Tests reproduce failures before code, meaningful assertions, bounded named readiness waits, no assertion/timeout weakening or unrelated refactor.
 
-## Review Focus
+## 2. Review Focus
 
 - Crash between summary persist and journal purge: terminal dominates unknown (Task1 duplicate test).
 - Secret-bearing endpoint/error and bracketed/spaced filenames: summaries never contain seeded credentials and UI is literal (Tasks1/3 seeded fixtures).
@@ -31,7 +31,7 @@
 - Cancellation during disk durability: drain write and preserve accurate outcome without late updates (Tasks2/3 barrier test).
 - Legacy/symlink/unreadable files mixed with valid records: skip without traversal or dropping healthy data; clear preserves unowned bytes (Task1 fixture test).
 
-### Task 1: Durable summary store and versioned journal descriptors
+### 2.1. Task 1: Durable summary store and versioned journal descriptors
 
 **Files:** Create src/aws_tui/domain/transfer_history.py; modify src/aws_tui/domain/transfer_journal.py; tests/unit/domain/test_transfer_history.py and test_transfer_journal.py.
 
@@ -52,7 +52,7 @@ Also parameterize completed/skipped/failed/cancelled restart; all fields/date/ze
 - [ ] Step4: Run both domain modules and lint/mypy/import boundary hooks covering touched code; inspect terminal evidence once. Report exact results and caveats, not live-AWS claims.
 - [ ] Step5: Self-review all Task1 cases then commit normal scoped files. Full report persists at task-1-report.md. Return status/commit/testsummary/concerns only.
 
-### Task 2: Worker-safe transfer lifecycle and endpoint-bound recovery VM
+### 2.2. Task 2: Worker-safe transfer lifecycle and endpoint-bound recovery VM
 
 **Files:** Create src/aws_tui/vm/file_manager/transfer_history_vm.py and bounded helper modules if needed; modify dual_pane_vm.py, pane_vm.py, services/s3/service.py, composition.py and app.py endpoint build/swap/recovery callsites only; relevant VM/service/composition tests and new test_transfer_history_vm.py.
 
@@ -72,7 +72,7 @@ Add tests per move/delete/ambiguous refusal, fresh source/destination stat calls
 - [ ] Step4: Run new VM tests plus existing transfers/dual-pane/cancel/source-swap/credential-recovery/service/composition tests affected by edits; meaningful async thread barriers, no raw sleeps as completion gates. Run normal hooks. Report concrete callable/type interfaces Task3 uses, errors, lifecycle/shutdown and exact test results.
 - [ ] Step5: Self-review and normal scoped commit. Write task-2-report.md; controller resolves task review before UI task.
 
-### Task 3: Startup worker, history/recovery modal and documented user journey
+### 2.3. Task 3: Startup worker, history/recovery modal and documented user journey
 
 **Files:** Create src/aws_tui/ui/widgets/transfer_history_modal.py and tests/unit/ui/test_transfer_history.py; modify app.py, transfers_overlay.py, keymap/action registry, test_transfers_overlay.py; new tests/snapshot/test_transfer_history.py and deterministic harness; cookbook/reference/keybindings/changelog and existing local generated site/wiki sources.
 
@@ -93,6 +93,6 @@ Use actual composed context/history APIs and real worker-manager ownership probe
 - [ ] Step4: Update cookbook100summarylimit/restart and legacy caveats/clear-metadata-only/uncertain-publication/recheck/retry refusal; keybinding/custom migration, reference and changelog. Regenerate local docs per three-surface-docs skill without publishing. Run affected pilots, existing overlay/snapshot/modal key/focus tests, docs tests and hooks. Export actual-app capture artifacts into task-owned scratch with pytest portable paths (never hardcode old SDD folder into tests).
 - [ ] Step5: Self-review all nine ACs and commit. Report commands/terminal results/new screenshots or SVG paths, assertion mapping, limitations and shutdown verification in task-3-report.md. Controller owns once-only whole-branch review and final full local gates plus protected delivery, postchecks, cleanup/issueDone before #256.
 
-### Task 0: End sentinel
+### 2.4. Task 0: End sentinel
 
 Extraction sentinel only; no dispatch. Canonical spec/plan are committed with coherent planning before Task1. Review packages use recorded pre-dispatch bases, never HEAD~1. Final evidence/rulings are preserved before exact workspace deletion.

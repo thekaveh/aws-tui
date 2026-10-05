@@ -372,5 +372,5 @@ aws-tui writes a durable JSONL `begin` record under
 transfers are removed promptly, so files left after a process crash identify
 interrupted work. Startup scanning, automatic replay, and persisted multipart
 upload IDs remain deferred; see the
-[cookbook](cookbook.md#4-diagnose-an-interrupted-transfer-after-a-crash) for
+[cookbook](cookbook.md#4-inspect-transfer-history-and-recovery-after-a-restart) for
 inspection and cleanup.

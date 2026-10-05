@@ -6,7 +6,7 @@
 1. [Connect to and switch between data sources](#1-connect-to-and-switch-between-data-sources)
 2. [Switch the theme on the fly](#2-switch-the-theme-on-the-fly)
 3. [Customize a keybinding](#3-customize-a-keybinding)
-4. [Diagnose an interrupted transfer after a crash](#4-diagnose-an-interrupted-transfer-after-a-crash)
+4. [Inspect transfer history and recovery after a restart](#4-inspect-transfer-history-and-recovery-after-a-restart)
 5. [Browse AWS Glue safely](#5-browse-aws-glue-safely)
 6. [Run Athena queries safely](#6-run-athena-queries-safely)
 7. [Inspect and query Glue tables through Athena](#7-inspect-and-query-glue-tables-through-athena)
@@ -365,44 +365,77 @@ action id to fix.
 
 ---
 
-## 4. Diagnose an interrupted transfer after a crash
-Long-running transfers keep a local journal while work is active so a process
-crash leaves evidence of the interrupted operation. Automatic replay and
-persisted S3 multipart state remain deferred; this recipe documents the
-current journal and manual cleanup flow.
+## 4. Inspect transfer history and recovery after a restart
+Open **Transfer history and recovery** from the command palette or press
+`Ctrl+T` (`app.transfer_history`). The Transfers overlay also has **History**
+and **Recovery** controls, which remain available after live progress rows
+expire. `Ctrl+T` works with an empty overlay too. Startup scans current-schema
+metadata in a background worker; it never starts a transfer automatically.
 
 ### 4.1. What gets saved
-The production transfer path writes a durable `begin` line to
-`<cache-dir>/transfers/<id>.jsonl`:
+Each transfer has a private durable summary containing its operation, original
+connection names and fingerprints, literal source and effective destination,
+UTC timestamps, observed bytes, outcome, publication certainty, and a fixed
+failure category. Zero bytes and an unknown total remain distinct. Credentials,
+raw provider errors, client objects, multipart IDs, and raw endpoint settings
+are excluded. Begin and attempted-publication metadata are saved before
+provider mutation; terminal summaries are saved before the worker settles.
+A history-save warning after a successful copy does not undo that copy.
+
+The default retention is the **100 newest summaries**, ordered by updated UTC
+timestamp and then ID, newest first. Success, skip, failure, and cancellation
+survive a restart. Interrupted current-schema journals appear as **outcome
+unknown**. A summary with a known terminal outcome takes precedence over an
+interrupted journal with the same ID. Corrupt, truncated, legacy-schema,
+missing, unreadable, or unowned metadata is skipped safely.
+
+Older diagnostic journals may contain a line like this:
 
 ```jsonl
 {"kind":"begin","transfer_id":"abc123abc123abcd","source_uri":"local:///x.bin","destination_uri":"s3://bucket/x.bin","bytes_total":104857600,"upload_id":null,"ts":"2026-06-13T23:45:11Z"}
 ```
 
-On success, skip, failure, or cancellation, aws-tui records the terminal state
-and immediately removes that journal. The schema can replay optional `part`
-lines and an `upload_id`, but the current explicit S3 multipart implementation
-does not persist those values across process restarts.
+This legacy example remains diagnostic evidence; it has no verified connection
+identity and is excluded from the recovery UI. S3 multipart upload IDs and
+part state are not persisted for restart recovery.
 
-### 4.2. What happens on next launch
-Startup does not scan or display interrupted journals today. Files that remain
-lack a terminal record and can be inspected as JSONL to identify source,
-destination, size, and start time:
+### 4.2. Recheck and explicitly retry a copy
+Use `h` for History or `r` for Recovery. Recovery groups records by **never
+attempted**, **possibly published**, and **confirmed terminal**. Outcome and
+publication certainty are separate: a failed or cancelled transfer may have
+published bytes. A journal, a destination file, or a matching size never proves
+that an interrupted transfer succeeded.
 
-```
-{"kind":"begin","transfer_id":"abc123abc123abcd","source_uri":"local:///x.bin","destination_uri":"s3://bucket/x.bin","bytes_total":104857600,"upload_id":null,"ts":"2026-06-13T23:45:11Z"}
-```
+Select a record with arrows or the mouse. The scrollable details show full
+literal paths and fingerprints; **Copy details** copies the complete text.
+`Tab` and `Shift+Tab` move between the list, details and controls. `Escape`
+closes the screen and restores file-pane focus.
 
-### 4.3. Manual cleanup
-To remove journals after inspecting them:
+**Recheck** resolves both original connections and reads both original paths.
+It preserves the recorded outcome. An uncertain copy can become eligible for
+a new retry only when a fresh recheck proves its destination absent. A present
+uncertain destination remains ambiguous and retry is refused. Moves, deletes,
+completed or skipped operations, missing or changed connections, and changed
+endpoints cannot be retried.
 
-```bash
-rm -f "<cache-dir>"/transfers/*.jsonl
-```
+**Retry copy** starts a new transfer from the beginning with a new ID, normal
+progress and cancellation. It always asks for a fresh conflict choice and
+shows both original endpoints. **Refuse overwrite** is the safe default;
+**Skip**, **Rename**, and **Overwrite** require an explicit selection. Both
+connections and file observations are checked again after that decision;
+changes invalidate the request. There is no automatic replay, byte-offset
+resume, multipart resume, or inference of prior success.
 
-For S3 uploads that were interrupted outside aws-tui's normal cancel
-path, the [1-day MPU abort lifecycle rule](connections.md#6-recommended-1-day-mpu-abort-lifecycle-rule)
-is the server-side backstop.
+### 4.3. Clear metadata only
+**Clear history** asks for confirmation, starting on Cancel. It removes only
+validated owned history and interrupted metadata; corrupt, unowned and legacy
+artifacts are preserved. It does not remove source or destination bytes, delete
+remote multipart uploads, or cancel active transfers. Active operation metadata
+remains protected until the transfer settles.
+
+For S3 uploads interrupted outside aws-tui's normal cancel path, the
+[1-day MPU abort lifecycle rule](connections.md#6-recommended-1-day-mpu-abort-lifecycle-rule)
+is the server-side backstop. Recovery does not clean up endpoint artifacts.
 
 ### 4.4. What gets dumped on a crash
 If aws-tui hits an unhandled exception, it writes
