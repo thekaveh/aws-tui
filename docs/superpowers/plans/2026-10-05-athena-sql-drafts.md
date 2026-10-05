@@ -842,6 +842,8 @@ class _WriteCoordinator:
             self.current.pop(identity, None)
 ```
 
+A new editor revision that cannot schedule revokes only its session's currently owned capture (timer and permit); `_revoke_session_capture` fences that ID only if `is_current` still matches its exact write revision and permit. It must not cancel another session's newer writer. A `context_changed` notification alone preserves the captured payload. Completion acknowledges the original saved SQL/context but retains `context_required` while the current selection differs from the bound origin; returning to that exact origin can reveal the acknowledged saved state without a new write.
+
 Construct this coordinator lazily on the first enabled async operation, so composition and synchronous disabled VMs do not require a running event loop or start a thread. The session's exact edit transition is:
 
 ```python
@@ -870,10 +872,12 @@ def edited(self, sql: str, context: QueryContext) -> None:
     elif self._bound_context is None and all(context.cache_key):
         self._bound_context = context
     if not self._active or not self._runtime.enabled:
+        self._runtime._revoke_session_capture(self)
         self._state = "off"
     elif not all(context.cache_key) or (
         self._bound_context is not None and self._bound_context != context
     ):
+        self._runtime._revoke_session_capture(self)
         self._state = "context_required"
     else:
         self._state = "pending"
@@ -931,6 +935,8 @@ def schedule_session(self, session: AthenaDraftSession, sql: str,
             session._state = "saved" if capture.record.sql.strip() else "empty"
         elif result.code not in {"cancelled", "disabled"}:
             session._state = "error"
+        if session._context_needs_guard():
+            session._state = "context_required"
         session._notify("state")
     self._coordinator.schedule(
         sql=sql, context=context, captured_editor_revision=captured_editor_revision,
