@@ -650,6 +650,7 @@ class AthenaDraftSession:
     def edited(self, sql: str, context: QueryContext) -> None:
         if self._detached:
             return
+        bound_origin = self._bound_context
         self._editor_revision += 1
         self._save_failed_revision = None
         self._sql = sql
@@ -662,6 +663,14 @@ class AthenaDraftSession:
         if not self._active or not self._runtime.enabled:
             self._runtime._revoke_session_capture(self)
             self._state = "off"
+        elif not sql.strip():
+            if bound_origin is not None:
+                self._state = "pending"
+                self._runtime.schedule_session(self, sql, bound_origin, self._editor_revision)
+            else:
+                self._runtime._revoke_session_capture(self)
+                self._capture = None
+                self._state = "empty"
         elif not all(context.cache_key) or (
             self._bound_context is not None and self._bound_context != context
         ):

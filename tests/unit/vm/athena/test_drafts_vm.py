@@ -1,11 +1,13 @@
 import asyncio
 import threading
 import time
+from dataclasses import replace
+from datetime import UTC, datetime
 
 import pytest
 
 from aws_tui.domain.query import QueryContext
-from aws_tui.infra.athena_draft_store import DraftStoreResult
+from aws_tui.infra.athena_draft_store import DraftPermit, DraftStoreResult
 from tests.athena_drafts_helpers import CTX, record, runtime_at, store_at
 from tests.helpers import wait_until
 
@@ -453,6 +455,113 @@ async def test_empty_edit_deletes_and_new_context_can_bind(tmp_path):
     session.edited("SELECT 2", other)
     assert (await runtime.shutdown()).unpersisted == 0
     assert store.list().records[0].context == other.cache_key
+
+
+async def test_clear_after_selecting_another_context_deletes_only_bound_origin(tmp_path):
+    runtime, store = runtime_at(tmp_path)
+    origin = QueryContext(*CTX)
+    selected = QueryContext(*(*CTX[:4], "other"))
+    assert store.save(record(origin.cache_key, "SELECT origin"), permit=DraftPermit()).code is None
+    assert (
+        store.save(record(selected.cache_key, "SELECT selected"), permit=DraftPermit()).code is None
+    )
+    session = runtime.open_session()
+    session.recovered(record(origin.cache_key, "SELECT origin"))
+
+    session.context_changed(selected)
+    assert session.state == "context_required"
+    session.edited("  ", selected)
+
+    await wait_until(lambda: session.state == "empty", what="origin clear acknowledged")
+    records = {item.context: item.sql for item in store.list().records}
+    assert records == {selected.cache_key: "SELECT selected"}
+    assert session.bound_context is None
+    await runtime.shutdown()
+
+
+async def test_clear_with_incomplete_selection_still_deletes_bound_origin(tmp_path):
+    runtime, store = runtime_at(tmp_path)
+    origin = QueryContext(*CTX)
+    selected_record = QueryContext(*(*CTX[:4], "other"))
+    incomplete = QueryContext(CTX[0], "", CTX[2], CTX[3], CTX[4])
+    assert store.save(record(origin.cache_key, "SELECT origin"), permit=DraftPermit()).code is None
+    assert (
+        store.save(record(selected_record.cache_key, "SELECT selected"), permit=DraftPermit()).code
+        is None
+    )
+    session = runtime.open_session()
+    session.recovered(record(origin.cache_key, "SELECT origin"))
+
+    session.context_changed(incomplete)
+    session.edited("", incomplete)
+
+    await wait_until(lambda: session.state == "empty", what="origin clear acknowledged")
+    records = {item.context: item.sql for item in store.list().records}
+    assert records == {selected_record.cache_key: "SELECT selected"}
+    await runtime.shutdown()
+
+
+async def test_clear_supersedes_pending_origin_save_and_preserves_newer_selected_writer(
+    tmp_path, monkeypatch
+):
+    runtime, store = runtime_at(tmp_path)
+    origin = QueryContext(*CTX)
+    selected = QueryContext(*(*CTX[:4], "other"))
+    assert store.save(record(origin.cache_key, "SELECT origin"), permit=DraftPermit()).code is None
+    selected_existing = replace(
+        record(selected.cache_key, "SELECT selected old"),
+        created_at=datetime(2000, 1, 1, tzinfo=UTC),
+        updated_at=datetime(2000, 1, 1, tzinfo=UTC),
+    )
+    assert store.save(selected_existing, permit=DraftPermit()).code is None
+    outcomes = []
+    original_save = store.save
+
+    def observe_save(draft, *, permit):
+        result = original_save(draft, permit=permit)
+        outcomes.append((draft.context, draft.sql, result.code, permit.cancelled))
+        return result
+
+    monkeypatch.setattr(store, "save", observe_save)
+    origin_session = runtime.open_session()
+    selected_session = runtime.open_session()
+    origin_session.edited("SELECT stale pending origin", origin)
+    selected_session.edited("SELECT selected newer", selected)
+    selected_capture = selected_session._capture
+    assert selected_capture is not None
+    origin_session.context_changed(selected)
+
+    origin_session.edited("", selected)
+    assert runtime._coordinator.is_current(
+        selected_capture.record.id,
+        selected_capture.captured_write_revision,
+        selected_capture.permit,
+    )
+    assert not selected_capture.permit.cancelled
+    await selected_session.flush(deadline=asyncio.get_running_loop().time() + 2)
+    await origin_session.flush(deadline=asyncio.get_running_loop().time() + 2)
+    assert outcomes == [(selected.cache_key, "SELECT selected newer", None, False)]
+    assert selected_session.state == "saved"
+    await runtime.shutdown()
+    records = {item.context: item.sql for item in store.list().records}
+    assert records == {selected.cache_key: "SELECT selected newer"}
+
+
+async def test_clear_without_bound_origin_preserves_selected_context_record(tmp_path):
+    runtime, store = runtime_at(tmp_path)
+    selected = QueryContext(*CTX)
+    assert (
+        store.save(record(selected.cache_key, "SELECT unrelated"), permit=DraftPermit()).code
+        is None
+    )
+    session = runtime.open_session()
+    session.activate("", selected)
+
+    session.edited("  ", selected)
+
+    assert session.state == "empty"
+    assert store.list().records[0].sql == "SELECT unrelated"
+    await runtime.shutdown()
 
 
 async def test_readonly_demo_never_invokes_store(tmp_path, monkeypatch):

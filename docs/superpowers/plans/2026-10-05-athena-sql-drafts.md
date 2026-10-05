@@ -812,7 +812,7 @@ class _WriteCoordinator:
             if sql.strip():
                 operation = lambda: self.store.save(capture.record, permit=capture.permit)
             else:
-                # Empty edits delete the bound context. The same FIFO orders older writes.
+                # Empty captures target their immutable bound origin; never infer from selection.
                 operation = lambda: (
                     DraftStoreResult(code="cancelled") if capture.permit.cancelled
                     else self.store.delete(identity)
@@ -863,6 +863,7 @@ self._state: DraftState = "off"
 def edited(self, sql: str, context: QueryContext) -> None:
     if self._detached:
         return
+    bound_origin = self._bound_context
     self._editor_revision += 1
     self._sql = sql
     self._context = context
@@ -874,6 +875,14 @@ def edited(self, sql: str, context: QueryContext) -> None:
     if not self._active or not self._runtime.enabled:
         self._runtime._revoke_session_capture(self)
         self._state = "off"
+    elif not sql.strip():
+        if bound_origin is None:
+            self._runtime._revoke_session_capture(self)
+            self._capture = None
+            self._state = "empty"
+        else:
+            self._state = "pending"
+            self._runtime.schedule_session(self, sql, bound_origin, self._editor_revision)
     elif not all(context.cache_key) or (
         self._bound_context is not None and self._bound_context != context
     ):
