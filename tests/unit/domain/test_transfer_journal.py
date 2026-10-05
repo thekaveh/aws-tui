@@ -2,10 +2,14 @@
 
 from __future__ import annotations
 
+import errno
 import json
 import os
 import shutil
 import stat
+import subprocess
+import sys
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -611,3 +615,125 @@ def test_legacy_diagnostic_replay_still_streams_large_journals(tmp_path: Path) -
     assert entry.completed_parts == (1,)
     assert entry.completed_etags == ("e" * 65537,)
     assert journal.load_history() == ()
+
+
+def test_safe_journal_preserves_literal_paths_through_attempt_and_terminal(tmp_path: Path) -> None:
+    literal = "a?question#hash%2F%25 [brackets] spaces.txt"
+    descriptor = replace(
+        safe_descriptor(), source_uri="/tmp/" + literal, destination_uri="s3://bucket/" + literal
+    )
+    journal = TransferJournal(base_dir=tmp_path)
+    transfer_id = journal.begin(
+        source_uri=descriptor.source_uri,
+        destination_uri=descriptor.destination_uri or "",
+        bytes_total=descriptor.bytes_total,
+        descriptor=descriptor,
+    )
+    journal.mark_attempted(transfer_id)
+    [interrupted] = journal.load_history()
+    assert interrupted.source_uri == descriptor.source_uri
+    assert interrupted.destination_uri == descriptor.destination_uri
+    journal.mark_terminal(transfer_id, status="completed", bytes_total=0)
+    [terminal] = TransferJournal(base_dir=tmp_path).load_history()
+    assert terminal.source_uri == descriptor.source_uri
+    assert terminal.destination_uri == descriptor.destination_uri
+
+
+@pytest.mark.skipif(not hasattr(os, "mkfifo"), reason="named pipes unavailable")
+@pytest.mark.parametrize("reader", ["load_history", "find_unfinished"])
+def test_fifo_journal_is_skipped_with_a_bounded_scan(tmp_path: Path, reader: str) -> None:
+    journal = TransferJournal(base_dir=tmp_path)
+    good = safe_begin(journal)
+    os.mkfifo(tmp_path / "0000000000000001.jsonl")
+    script = """
+import sys
+from pathlib import Path
+from aws_tui.domain.transfer_journal import TransferJournal
+journal = TransferJournal(base_dir=Path(sys.argv[1]))
+entries = getattr(journal, sys.argv[2])()
+ids = [entry.id if sys.argv[2] == 'load_history' else entry.transfer_id for entry in entries]
+assert ids == [sys.argv[3]]
+"""
+    child = subprocess.Popen(
+        [sys.executable, "-c", script, str(tmp_path), reader, good],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        env=os.environ | {"PYTHONPATH": str(Path("src").absolute())},
+    )
+    scan_deadline_seconds = 3
+    try:
+        stdout, stderr = child.communicate(timeout=scan_deadline_seconds)
+        assert child.returncode == 0, stdout + stderr
+    except subprocess.TimeoutExpired:
+        pytest.fail(f"{reader} scan blocked on FIFO")
+    finally:
+        if child.poll() is None:
+            child.kill()
+        child.communicate(timeout=3)
+
+
+@pytest.mark.skipif(not hasattr(os, "mkfifo"), reason="named pipes unavailable")
+def test_journal_append_refuses_fifo_without_blocking(tmp_path: Path) -> None:
+    journal = TransferJournal(base_dir=tmp_path)
+    transfer_id = journal.begin(source_uri="s", destination_uri="d")
+    target = tmp_path / f"{transfer_id}.jsonl"
+    target.unlink()
+    os.mkfifo(target)
+    script = """
+import sys
+from pathlib import Path
+from aws_tui.domain.transfer_journal import TransferJournal
+journal = TransferJournal(base_dir=Path(sys.argv[1]))
+try:
+    journal.record_part(sys.argv[2], part_index=1, etag='etag', bytes_written=1)
+except (ValueError, OSError):
+    pass
+else:
+    raise AssertionError('journal appended to a nonregular file')
+"""
+    child = subprocess.Popen(
+        [sys.executable, "-c", script, str(tmp_path), transfer_id],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        env=os.environ | {"PYTHONPATH": str(Path("src").absolute())},
+    )
+    append_deadline_seconds = 3
+    try:
+        stdout, stderr = child.communicate(timeout=append_deadline_seconds)
+        assert child.returncode == 0, stdout + stderr
+    except subprocess.TimeoutExpired:
+        pytest.fail("journal append blocked on FIFO")
+    finally:
+        if child.poll() is None:
+            child.kill()
+        child.communicate(timeout=3)
+    assert stat.S_ISFIFO(target.stat().st_mode)
+
+
+@pytest.mark.skipif(
+    not hasattr(os, "mkfifo") or not hasattr(os, "O_NONBLOCK"),
+    reason="POSIX FIFO flags unavailable",
+)
+def test_append_nonblocking_guard_handles_fifo_replacement_after_precheck(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    journal = TransferJournal(base_dir=tmp_path)
+    transfer_id = journal.begin(source_uri="s", destination_uri="d")
+    target = tmp_path / f"{transfer_id}.jsonl"
+    real_open = os.open
+
+    def replace_before_open(path: str | Path, flags: int, mode: int = 0o777) -> int:
+        assert flags & os.O_NONBLOCK, "would block after regular-file precheck"
+        if hasattr(os, "O_NOFOLLOW"):
+            assert flags & os.O_NOFOLLOW
+        target.unlink()
+        os.mkfifo(target)
+        return real_open(path, flags, mode)
+
+    monkeypatch.setattr(os, "open", replace_before_open)
+    with pytest.raises(OSError, match=os.strerror(errno.ENXIO)) as refused:
+        journal.record_part(transfer_id, part_index=1, etag="etag", bytes_written=1)
+    assert refused.value.errno == errno.ENXIO
+    assert stat.S_ISFIFO(target.stat().st_mode)

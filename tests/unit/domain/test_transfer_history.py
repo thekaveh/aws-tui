@@ -5,6 +5,8 @@ from __future__ import annotations
 import json
 import os
 import stat
+import subprocess
+import sys
 import threading
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import FrozenInstanceError, replace
@@ -18,6 +20,7 @@ from aws_tui.domain.transfer_history import (
     TransferConnectionIdentity,
     TransferHistoryRecord,
     TransferHistoryStore,
+    read_metadata,
 )
 
 pytestmark = pytest.mark.unit
@@ -108,7 +111,8 @@ def test_default_retention_is_100(tmp_path: Path) -> None:
         {"started_at": datetime(2026, 10, 4)},
         {"updated_at": "2026-10-04"},
         {"destination_uri": "https://user:password@host/path"},
-        {"destination_uri": "s3://bucket/key?X-Amz-Credential=secret"},
+        {"destination_uri": "https://bucket.example/key?X-Amz-Credential=secret"},
+        {"destination_uri": "s3://user:password@bucket/key"},
     ],
 )
 def test_invalid_metadata_is_rejected(changes: dict[str, object]) -> None:
@@ -283,3 +287,102 @@ def test_clear_reports_disk_failure_without_claiming_record_was_removed(
     with pytest.raises(OSError, match="clear disk failure"):
         store.clear()
     assert store.load() == (record,)
+
+
+@pytest.mark.parametrize("prefix", ["/tmp/", "file:///tmp/", "local:///tmp/"])
+def test_literal_path_punctuation_round_trips_without_url_transformation(
+    tmp_path: Path, prefix: str
+) -> None:
+    literal = "a?question#hash%2F%25 [brackets] spaces.txt"
+    record = history_record(source_uri=prefix + literal, destination_uri="s3://bucket/" + literal)
+    store = TransferHistoryStore(tmp_path)
+    store.save(record)
+    assert TransferHistoryStore(tmp_path).load() == (record,)
+    assert record.source_uri == prefix + literal
+    assert record.destination_uri == "s3://bucket/" + literal
+
+
+@pytest.mark.skipif(not hasattr(os, "mkfifo"), reason="named pipes unavailable")
+def test_fifo_summary_is_skipped_with_a_bounded_scan(tmp_path: Path) -> None:
+    store = TransferHistoryStore(tmp_path)
+    record = history_record()
+    store.save(record)
+    fifo = tmp_path / "0000000000000002.json"
+    os.mkfifo(fifo)
+    script = """
+import sys
+from pathlib import Path
+from aws_tui.domain.transfer_history import TransferHistoryStore
+store = TransferHistoryStore(Path(sys.argv[1]))
+assert [record.id for record in store.load()] == [sys.argv[2]]
+store.clear()
+assert store.load() == ()
+assert (Path(sys.argv[1]) / '0000000000000002.json').exists()
+"""
+    child = subprocess.Popen(
+        [sys.executable, "-c", script, str(tmp_path), record.id],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        env=os.environ | {"PYTHONPATH": str(Path("src").absolute())},
+    )
+    scan_deadline_seconds = 3
+    try:
+        stdout, stderr = child.communicate(timeout=scan_deadline_seconds)
+        assert child.returncode == 0, stdout + stderr
+    except subprocess.TimeoutExpired:
+        pytest.fail("regular-file summary scan blocked on FIFO")
+    finally:
+        if child.poll() is None:
+            child.kill()
+        child.communicate(timeout=3)
+
+
+@pytest.mark.parametrize("node_kind", ["directory", "symlink", "fifo"])
+def test_portable_read_precheck_refuses_nonregular_without_open(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, node_kind: str
+) -> None:
+    target = tmp_path / "metadata"
+    if node_kind == "directory":
+        target.mkdir()
+    elif node_kind == "symlink":
+        regular = tmp_path / "regular"
+        regular.write_text("{}")
+        target.symlink_to(regular)
+    else:
+        if not hasattr(os, "mkfifo"):
+            pytest.skip("named pipes unavailable")
+        os.mkfifo(target)
+    monkeypatch.delattr(os, "O_NONBLOCK", raising=False)
+    monkeypatch.delattr(os, "O_NOFOLLOW", raising=False)
+
+    def unexpected_open(*args: object) -> int:
+        pytest.fail("portable regular-file precheck opened a nonregular entry")
+
+    monkeypatch.setattr(os, "open", unexpected_open)
+    with pytest.raises(ValueError, match="nonregular"):
+        read_metadata(target)
+
+
+@pytest.mark.skipif(
+    not hasattr(os, "mkfifo") or not hasattr(os, "O_NONBLOCK"),
+    reason="POSIX FIFO flags unavailable",
+)
+def test_reader_rechecks_descriptor_when_regular_file_is_replaced_by_fifo(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    target = tmp_path / "metadata"
+    target.write_text("{}")
+    real_open = os.open
+
+    def replace_before_open(path: str | Path, flags: int, mode: int = 0o777) -> int:
+        assert flags & os.O_NONBLOCK, "would block after regular-file precheck"
+        if hasattr(os, "O_NOFOLLOW"):
+            assert flags & os.O_NOFOLLOW
+        target.unlink()
+        os.mkfifo(target)
+        return real_open(path, flags, mode)
+
+    monkeypatch.setattr(os, "open", replace_before_open)
+    with pytest.raises(ValueError, match="nonregular"):
+        read_metadata(target)

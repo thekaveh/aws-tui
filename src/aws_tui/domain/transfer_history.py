@@ -19,7 +19,6 @@ from dataclasses import asdict, dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Literal
-from urllib.parse import urlsplit
 
 Operation = Literal["copy", "move", "delete"]
 HistoryStatus = Literal["completed", "skipped", "failed", "cancelled", "outcome_unknown"]
@@ -67,15 +66,15 @@ def _text(value: object, maximum: int = 8192) -> None:
 
 def _uri(value: str) -> None:
     _text(value)
-    parsed = urlsplit(value)
-    if (
-        parsed.scheme not in {"file", "local", "s3"}
-        or parsed.username is not None
-        or parsed.password is not None
-        or parsed.query
-    ):
+    # These are literal PathRef/_pane_uri labels, not transport URLs. The path
+    # suffix may contain ?, #, %, brackets or spaces without URL interpretation.
+    if value.startswith("/"):
+        return
+    scheme, separator, body = value.partition("://")
+    authority = body.partition("/")[0]
+    if not separator or scheme not in {"file", "local", "s3"} or "@" in authority:
         raise ValueError(
-            "history paths must be literal file/local/s3 URIs without credentials or queries"
+            "history paths must be literal absolute/file/local/s3 labels without transport URLs or user-info"
         )
 
 
@@ -265,11 +264,45 @@ def ensure_private_directory(path: Path) -> None:
         path.chmod(0o700)
 
 
+def open_regular_metadata(path: Path, *, flags: int = os.O_RDONLY, create: bool = False) -> int:
+    """Open owned regular metadata without blocking on a replaced FIFO.
+
+    The precheck also handles platforms without O_NONBLOCK/O_NOFOLLOW; fstat
+    verifies the actual descriptor and rejects replacement after that precheck.
+    The caller owns the returned descriptor and must close it.
+    """
+    try:
+        previous = path.lstat()
+    except FileNotFoundError:
+        if not create:
+            raise
+        previous = None
+    if previous is not None and not stat.S_ISREG(previous.st_mode):
+        raise ValueError("nonregular metadata is not owned")
+    fd = os.open(
+        path,
+        flags
+        | (os.O_CREAT if create else 0)
+        | getattr(os, "O_NONBLOCK", 0)
+        | getattr(os, "O_NOFOLLOW", 0),
+        0o600,
+    )
+    try:
+        opened = os.fstat(fd)
+        if not stat.S_ISREG(opened.st_mode) or (
+            previous is not None
+            and (previous.st_dev, previous.st_ino) != (opened.st_dev, opened.st_ino)
+        ):
+            raise ValueError("nonregular or replaced metadata is not owned")
+    except BaseException:
+        os.close(fd)
+        raise
+    return fd
+
+
 def read_metadata(path: Path) -> str:
     """Read a bounded regular file without following its final symlink."""
-    if path.is_symlink():
-        raise ValueError("symlink metadata is not owned")
-    fd = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+    fd = open_regular_metadata(path)
     with os.fdopen(fd, "rb") as stream:
         info = os.fstat(stream.fileno())
         if (
@@ -325,10 +358,8 @@ class TransferHistoryStore:
         with self._lock:
             ensure_private_directory(self.base_dir)
             # Per-directory advisory lock also serializes separate POSIX processes.
-            fd = os.open(
-                self.base_dir / ".history.lock",
-                os.O_CREAT | os.O_RDWR | getattr(os, "O_NOFOLLOW", 0),
-                0o600,
+            fd = open_regular_metadata(
+                self.base_dir / ".history.lock", flags=os.O_RDWR, create=True
             )
             try:
                 if os.name == "posix":

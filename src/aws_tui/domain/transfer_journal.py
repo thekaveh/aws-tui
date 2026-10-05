@@ -41,6 +41,7 @@ from aws_tui.domain.transfer_history import (
     descriptor_from_json,
     descriptor_to_json,
     ensure_private_directory,
+    open_regular_metadata,
     parse_metadata_json,
     read_metadata,
 )
@@ -366,17 +367,9 @@ class TransferJournal:
         # (measured: 400 for 200 entries). The per-file fsync in
         # `_write_journal_line` still makes the CONTENT durable on every record.
         created = not path.exists()
-        if os.name == "posix":
-            with open(
-                path,
-                "a",
-                encoding="utf-8",
-                opener=_private_append_opener,
-            ) as fh:
-                _write_journal_line(fh, line)
-        else:
-            with path.open("a", encoding="utf-8") as fh:
-                _write_journal_line(fh, line)
+        fd = _private_append_opener(str(path), os.O_APPEND | os.O_WRONLY)
+        with os.fdopen(fd, "a", encoding="utf-8") as fh:
+            _write_journal_line(fh, line)
         if created:
             _fsync_directory(path.parent)
 
@@ -430,9 +423,7 @@ class TransferJournal:
 def _iter_jsonl(path: Path) -> Iterator[dict[str, Any]]:
     # Legacy diagnostics can contain many multipart lines. Preserve streaming
     # replay and its torn-final-line tolerance; new recovery uses bounded reads.
-    if path.is_symlink():
-        raise _JournalReplayError("symlink journal is not owned")
-    fd = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+    fd = open_regular_metadata(path)
     with os.fdopen(fd, "r", encoding="utf-8") as fh:
         for raw in fh:
             stripped = raw.strip()
@@ -466,9 +457,7 @@ class _JournalReplayError(Exception):
 
 
 def _private_append_opener(path: str, flags: int) -> int:
-    return os.open(
-        path, flags | os.O_APPEND | os.O_CREAT | os.O_WRONLY | getattr(os, "O_NOFOLLOW", 0), 0o600
-    )
+    return open_regular_metadata(Path(path), flags=flags | os.O_APPEND | os.O_WRONLY, create=True)
 
 
 def _write_journal_line(fh: TextIO, line: str) -> None:
