@@ -10,7 +10,7 @@ from textual.widgets import Button, OptionList, Static
 
 from aws_tui.infra.athena_draft_store import DraftPermit
 from tests.athena_drafts_helpers import record, runtime_at
-from tests.helpers import drain_workers, focus_and_settle
+from tests.helpers import drain_workers, focus_and_settle, wait_until
 from tests.unit.vm.athena.test_page_vm import PageClient, make_page_vm
 
 
@@ -351,7 +351,11 @@ async def test_manager_main_refresh_requires_complete_projection(tmp_path, remov
             assert replacement.query_one("#athena-drafts-warning", Static).display
             assert "Saved:" in str(replacement.query_one("#athena-drafts-detail", Static).content)
             assert await runtime.clear()
-            await pilot.pause()
+            # Runtime completion does not wait for the deferred modal projection.
+            await wait_until(
+                lambda: replacement.query_one(OptionList).option_count == 0,
+                what="cleared drafts projected in replacement manager",
+            )
             assert replacement.query_one(OptionList).option_count == 0
             assert replacement._selected_id() is None
             assert not replacement.query_one("#athena-drafts-warning", Static).display
