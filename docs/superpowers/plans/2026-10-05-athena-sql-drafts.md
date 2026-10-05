@@ -8,7 +8,7 @@
 
 **Tech Stack:** Existing Python 3.11–3.13 support, asyncio, threading/concurrent.futures, dataclasses, JSON, Textual, VMx/reactivex, pytest and pytest-textual-snapshot; no new dependency.
 
-## Global Constraints
+## 1. Global Constraints
 
 - Preserve Python support `>=3.11,<3.14`; add no dependency or toolchain installation.
 - Persist SQL text, UTC timestamps, a stable draft identifier, the five QueryContext fields, and schema version only; never persist result rows, query execution state, credentials, provider objects, or navigation snapshots.
@@ -24,7 +24,7 @@
 
 ---
 
-## Execution boundary and environment
+## 2. Execution boundary and environment
 
 Read the canonical [design](../specs/2026-10-05-athena-sql-drafts-design.md) before implementing any task. Its exact data types, fixed strings, failure outcomes and limit semantics are requirements, not optional examples. Implementers run each task's tests, self-review, commit through normal repository hooks, and report the commit hash. Root performs independent diff review and integration, owns merge/cleanup, issue closure and remote changes. Do not skip hooks, amend unrelated commits, or wait for root to make an implementation commit. The planning worker writes only this document, the design and its own report. Implementation workers receive only their assigned task plus this Global Constraints section and the design.
 
@@ -40,7 +40,7 @@ export DYLD_FALLBACK_LIBRARY_PATH=/opt/homebrew/opt/cairo/lib
 
 Each task has a red/green cycle. Expected red means the new assertion/import fails for the intended missing behavior; infrastructure/import failures are not evidence of a valid red. Expected green means exit 0 and all selected tests pass. Do not run live AWS, native clipboard or hosted workflows. Do not remove unrelated files, run `git clean -fdx`, modify toolchains, or alter a test to bless missing rendered content. Use safe fake SQL in visual fixtures; sentinel privacy tests inspect generated diagnostics directly.
 
-## File map and dependency order
+## 3. File map and dependency order
 
 | Task | Independently reviewable output | Depends on |
 |---|---|---|
@@ -52,7 +52,7 @@ Each task has a red/green cycle. Expected red means the new assertion/import fai
 
 No parallel edits to the same query/page/composition files. Task 1 must land its interface before Task 2; Task 3 must land before service wiring. Do not spawn a child agent from an implementation worker. Each task's tests must exercise its observable contract, not only the helpers it just implemented.
 
-### Task 1: Preserve the opt-in setting and implement the private store
+### 3.1. Task 1: Preserve the opt-in setting and implement the private store
 
 **Files:**
 
@@ -566,7 +566,7 @@ uv run ruff check src/aws_tui/infra/config_store.py src/aws_tui/infra/athena_dra
 
 Expected: all tests pass, `layer rules clean`, ruff exits 0. The implementer self-reviews the schema, safe result boundary, preservation tests and owned-file deletion, commits assigned files through normal hooks with `feat: add private opt-in Athena draft store`, and reports the hash. Root then independently reviews the committed diff and integrates.
 
-### Task 2: Own asynchronous work, save revisions and bounded shutdown
+### 3.2. Task 2: Own asynchronous work, save revisions and bounded shutdown
 
 **Files:**
 
@@ -1067,7 +1067,7 @@ bash scripts/check-layers.sh
 
 Required race matrix: older-save/newer-edit, context-change/debounce, old-page/new-page same ID, pending-save/delete, in-flight-save/clear, enable/disable overlap, disable/save, shutdown/stalled-write, canceled-waiter/completion. The implementer self-reviews ownership and the true deadline test, commits through normal hooks with `feat: coordinate Athena draft saves and bounded flush`, and reports the hash. Root then independently reviews the committed diff and integrates.
 
-### Task 3: Add explicit recovery and source/context execution guards
+### 3.3. Task 3: Add explicit recovery and source/context execution guards
 
 **Files:**
 
@@ -1425,7 +1425,7 @@ bash scripts/check-layers.sh
 
 Expected: all pass. The implementer self-reviews the no-fallback path, direct-command protection, confirmation races and unchanged snapshot diff, commits through normal hooks with `feat: recover Athena drafts only in validated source context`, and reports the hash. Root then independently reviews the committed diff and integrates.
 
-### Task 4: Wire app/service lifetimes and prove normal-exit and crash-file recovery
+### 3.4. Task 4: Wire app/service lifetimes and prove normal-exit and crash-file recovery
 
 **Files:**
 
@@ -1716,7 +1716,7 @@ bash scripts/check-layers.sh
 
 Update all three `SimpleNamespace` contexts in `tests/unit/test_app_sanity.py` (near baseline lines 422, 509 and 584) with a mandatory fake draft owner and warning field, then run `uv run pytest tests/unit/test_app_sanity.py -q`. Strengthen exact cleanup order, failure continuation, cancellation and log-close-last assertions to include drafts shutdown/disposal. Do not add an optional production `getattr` fallback to accommodate incomplete test fakes. The implementer self-reviews normal/crash separation, demo no-I/O, the shared deadline, fixed warning and staged ownership, commits through normal hooks with `feat: wire Athena draft persistence across app lifetimes`, and reports the hash. Root then independently reviews the committed diff and integrates.
 
-### Task 5: Deliver keyboard controls, truthful rendering and user documentation
+### 3.5. Task 5: Deliver keyboard controls, truthful rendering and user documentation
 
 **Files:**
 
@@ -1780,20 +1780,32 @@ async def ask_draft_confirmation(host, *, drafts: AthenaDraftsVM, hub,
 Use `DOMNode` for `host`, `MessageHub[Message]` for `hub` when typing this helper; both imports already follow existing widget conventions. The complete panel behavior is:
 
 ```python
+from __future__ import annotations
+
+from typing import ClassVar
+
+from reactivex.abc import DisposableBase
 from textual.app import ComposeResult
 from textual.widget import Widget
 from textual.widgets import Button, Static
+from vmx import Message, MessageHub
+
 from aws_tui.ui.widgets._worker import DeferredWorkerMixin
+from aws_tui.ui.widgets.athena.drafts_modal import ask_draft_confirmation
+from aws_tui.vm.athena.drafts_vm import AthenaDraftsVM
+from aws_tui.vm.chrome.confirm_vm import ConfirmRequest
 
 
 class AthenaDraftsPanel(DeferredWorkerMixin, Widget):
-    DEFAULT_CSS = "AthenaDraftsPanel { height: auto; } AthenaDraftsPanel Static { height: auto; }"
+    DEFAULT_CSS: ClassVar[str] = (
+        "AthenaDraftsPanel { height: auto; } AthenaDraftsPanel Static { height: auto; }"
+    )
 
-    def __init__(self, vm: AthenaDraftsVM, *, hub) -> None:
+    def __init__(self, vm: AthenaDraftsVM, *, hub: MessageHub[Message]) -> None:
         super().__init__()
         self._vm = vm
         self._hub = hub
-        self._subscription = None
+        self._subscription: DisposableBase | None = None
         self._pending = False
 
     def compose(self) -> ComposeResult:
@@ -1802,27 +1814,40 @@ class AthenaDraftsPanel(DeferredWorkerMixin, Widget):
             "Keep the latest SQL for each query context on this device. "
             "Up to 50 drafts and 8 MiB total. SQL is stored as plaintext; "
             "results and credentials are not retained.",
-            id="athena-drafts-retention", markup=False,
+            id="athena-drafts-retention",
+            markup=False,
         )
-        yield Button("Enable local SQL drafts", id="athena-drafts-toggle")
-        yield Button("Retry draft cleanup", id="athena-drafts-cleanup")
+        button = Button(
+            "Disable and delete drafts" if self._vm.enabled else "Enable local SQL drafts",
+            id="athena-drafts-toggle",
+            flat=True,
+        )
+        button.disabled = self._vm.read_only or self._vm.busy
+        yield button
+        cleanup = Button("Retry draft cleanup", id="athena-drafts-cleanup", flat=True)
+        cleanup.display = self._vm.cleanup_required
+        yield cleanup
         yield Static("", id="athena-drafts-setting-status", markup=False)
 
     def on_mount(self) -> None:
-        self._subscription = self._vm.on_property_changed.subscribe(
-            lambda _name: self.call_after_refresh(self._refresh)
-        )
-        self._refresh()
+        self._subscription = self._vm.on_property_changed.subscribe(self._on_vm_changed)
+        self.call_after_refresh(self._refresh)
+
+    def _on_vm_changed(self, _name: str) -> None:
+        if self.is_mounted and self.is_attached and self.is_running:
+            self.call_after_refresh(self._refresh)
 
     def on_unmount(self) -> None:
         if self._subscription is not None:
             self._subscription.dispose()
 
     def _refresh(self) -> None:
-        if not self.is_mounted:
+        if not self.is_mounted or not self.is_attached or not self.is_running:
             return
         button = self.query_one("#athena-drafts-toggle", Button)
-        button.label = "Disable and delete drafts" if self._vm.enabled else "Enable local SQL drafts"
+        button.label = (
+            "Disable and delete drafts" if self._vm.enabled else "Enable local SQL drafts"
+        )
         button.disabled = self._vm.read_only or self._vm.busy or self._pending
         cleanup = self.query_one("#athena-drafts-cleanup", Button)
         cleanup.display = self._vm.cleanup_required
@@ -1831,13 +1856,19 @@ class AthenaDraftsPanel(DeferredWorkerMixin, Widget):
         self.query_one("#athena-drafts-setting-status", Static).update(status or "")
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
-        if event.button.id not in {"athena-drafts-toggle", "athena-drafts-cleanup"} or self._pending or self._vm.busy:
+        if (
+            event.button.id not in {"athena-drafts-toggle", "athena-drafts-cleanup"}
+            or self._pending
+            or self._vm.busy
+        ):
             return
         event.stop()
         self._pending = True
         self._refresh()
         cleanup_only = event.button.id == "athena-drafts-cleanup"
-        self._run_lifecycle_worker(lambda: self._toggle(cleanup_only), group="athena-drafts-setting")
+        self._run_lifecycle_worker(
+            lambda: self._toggle(cleanup_only), group="athena-drafts-setting"
+        )
 
     async def _toggle(self, cleanup_only: bool) -> None:
         try:
@@ -1846,11 +1877,14 @@ class AthenaDraftsPanel(DeferredWorkerMixin, Widget):
                 return
             enabled = self._vm.enabled
             if enabled and not await ask_draft_confirmation(
-                self, drafts=self._vm, hub=self._hub,
+                self,
+                drafts=self._vm,
+                hub=self._hub,
                 request=ConfirmRequest(
                     title="Disable and delete local drafts?",
                     body_lines=("All local Athena SQL draft records will be deleted.",),
-                    confirm_label="Disable and delete", danger=True,
+                    confirm_label="Disable and delete",
+                    danger=True,
                 ),
             ):
                 return
@@ -1909,11 +1943,12 @@ For `context_required`, use the short title `Draft pending` and put the full fix
 
 ```python
 button = Button("Drafts", id="athena-drafts", compact=True, flat=True)
+button.styles.line_pad = 0
 button.display = self._page_vm.drafts is not None and self._page_vm.drafts.enabled
 yield button
 ```
 
-Set its CSS `width: 8; min-width: 8; height: 3; margin: 0 1 0 0;`. Add `query_one("#athena-drafts", Button)` after Cancel in QueryView's manual focus list and `(FocusSlot.ATHENA_DRAFTS, self.query_one("#athena-drafts", Button))` after ATHENA_CANCEL in Page's query-surface target tuple. The existing visible/enabled filtering applies. Add the ID-to-slot projection entry wherever Page's existing Cancel entry is mapped. The opening bridge uses a Textual message rather than reaching into app internals:
+Set its CSS `width: 8; min-width: 8; height: 3; padding: 0; margin: 0 1 0 0;`. Set `button.styles.line_pad = 0` through the public style property: Textual 8.2.8 rejects zero for this CSS declaration. Zero line padding renders all six letters within the eight-cell control. Add `query_one("#athena-drafts", Button)` after Cancel in QueryView's manual focus list and `(FocusSlot.ATHENA_DRAFTS, self.query_one("#athena-drafts", Button))` after ATHENA_CANCEL in Page's query-surface target tuple. The existing visible/enabled filtering applies. Add the ID-to-slot projection entry wherever Page's existing Cancel entry is mapped. The opening bridge uses a Textual message rather than reaching into app internals:
 
 ```python
 from textual.message import Message
@@ -1956,27 +1991,54 @@ Import `AthenaDraftsModal` and `DraftModalResult` from `ui.widgets.athena.drafts
 
 - [ ] **5.4 Implement the metadata-only manager and confirmation bridge.** Use a ModalScreen with scrollable list/detail and buttons. Render all metadata with markup disabled and no SQL preview. Refresh asynchronously when opened; disable mutation/recovery buttons while busy. Buttons call VM methods via lifecycle workers. Restore passes a callback that presents `Replace unsaved SQL?`; decision to invoke it belongs to PageVM. Keep-current clears only failed recovery. Delete/Clear all show danger confirmation and await VM success before updating list. Nested confirmation and Escape use existing modal/focus coordinator conventions; closing a modal cancels presentation subscriptions, not owned persistence work.
 
-The manager's full behavior mechanism follows. Use the existing theme's modal frame/footer classes and capture its render before accepting CSS; all dynamic text is plain `Text` or `markup=False`. The `focus_coordinator` argument is retained for the app's bridge, but do not call `modal_open` a second time: `AwsTuiApp` already synchronizes screen-stack transitions.
+The manager's full behavior mechanism follows. `_refresh_drafts` is a presentation method; it must not override Textual's inherited `_render` hook. Its bounded `VerticalScroll` detail keeps every context field, timestamp, and fixed warning keyboard-reachable. The Up/Down bridge scrolls the focused detail surface; action completion defers modal focus restoration until controls are enabled again. Use the existing theme's modal frame/footer classes and capture its render before accepting CSS; all dynamic text is plain `Text` or `markup=False`. The `focus_coordinator` argument is retained for the app's bridge, but do not call `modal_open` a second time: `AwsTuiApp` already synchronizes screen-stack transitions.
 
 ```python
-from typing import Literal
+from __future__ import annotations
+
+from typing import ClassVar, Literal
+
+from reactivex.abc import DisposableBase
 from rich.text import Text
-from vmx import Message, MessageHub
-from aws_tui.vm.chrome.focus_coordinator_vm import FocusCoordinatorVM
 from textual.app import ComposeResult
-from textual.binding import Binding
-from textual.containers import Grid, Vertical
+from textual.binding import Binding, BindingType
+from textual.containers import Grid, Vertical, VerticalScroll
+from textual.dom import DOMNode
 from textual.screen import ModalScreen
 from textual.widgets import Button, OptionList, Static
 from textual.widgets.option_list import Option
-from aws_tui.ui.widgets._worker import DeferredWorkerMixin
+from vmx import Message, MessageHub
 
+from aws_tui.ui.widgets._worker import DeferredWorkerMixin
+from aws_tui.ui.widgets.confirm_modal import TextualDialogService
+from aws_tui.vm.athena.drafts_vm import AthenaDraftsVM
+from aws_tui.vm.athena.page_vm import AthenaPageVM
+from aws_tui.vm.chrome.confirm_vm import ConfirmationVM, ConfirmRequest
+from aws_tui.vm.chrome.focus_coordinator_vm import FocusCoordinatorVM
 
 DraftModalResult = Literal["restored", "closed"]
 
 
+async def ask_draft_confirmation(
+    host: DOMNode,
+    *,
+    drafts: AthenaDraftsVM,
+    hub: MessageHub[Message],
+    request: ConfirmRequest,
+) -> bool:
+    confirmation = ConfirmationVM(hub=hub, dispatcher=drafts.dispatcher)
+    confirmation.construct()
+    try:
+        return await confirmation.ask(
+            request,
+            dialog_service=TextualDialogService(host.app, confirmation, hub=hub),
+        )
+    finally:
+        confirmation.dispose()
+
+
 class AthenaDraftsModal(DeferredWorkerMixin, ModalScreen[DraftModalResult]):
-    BINDINGS = [
+    BINDINGS: ClassVar[list[BindingType]] = [
         Binding("tab", "focus_next", show=False, priority=True),
         Binding("shift+tab", "focus_previous", show=False, priority=True),
         Binding("up", "move_up", show=False, priority=True),
@@ -1984,17 +2046,22 @@ class AthenaDraftsModal(DeferredWorkerMixin, ModalScreen[DraftModalResult]):
         Binding("enter", "commit_focused", show=False, priority=True),
         Binding("escape", "close", show=False, priority=True),
     ]
-    DEFAULT_CSS = """
-    AthenaDraftsModal { align: center middle; }
-    AthenaDraftsModal > Vertical { width: 76; max-width: 96%; height: 90%; }
+    DEFAULT_CSS: ClassVar[str] = """
+    AthenaDraftsModal { align: center middle; background: $background 60%; }
+    AthenaDraftsModal > Vertical { width: 76; max-width: 96%; height: 90%; border: round $accent; background: $surface; padding: 0 1; }
+    AthenaDraftsModal .modal-title { height: 1; color: $accent; text-style: bold; }
     #athena-drafts-list { height: 1fr; min-height: 3; }
-    #athena-drafts-detail { height: 7; }
+    #athena-drafts-detail-scroll { height: 7; scrollbar-size: 1 1; }
+    #athena-drafts-detail { height: auto; }
     #athena-drafts-actions { grid-size: 3 2; height: 6; }
     #athena-drafts-actions Button { width: 1fr; min-width: 8; }
     """
 
     def __init__(
-        self, page: AthenaPageVM, *, hub: MessageHub[Message],
+        self,
+        page: AthenaPageVM,
+        *,
+        hub: MessageHub[Message],
         focus_coordinator: FocusCoordinatorVM | None = None,
     ) -> None:
         super().__init__()
@@ -2005,81 +2072,85 @@ class AthenaDraftsModal(DeferredWorkerMixin, ModalScreen[DraftModalResult]):
         self._hub = hub
         self._focus_coordinator = focus_coordinator
         self._ids: list[str] = []
-        self._subscription = None
+        self._subscription: DisposableBase | None = None
         self._pending = False
+        self._loading = True
 
     def compose(self) -> ComposeResult:
         with Vertical(classes="modal-frame"):
             yield Static("Local Athena SQL drafts", classes="modal-title", markup=False)
             yield OptionList(id="athena-drafts-list")
-            yield Static("", id="athena-drafts-detail", markup=False)
+            with VerticalScroll(id="athena-drafts-detail-scroll"):
+                yield Static("", id="athena-drafts-detail", markup=False)
             with Grid(id="athena-drafts-actions", classes="modal-footer"):
-                yield Button("Restore", id="athena-drafts-restore")
-                yield Button("Delete", id="athena-drafts-delete")
-                yield Button("Clear all", id="athena-drafts-clear")
-                yield Button("Keep current editor", id="athena-drafts-keep")
-                yield Button("Close", id="athena-drafts-close")
+                yield Button("Restore", id="athena-drafts-restore", flat=True, disabled=True)
+                yield Button("Delete", id="athena-drafts-delete", flat=True, disabled=True)
+                yield Button("Clear all", id="athena-drafts-clear", flat=True, disabled=True)
+                yield Button("Keep current editor", id="athena-drafts-keep", flat=True)
+                yield Button("Close", id="athena-drafts-close", flat=True)
 
     def on_mount(self) -> None:
-        self._subscription = self._drafts.on_property_changed.subscribe(
-            lambda _name: self.call_after_refresh(self._render)
-        )
+        self._subscription = self._drafts.on_property_changed.subscribe(self._on_runtime_changed)
+        self.call_after_refresh(self._refresh_drafts)
         self._run_lifecycle_worker(self._load, group="athena-drafts-list")
         self.query_one("#athena-drafts-list", OptionList).focus()
+
+    def _on_runtime_changed(self, _name: str) -> None:
+        if self.is_mounted and self.is_attached and self.is_running:
+            self.call_after_refresh(self._refresh_drafts)
 
     def on_unmount(self) -> None:
         if self._subscription is not None:
             self._subscription.dispose()
 
     async def _load(self) -> None:
-        await self._drafts.refresh()
-        if self.is_mounted:
-            self._render()
+        try:
+            await self._drafts.refresh()
+        finally:
+            self._loading = False
+            if self.is_mounted:
+                self._refresh_drafts()
 
     def _selected_id(self) -> str | None:
         index = self.query_one("#athena-drafts-list", OptionList).highlighted
         return self._ids[index] if index is not None and 0 <= index < len(self._ids) else None
 
-    def _render(self) -> None:
-        if not self.is_mounted:
+    def _refresh_drafts(self) -> None:
+        if not self.is_mounted or not self.is_attached or not self.is_running:
             return
         selected = self._selected_id()
         listing = self.query_one("#athena-drafts-list", OptionList)
         listing.clear_options()
         self._ids = [row.id for row in self._drafts.items]
-        for row in self._drafts.items:
-            listing.add_option(Option(Text(" · ".join(row.context)), id=row.id))
+        for item in self._drafts.items:
+            listing.add_option(Option(Text(" · ".join(item.context)), id=item.id))
         if self._ids:
             listing.highlighted = self._ids.index(selected) if selected in self._ids else 0
         row = next((row for row in self._drafts.items if row.id == self._selected_id()), None)
-        details = "No local drafts"
-        if row is not None:
-            labels = ("Connection", "Region", "Workgroup", "Catalog", "Database")
-            details = "\n".join(f"{label}: {value}" for label, value in zip(labels, row.context, strict=True))
-            details += "\nSaved: " + row.updated_at.isoformat()
-        error = self._page.draft_recovery_error or self._drafts.error_text
-        if error:
-            details += "\n" + error
-        self.query_one("#athena-drafts-detail", Static).update(details)
-        busy = self._pending or self._drafts.busy or not self._drafts.enabled
+        self._refresh_drafts_detail()
+        busy = self._loading or self._pending or self._drafts.busy or not self._drafts.enabled
         for identity in ("restore", "delete"):
             self.query_one(f"#athena-drafts-{identity}", Button).disabled = busy or row is None
         self.query_one("#athena-drafts-clear", Button).disabled = busy or not self._ids
         self.query_one("#athena-drafts-keep", Button).disabled = self._pending
 
-    def on_option_list_option_highlighted(self, event: OptionList.OptionHighlighted) -> None:
-        if event.option_list.id != "athena-drafts-list":
-            return
-        # Update detail directly; do not clear/rebuild the list in response to its own highlight.
-        row = next((row for row in self._drafts.items if row.id == event.option.id), None)
+    def _refresh_drafts_detail(self) -> None:
+        row = next((row for row in self._drafts.items if row.id == self._selected_id()), None)
+        details = "No local drafts"
         if row is not None:
             labels = ("Connection", "Region", "Workgroup", "Catalog", "Database")
-            text = "\n".join(f"{label}: {value}" for label, value in zip(labels, row.context, strict=True))
-            text += "\nSaved: " + row.updated_at.isoformat()
-            error = self._page.draft_recovery_error or self._drafts.error_text
-            if error:
-                text += "\n" + error
-            self.query_one("#athena-drafts-detail", Static).update(text)
+            details = "\n".join(
+                f"{label}: {value}" for label, value in zip(labels, row.context, strict=True)
+            )
+            details += "\nSaved: " + row.updated_at.isoformat()
+        error = self._page.draft_recovery_error or self._drafts.error_text
+        if error:
+            details += "\n" + error
+        self.query_one("#athena-drafts-detail", Static).update(details)
+
+    def on_option_list_option_highlighted(self, event: OptionList.OptionHighlighted) -> None:
+        if event.option_list.id == "athena-drafts-list":
+            self._refresh_drafts_detail()
 
     def action_focus_next(self) -> None:
         self.focus_next()
@@ -2088,9 +2159,17 @@ class AthenaDraftsModal(DeferredWorkerMixin, ModalScreen[DraftModalResult]):
         self.focus_previous()
 
     def _move(self, delta: int) -> None:
+        if isinstance(self.focused, VerticalScroll):
+            if delta < 0:
+                self.focused.action_scroll_up()
+            else:
+                self.focused.action_scroll_down()
+            return
         listing = self.query_one("#athena-drafts-list", OptionList)
         if self._ids:
-            listing.highlighted = min(len(self._ids) - 1, max(0, (listing.highlighted or 0) + delta))
+            listing.highlighted = min(
+                len(self._ids) - 1, max(0, (listing.highlighted or 0) + delta)
+            )
 
     def action_move_up(self) -> None:
         self._move(-1)
@@ -2112,27 +2191,47 @@ class AthenaDraftsModal(DeferredWorkerMixin, ModalScreen[DraftModalResult]):
         if identity == "athena-drafts-close":
             self.action_close()
             return
-        if self._pending or identity is None:
+        if (
+            self._loading
+            or self._pending
+            or self._drafts.busy
+            or event.button.disabled
+            or identity is None
+        ):
             return
         self._pending = True
         selected = self._selected_id()
-        self._render()
+        self._refresh_drafts()
         self._run_lifecycle_worker(
-            lambda: self._perform(identity, selected), group="athena-drafts-action",
+            lambda: self._perform(identity, selected),
+            group="athena-drafts-action",
         )
+
+    def _restore_action_focus(self, identity: str) -> None:
+        if not self.is_mounted or not self.is_attached or self.screen is not self.app.screen:
+            return
+        button = self.query_one(f"#{identity}", Button)
+        if button.display and not button.disabled:
+            button.focus()
+        else:
+            self.query_one("#athena-drafts-list", OptionList).focus()
 
     async def _confirm(self, title: str, *, danger: bool = False) -> bool:
         return await ask_draft_confirmation(
-            self, drafts=self._drafts, hub=self._hub,
-            request=ConfirmRequest(title=title, danger=danger,
-                                   confirm_label="Confirm" if danger else "Replace"),
+            self,
+            drafts=self._drafts,
+            hub=self._hub,
+            request=ConfirmRequest(
+                title=title, danger=danger, confirm_label="Confirm" if danger else "Replace"
+            ),
         )
 
     async def _perform(self, identity: str, selected: str | None) -> None:
         try:
             if identity == "athena-drafts-restore" and selected is not None:
                 restored = await self._page.restore_draft(
-                    selected, lambda: self._confirm("Replace unsaved SQL?"),
+                    selected,
+                    lambda: self._confirm("Replace unsaved SQL?"),
                 )
                 if restored and self.is_mounted:
                     self.dismiss("restored")
@@ -2147,7 +2246,9 @@ class AthenaDraftsModal(DeferredWorkerMixin, ModalScreen[DraftModalResult]):
         finally:
             self._pending = False
             if self.is_mounted:
-                self._render()
+                self._refresh_drafts()
+                if self.is_attached and self.is_running:
+                    self.call_after_refresh(self._restore_action_focus, identity)
 ```
 
 The highlighted-detail handler preserves the fixed page/runtime error. Import `AthenaPageVM`, `AthenaDraftsVM`, `ConfirmRequest`, `MessageHub`, `Message` and proper callback/subscription types explicitly; annotate `_subscription` as `DisposableBase | None`, `hub` as `MessageHub[Message]`, and class CSS/bindings as `ClassVar` under the repository's strict lint/type rules. The API names and entire action logic are defined above; do not replace any body with a placeholder. The actual-app priority-key bridge already forwards `action_focus_next`, `action_focus_previous`, `action_move_up`, `action_move_down` and `action_commit_focused`; these method names are deliberate.
@@ -2207,7 +2308,7 @@ Run `uv run pytest tests/snapshot/test_settings_view.py -q` after updating its f
 
 The implementer self-reviews captured UI output, real keyboard evidence, unchanged off-state layout and documentation limits, commits through normal hooks with `feat: expose keyboard-accessible Athena draft recovery`, and reports the hash. Root then independently reviews the committed diff and integrates.
 
-## Privacy evidence belongs to the store/recovery tasks
+## 4. Privacy evidence belongs to the store/recovery tasks
 
 This is not an extra final testing task. Include these tests in Task 1's store deliverable and Task 3's recovery deliverable before accepting them.
 
@@ -2236,7 +2337,7 @@ def assert_private_error(exc, *, sentinel, crash, log_text):
 
 Use fresh exception creation outside any original except block. Check both cause and context individually if both exist; the helper above is the minimum chain check, not permission to leave an unexamined branch.
 
-## Root's final acceptance checklist
+## 5. Root's final acceptance checklist
 
 This is a checklist over the five delivered tasks, not a new standalone code/test task. Do not rerun unchanged suites without a concrete gap. Collect the recorded task results, then run lint/type/format and applicable cross-feature checks required by the repository once:
 

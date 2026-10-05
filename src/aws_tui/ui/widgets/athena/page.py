@@ -16,6 +16,7 @@ from aws_tui.infra.keymap_store import KeymapStore
 from aws_tui.ui.widgets._focus_guard import focus_rests_within, is_on_active_screen
 from aws_tui.ui.widgets._subscriber import HubSubscriberMixin
 from aws_tui.ui.widgets._worker import DeferredWorkerMixin
+from aws_tui.ui.widgets.athena.drafts_modal import AthenaDraftsModal, DraftModalResult
 from aws_tui.ui.widgets.athena.history_view import AthenaHistoryView
 from aws_tui.ui.widgets.athena.load_more_button import AthenaLoadMoreButton
 from aws_tui.ui.widgets.athena.query_view import AthenaQueryView
@@ -46,6 +47,7 @@ _ATHENA_FOCUS_ORDER = (
     FocusSlot.ATHENA_HISTORY_MORE,
     FocusSlot.ATHENA_SECONDARY,
     FocusSlot.ATHENA_CANCEL,
+    FocusSlot.ATHENA_DRAFTS,
     FocusSlot.ATHENA_STATUS,
     FocusSlot.ATHENA_SAVED_PREPARED_MORE,
     FocusSlot.ATHENA_DETAIL,
@@ -284,6 +286,10 @@ class AthenaPage(DeferredWorkerMixin, HubSubscriberMixin, Widget):
                     )
                 )
             )
+        if self._vm.drafts is not None:
+            self._focus_subscriptions.append(
+                self._vm.drafts.on_property_changed.subscribe(self._on_page_changed)
+            )
         self.call_after_refresh(self._refresh_page)
         self.call_after_refresh(self._maybe_focus_active)
 
@@ -347,6 +353,35 @@ class AthenaPage(DeferredWorkerMixin, HubSubscriberMixin, Widget):
 
     def _picker_coordination_available(self) -> bool:
         return self.is_running and self.is_attached and self.display
+
+    def on_athena_query_view_open_drafts(self, event: AthenaQueryView.OpenDrafts) -> None:
+        event.stop()
+        if self._vm.drafts is None or not self._vm.drafts.enabled:
+            return
+        modal = AthenaDraftsModal(
+            self._vm,
+            hub=self._hub,
+            focus_coordinator=self._focus_coordinator,
+        )
+
+        def restore_focus(result: DraftModalResult | None) -> None:
+            def apply_focus() -> None:
+                if not self.is_mounted or self.screen is not self.app.screen:
+                    return
+                selector = "#athena-editor" if result == "restored" else "#athena-drafts"
+                try:
+                    target = self.query_one(selector, Widget)
+                except NoMatches:
+                    target = None
+                if target is not None and self._is_focus_target(target):
+                    target.focus()
+                else:
+                    self.focus_default()
+
+            if self.is_mounted:
+                self.call_after_refresh(apply_focus)
+
+        self.app.push_screen(modal, restore_focus)
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
         loaders = {
@@ -572,6 +607,7 @@ class AthenaPage(DeferredWorkerMixin, HubSubscriberMixin, Widget):
                 (FocusSlot.ATHENA_PRIMARY, self.query_one("#athena-editor", TextArea)),
                 (FocusSlot.ATHENA_SECONDARY, self.query_one("#athena-execute", Button)),
                 (FocusSlot.ATHENA_CANCEL, self.query_one("#athena-cancel", Button)),
+                (FocusSlot.ATHENA_DRAFTS, self.query_one("#athena-drafts", Button)),
                 (FocusSlot.ATHENA_STATUS, self.query_one("#athena-query-status", Widget)),
                 (
                     FocusSlot.ATHENA_DETAIL,

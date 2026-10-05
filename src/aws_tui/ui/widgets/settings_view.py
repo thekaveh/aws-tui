@@ -18,6 +18,7 @@ from textual.widgets import Button, Collapsible, Static
 from vmx import Message, MessageHub
 
 from aws_tui.ui.widgets.modal_button import ModalButton
+from aws_tui.ui.widgets.settings.athena_drafts_panel import AthenaDraftsPanel
 from aws_tui.ui.widgets.settings.s3_connections_panel import S3ConnectionsPanel
 from aws_tui.vm.chrome.focus_coordinator_vm import FocusSlot
 from aws_tui.vm.settings.settings_vm import SettingsVM
@@ -72,6 +73,11 @@ class SettingsView(Widget):
                 id="section-connections",
             ):
                 yield S3ConnectionsPanel(vm=self._vm.s3, hub=self._hub)
+            if self._vm.athena_drafts is not None:
+                with Collapsible(
+                    title="Athena SQL drafts", collapsed=False, id="section-athena-drafts"
+                ):
+                    yield AthenaDraftsPanel(vm=self._vm.athena_drafts, hub=self._hub)
             with Collapsible(
                 title="Themes (coming in v0.9)",
                 collapsed=True,
@@ -164,18 +170,15 @@ class SettingsView(Widget):
         title.focus()
 
     def _focus_controls(self) -> tuple[Widget, ...]:
-        title = self._section_focus_target()
-        candidates: tuple[Widget, ...] = (
-            *((title,) if title is not None else ()),
-            *tuple(self.query(Button)),
-        )
         controls: list[Widget] = []
-        for widget in candidates:
+        for widget in self.walk_children(Widget):
+            is_title = callable(getattr(widget, "action_toggle_collapsible", None))
+            if not (is_title or isinstance(widget, Button)):
+                continue
             if not widget.can_focus or widget.disabled:
                 continue
-            if not all(node.display for node in widget.ancestors_with_self):
-                continue
-            controls.append(widget)
+            if all(node.display for node in widget.ancestors_with_self):
+                controls.append(widget)
         return tuple(controls)
 
     def focus_boundary(self, *, reverse: bool) -> None:

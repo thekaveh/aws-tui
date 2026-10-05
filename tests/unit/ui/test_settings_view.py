@@ -80,3 +80,130 @@ async def test_settings_view_shows_connections_section_expanded_by_default(tmp_p
     finally:
         vm.dispose()
         s3.dispose()
+
+
+async def test_drafts_section_keyboard_reentry_and_real_path(tmp_path):
+    from textual.widgets import Button, Collapsible, Static
+
+    from tests.athena_drafts_helpers import runtime_at
+    from tests.helpers import drain_workers, focus_and_settle
+
+    vm, s3 = _make_vm(tmp_path)
+    drafts, _ = runtime_at(tmp_path, enabled=False)
+    vm._athena_drafts = drafts
+
+    class Host(App[None]):
+        def compose(self):
+            yield SettingsView(vm=vm, hub=_hub())
+
+    app = Host()
+    try:
+        async with app.run_test(size=(80, 24)) as pilot:
+            view = app.query_one(SettingsView)
+            section = view.query_one("#section-athena-drafts", Collapsible)
+            assert not section.collapsed
+            assert view.query_one("#athena-drafts-path", Static).content == str(drafts.directory)
+            title = next(
+                w
+                for w in section.walk_children()
+                if callable(getattr(w, "action_toggle_collapsible", None))
+            )
+            assert title in view._focus_controls()
+            await focus_and_settle(title)
+            await pilot.press("enter")
+            await pilot.pause()
+            assert section.collapsed
+            assert view.query_one("#athena-drafts-toggle", Button) not in view._focus_controls()
+            await focus_and_settle(title)
+            await pilot.press("enter")
+            await pilot.pause()
+            assert not section.collapsed
+            assert view.cycle_focus(reverse=False)
+            await pilot.pause()
+            assert app.focused.id == "athena-drafts-toggle"
+            await pilot.press("enter")
+            await drain_workers(app)
+            assert drafts.enabled
+            assert (
+                str(view.query_one("#athena-drafts-toggle", Button).label)
+                == "Disable and delete drafts"
+            )
+    finally:
+        vm.dispose()
+        s3.dispose()
+        await drafts.shutdown()
+        drafts.dispose()
+
+
+@pytest.mark.parametrize("read_only", [False, True])
+async def test_drafts_initial_mount_hides_cleanup_and_disables_demo(tmp_path, read_only):
+    from textual.widgets import Button, Static
+
+    from tests.athena_drafts_helpers import runtime_at
+
+    vm, s3 = _make_vm(tmp_path)
+    drafts, _ = runtime_at(tmp_path, enabled=False)
+    drafts._read_only = read_only
+    vm._athena_drafts = drafts
+
+    class Host(App[None]):
+        def compose(self):
+            yield SettingsView(vm=vm, hub=_hub())
+
+    app = Host()
+    try:
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            assert not app.query_one("#athena-drafts-cleanup", Button).display
+            assert app.query_one("#athena-drafts-toggle", Button).disabled is read_only
+            assert app.query_one("#athena-drafts-setting-status", Static).content == (
+                "Unavailable in demo mode" if read_only else ""
+            )
+    finally:
+        vm.dispose()
+        s3.dispose()
+        await drafts.shutdown()
+        drafts.dispose()
+
+
+async def test_disabled_cleanup_failure_offers_retry_without_enable(tmp_path, monkeypatch):
+    from textual.widgets import Button
+
+    from aws_tui.infra.athena_draft_store import DraftStoreResult
+    from tests.athena_drafts_helpers import runtime_at
+    from tests.helpers import drain_workers, focus_and_settle
+
+    vm, s3 = _make_vm(tmp_path)
+    drafts, store = runtime_at(tmp_path)
+    original = store.set_enabled
+    monkeypatch.setattr(
+        store, "set_enabled", lambda enabled: DraftStoreResult(code="io", enabled=False)
+    )
+    assert not await drafts.set_enabled(False)
+    assert not drafts.enabled
+    assert drafts.cleanup_required
+    vm._athena_drafts = drafts
+
+    class Host(App[None]):
+        def compose(self):
+            yield SettingsView(vm=vm, hub=_hub())
+
+    app = Host()
+    try:
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            cleanup = app.query_one("#athena-drafts-cleanup", Button)
+            assert cleanup.display
+            monkeypatch.setattr(store, "set_enabled", original)
+            await focus_and_settle(cleanup)
+            await pilot.press("enter")
+            await drain_workers(app)
+            await pilot.pause()
+            assert not drafts.enabled
+            assert not drafts.cleanup_required
+            assert not cleanup.display
+    finally:
+        vm.dispose()
+        s3.dispose()
+        await drafts.shutdown()
+        drafts.dispose()

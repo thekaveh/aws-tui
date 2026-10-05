@@ -7,6 +7,7 @@ from textual import events
 from textual.app import ComposeResult
 from textual.binding import Binding, BindingType
 from textual.containers import Horizontal, VerticalScroll
+from textual.message import Message
 from textual.screen import Screen
 from textual.widget import Widget
 from textual.widgets import Button, Static, TextArea
@@ -15,8 +16,19 @@ from aws_tui.ui.widgets._worker import DeferredWorkerMixin
 from aws_tui.ui.widgets.glue.detail_rows import display_value
 from aws_tui.vm.athena.page_vm import AthenaPageVM
 
+DRAFT_LABELS = {
+    "pending": "Draft pending",
+    "saved": "Draft saved",
+    "error": "Draft not saved",
+    "context_required": "Draft pending",
+    "empty": "No saved draft",
+}
+
 
 class AthenaQueryView(DeferredWorkerMixin, Widget):
+    class OpenDrafts(Message):
+        """Request the metadata-only local draft manager."""
+
     BINDINGS: ClassVar[list[BindingType]] = [
         Binding("tab", "focus_next", show=False),
         Binding("shift+tab", "focus_previous", show=False),
@@ -52,6 +64,7 @@ class AthenaQueryView(DeferredWorkerMixin, Widget):
         max-height: 3;
         margin: 0 1 0 0;
     }
+    AthenaQueryView #athena-drafts { width: 8; min-width: 8; height: 3; padding: 0; margin: 0 1 0 0; }
     AthenaQueryView #athena-query-status {
         width: 1fr;
         height: 3;
@@ -83,6 +96,7 @@ class AthenaQueryView(DeferredWorkerMixin, Widget):
         self._page_vm = vm
         self._vm = vm.query
         self._sub: DisposableBase | None = None
+        self._drafts_sub: DisposableBase | None = None
         self._syncing_editor = False
         self._layout_screen: Screen[object] | None = None
 
@@ -104,6 +118,11 @@ class AthenaQueryView(DeferredWorkerMixin, Widget):
                 flat=True,
                 tooltip="Stop query submission or the active query",
             )
+            button = Button("Drafts", id="athena-drafts", compact=True, flat=True)
+            # Textual 8.2.8 rejects CSS line-pad: 0; the public style property accepts it.
+            button.styles.line_pad = 0
+            button.display = self._page_vm.drafts is not None and self._page_vm.drafts.enabled
+            yield button
             status = Static("", id="athena-query-status", markup=False)
             status.can_focus = True
             yield status
@@ -140,6 +159,10 @@ class AthenaQueryView(DeferredWorkerMixin, Widget):
         self.query_one("#athena-query-detail").border_title = "execution detail"
         self._refresh()
         self._sub = self._vm.on_property_changed.subscribe(on_next=self._on_vm_changed)
+        if self._page_vm.drafts is not None:
+            self._drafts_sub = self._page_vm.drafts.on_property_changed.subscribe(
+                self._on_vm_changed
+            )
 
     def on_unmount(self) -> None:
         if self._layout_screen is not None:
@@ -148,6 +171,10 @@ class AthenaQueryView(DeferredWorkerMixin, Widget):
         if self._sub is not None:
             self._sub.dispose()
             self._sub = None
+
+        if self._drafts_sub is not None:
+            self._drafts_sub.dispose()
+            self._drafts_sub = None
 
     def on_text_area_changed(self, event: TextArea.Changed) -> None:
         if event.text_area.id != "athena-editor" or self._syncing_editor:
@@ -159,6 +186,8 @@ class AthenaQueryView(DeferredWorkerMixin, Widget):
             self.dispatch_execute()
         elif event.button.id == "athena-cancel":
             self.dispatch_cancel()
+        elif event.button.id == "athena-drafts":
+            self.post_message(self.OpenDrafts())
 
     def dispatch_execute(self) -> None:
         """Start the query on a worker, never on the message pump.
@@ -209,6 +238,7 @@ class AthenaQueryView(DeferredWorkerMixin, Widget):
             self.query_one("#athena-editor", TextArea),
             self.query_one("#athena-execute", Button),
             self.query_one("#athena-cancel", Button),
+            self.query_one("#athena-drafts", Button),
             self.query_one("#athena-query-status", Static),
             self.query_one("#athena-query-detail", VerticalScroll),
         )
@@ -277,6 +307,14 @@ class AthenaQueryView(DeferredWorkerMixin, Widget):
         cancel.disabled = not self._vm.cancel_command.can_execute()
         status.update(self._status_text())
         detail.update(self._detail_text())
+        drafts = self._page_vm.drafts
+        button = self.query_one("#athena-drafts", Button)
+        button.display = drafts is not None and drafts.enabled
+        editor.border_title = (
+            "query editor · " + DRAFT_LABELS.get(self._vm.draft_state, "No saved draft")
+            if button.display
+            else "query editor"
+        )
         detail.set_class(
             self._vm.error_text is not None
             or self._page_vm.workgroup_detail_error_text is not None,
@@ -351,6 +389,12 @@ class AthenaQueryView(DeferredWorkerMixin, Widget):
                     f"Result          {display_value(self._vm.output_location)}",
                 )
             )
+        if (
+            self._page_vm.drafts is not None
+            and self._page_vm.drafts.enabled
+            and self._vm.draft_error_text
+        ):
+            rows.append(self._vm.draft_error_text)
         return "\n".join(rows) if rows else "No execution yet"
 
 

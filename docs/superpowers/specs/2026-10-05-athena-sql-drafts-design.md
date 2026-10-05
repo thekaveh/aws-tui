@@ -2,7 +2,7 @@
 
 Date: 2026-10-05. Binding scope: issue #256, as saved in `.superpowers/sdd/2026-10-05-athena-sql-drafts/issue-description.md`.
 
-## Decision and alternatives
+## 1. Decision and alternatives
 
 Use one private, atomic JSON file per complete five-field query context, an application-owned draft runtime, and explicit recovery into the already selected exact context. Enable persistence from Settings; show a Drafts button and save state inside Athena only while enabled. Never recover SQL automatically.
 
@@ -14,7 +14,7 @@ Alternatives considered:
 
 This is one feature with five independently reviewable implementation tasks. The prior user authorization allows design decisions without a new permission menu; root reviews this design and the implementation plan before execution. No product implementation or test execution is part of this planning deliverable.
 
-## Global Constraints
+## 2. Global Constraints
 
 - Preserve Python support `>=3.11,<3.14`; add no dependency or toolchain installation.
 - Persist SQL text, UTC timestamps, a stable draft identifier, the five QueryContext fields, and schema version only; never persist result rows, query execution state, credentials, provider objects, or navigation snapshots.
@@ -28,7 +28,7 @@ This is one feature with five independently reviewable implementation tasks. The
 - Recovery never submits SQL, loads result rows, creates AWS named queries, or automatically chooses another connection or context.
 - Use only applicable local checks on the existing Python 3.12.9 environment; do not claim Windows, multiple-runtime, native-clipboard, live-AWS, or hosted-Actions verification.
 
-## Current code and boundaries
+## 3. Current code and boundaries
 
 `AthenaQueryVM.set_sql` is synchronous. It remains synchronous and schedules memory-only draft work. `set_context` already has lifecycle locking and query cancellation; add draft hooks without replacing that mechanism. `AthenaPageVM` starts with three blank Athena context fields and discovers defaults asynchronously. Recovery must never call its default-selection functions to repair a missing record context.
 
@@ -36,7 +36,7 @@ This is one feature with five independently reviewable implementation tasks. The
 
 The infrastructure layer may not import `QueryContext`. Its record uses an exact five-string tuple in the order `connection_name, region, workgroup, catalog, database`; the VM converts using `context.cache_key` and `QueryContext(*record.context)`. A new infrastructure worker owns blocking I/O; no default asyncio executor thread is used for draft work.
 
-### Files and responsibilities
+### 3.1. Files and responsibilities
 
 - `infra/athena_draft_store.py`: immutable private record/result/permit types, schema validation, deterministic IDs, limits, read/merge/write/delete operations.
 - `infra/draft_worker.py`: one lazy dedicated daemon worker, FIFO submission, concurrent-future ownership, stop fencing, safe result transport. It does not know widgets or QueryContext.
@@ -49,7 +49,7 @@ The infrastructure layer may not import `QueryContext`. Its record uses an exact
 
 No new domain module is necessary. Do not extend the AWS named-query Saved view.
 
-## Configuration and on-disk contract
+## 4. Configuration and on-disk contract
 
 The public config setting is:
 
@@ -87,7 +87,7 @@ Before any ensure_private_dir call, lstat the draft directory and refuse symlink
 
 Use `ensure_private_dir(directory)`, temp creation mode `0600`, flush, `os.fsync`, and same-directory `os.replace`; sync the directory on POSIX where supported, following existing config behavior. Harden valid pre-existing records to `0600`. No SQL-containing backup files. Remove owned temp files on normal failure; clean leftover `.draft-*.tmp` files under the same transaction on the next enabled operation, without following symlinks or traversing directories. They are private too. Permission claims are POSIX assertions, with the existing best-effort behavior documented for other filesystems.
 
-### Serialization and destructive actions
+### 4.1. Serialization and destructive actions
 
 Use `ConfigStore.transaction()` as the shared process/thread and OS-level lock for every store mutation and enabled listing. It is keyed by the same config path across store instances. Under that lock reload the current setting before every save; an off setting rejects a stale save. Do not nest `ConfigStore.set_athena_sql_drafts` outside its reentrant transaction assumptions incorrectly. `set_enabled` performs preference and deletion under the same lock; the public mutator may be called inside that transaction.
 
@@ -97,7 +97,7 @@ Enable: serialize through the runtime; persist true, verify/create private stora
 
 Delete-one invalidates pending writes for that ID in every session in this app before enqueueing deletion; clear-all does so for every ID. The worker serialization means a started save completes before its delete/clear. Sessions acknowledge a tombstone in memory: unchanged editor text does not immediately recreate a deleted draft during shutdown; only a new user edit may create it again. Records saved by a later explicit edit in a different running app can reappear; deletion is not a cross-process prohibition on future edits. Concurrent saves from separate store instances/processes to different contexts cannot overwrite one another or exceed aggregate limits.
 
-## Exact public interfaces
+## 5. Exact public interfaces
 
 The implementation plan supplies imports and examples. These names/types are the handoff contract:
 
@@ -175,7 +175,7 @@ def keep_current_editor(self) -> None: ...
 
 `AthenaDraftsVM` exposes read-only properties `enabled`, `read_only`, `directory`, `items: tuple[SqlDraft, ...]`, `busy`, `cleanup_required: bool`, `dispatcher: Dispatcher`, `error_text: str | None`, and value-free `on_property_changed`. Sessions expose `state`, `error_text`, `editor_revision: int`, `bound_context: QueryContext | None`, and `on_property_changed`. `SqlDraft` construction/validation and worker transport never retain raw exceptions.
 
-## Edit/save state and lifecycle
+## 6. Edit/save state and lifecycle
 
 Every user edit increments the session editor revision synchronously and binds a complete context at that edit. Capture immutable `(SQL, five fields, revision, permit)` immediately; never look up whatever page context happens to exist after debounce. Set `pending` immediately, then start/restart the 500 ms timer. Only a completed atomic save for the current revision and current permit may set `saved`. A previous revision completing while newer text is pending does not change the visible pending state. A new editor revision that cannot schedule revokes only that session's still-current pending capture; it preserves another session's newer writer and already committed disk records. A context-selection notification alone preserves the captured payload. A successful acknowledgment retains the context-required warning when the current selection differs from the bound origin, while recording the exact original SQL/context baseline. Save errors keep SQL in memory and expose `Draft not saved` with a fixed reason; retry occurs on the next edit or shutdown.
 
@@ -185,7 +185,7 @@ Enabling with current nonempty editor SQL schedules that SQL once against its co
 
 Page shutdown captures/flushed data from the query session, not the page context that `AthenaPageVM.shutdown` has already cleared. Query shutdown preserves its existing execution cleanup. A session detach cancels its debounce handle, submits its final eligible edit once (unless tombstoned), and leaves resulting future ownership with the application runtime. Page navigation can wait using the same bounded flush helper; it must not shut down the shared runtime.
 
-### Shutdown and ownership
+### 6.1. Shutdown and ownership
 
 The application calls shared draft shutdown before hosted-content shutdown. Cache its terminal report: every later query/session flush or detach immediately reuses that report and never reopens intake or waits another budget. The draft runtime shutdown closes edit intake, cancels debounce timers, queues every eligible final edit, and waits against one absolute `loop.time() + 2.000` deadline. Multiple sessions share this budget, not two seconds each. Use `asyncio.wait` over runtime-owned asyncio waiter futures fed by concurrent-future completion callbacks; canceling a waiter must never propagate cancellation to the worker future; do not `wait_for` and then await cancellation-resistant operations, and do not await worker joins. At the deadline revoke outstanding save permits, detach UI observers, and return a conservative count of edits without confirmed saves. Mark no timed-out edit saved, even if an already-entered OS operation completes later.
 
@@ -195,7 +195,7 @@ No Python mechanism can forcibly cancel a thread already blocked inside a filesy
 
 App shutdown invokes shared draft shutdown before closing LogSink and records a value-free `athena.drafts.unpersisted` event containing only `count` and `timed_out`. Preserve a fixed user-facing shutdown warning on the app context and print it after the TUI exits: `Some Athena SQL edits were not confirmed saved before exit.` A transient toast during teardown is insufficient evidence of reporting.
 
-## Recovery and source safety
+## 7. Recovery and source safety
 
 The manager lists all valid records by connection/region/workgroup/catalog/database and saved time; no SQL preview is needed. Selecting a row does nothing. Restore is a separate explicit action, available only when no query is submitting/running, no lifecycle transition is active, and drafts remain enabled. This minimal design does not automatically switch context: users first select the exact source and all three Athena selectors displayed in the record. A mismatch warns and blocks the pending recovery; there is no selection of a first/default account, workgroup, catalog, or database.
 
@@ -219,7 +219,7 @@ While recovery checks are running, execution is blocked. Failed missing/stale-co
 
 The persisted five fields cannot attest that an AWS profile with the same name has been repointed to a different AWS account between restarts. Do not invent account IDs, call STS as attestation, or claim account proof. Detectable live configured routing changes and mismatched/missing five-field contexts are refused; genuinely unobservable credential-account remapping is outside this record scope and is stated in documentation.
 
-## Privacy and diagnostic handling
+## 8. Privacy and diagnostic handling
 
 Use repr-suppressed fields on records, session payloads, futures/job wrappers and results. Never include SQL snippets in listing labels, confirmation text, status, task names, logs or action recording. Format record context as plain text with markup disabled; context fields from disk are untrusted too. Fixed status/error mappings are preferable to raising store exceptions. Never return a JSON decoder exception, Unicode exception, OSError object, `exc_info`, exception cause, or exception notes to the VM. The worker catches operational exceptions into fixed result codes; unexpected store failures also become `io` without stringification.
 
@@ -227,7 +227,7 @@ Where a public validation error must be raised, decide its constant code in a se
 
 The binding issue predates the current `doctor` command. Current doctor is read-only and must continue not to discover/open these draft files. Add a targeted no-read regression if composition paths are touched; no new doctor/report/export integration belongs to this feature.
 
-## User interface
+## 9. User interface
 
 Settings adds an expanded `Athena SQL drafts` section after Connections, containing a plain-text path, retention copy and an `Enable local SQL drafts` button (becomes `Disable and delete drafts`). Copy: `Keep the latest SQL for each query context on this device. Up to 50 drafts and 8 MiB total. SQL is stored as plaintext; results and credentials are not retained.` Show the actual resolved directory and the demo reason when applicable. A separate checkbox is unnecessary; Button fits the existing Settings focus traversal. Disable opens a danger confirmation explaining that all local draft records will be deleted. Operation failure stays visible and retryable.
 
@@ -237,7 +237,7 @@ The modal has a scrollable metadata list, a detail area showing all five fields 
 
 Settings goldens that visibly add the real control may be updated after visual review. Existing functional assertions remain. Existing Athena off-state goldens remain byte-identical; new enabled fixtures cover pending, saved, manager, and context warning at 80x24 and 120x40 in carbon and github-light, plus theme coverage where the harness already requires it.
 
-## Acceptance and evidence mapping
+## 10. Acceptance and evidence mapping
 
 | Binding criterion | Required evidence |
 |---|---|
@@ -258,6 +258,6 @@ Settings goldens that visibly add the real control may be updated after visual r
 | 15. Keyboard | Real AwsTuiApp pilot traverses Settings enable and Athena manager restore, confirms/declines, closes and restores focus; no live AWS. |
 | 16. Existing snapshot | Run the exact test named in the issue, unchanged. |
 
-## Review conclusions and limitations
+## 11. Review conclusions and limitations
 
 The selected design satisfies the functional scope without account attestation or snapshot persistence. The difficult boundary is physical I/O: the two-second flush-wait contract cannot promise an arbitrary blocked syscall has stopped. That distinction is part of both implementation tests and user documentation, not a weakened fake acceptance. Existing AWS shutdown behavior remains independent. Full-app keyboard evidence must come from a writable temporary configuration and fake Athena client, not from claiming demo's disabled toggle proved persistence. No local test execution has occurred during architecture planning.

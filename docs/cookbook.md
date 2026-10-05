@@ -901,6 +901,42 @@ state. All of this is in-memory and resets on launch.
   output URI must be valid, match the active connection/region, and be readable
   through S3. Check `s3:ListBucket` / `s3:GetObject` on the result prefix.
 
+### 6.6. Save and recover local SQL drafts
+
+1. Open Settings with `,`. Tab to the **Athena SQL drafts** section and
+   **Enable local SQL drafts**, then press Enter. Settings shows the actual
+   local path and plaintext retention explanation. On a short terminal, collapse
+   the Connections section with Enter to expose the complete draft panel.
+2. Return to Athena. Select the intended Source, Workgroup, Catalog, and Database,
+   enter SQL, and wait until the editor border says **Draft saved**. **Draft
+   pending** means the write has not been acknowledged. **Draft not saved** means
+   the write failed; read Execution detail and edit again to retry.
+3. Quit and relaunch aws-tui. Select the exact original source (connection and
+   region), workgroup, catalog, and database before recovery.
+4. Tab to **Drafts** and press Enter. Use Up and Down to highlight the record;
+   selection alone does not change the editor. Tab to **Restore**, then press
+   Enter. If prompted with **Replace unsaved SQL?**, accept only when ready to
+   replace that editor text. A successful restore focuses the editor and does
+   not execute SQL or load results. Press `Ctrl+Enter` separately after checking
+   the SQL and account.
+
+After an abrupt exit, restart and follow steps 3–4 to recover a completed
+autosave. Stalled writes remain **Draft pending**; errors show **Draft not saved**.
+Neither state guarantees recovery of the latest text. Keep a separate copy when
+a save has not been confirmed.
+
+aws-tui waits up to two seconds for draft flushing and reports edits not confirmed saved.
+An already-running filesystem operation may finish later. This limit does not bound AWS cancellation or total process shutdown.
+
+**Delete** or **Clear all** in the manager deletes owned records without
+recreating them from untouched editor text. **Disable and delete drafts** in
+Settings asks for confirmation, turns persistence off, and deletes owned records;
+**Retry draft cleanup** retries an unsuccessful cleanup. Draft contents are not
+collected by diagnostics. Demo mode does not save local SQL drafts. See
+[Configuration](configuration.md#5-local-athena-sql-drafts) for schema, byte limits,
+and permissions, and [Athena](services/athena.md#6-local-sql-draft-recovery) for
+fresh context validation and same-name credential-account limitations.
+
 ## 7. Inspect and query Glue tables through Athena
 
 Glue → Athena navigation is an explicit, read-only handoff. It carries the
