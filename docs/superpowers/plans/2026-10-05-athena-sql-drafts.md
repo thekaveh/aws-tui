@@ -735,6 +735,7 @@ class _WriteCoordinator:
         self.worker = worker
         self.loop = asyncio.get_running_loop()
         self.sequence = 0
+        self.latest_revision: dict[str, int] = {}
         self.current: dict[str, _EditCapture] = {}
         self.unconfirmed: dict[str, int] = {}
         self.timers: dict[str, asyncio.TimerHandle] = {}
@@ -791,23 +792,13 @@ class _WriteCoordinator:
         if not self.intake or not all(context.cache_key):
             return None
         identity = draft_id(context.cache_key)
-        previous = self.current.get(identity)
-        if previous is not None:
-            previous.permit.cancel()
-        old_timer = self.timers.pop(identity, None)
-        if old_timer is not None:
-            old_timer.cancel()
-        self.sequence += 1
+        revision = self.track(identity, unconfirmed=bool(sql.strip()))
         now = datetime.now(UTC)
         capture = _EditCapture(
             SqlDraft(identity, context.cache_key, sql, now, now),
-            captured_editor_revision, self.sequence, DraftPermit(),
+            captured_editor_revision, revision, DraftPermit(),
         )
         self.current[identity] = capture
-        if sql.strip():
-            self.unconfirmed[identity] = self.sequence
-        else:
-            self.unconfirmed.pop(identity, None)
 
         def launch() -> None:
             self.timers.pop(identity, None)
@@ -839,6 +830,14 @@ class _WriteCoordinator:
         self.timers[identity] = self.loop.call_later(DEBOUNCE_SECONDS, launch)
         return capture
 
+    def track(self, identity: str, *, unconfirmed: bool) -> int:
+        self.fence({identity})
+        self.sequence += 1
+        self.latest_revision[identity] = self.sequence
+        if unconfirmed:
+            self.unconfirmed[identity] = self.sequence
+        return self.sequence
+
     def fence(self, ids: set[str] | None, *, discard_unconfirmed: bool = True) -> None:
         for identity in self.current.keys() | self.unconfirmed.keys():
             if ids is not None and identity not in ids:
@@ -857,7 +856,7 @@ class _WriteCoordinator:
 
 Successive blank revisions retain deletion ownership only from a still-current blank capture, using its immutable origin and a fresh editor/write revision. Successful deletion releases the session capture; a canceled, fenced, or superseded capture supplies no deletion ownership. Clearing still releases the execution context guard immediately.
 
-A new editor revision that cannot schedule revokes only its session's currently owned capture (timer and permit); `_revoke_session_capture` fences that ID only if `is_current` still matches its exact write revision and permit. It must not cancel another session's newer writer. A `context_changed` notification alone preserves the captured payload. Completion acknowledges the original saved SQL/context but retains `context_required` while the current selection differs from the bound origin; returning to that exact origin can reveal the acknowledged saved state without a new write.
+A new editor revision that cannot schedule retains a value-private origin/revision obligation without submitting any physical write. It revokes only its session's currently owned capture (timer and permit); `_revoke_session_capture` fences that ID only if `is_current` still matches its exact write revision and permit. It must not cancel another session's newer writer. A `context_changed` notification alone preserves the captured payload. Completion acknowledges the original saved SQL/context but retains `context_required` while the current selection differs from the bound origin; returning to that exact origin can reveal the acknowledged saved state without a new write.
 
 Construct this coordinator lazily on the first enabled async operation, so composition and synchronous disabled VMs do not require a running event loop or start a thread. The session's exact edit transition is:
 
@@ -871,6 +870,7 @@ self._saved_sql: str | None = None
 self._saved_context: QueryContext | None = None
 self._deleted_revision: int | None = None
 self._capture: _EditCapture | None = None
+self._origin_revision: tuple[str, int] | None = None
 self._detached = False
 self._active = active
 self._state: DraftState = "off"
@@ -903,9 +903,14 @@ def edited(self, sql: str, context: QueryContext) -> None:
     if not self._active or not self._runtime.enabled:
         self._runtime._revoke_session_capture(self)
         self._state = "off"
+    elif self._runtime._saving_suspended:
+        self._runtime._revoke_session_capture(self)
+        self._runtime._retain_unscheduled(self)
+        self._state = "error"
     elif not sql.strip():
         if bound_origin is None:
             self._runtime._revoke_session_capture(self)
+            self._runtime._release_session_obligation(self)
             self._capture = None
             self._state = "empty"
         else:
@@ -915,6 +920,7 @@ def edited(self, sql: str, context: QueryContext) -> None:
         self._bound_context is not None and self._bound_context != context
     ):
         self._runtime._revoke_session_capture(self)
+        self._runtime._retain_unscheduled(self)
         self._state = "context_required"
     else:
         self._state = "pending"
@@ -933,6 +939,12 @@ def context_changed(self, context: QueryContext) -> None:
 
 
 def recovered(self, record: SqlDraft) -> None:
+    self._runtime._release_session_obligation(self)
+    coordinator = self._runtime._coordinator
+    if coordinator is not None and coordinator.intake and self._active:
+        revision = coordinator.track(record.id, unconfirmed=False)
+        self._origin_revision = record.id, revision
+    self._capture = None
     self._editor_revision += 1
     self._sql = record.sql
     self._context = QueryContext(*record.context)
@@ -956,6 +968,7 @@ def schedule_session(self, session: AthenaDraftSession, sql: str,
     if self._disposed or self._saving_suspended or not self.enabled:
         return
     self._ensure_coordinator()
+    self._release_session_obligation(session)
     session_reference = weakref.ref(session)  # Import weakref in the runtime module.
     def completed(capture: _EditCapture, result: DraftStoreResult) -> None:
         session = session_reference()
@@ -985,6 +998,10 @@ def schedule_session(self, session: AthenaDraftSession, sql: str,
         sql=sql, context=context, captured_editor_revision=captured_editor_revision,
         completed=completed,
     )
+    if session._capture is not None:
+        session._origin_revision = (
+            session._capture.record.id, session._capture.captured_write_revision,
+        )
 ```
 
 The lazy coordinator initializer is a runtime method, called only from an enabled async operation or edit while the application loop is running:
@@ -998,7 +1015,7 @@ def _ensure_coordinator(self) -> _WriteCoordinator:
 
 The illustrative defaults below assume a confirmed initial preference; unknown initial preference starts suspended with explicit reconciliation feedback. Successful listing results retain a value-safe `skipped` count. The manager shows fixed nonfatal warning copy and enables confirmed Clear all when valid or skipped records remain; valid sibling recovery is still available.
 
-The runtime initializes `_sessions: set[AthenaDraftSession]`, `_coordinator=None`, a lazy `_worker=DraftWorker()`, `_store`, `_enabled`, `_read_only`, `_disposed=False`, `_saving_suspended=False`, `_items=()`, `_error_text=None`, `_busy=False` and `_cleanup_required=False`; public properties are read-only projections. When disabled, it retains current session text without creating a coordinator. `activate` assigns text/context/complete bound context and flips `_active=True` without calling `edited`. `deleted` sets `_deleted_revision = _editor_revision`, clears saved baseline, and sets empty. `detach` submits the final eligible capture before marking the session detached and removing presentation subscriptions. The coordinator retains per-ID/write-revision unconfirmed obligations independently of those subscriptions and acknowledges successful physical saves even after the page is disposed. Completion callbacks use weak session references; retired UI objects are not accounting owners.
+The runtime initializes `_sessions: set[AthenaDraftSession]`, `_coordinator=None`, a lazy `_worker=DraftWorker()`, `_store`, `_enabled`, `_read_only`, `_disposed=False`, `_saving_suspended=False`, `_items=()`, `_error_text=None`, `_busy=False` and `_cleanup_required=False`; public properties are read-only projections. When disabled, it retains current session text without creating a coordinator. `activate` assigns text/context/complete bound context, flips `_active=True`, and registers a nonempty unsaved baseline with `_retain_unscheduled` without calling `edited`, starting a worker, or scheduling a write. This assigns revision order before a later writer can supersede the baseline. `deleted` sets `_deleted_revision = _editor_revision`, clears saved baseline, and sets empty. `detach` submits the final eligible capture before marking the session detached and removing presentation subscriptions; accounting was already registered by the edit or activation. `_release_session_obligation` fences only a token that still matches `latest_revision`; `_retain_unscheduled` rejects superseded tokens, releases the current token, then uses `track` for nonempty text against the bound origin (or current incomplete context when unbound). It checks active/enabled state and terminal intake, creates no save or timer, and records only identity/revision. Blank text releases its current obligation. Recovery records an acknowledged revision for its validated origin. The coordinator retains per-ID/editor-revision unconfirmed obligations independently of those subscriptions whether or not a save can be scheduled, and acknowledges successful matching physical saves even after the page is disposed. Completion callbacks use weak session references; retired UI objects are not accounting owners.
 
 - [ ] **2.6 Implement mutation fencing and deadline aggregation.** Before delete/clear/disable, revoke appropriate permits in every session and cancel timers. Queue disk mutations in the same FIFO, then update listings only from successful disk results. Set an in-memory tombstone on matching editor revisions; no untouched text is requeued by shutdown. New edits clear only their own tombstone. Disable also suspends intake before starting I/O; failed cleanup keeps an explicit retry state. Concurrent enable/disable actions serialize through one runtime operation lock; `busy` prevents duplicate UI actions, and generation checks reject late results.
 
@@ -1073,9 +1090,9 @@ async def finish(
         return self.terminal
 ```
 
-Place these as methods on `_WriteCoordinator` (remove the explicit `self: _WriteCoordinator` annotation). Runtime `shutdown` computes `deadline = loop.time() + SHUTDOWN_SECONDS` once and passes a callback counting the union of current per-ID unconfirmed coordinator obligations and active unsaved editor origins with no matching `_deleted_revision`. Retired pages remain represented by their obligations until confirmed success, supersession, or destructive fencing; failures remain unresolved. Count each origin once, without an additional wait budget. On cancellation, retain the terminal report for a later shutdown caller; do not close the coordinator twice. The ordinary page-navigation flush uses the same observation wait pattern without `close_intake` or setting `terminal`; app-terminal flush immediately returns the cached report. Define `_session_is_unconfirmed` as `session._active and session._sql.strip() and session._deleted_revision != session._editor_revision and session.has_unsaved_text(session._sql, session._context)` when context exists, with incomplete-context nonempty text also counted. Never count two sessions' identical superseded revisions as two current edits; select only the runtime's current writer per ID.
+Place these as methods on `_WriteCoordinator` (remove the explicit `self: _WriteCoordinator` annotation). Runtime `shutdown` computes `deadline = loop.time() + SHUTDOWN_SECONDS` once and passes a callback counting the union of current per-ID unconfirmed coordinator obligations (including unschedulable edits) and active unsaved baselines with no matching `_deleted_revision`. Nonempty active baselines are registered at activation so later writers supersede them before retirement. Retired pages remain represented by identity/revision obligations independently of accepted physical work until matching confirmed success, validated recovery acknowledgement, supersession, blank clearing, or destructive fencing; failures remain unresolved. Count each origin once, without an additional wait budget. On cancellation, retain the terminal report for a later shutdown caller; do not close the coordinator twice. The ordinary page-navigation flush uses the same observation wait pattern without `close_intake` or setting `terminal`; app-terminal flush immediately returns the cached report. Define `_session_is_unconfirmed` as `session._active and session._sql.strip() and session._deleted_revision != session._editor_revision and session.has_unsaved_text(session._sql, session._context)` when context exists, with incomplete-context nonempty text also counted. Never count two sessions' identical superseded revisions as two current edits; select only the runtime's current revision per ID using the session's `_origin_revision`, including revisions without captures.
 
-Runtime delete passes `ids={selected_id}` and a tombstone callback iterating all matching bound contexts. Clear passes `ids=None` and tombstones all sessions. Disable first sets local saving suspension and then passes `store.set_enabled(False)` with all-session tombstoning; enabled/error state is taken from the returned `enabled` field, and local suspension remains until a successful enable. Enable suspends saving before I/O and uses the same mutation lock, revoking pending permits without discarding unconfirmed obligations. Only confirmed successful initialization releases suspension and schedules the current nonempty text of active sessions once. Failed initialization or rollback preserves the last confirmed preference, separately marks unknown readback, and keeps fixed suspension feedback across listing refreshes. Settings provides explicit enable retry and confirmed disable/delete routes; failed off cleanup retains its existing retry route. All mutators notify `items`, `enabled`, `busy`, `error_text` with property names only.
+Runtime delete passes `ids={selected_id}` and a tombstone callback iterating all matching bound origins (or current incomplete contexts when unbound). Clear passes `ids=None` and tombstones all sessions. Disable first sets local saving suspension and then passes `store.set_enabled(False)` with all-session tombstoning; enabled/error state is taken from the returned `enabled` field, and local suspension remains until a successful enable. Enable suspends saving before I/O and uses the same mutation lock, revoking pending permits without discarding unconfirmed obligations. Only confirmed successful initialization releases suspension and schedules the current nonempty text of active sessions once. Failed initialization or rollback preserves the last confirmed preference, separately marks unknown readback, and keeps fixed suspension feedback across listing refreshes. Settings provides explicit enable retry and confirmed disable/delete routes; failed off cleanup retains its existing retry route. All mutators notify `items`, `enabled`, `busy`, `error_text` with property names only.
 
 - [ ] **2.7 Run green and review races.**
 

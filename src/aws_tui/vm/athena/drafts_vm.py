@@ -121,26 +121,15 @@ class _WriteCoordinator:
         if not self.intake or not all(context.cache_key):
             return None
         identity = context_draft_id(context.cache_key)
-        previous = self.current.get(identity)
-        if previous is not None:
-            previous.permit.cancel()
-        old_timer = self.timers.pop(identity, None)
-        if old_timer is not None:
-            old_timer.cancel()
-        self.sequence += 1
+        revision = self.track(identity, unconfirmed=bool(sql.strip()))
         now = datetime.now(UTC)
         capture = _EditCapture(
             SqlDraft(identity, context.cache_key, sql, now, now),
             captured_editor_revision,
-            self.sequence,
+            revision,
             DraftPermit(),
         )
         self.current[identity] = capture
-        self.latest_revision[identity] = self.sequence
-        if sql.strip():
-            self.unconfirmed[identity] = self.sequence
-        else:
-            self.unconfirmed.pop(identity, None)
 
         def launch() -> None:
             self.timers.pop(identity, None)
@@ -173,6 +162,15 @@ class _WriteCoordinator:
         self.launches[identity] = launch
         self.timers[identity] = self.loop.call_later(DEBOUNCE_SECONDS, launch)
         return capture
+
+    def track(self, identity: str, *, unconfirmed: bool) -> int:
+        """Own an editor revision even when no physical save can be accepted."""
+        self.fence({identity})
+        self.sequence += 1
+        self.latest_revision[identity] = self.sequence
+        if unconfirmed:
+            self.unconfirmed[identity] = self.sequence
+        return self.sequence
 
     def launch(self, capture: _EditCapture) -> None:
         if not self.is_current(capture.record.id, capture.captured_write_revision, capture.permit):
@@ -367,6 +365,7 @@ class AthenaDraftsVM:
         if self._disposed or self._saving_suspended or not self.enabled:
             return
         coordinator = self._ensure_coordinator()
+        self._release_session_obligation(session)
         session_reference = weakref.ref(session)
 
         def completed(capture: _EditCapture, result: DraftStoreResult) -> None:
@@ -406,6 +405,36 @@ class AthenaDraftsVM:
             captured_editor_revision=captured_editor_revision,
             completed=completed,
         )
+        if session._capture is not None:
+            session._origin_revision = (
+                session._capture.record.id,
+                session._capture.captured_write_revision,
+            )
+
+    def _release_session_obligation(self, session: AthenaDraftSession) -> None:
+        coordinator, origin = self._coordinator, session._origin_revision
+        if coordinator is not None and origin is not None:
+            identity, revision = origin
+            if coordinator.latest_revision.get(identity) == revision:
+                coordinator.fence({identity})
+
+    def _retain_unscheduled(self, session: AthenaDraftSession) -> None:
+        if self._disposed or self._terminal is not None or not self.enabled or not session._active:
+            return
+        coordinator = self._ensure_coordinator()
+        if not coordinator.intake:
+            return
+        origin = session._origin_revision
+        if origin is not None and coordinator.latest_revision.get(origin[0]) != origin[1]:
+            return  # A replacement writer owns this origin now.
+        self._release_session_obligation(session)
+        context = session._bound_context or session._context
+        if context is not None and session._sql.strip():
+            identity = context_draft_id(context.cache_key)
+            revision = coordinator.track(
+                identity, unconfirmed=session.has_unsaved_text(session._sql, context)
+            )
+            session._origin_revision = identity, revision
 
     def _revoke_session_capture(self, session: AthenaDraftSession) -> None:
         coordinator, capture = self._coordinator, session._capture
@@ -455,10 +484,10 @@ class AthenaDraftsVM:
             or not session.has_unsaved_text(session._sql, session._context)
         ):
             return False
-        capture = session._capture
-        if capture is not None and self._coordinator is not None:
-            latest = self._coordinator.latest_revision.get(capture.record.id)
-            if latest is not None and latest != capture.captured_write_revision:
+        origin = session._origin_revision
+        if origin is not None and self._coordinator is not None:
+            latest = self._coordinator.latest_revision.get(origin[0])
+            if latest is not None and latest != origin[1]:
                 return False
         return True
 
@@ -675,6 +704,7 @@ class AthenaDraftSession:
         self._saved_context: QueryContext | None = None
         self._deleted_revision: int | None = None
         self._capture: _EditCapture | None = None
+        self._origin_revision: tuple[str, int] | None = None
         self._save_failed_revision: int | None = None
         self._detached = False
         self._active = active
@@ -716,6 +746,8 @@ class AthenaDraftSession:
         self._context = context
         self._bound_context = context if sql.strip() and all(context.cache_key) else None
         self._active = True
+        if sql.strip():
+            self._runtime._retain_unscheduled(self)
 
     def edited(self, sql: str, context: QueryContext) -> None:
         if self._detached:
@@ -747,6 +779,7 @@ class AthenaDraftSession:
             self._state = "off"
         elif self._runtime._saving_suspended:
             self._runtime._revoke_session_capture(self)
+            self._runtime._retain_unscheduled(self)
             self._state = "error"
         elif not sql.strip():
             if bound_origin is not None:
@@ -754,12 +787,14 @@ class AthenaDraftSession:
                 self._runtime.schedule_session(self, sql, bound_origin, self._editor_revision)
             else:
                 self._runtime._revoke_session_capture(self)
+                self._runtime._release_session_obligation(self)
                 self._capture = None
                 self._state = "empty"
         elif not all(context.cache_key) or (
             self._bound_context is not None and self._bound_context != context
         ):
             self._runtime._revoke_session_capture(self)
+            self._runtime._retain_unscheduled(self)
             self._state = "context_required"
         else:
             self._state = "pending"
@@ -791,15 +826,11 @@ class AthenaDraftSession:
     def recovered(self, record: SqlDraft) -> None:
         if self._detached:
             return
-        coordinator, capture = self._runtime._coordinator, self._capture
-        if (
-            coordinator is not None
-            and capture is not None
-            and coordinator.is_current(
-                capture.record.id, capture.captured_write_revision, capture.permit
-            )
-        ):
-            coordinator.fence({capture.record.id})
+        self._runtime._release_session_obligation(self)
+        coordinator = self._runtime._coordinator
+        if coordinator is not None and coordinator.intake and self._active:
+            revision = coordinator.track(record.id, unconfirmed=False)
+            self._origin_revision = record.id, revision
         self._capture = None
         self._editor_revision += 1
         self._save_failed_revision = None
@@ -816,9 +847,9 @@ class AthenaDraftSession:
     def deleted(self, draft_id: str | None) -> None:
         if self._detached:
             return
+        context = self._bound_context or self._context
         if draft_id is not None and (
-            self._bound_context is None
-            or draft_id != context_draft_id(self._bound_context.cache_key)
+            context is None or draft_id != context_draft_id(context.cache_key)
         ):
             return
         self._deleted_revision = self._editor_revision

@@ -1171,3 +1171,250 @@ async def test_failed_reenable_keeps_retired_obligation_without_queued_save(tmp_
     assert (await runtime.shutdown()).unpersisted == 1
     assert not store.list().records
     runtime.dispose()
+
+
+async def _unschedulable_page(runtime, *, incomplete):
+    from tests.unit.vm.athena.test_page_vm import PageClient, make_page_vm
+
+    client = PageClient()
+    page = make_page_vm(client, drafts=runtime)
+    if not incomplete:
+        await page.setup()
+        page.query.set_sql("SELECT 1")
+        await page._draft_session.flush(deadline=asyncio.get_running_loop().time() + 2)
+        await page.select_workgroup("analysts")
+    page.query.set_sql("SELECT 'UNSCHEDULED_PRIVATE'")
+    assert page.query.draft_state == "context_required"
+    return page, client
+
+
+@pytest.mark.parametrize("incomplete", [False, True])
+async def test_unschedulable_page_retirement_keeps_latest_obligation(tmp_path, incomplete):
+    import gc
+    import weakref
+
+    runtime, store = runtime_at(tmp_path)
+    page, client = await _unschedulable_page(runtime, incomplete=incomplete)
+    assert runtime._unconfirmed_count() == 1
+    session_ref = weakref.ref(page._draft_session)
+    await page.shutdown()
+    page.dispose()
+    del page
+    gc.collect()
+    assert session_ref() is None
+    assert not runtime._sessions
+    report = await runtime.shutdown()
+    assert report.unpersisted == 1
+    assert not report.timed_out
+    assert client.start_calls == []
+    assert [row.sql for row in store.list().records] == ([] if incomplete else ["SELECT 1"])
+    assert "UNSCHEDULED_PRIVATE" not in repr(runtime._coordinator.unconfirmed) + repr(report)
+    assert await runtime.shutdown() is report
+    runtime.dispose()
+
+
+@pytest.mark.parametrize("incomplete", [False, True])
+@pytest.mark.parametrize("resolution", ["blank", "delete", "clear", "disable"])
+async def test_unschedulable_obligation_obeys_editor_and_destructive_fences(
+    tmp_path, incomplete, resolution
+):
+    runtime, store = runtime_at(tmp_path)
+    page, _ = await _unschedulable_page(runtime, incomplete=incomplete)
+    origin = page._draft_session.bound_context or page.query.context
+    if resolution == "blank":
+        page.query.set_sql("  ")
+    await page.shutdown()
+    page.dispose()
+    if resolution == "delete":
+        assert await runtime.delete(record(origin.cache_key).id)
+    elif resolution == "clear":
+        assert await runtime.clear()
+    elif resolution == "disable":
+        assert await runtime.set_enabled(False)
+    assert (await runtime.shutdown()).unpersisted == 0
+    assert not store.list().records
+    runtime.dispose()
+
+
+@pytest.mark.parametrize("resolution", ["saved", "failed", "recovered", "other_origin"])
+async def test_unschedulable_retired_origin_supersession(tmp_path, monkeypatch, resolution):
+    from tests.unit.vm.athena.test_draft_recovery import yes
+    from tests.unit.vm.athena.test_page_vm import PageClient, make_page_vm
+
+    runtime, store = runtime_at(tmp_path)
+    old, _ = await _unschedulable_page(runtime, incomplete=False)
+    origin = old._draft_session.bound_context
+    await old.shutdown()
+    old.dispose()
+    client = PageClient()
+    newer = make_page_vm(client, drafts=runtime, source_is_current=yes)
+    await newer.setup()
+    assert newer.query.context == origin
+    if resolution == "failed":
+        monkeypatch.setattr(store, "save", lambda record, *, permit: DraftStoreResult(code="io"))
+    if resolution == "recovered":
+        assert await newer.restore_draft(record(origin.cache_key).id, yes)
+        assert newer.query.sql == "SELECT 1"
+    else:
+        if resolution == "other_origin":
+            await newer.select_workgroup("analysts")
+        newer.query.set_sql("SELECT 3")
+    await newer.shutdown()
+    newer.dispose()
+    assert (await runtime.shutdown()).unpersisted == (
+        1 if resolution in {"failed", "other_origin"} else 0
+    )
+    assert client.start_calls == []
+    runtime.dispose()
+
+
+async def test_superseded_unschedulable_page_cannot_revive_obligation(tmp_path):
+    from tests.unit.vm.athena.test_page_vm import PageClient, make_page_vm
+
+    runtime, store = runtime_at(tmp_path)
+    old, _ = await _unschedulable_page(runtime, incomplete=False)
+    newer = make_page_vm(PageClient(), drafts=runtime)
+    await newer.setup()
+    newer.query.set_sql("SELECT 3")
+    old.query.set_sql("SELECT invalid again")
+    await newer.shutdown()
+    newer.dispose()
+    await old.shutdown()
+    old.dispose()
+    assert (await runtime.shutdown()).unpersisted == 0
+    assert [row.sql for row in store.list().records] == ["SELECT 3"]
+    runtime.dispose()
+
+
+async def test_unschedulable_incomplete_origin_can_be_completed_without_double_count(tmp_path):
+    runtime, store = runtime_at(tmp_path)
+    page, _ = await _unschedulable_page(runtime, incomplete=True)
+    await page.setup()
+    page.query.set_sql("SELECT completed")
+    await page.shutdown()
+    page.dispose()
+    assert (await runtime.shutdown()).unpersisted == 0
+    assert [row.sql for row in store.list().records] == ["SELECT completed"]
+    runtime.dispose()
+
+
+@pytest.mark.parametrize("mode", ["off", "demo", "staged"])
+async def test_unschedulable_excluded_page_retirement_has_no_obligation(
+    tmp_path, monkeypatch, mode
+):
+    from tests.unit.vm.athena.test_page_vm import PageClient, make_page_vm
+
+    runtime, store = runtime_at(tmp_path, enabled=False)
+    runtime._enabled = mode == "staged"
+    runtime._read_only = mode == "demo"
+    for name in ("list", "save", "delete", "clear"):
+        monkeypatch.setattr(store, name, lambda *a, **kw: pytest.fail("excluded draft I/O"))
+    page = make_page_vm(PageClient(), drafts=runtime, drafts_active=mode != "staged")
+    page.query.set_sql("SELECT excluded")
+    await page.shutdown()
+    page.dispose()
+    assert (await runtime.shutdown()).unpersisted == 0
+    assert runtime._worker._thread is None
+    assert not (tmp_path / "athena-drafts").exists()
+    runtime.dispose()
+
+
+async def test_unschedulable_suspended_edit_remains_reported_after_retirement(
+    tmp_path, monkeypatch
+):
+    runtime, store = runtime_at(tmp_path)
+    page, _ = await _unschedulable_page(runtime, incomplete=False)
+    monkeypatch.setattr(
+        store, "set_enabled", lambda enabled: DraftStoreResult(code="io", enabled=True)
+    )
+    assert not await runtime.set_enabled(True)
+    page.query.set_sql("SELECT suspended")
+    await page.shutdown()
+    page.dispose()
+    assert (await runtime.shutdown()).unpersisted == 1
+    assert [row.sql for row in store.list().records] == ["SELECT 1"]
+    runtime.dispose()
+
+
+@pytest.mark.parametrize("outcome", ["success", "failure"])
+async def test_unschedulable_revision_survives_older_physical_completion(
+    tmp_path, monkeypatch, outcome
+):
+    from tests.unit.vm.athena.test_page_vm import PageClient, make_page_vm
+
+    runtime, store = runtime_at(tmp_path)
+    entered, release = threading.Event(), threading.Event()
+    save = store.save
+
+    def held(saved, *, permit):
+        result = save(saved, permit=permit) if outcome == "success" else DraftStoreResult(code="io")
+        entered.set()
+        assert release.wait(10)
+        return result
+
+    monkeypatch.setattr(store, "save", held)
+    page = make_page_vm(PageClient(), drafts=runtime)
+    await page.setup()
+    page.query.set_sql("SELECT older")
+    runtime._prepare_final(page._draft_session)
+    try:
+        assert entered.wait(1)
+        await page.select_workgroup("analysts")
+        page.query.set_sql("SELECT unschedulable")
+        await page.shutdown()
+        page.dispose()
+        release.set()
+        report = await runtime.shutdown()
+        assert report.unpersisted == 1
+        assert not report.timed_out
+        assert [row.sql for row in store.list().records] == (
+            ["SELECT older"] if outcome == "success" else []
+        )
+    finally:
+        release.set()
+        await page.shutdown()
+        page.dispose()
+        await runtime.shutdown()
+        runtime.dispose()
+
+
+async def test_unschedulable_repeated_incomplete_edits_are_one_current_origin(tmp_path):
+    from tests.unit.vm.athena.test_page_vm import PageClient, make_page_vm
+
+    runtime, store = runtime_at(tmp_path)
+    old, _ = await _unschedulable_page(runtime, incomplete=True)
+    new = make_page_vm(PageClient(), drafts=runtime)
+    new.query.set_sql("SELECT newer incomplete")
+    old.query.set_sql("SELECT stale incomplete")
+    for page in (new, old):
+        await page.shutdown()
+        page.dispose()
+    assert (await runtime.shutdown()).unpersisted == 1
+    assert runtime._worker._thread is None
+    assert not store.list().records
+    runtime.dispose()
+
+
+@pytest.mark.parametrize("replacement", [False, True])
+async def test_unschedulable_activated_baseline_obeys_later_writer(tmp_path, replacement):
+    from tests.unit.vm.athena.test_page_vm import PageClient, make_page_vm
+
+    runtime, store = runtime_at(tmp_path)
+    old = make_page_vm(PageClient(), drafts=runtime, drafts_active=False)
+    await old.setup()
+    old.query.set_sql("SELECT baseline")
+    old.activate_drafts()
+    assert runtime._worker._thread is None
+    if replacement:
+        new = make_page_vm(PageClient(), drafts=runtime)
+        await new.setup()
+        new.query.set_sql("SELECT replacement")
+        await new.shutdown()
+        new.dispose()
+    await old.shutdown()
+    old.dispose()
+    assert (await runtime.shutdown()).unpersisted == (0 if replacement else 1)
+    assert [row.sql for row in store.list().records] == (
+        ["SELECT replacement"] if replacement else []
+    )
+    runtime.dispose()
