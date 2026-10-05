@@ -27,12 +27,13 @@ import re
 import secrets
 import threading
 from collections.abc import Iterator
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, TextIO
 
 from aws_tui.domain.transfer_history import (
+    MAX_METADATA_BYTES,
     FailureReason,
     HistoryStatus,
     TransferHistoryDescriptor,
@@ -196,6 +197,21 @@ class TransferJournal:
                 raise ValueError("attempt requires a validated current descriptor")
             self._append(transfer_id, {"kind": "attempted", "ts": _now_iso()})
 
+    def mark_destination(self, transfer_id: str, *, destination_uri: str) -> None:
+        """Durably bind a resolved publication destination before mutation."""
+        with self._lock:
+            safe = self._safe_state(self._path_for(transfer_id))
+            if safe is None or safe.operation == "delete":
+                raise ValueError("destination intent requires a validated copy or move")
+            # Reuse current-schema path validation without changing endpoint identity.
+            replace(safe, destination_uri=destination_uri)
+            intent = {"kind": "destination", "destination_uri": destination_uri, "ts": _now_iso()}
+            existing = read_metadata(self._path_for(transfer_id)).encode("utf-8")
+            encoded = json.dumps(intent, separators=(",", ":")).encode("utf-8") + b"\n"
+            if len(existing) + len(encoded) > MAX_METADATA_BYTES:
+                raise ValueError("destination intent exceeds metadata size limit")
+            self._append(transfer_id, intent)
+
     def mark_terminal(
         self,
         transfer_id: str,
@@ -303,6 +319,7 @@ class TransferJournal:
             started = datetime.fromisoformat(begin["ts"])
             updated = started
             attempted = False
+            destination_uri = descriptor.destination_uri
             for line in lines[1:]:
                 timestamp = datetime.fromisoformat(line["ts"])
                 if timestamp.utcoffset() != started.utcoffset() or timestamp < updated:
@@ -310,6 +327,12 @@ class TransferJournal:
                 updated = timestamp
                 if line.get("kind") == "attempted":
                     attempted = True
+                elif line.get("kind") == "destination":
+                    if descriptor.operation == "delete":
+                        return None
+                    destination_uri = replace(
+                        descriptor, destination_uri=line["destination_uri"]
+                    ).destination_uri
                 elif line.get("kind") in {"finished", "aborted"} or line.get("kind") != "part":
                     return None
             return TransferHistoryRecord(
@@ -318,7 +341,7 @@ class TransferJournal:
                 source_connection=descriptor.source_connection,
                 destination_connection=descriptor.destination_connection,
                 source_uri=descriptor.source_uri,
-                destination_uri=descriptor.destination_uri,
+                destination_uri=destination_uri,
                 started_at=started,
                 updated_at=updated,
                 finished_at=None,
@@ -410,6 +433,7 @@ class TransferJournal:
         last_progress = _parse_iso(str(begin["ts"]))
         finished = False
         aborted = False
+        destination_uri = str(begin["destination_uri"])
 
         for record in lines:
             kind = record.get("kind")
@@ -419,6 +443,8 @@ class TransferJournal:
             if kind == "part":
                 completed_parts.append(int(record["part_index"]))
                 completed_etags.append(str(record["etag"]))
+            elif kind == "destination" and isinstance(record.get("destination_uri"), str):
+                destination_uri = record["destination_uri"]
             elif kind == "finished":
                 finished = True
             elif kind == "aborted":
@@ -427,7 +453,7 @@ class TransferJournal:
         return TransferJournalEntry(
             transfer_id=str(begin["transfer_id"]),
             source_uri=str(begin["source_uri"]),
-            destination_uri=str(begin["destination_uri"]),
+            destination_uri=destination_uri,
             upload_id=_optional_str(begin.get("upload_id")),
             bytes_total=_optional_int(begin.get("bytes_total")),
             started_at=_parse_iso(str(begin["ts"])),

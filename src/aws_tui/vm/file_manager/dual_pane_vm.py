@@ -26,7 +26,7 @@ from vmx.lifecycle.status import ConstructionStatus
 from vmx.services.dispatcher import Dispatcher
 
 from aws_tui.domain.cross_fs import ConflictResolution, CrossFsCopy, CrossFsMove
-from aws_tui.domain.filesystem import ProviderError
+from aws_tui.domain.filesystem import EntryKind, ProviderError
 from aws_tui.domain.transfer_history import TransferHistoryDescriptor
 from aws_tui.domain.transfer_journal import TransferJournal
 from aws_tui.vm._observable import ObserverSafeSubject, send_value_free
@@ -376,7 +376,7 @@ class DualPaneVM:
         targets = list(src_pane.marked_entries)
         if not targets:
             return
-        copier = CrossFsCopy(source=src_pane.provider, destination=dst_pane.provider)
+        source_provider, destination_provider = src_pane.provider, dst_pane.provider
         src_base, dst_base = src_pane.path, dst_pane.path
         transfer_ids = await self._pre_register_pending(
             targets, src_pane, dst_pane, operation="copy"
@@ -406,6 +406,17 @@ class DualPaneVM:
                 consumed.add(transfer_id)
                 self._active_transfer_ids.add(transfer_id)
                 try:
+                    before_publication, file_progress = self.transfer_runtime.copy_hooks(
+                        transfer_id,
+                        src_path,
+                        directory=entry.entry.kind is EntryKind.DIRECTORY,
+                    )
+                    copier = CrossFsCopy(
+                        source=source_provider,
+                        destination=destination_provider,
+                        before_publication=before_publication,
+                        file_progress_transform=file_progress,
+                    )
                     completed = await self._run_one_transfer(
                         operation=copier.copy,
                         src_path=src_path,
@@ -445,7 +456,7 @@ class DualPaneVM:
         targets = list(src_pane.marked_entries)
         if not targets:
             return
-        mover = CrossFsMove(source=src_pane.provider, destination=dst_pane.provider)
+        source_provider, destination_provider = src_pane.provider, dst_pane.provider
         src_base, dst_base = src_pane.path, dst_pane.path
         transfer_ids = await self._pre_register_pending(
             targets, src_pane, dst_pane, operation="move"
@@ -468,6 +479,17 @@ class DualPaneVM:
                 consumed.add(transfer_id)
                 self._active_transfer_ids.add(transfer_id)
                 try:
+                    before_publication, file_progress = self.transfer_runtime.copy_hooks(
+                        transfer_id,
+                        src_path,
+                        directory=entry.entry.kind is EntryKind.DIRECTORY,
+                    )
+                    mover = CrossFsMove(
+                        source=source_provider,
+                        destination=destination_provider,
+                        before_publication=before_publication,
+                        file_progress_transform=file_progress,
+                    )
                     completed = await self._run_one_transfer(
                         operation=mover.move,
                         src_path=src_path,

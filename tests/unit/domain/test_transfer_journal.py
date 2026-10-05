@@ -737,3 +737,60 @@ def test_append_nonblocking_guard_handles_fifo_replacement_after_precheck(
         journal.record_part(transfer_id, part_index=1, etag="etag", bytes_written=1)
     assert refused.value.errno == errno.ENXIO
     assert stat.S_ISFIFO(target.stat().st_mode)
+
+
+def test_destination_intent_is_durable_before_terminal_summary(tmp_path):
+    from aws_tui.domain.transfer_history import (
+        TransferConnectionIdentity,
+        TransferHistoryDescriptor,
+    )
+
+    journal = TransferJournal(base_dir=tmp_path)
+    source = TransferConnectionIdentity("local", "", "a" * 64)
+    destination = TransferConnectionIdentity("local", "", "b" * 64)
+    descriptor = TransferHistoryDescriptor("copy", source, destination, "/source", "/requested", 3)
+    tid = journal.begin(
+        source_uri="/source", destination_uri="/requested", bytes_total=3, descriptor=descriptor
+    )
+    journal.mark_attempted(tid)
+    journal.mark_destination(tid, destination_uri="/effective (1)")
+    restarted = TransferJournal(base_dir=tmp_path)
+    assert restarted.load_history()[0].destination_uri == "/effective (1)"
+    assert restarted.load_history()[0].publication == "possibly_published"
+    assert restarted.find_unfinished()[0].destination_uri == "/effective (1)"
+    restarted.mark_destination(tid, destination_uri="/effective (2)")
+    restarted.mark_terminal(tid, status="completed", bytes_done=3, bytes_total=3)
+    assert restarted.load_history()[0].destination_uri == "/effective (2)"
+
+
+def test_destination_intent_refuses_to_exceed_safe_metadata_bound(tmp_path):
+    from aws_tui.domain.transfer_history import (
+        TransferConnectionIdentity,
+        TransferHistoryDescriptor,
+    )
+
+    journal = TransferJournal(base_dir=tmp_path)
+    source = TransferConnectionIdentity("local", "", "a" * 64)
+    destination = TransferConnectionIdentity("local", "", "b" * 64)
+    tid = journal.begin(
+        source_uri="/source",
+        destination_uri="/requested",
+        bytes_total=3,
+        descriptor=TransferHistoryDescriptor(
+            "copy", source, destination, "/source", "/requested", 3
+        ),
+    )
+    path = tmp_path / f"{tid}.jsonl"
+    failure = None
+    unchanged = False
+    for index in range(20):
+        before = path.read_bytes()
+        try:
+            journal.mark_destination(tid, destination_uri="/" + str(index) + "x" * 8100)
+        except ValueError as error:
+            failure = str(error)
+            unchanged = path.read_bytes() == before
+            break
+    assert failure == "destination intent exceeds metadata size limit"
+    assert unchanged
+    assert journal.load_history()[0].id == tid

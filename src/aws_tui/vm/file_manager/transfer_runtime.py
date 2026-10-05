@@ -10,10 +10,11 @@ from typing import Any, TypeVar
 
 from vmx import Message, MessageHub, PropertyChangedMessage
 
-from aws_tui.domain.cross_fs import ConflictResolution
+from aws_tui.domain.cross_fs import BeforePublication, ConflictResolution, FileProgressTransform
 from aws_tui.domain.filesystem import (
     ConflictError,
     NotFoundError,
+    PathRef,
     PermissionDeniedError,
     ProviderError,
     TransferProgress,
@@ -73,6 +74,8 @@ class OwnedDiskOperations:
 
 
 def failure_reason(error: BaseException) -> FailureReason:
+    if isinstance(error, HistoryWriteError):
+        return "persistence_error"
     if isinstance(error, PermissionDeniedError):
         return "permission_denied"
     if isinstance(error, NotFoundError):
@@ -96,6 +99,7 @@ class TransferRuntime:
         self._finished_ids: set[str] = set()
         self._running_ids: set[str] = set()
         self._totals: dict[str, tuple[int, int | None]] = {}
+        self._destination_uris: dict[str, str] = {}
         self._observed_ids: set[str] = set()
         self._queued_cleanup: dict[str, asyncio.Task[None]] = {}
         self._owners: dict[str, asyncio.Task[Any]] = {}
@@ -176,6 +180,7 @@ class TransferRuntime:
             self._owners[tid] = owner
             self.cancel_events[tid] = asyncio.Event()
             self._totals[tid] = (0, bytes_total)
+            self._destination_uris[tid] = destination_uri
             if descriptor is not None:
                 self._descriptors.add(tid)
             if cancelled:
@@ -194,6 +199,7 @@ class TransferRuntime:
         self._finished_ids.discard(tid)
         self._running_ids.discard(tid)
         self._totals.pop(tid, None)
+        self._destination_uris.pop(tid, None)
         self._observed_ids.discard(tid)
         self._queued_cleanup.pop(tid, None)
         self._owners.pop(tid, None)
@@ -257,6 +263,50 @@ class TransferRuntime:
             done, total = observed
         self.progress(tid, TransferState.COMPLETED, done, total)
         await self.finish(tid, "completed", done, total)
+
+    def copy_hooks(
+        self,
+        tid: str,
+        source_path: PathRef,
+        *,
+        directory: bool,
+    ) -> tuple[BeforePublication, FileProgressTransform]:
+        """Bind only the operation root and aggregate logical per-file bytes."""
+        requested_uri = self._destination_uris[tid]
+        current_uri = requested_uri
+        observed_files: dict[PathRef, int] = {}
+
+        async def before_publication(source: PathRef, destination: PathRef) -> None:
+            nonlocal current_uri
+            if source != source_path or tid not in self._descriptors:
+                return
+            effective_uri = destination.as_posix()
+            for prefix in ("s3://", "local://", "file://"):
+                if requested_uri.startswith(prefix):
+                    separator = "/" if requested_uri[len(prefix) :].startswith("/") else ""
+                    effective_uri = prefix + separator + effective_uri.lstrip("/")
+                    break
+            if effective_uri == current_uri:
+                return
+            try:
+                await self.disk.call(
+                    self.journal.mark_destination, tid, destination_uri=effective_uri
+                )
+            except _DiskCancelled:
+                current_uri = effective_uri
+                raise
+            except Exception:
+                self._feedback()
+                raise HistoryWriteError("Transfer history could not be saved.") from None
+            current_uri = effective_uri
+
+        def file_progress(source: PathRef, value: TransferProgress) -> TransferProgress:
+            if not directory:
+                return value
+            observed_files[source] = max(observed_files.get(source, 0), value.bytes_transferred)
+            return TransferProgress(sum(observed_files.values()), None)
+
+        return before_publication, file_progress
 
     async def run_one(
         self,

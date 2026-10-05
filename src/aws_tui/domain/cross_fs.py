@@ -30,7 +30,7 @@ so atomically.
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Coroutine
+from collections.abc import Awaitable, Callable, Coroutine
 from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
@@ -51,6 +51,7 @@ from aws_tui.domain.filesystem import (
     ProgressCallback,
     ProviderError,
     StageManifestEntry,
+    TransferProgress,
     UnsupportedSourceError,
 )
 
@@ -192,17 +193,50 @@ class ConflictResolution(StrEnum):
     RENAME = "rename"
 
 
+BeforePublication = Callable[[PathRef, PathRef], Awaitable[None]]
+FileProgressTransform = Callable[[PathRef, TransferProgress], TransferProgress]
+
+
 class CrossFsCopy:
-    """Streaming copy between two providers (possibly the same one)."""
+    """Streaming copy between two providers (possibly the same one).
+
+    Optional ``before_publication`` awaits effective intent before staging,
+    direct writes, and each conditional publication attempt. A failed hook
+    refuses publication and drains any already-owned stage cleanup.
+    ``file_progress_transform`` can aggregate logical bytes by source path;
+    without it, existing per-file progress behavior is unchanged.
+    """
 
     def __init__(
         self,
         *,
         source: FileSystemProvider,
         destination: FileSystemProvider,
+        before_publication: BeforePublication | None = None,
+        file_progress_transform: FileProgressTransform | None = None,
     ) -> None:
         self._source = source
         self._destination = destination
+        self._before_publication = before_publication
+        self._file_progress_transform = file_progress_transform
+
+    async def _prepare_publication(
+        self,
+        source: PathRef,
+        destination: PathRef,
+        staged: _OwnedStage | None = None,
+    ) -> None:
+        if self._before_publication is None:
+            return
+        try:
+            await self._before_publication(source, destination)
+        except BaseException as error:
+            if staged is None:
+                raise
+            cleanup = await self._cleanup_owned_stage(staged)
+            _finish_durable(
+                error, context="publication intent", outcomes=[cleanup], ignore_not_found=True
+            )
 
     async def copy(
         self,
@@ -268,6 +302,7 @@ class CrossFsCopy:
         if effective_dst is None:
             return False
         destination_exists = await self._exists(effective_dst)
+        await self._prepare_publication(src, effective_dst)
         staged = await self._write_unique_file_stage(
             publisher,
             src,
@@ -276,6 +311,7 @@ class CrossFsCopy:
             progress=progress,
         )
         return await self._publish_staged(
+            src,
             publisher,
             staged,
             effective_dst,
@@ -297,6 +333,7 @@ class CrossFsCopy:
             effective_dst = await self._resolve_conflict(dst, on_conflict)
             if effective_dst is None:
                 return False
+            await self._prepare_publication(src, effective_dst)
             try:
                 await self._copy_file(
                     src,
@@ -470,6 +507,14 @@ class CrossFsCopy:
         overwrite: bool,
     ) -> None:
         stream = await self._source.read_stream(src)
+        if progress is not None and self._file_progress_transform is not None:
+            original_progress = progress
+
+            def transformed(value: TransferProgress) -> None:
+                assert self._file_progress_transform is not None
+                original_progress(self._file_progress_transform(src, value))
+
+            progress = transformed
         failure: BaseException | None = None
         try:
             await self._destination.write_stream(
@@ -494,6 +539,7 @@ class CrossFsCopy:
 
     async def _publish_staged(
         self,
+        source: PathRef,
         publisher: AtomicNoReplacePublisher,
         staged: _OwnedStage,
         destination: PathRef,
@@ -505,6 +551,7 @@ class CrossFsCopy:
         current_destination = destination
         current_exists = destination_exists
         for _attempt in range(_MAX_RENAME_ATTEMPTS):
+            await self._prepare_publication(source, current_destination, staged)
             if on_conflict == ConflictResolution.OVERWRITE and current_exists:
                 await self._commit_overwrite(
                     publisher,
@@ -943,6 +990,7 @@ class CrossFsCopy:
                 budget=_TraversalBudget(),
                 depth=0,
             )
+            await self._prepare_publication(src, dst)
             copied_all = True
             for child in await self._source.list(src):
                 copied = await self._copy_entry(
@@ -992,6 +1040,7 @@ class CrossFsCopy:
         destination_exists: bool,
     ) -> bool:
         publisher, claimer = self._require_directory_transaction(destination)
+        await self._prepare_publication(src, destination)
 
         staged: _OwnedStage | None = None
         for _attempt in range(_MAX_RENAME_ATTEMPTS):
@@ -1059,6 +1108,7 @@ class CrossFsCopy:
             raise ConflictError(f"no free directory stage beside {destination.as_posix()}")
 
         return await self._publish_staged(
+            src,
             publisher,
             staged,
             destination,
@@ -1407,6 +1457,7 @@ class CrossFsMove(CrossFsCopy):
                 budget=_TraversalBudget(),
                 depth=0,
             )
+            await self._prepare_publication(src, dst)
             moved_all = True
             for child in await self._source.list(src):
                 moved = await self._move_entry(
@@ -1501,4 +1552,10 @@ class CrossFsMove(CrossFsCopy):
         await self._source.delete(path, expected_etag=etag)
 
 
-__all__ = ["ConflictResolution", "CrossFsCopy", "CrossFsMove"]
+__all__ = [
+    "BeforePublication",
+    "ConflictResolution",
+    "CrossFsCopy",
+    "CrossFsMove",
+    "FileProgressTransform",
+]

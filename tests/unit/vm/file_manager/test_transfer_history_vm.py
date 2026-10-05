@@ -662,3 +662,308 @@ async def test_retry_provider_failure_has_safe_category_and_durable_new_outcome(
     finally:
         await vm.shutdown()
         dual.dispose()
+
+
+@pytest.mark.parametrize("operation", ["copy", "move"])
+async def test_rename_history_binds_each_effective_destination_before_publication(
+    tmp_path, monkeypatch, operation
+):
+    dual, _, journal, source, destination = await make_dual(tmp_path)
+    (destination / "a?#%.txt").write_bytes(b"unrelated original")
+    original_publish = dual.right.provider.atomic_publish_no_replace
+    observed = []
+
+    async def collide_once(stage, target, **kwargs):
+        record = journal.load_history()[0]
+        observed.append((target.as_posix(), record.destination_uri))
+        if len(observed) == 1:
+            (destination / target.name).write_bytes(b"unrelated collision")
+        return await original_publish(stage, target, **kwargs)
+
+    monkeypatch.setattr(dual.right.provider, "atomic_publish_no_replace", collide_once)
+    try:
+        if operation == "move":
+            await dual.move_across(on_conflict=ConflictResolution.RENAME)
+        else:
+            await dual.copy_across(on_conflict=ConflictResolution.RENAME)
+        assert observed == [("/a?#% (1).txt", "/a?#% (1).txt"), ("/a?#% (2).txt", "/a?#% (2).txt")]
+        assert journal.load_history()[0].destination_uri == "/a?#% (2).txt"
+        assert (destination / "a?#% (2).txt").read_bytes() == b"payload"
+        assert source.joinpath("a?#%.txt").exists() is (operation == "copy")
+    finally:
+        await dual.shutdown()
+        dual.dispose()
+
+
+async def test_renamed_interrupted_publication_rechecks_actual_target(tmp_path, monkeypatch):
+    from aws_tui.vm.file_manager.transfer_history_vm import (
+        ResolvedTransferEndpoint,
+        TransferHistoryVM,
+    )
+
+    dual, hub, journal, _, destination = await make_dual(tmp_path)
+    (destination / "a?#%.txt").write_bytes(b"unrelated")
+
+    def fail_terminal(*args, **kwargs):
+        raise OSError("terminal disk failure")
+
+    monkeypatch.setattr(journal, "mark_terminal", fail_terminal)
+    await dual.copy_across(on_conflict=ConflictResolution.RENAME)
+    destination.joinpath("a?#%.txt").unlink()
+    providers = {
+        dual.left.transfer_connection: dual.left.provider,
+        dual.right.transfer_connection: dual.right.provider,
+    }
+
+    async def resolve(endpoint):
+        return ResolvedTransferEndpoint(providers[endpoint], endpoint)
+
+    vm = TransferHistoryVM(journal, resolve, hub, NULL_DISPATCHER, runtime=dual.transfer_runtime)
+    try:
+        await vm.load()
+        record = vm.records[0]
+        assert record.destination_uri == "/a?#% (1).txt"
+        assert record.status == "outcome_unknown"
+        observed = await vm.recheck(record.id)
+        assert observed.destination is not None
+        assert not observed.retry_eligible
+    finally:
+        await vm.shutdown()
+        dual.dispose()
+
+
+async def test_retry_rename_records_actual_target(tmp_path):
+    vm, dual, tid, _, destination, _, _ = await history_case(tmp_path)
+    destination.joinpath("a?#%.txt").write_bytes(b"unrelated")
+
+    async def choose_rename(plan):
+        assert plan.destination is not None
+        return ConflictResolution.RENAME
+
+    try:
+        new_id = await vm.retry(tid, choose_rename)
+        record = next(record for record in vm.records if record.id == new_id)
+        assert record.destination_uri == "/a?#% (1).txt"
+        assert destination.joinpath("a?#% (1).txt").read_bytes() == b"payload"
+    finally:
+        await vm.shutdown()
+        dual.dispose()
+
+
+async def select_tree(dual, source, *, empty=False):
+    source.joinpath("tree").mkdir()
+    if not empty:
+        source.joinpath("tree", "a").write_bytes(b"abc")
+        source.joinpath("tree", "b").write_bytes(b"12345")
+    await dual.left.refresh()
+    dual.left.enter_multiselect_command.execute()
+    tree = next(entry for entry in dual.left.entries if entry.entry.name == "tree")
+    dual.left.set_marked_entries([tree], marked=True)
+
+
+@pytest.mark.parametrize("operation", ["copy", "move"])
+@pytest.mark.parametrize("empty", [False, True])
+async def test_recursive_history_aggregates_children_and_keeps_total_unknown(
+    tmp_path, operation, empty
+):
+    dual, _, journal, source, destination = await make_dual(tmp_path)
+    await select_tree(dual, source, empty=empty)
+    try:
+        if operation == "move":
+            await dual.move_across()
+        else:
+            await dual.copy_across()
+        record = journal.load_history()[0]
+        assert record.status == "completed"
+        assert record.bytes_done == (0 if empty else 8)
+        assert record.bytes_total is None
+        assert destination.joinpath("tree").is_dir()
+    finally:
+        await dual.shutdown()
+        dual.dispose()
+
+
+@pytest.mark.parametrize("operation", ["copy", "move", "retry"])
+@pytest.mark.parametrize("outcome", ["failure", "cancelled"])
+async def test_recursive_partial_history_has_aggregate_bytes_and_unknown_total(
+    tmp_path, monkeypatch, outcome, operation
+):
+    dual, hub, journal, source, _ = await make_dual(tmp_path)
+    await select_tree(dual, source)
+    second_started = asyncio.Event()
+    original_read = dual.left.provider.read_stream
+
+    async def read(path, **kwargs):
+        if path.name == "b":
+            if outcome == "failure":
+                raise PermissionDeniedError("safe category")
+            second_started.set()
+            await asyncio.Event().wait()
+        return await original_read(path, **kwargs)
+
+    monkeypatch.setattr(dual.left.provider, "read_stream", read)
+    vm = None
+    if operation == "retry":
+        from aws_tui.vm.file_manager.transfer_history_vm import (
+            RecoveryRefused,
+            ResolvedTransferEndpoint,
+            TransferHistoryVM,
+        )
+
+        async def resolve(endpoint):
+            provider = (
+                dual.left.provider
+                if endpoint == dual.left.transfer_connection
+                else dual.right.provider
+            )
+            return ResolvedTransferEndpoint(provider, endpoint)
+
+        vm = TransferHistoryVM(
+            journal, resolve, hub, NULL_DISPATCHER, runtime=dual.transfer_runtime
+        )
+        descriptor = TransferHistoryDescriptor(
+            "copy",
+            dual.left.transfer_connection,
+            dual.right.transfer_connection,
+            "/tree",
+            "/tree",
+            None,
+        )
+        tid = journal.begin(source_uri="/tree", destination_uri="/tree", descriptor=descriptor)
+        await vm.load()
+
+        async def decide(plan):
+            return ConflictResolution.ERROR
+
+        transfer = asyncio.create_task(vm.retry(tid, decide))
+    else:
+        transfer = asyncio.create_task(
+            dual.move_across() if operation == "move" else dual.copy_across()
+        )
+    try:
+        if outcome == "cancelled":
+            await asyncio.wait_for(second_started.wait(), 2)
+            transfer.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await transfer
+        else:
+            if operation == "retry":
+                with pytest.raises(RecoveryRefused) as refused:
+                    await transfer
+                assert refused.value.reason == "permission_denied"
+            else:
+                with pytest.raises(PermissionDeniedError):
+                    await transfer
+        record = next(record for record in journal.load_history() if record.finished_at is not None)
+        assert record.status == ("failed" if outcome == "failure" else "cancelled")
+        assert record.bytes_done == 3
+        assert record.bytes_total is None
+    finally:
+        if vm is not None:
+            await vm.shutdown()
+        await dual.shutdown()
+        dual.dispose()
+
+
+async def test_recursive_retry_uses_aggregate_accounting(tmp_path):
+    vm, dual, _, source, destination, _, _ = await history_case(tmp_path)
+    await select_tree(dual, source)
+    descriptor = TransferHistoryDescriptor(
+        "copy",
+        dual.left.transfer_connection,
+        dual.right.transfer_connection,
+        "/tree",
+        "/tree",
+        None,
+    )
+    tid = dual._journal.begin(source_uri="/tree", destination_uri="/tree", descriptor=descriptor)
+    await vm.load()
+
+    async def decide(plan):
+        assert plan.source.size is None
+        return ConflictResolution.ERROR
+
+    try:
+        new_id = await vm.retry(tid, decide)
+        record = next(record for record in vm.records if record.id == new_id)
+        assert record.bytes_done == 8
+        assert record.bytes_total is None
+        assert destination.joinpath("tree", "a").read_bytes() == b"abc"
+    finally:
+        await vm.shutdown()
+        dual.dispose()
+
+
+async def test_destination_intent_write_failure_refuses_rename_mutation(tmp_path, monkeypatch):
+    dual, _, journal, _, destination = await make_dual(tmp_path)
+    destination.joinpath("a?#%.txt").write_bytes(b"unrelated")
+
+    def fail(*args, **kwargs):
+        raise OSError("safe disk category")
+
+    monkeypatch.setattr(journal, "mark_destination", fail)
+    try:
+        with pytest.raises(Exception, match="history could not be saved"):
+            await dual.copy_across(on_conflict=ConflictResolution.RENAME)
+        assert destination.joinpath("a?#%.txt").read_bytes() == b"unrelated"
+        assert set(path.name for path in destination.iterdir()) == {"a?#%.txt"}
+        assert journal.load_history()[0].failure_reason == "persistence_error"
+    finally:
+        await dual.shutdown()
+        dual.dispose()
+
+
+async def test_retry_renamed_publication_stays_ambiguous_at_actual_target(tmp_path, monkeypatch):
+    vm, dual, tid, _, destination, _, _ = await history_case(tmp_path)
+    destination.joinpath("a?#%.txt").write_bytes(b"unrelated")
+
+    def fail(*args, **kwargs):
+        raise OSError("terminal disk category")
+
+    monkeypatch.setattr(dual._journal, "mark_terminal", fail)
+
+    async def rename(plan):
+        return ConflictResolution.RENAME
+
+    try:
+        new_id = await vm.retry(tid, rename)
+        destination.joinpath("a?#%.txt").unlink()
+        record = next(record for record in vm.records if record.id == new_id)
+        assert record.destination_uri == "/a?#% (1).txt"
+        assert record.status == "outcome_unknown"
+        result = await vm.recheck(new_id)
+        assert result.destination is not None
+        assert not result.retry_eligible
+    finally:
+        await vm.shutdown()
+        dual.dispose()
+
+
+async def test_cancel_during_effective_destination_write_drains_before_mutation(
+    tmp_path, monkeypatch
+):
+    dual, _, journal, _, destination = await make_dual(tmp_path)
+    destination.joinpath("a?#%.txt").write_bytes(b"unrelated")
+    entered, release = threading.Event(), threading.Event()
+    original = journal.mark_destination
+
+    def blocked(tid, **kwargs):
+        original(tid, **kwargs)
+        entered.set()
+        assert release.wait(5)
+
+    monkeypatch.setattr(journal, "mark_destination", blocked)
+    transfer = asyncio.create_task(dual.copy_across(on_conflict=ConflictResolution.RENAME))
+    assert await asyncio.to_thread(entered.wait, 2)
+    assert journal.load_history()[0].destination_uri == "/a?#% (1).txt"
+    assert set(path.name for path in destination.iterdir()) == {"a?#%.txt"}
+    transfer.cancel()
+    release.set()
+    with pytest.raises(asyncio.CancelledError):
+        await asyncio.wait_for(transfer, 3)
+    record = journal.load_history()[0]
+    assert record.status == "cancelled"
+    assert record.destination_uri == "/a?#% (1).txt"
+    assert set(path.name for path in destination.iterdir()) == {"a?#%.txt"}
+    await dual.shutdown()
+    dual.dispose()

@@ -12,7 +12,13 @@ from vmx import Message, MessageHub, PropertyChangedMessage
 from vmx.services.dispatcher import Dispatcher
 
 from aws_tui.domain.cross_fs import ConflictResolution, CrossFsCopy
-from aws_tui.domain.filesystem import FileEntry, FileSystemProvider, NotFoundError, PathRef
+from aws_tui.domain.filesystem import (
+    EntryKind,
+    FileEntry,
+    FileSystemProvider,
+    NotFoundError,
+    PathRef,
+)
 from aws_tui.domain.transfer_history import (
     FailureReason,
     TransferConnectionIdentity,
@@ -351,7 +357,17 @@ class TransferHistoryVM:
                 record.source_uri,
                 record.destination_uri,
             )
-            copier = CrossFsCopy(source=source.provider, destination=destination.provider)
+            before_publication, file_progress = self.runtime.copy_hooks(
+                new_id,
+                original_path(record.source_uri),
+                directory=initial.source.kind is EntryKind.DIRECTORY,
+            )
+            copier = CrossFsCopy(
+                source=source.provider,
+                destination=destination.provider,
+                before_publication=before_publication,
+                file_progress_transform=file_progress,
+            )
             if await self.runtime.run_one(
                 operation=copier.copy,
                 src_path=original_path(record.source_uri),
