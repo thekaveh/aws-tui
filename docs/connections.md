@@ -366,11 +366,13 @@ The setup actions, form, and rail choices
 are reachable by keyboard at 120×40: Tab and Shift+Tab move focus, Enter
 activates the focused control, and Esc cancels an unsubmitted form.
 
-## 8. Interrupted-transfer diagnostic journal
+## 8. Transfer history and interrupted journals
 aws-tui writes a durable JSONL `begin` record under
 `<cache-dir>/transfers/<id>.jsonl` while each transfer is active. Terminal
-transfers are removed promptly, so files left after a process crash identify
-interrupted work. Startup scanning, automatic replay, and persisted multipart
-upload IDs remain deferred; see the
-[cookbook](cookbook.md#4-diagnose-an-interrupted-transfer-after-a-crash) for
+operations save a durable history summary before removing their active journal.
+Startup scans current-schema interrupted journals in a background worker and
+shows their outcomes as unknown in Recovery; legacy diagnostic streams are
+excluded from History and Recovery. Automatic replay and multipart resume,
+including persisted upload IDs, remain unsupported; see the
+[cookbook](cookbook.md#4-inspect-transfer-history-and-recovery-after-a-restart) for
 inspection and cleanup.

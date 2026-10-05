@@ -26,14 +26,15 @@ from vmx.lifecycle.status import ConstructionStatus
 from vmx.services.dispatcher import Dispatcher
 
 from aws_tui.domain.cross_fs import ConflictResolution, CrossFsCopy, CrossFsMove
-from aws_tui.domain.filesystem import ProviderError, TransferProgress
+from aws_tui.domain.filesystem import EntryKind, ProviderError
+from aws_tui.domain.transfer_history import TransferHistoryDescriptor
 from aws_tui.domain.transfer_journal import TransferJournal
 from aws_tui.vm._observable import ObserverSafeSubject, send_value_free
 from aws_tui.vm.file_manager.entry_vm import EntryVM
 from aws_tui.vm.file_manager.pane_vm import PaneVM
+from aws_tui.vm.file_manager.transfer_runtime import HistoryWriteError, TransferRuntime
 from aws_tui.vm.messages import (
     TransferCancelRequestedMessage,
-    TransferProgressMessage,
     TransferState,
 )
 
@@ -98,18 +99,21 @@ class DualPaneVM:
         hub: MessageHub[Message],
         dispatcher: Dispatcher,
         transfer_journal: TransferJournal,
+        transfer_runtime: TransferRuntime | None = None,
     ) -> None:
         self._hub: MessageHub[Message] = hub
         self._left: PaneVM = left
         self._right: PaneVM = right
         self._journal: TransferJournal = transfer_journal
+        self.transfer_runtime = transfer_runtime or TransferRuntime(transfer_journal, hub)
+        self._owns_runtime = transfer_runtime is None
         self._focused: FocusedPane = FocusedPane.LEFT
 
         # Per-transfer cancellation events. Populated by ``copy_across`` /
         # ``move_across`` when each transfer is queued; the hub subscription
         # for ``TransferCancelRequestedMessage`` sets the event so the run
         # loop's ``asyncio.wait`` race interrupts the in-flight copy task.
-        self._cancel_events: dict[str, asyncio.Event] = {}
+        self._cancel_events = self.transfer_runtime.cancel_events
         self._active_transfer_ids: set[str] = set()
         self._cancel_sub: DisposableBase | None = None
         self._refresh_tasks: set[asyncio.Task[None]] = set()
@@ -253,6 +257,8 @@ class DualPaneVM:
         if self._cancel_sub is not None:
             self._cancel_sub.dispose()
             self._cancel_sub = None
+        if self._owns_runtime:
+            self.transfer_runtime.dispose()
         self._switch_focus_command.dispose()
         self._copy_across_command.dispose()
         self._move_across_command.dispose()
@@ -270,6 +276,7 @@ class DualPaneVM:
     async def shutdown(self) -> None:
         """Cancel and durably drain detached pane refreshes."""
         self._shutdown_started = True
+        await self.transfer_runtime.shutdown()
         await self._cancel_and_drain_refreshes()
 
     def _schedule_owned_refresh(self, pane: PaneVM) -> asyncio.Task[None] | None:
@@ -345,8 +352,6 @@ class DualPaneVM:
         event = self._cancel_events.get(msg.transfer_id)
         if event is not None and not event.is_set():
             event.set()
-            if msg.transfer_id not in self._active_transfer_ids:
-                self._journal.mark_aborted(msg.transfer_id)
 
     async def setup(self) -> None:
         async with asyncio.TaskGroup() as tasks:
@@ -371,16 +376,17 @@ class DualPaneVM:
         targets = list(src_pane.marked_entries)
         if not targets:
             return
-        copier = CrossFsCopy(source=src_pane.provider, destination=dst_pane.provider)
-        transfer_ids = self._pre_register_pending(targets, src_pane, dst_pane)
+        source_provider, destination_provider = src_pane.provider, dst_pane.provider
+        src_base, dst_base = src_pane.path, dst_pane.path
+        transfer_ids = await self._pre_register_pending(
+            targets, src_pane, dst_pane, operation="copy"
+        )
         # Bind both directories ONCE, next to the provider pair already
         # snapshotted above. Re-reading ``*_pane.path`` per iteration lets a
         # navigation between two transfers redirect the rest of the batch, and
         # ``_pre_register_pending`` has already recorded the ORIGINAL paths in
         # the journal and the transfers overlay — so the record would name a
         # destination the bytes never reached.
-        src_base = src_pane.path
-        dst_base = dst_pane.path
         # Track which ``transfer_id`` the loop has actually consumed
         # (success, fail, or user-cancel). If an entry's
         # ``_run_one_transfer`` raises, the loop exits early and the
@@ -400,6 +406,17 @@ class DualPaneVM:
                 consumed.add(transfer_id)
                 self._active_transfer_ids.add(transfer_id)
                 try:
+                    before_publication, file_progress = self.transfer_runtime.copy_hooks(
+                        transfer_id,
+                        src_path,
+                        directory=entry.entry.kind is EntryKind.DIRECTORY,
+                    )
+                    copier = CrossFsCopy(
+                        source=source_provider,
+                        destination=destination_provider,
+                        before_publication=before_publication,
+                        file_progress_transform=file_progress,
+                    )
                     completed = await self._run_one_transfer(
                         operation=copier.copy,
                         src_path=src_path,
@@ -409,32 +426,14 @@ class DualPaneVM:
                         entry=entry,
                     )
                     if completed:
-                        self._mark_transfer_completed(transfer_id, entry)
+                        await self._mark_transfer_completed(transfer_id, entry)
                 finally:
                     self._active_transfer_ids.discard(transfer_id)
         finally:
-            for entry, transfer_id in transfer_ids:
-                self._cancel_events.pop(transfer_id, None)
-                self._active_transfer_ids.discard(transfer_id)
-                if transfer_id not in consumed:
-                    # Loop never reached this entry — mark its
-                    # journal file ABORTED so ``find_unfinished``
-                    # doesn't surface it on next launch, AND publish
-                    # a terminal TransferProgressMessage so the
-                    # in-memory TransferVM the pre-register placed
-                    # in PENDING leaves the active set (otherwise
-                    # the aggregate + cancel_all predicate stay
-                    # "active" with phantom queued rows visible
-                    # in the transfers overlay).
-                    self._journal.mark_aborted(transfer_id)
-                    self._hub.send(
-                        TransferProgressMessage(
-                            transfer_id=transfer_id,
-                            bytes_transferred=0,
-                            bytes_total=entry.entry.size,
-                            state=TransferState.CANCELLED,
-                        )
-                    )
+            await self.transfer_runtime.settle_batch(
+                [(tid, entry.entry.size) for entry, tid in transfer_ids],
+                consumed,
+            )
             # Refresh the destination pane INSIDE the finally so
             # the user sees the partial result even when the loop
             # raised mid-batch. Files 1..K-1 are physically present
@@ -457,16 +456,17 @@ class DualPaneVM:
         targets = list(src_pane.marked_entries)
         if not targets:
             return
-        mover = CrossFsMove(source=src_pane.provider, destination=dst_pane.provider)
-        transfer_ids = self._pre_register_pending(targets, src_pane, dst_pane)
+        source_provider, destination_provider = src_pane.provider, dst_pane.provider
+        src_base, dst_base = src_pane.path, dst_pane.path
+        transfer_ids = await self._pre_register_pending(
+            targets, src_pane, dst_pane, operation="move"
+        )
         # Bind both directories ONCE, next to the provider pair already
         # snapshotted above. Re-reading ``*_pane.path`` per iteration lets a
         # navigation between two transfers redirect the rest of the batch, and
         # ``_pre_register_pending`` has already recorded the ORIGINAL paths in
         # the journal and the transfers overlay — so the record would name a
         # destination the bytes never reached.
-        src_base = src_pane.path
-        dst_base = dst_pane.path
         # See ``copy_across`` for the rationale on the ``consumed``
         # set — mid-batch failure must not strand PENDING journal
         # entries for ids the loop never reached.
@@ -479,6 +479,17 @@ class DualPaneVM:
                 consumed.add(transfer_id)
                 self._active_transfer_ids.add(transfer_id)
                 try:
+                    before_publication, file_progress = self.transfer_runtime.copy_hooks(
+                        transfer_id,
+                        src_path,
+                        directory=entry.entry.kind is EntryKind.DIRECTORY,
+                    )
+                    mover = CrossFsMove(
+                        source=source_provider,
+                        destination=destination_provider,
+                        before_publication=before_publication,
+                        file_progress_transform=file_progress,
+                    )
                     completed = await self._run_one_transfer(
                         operation=mover.move,
                         src_path=src_path,
@@ -488,27 +499,14 @@ class DualPaneVM:
                         entry=entry,
                     )
                     if completed:
-                        self._mark_transfer_completed(transfer_id, entry)
+                        await self._mark_transfer_completed(transfer_id, entry)
                 finally:
                     self._active_transfer_ids.discard(transfer_id)
         finally:
-            for entry, transfer_id in transfer_ids:
-                self._cancel_events.pop(transfer_id, None)
-                self._active_transfer_ids.discard(transfer_id)
-                if transfer_id not in consumed:
-                    # See ``copy_across`` for the parity rationale —
-                    # publish CANCELLED so the in-memory TransferVM
-                    # doesn't stay in PENDING forever and inflate the
-                    # transfers-overlay active count.
-                    self._journal.mark_aborted(transfer_id)
-                    self._hub.send(
-                        TransferProgressMessage(
-                            transfer_id=transfer_id,
-                            bytes_transferred=0,
-                            bytes_total=entry.entry.size,
-                            state=TransferState.CANCELLED,
-                        )
-                    )
+            await self.transfer_runtime.settle_batch(
+                [(tid, entry.entry.size) for entry, tid in transfer_ids],
+                consumed,
+            )
             # Refresh BOTH panes inside the finally — see
             # ``copy_across`` for the rationale. Move is even more
             # sensitive: files 1..K-1 are both copied AND deleted
@@ -519,289 +517,163 @@ class DualPaneVM:
             await self._refresh_after_operation(src_pane, dst_pane)
 
     async def delete_in_focused(self) -> None:
-        """Delete every marked entry in the focused pane."""
-        await self.focused_pane.delete_marked()
+        """Attempt every marked original path, aggregating provider failures.
 
-    # ── Transfer-batch helpers ─────────────────────────────────────────────
+        Each attempted item settles through the durable runtime. Genuine
+        cancellation stops the batch, drains started work and refreshes the
+        pane before returning or propagating worker cancellation.
+        """
+        pane = self.focused_pane
+        provider, base = pane.provider, pane.path
+        targets = list(pane.marked_entries)
+        tids = await self._pre_register_pending(targets, pane, None, operation="delete")
+        consumed: set[str] = set()
+        failures: list[tuple[str, BaseException]] = []
 
-    def _mark_transfer_completed(self, transfer_id: str, entry: EntryVM) -> None:
-        self._hub.send(
-            TransferProgressMessage(
-                transfer_id=transfer_id,
-                bytes_transferred=entry.entry.size or 0,
-                bytes_total=entry.entry.size,
-                state=TransferState.COMPLETED,
-            )
-        )
-        self._journal.mark_finished(transfer_id)
+        async def delete(source: object, _destination: object, **_kwargs: object) -> bool:
+            await provider.delete(source)  # type: ignore[arg-type]
+            return True
 
-    def _pre_register_pending(
+        try:
+            for entry, tid in tids:
+                consumed.add(tid)
+                try:
+                    completed = await self._run_one_transfer(
+                        operation=delete,
+                        src_path=base.join(entry.entry.name),
+                        dst_path=None,
+                        on_conflict=ConflictResolution.ERROR,
+                        transfer_id=tid,
+                        entry=entry,
+                    )
+                except HistoryWriteError:
+                    # A durability refusal aborts the batch before further
+                    # mutation; it is not an ordinary provider failure.
+                    raise
+                except (OSError, ProviderError) as exc:
+                    failures.append((entry.entry.name, exc))
+                    continue
+                # Delete cannot skip: False means the runtime cancelled this
+                # item. Leave following targets untouched and settle them.
+                if not completed:
+                    break
+                await self.transfer_runtime.complete(tid, 0, entry.entry.size)
+        finally:
+            try:
+                await self.transfer_runtime.settle_batch(
+                    [(tid, entry.entry.size) for entry, tid in tids],
+                    consumed,
+                )
+            finally:
+                refresh_task = asyncio.create_task(self._refresh_after_operation(pane))
+                cancellation: asyncio.CancelledError | None = None
+                while not refresh_task.done():
+                    try:
+                        await asyncio.shield(refresh_task)
+                    except asyncio.CancelledError as exc:
+                        cancellation = cancellation or exc
+                    except BaseException:
+                        break
+                try:
+                    refresh_task.result()
+                except BaseException as exc:
+                    if cancellation is not None:
+                        cancellation.add_note(
+                            f"pane refresh failed during cancellation: {type(exc).__name__}: {exc}"
+                        )
+                        raise cancellation from exc
+                    raise
+                if cancellation is not None:
+                    raise cancellation
+        if failures:
+            first_name, first_exc = failures[0]
+            if len(failures) == 1:
+                raise type(first_exc)(
+                    f"failed to delete {first_name!r}: {first_exc}"
+                ) from first_exc
+            names = ", ".join(name for name, _ in failures)
+            raise ProviderError(
+                f"failed to delete {len(failures)} of {len(targets)} entries: {names}"
+            ) from first_exc
+
+    async def _mark_transfer_completed(self, transfer_id: str, entry: EntryVM) -> None:
+        await self.transfer_runtime.complete(transfer_id, entry.entry.size or 0, entry.entry.size)
+
+    async def _pre_register_pending(
         self,
         targets: list[EntryVM],
         src_pane: PaneVM,
-        dst_pane: PaneVM,
+        dst_pane: PaneVM | None,
+        *,
+        operation: str = "copy",
     ) -> list[tuple[EntryVM, str]]:
-        """Pre-register every queued transfer as PENDING + create the
-        per-transfer cancel event before the run loop starts.
-
-        Without the pre-register, only the currently-running transfer
-        (and any lingering recently-finished ones) is visible in the
-        overlay — the user can't see how many more are queued. The
-        journal entries are also created upfront so a crash mid-batch
-        records all-of-them as unfinished (not just the one being
-        copied).
-        """
         if len(targets) > _MAX_TRANSFER_BATCH_ENTRIES:
             raise ProviderError(
                 "copy and move batches support at most "
                 f"{_MAX_TRANSFER_BATCH_ENTRIES} selected entries"
             )
+        # Snapshot original paths and identities before the first disk await.
+        endpoints = [
+            (
+                entry,
+                _pane_uri(src_pane, entry.entry.name),
+                _pane_uri(dst_pane, entry.entry.name) if dst_pane else "",
+            )
+            for entry in targets
+        ]
+        source_identity = src_pane.transfer_connection
+        destination_identity = dst_pane.transfer_connection if dst_pane else None
         transfer_ids: list[tuple[EntryVM, str]] = []
         try:
-            for entry in targets:
-                src_uri = _pane_uri(src_pane, entry.entry.name)
-                dst_uri = _pane_uri(dst_pane, entry.entry.name)
-                transfer_id = self._journal.begin(
-                    source_uri=src_uri,
-                    destination_uri=dst_uri,
-                    bytes_total=entry.entry.size,
-                )
-                transfer_ids.append((entry, transfer_id))
-                # An asyncio.Event per transfer — set by the hub
-                # subscriber when the user clicks the cancel chip; raced
-                # against the copy task inside ``_run_one_transfer``.
-                self._cancel_events[transfer_id] = asyncio.Event()
-                self._hub.send(
-                    TransferProgressMessage(
-                        transfer_id=transfer_id,
-                        bytes_transferred=0,
+            for entry, source_uri, destination_uri in endpoints:
+                descriptor = None
+                if source_identity is not None and (
+                    dst_pane is None or destination_identity is not None
+                ):
+                    descriptor = TransferHistoryDescriptor(
+                        operation=operation,  # type: ignore[arg-type]
+                        source_connection=source_identity,
+                        destination_connection=destination_identity,
+                        source_uri=source_uri,
+                        destination_uri=destination_uri or None,
                         bytes_total=entry.entry.size,
-                        state=TransferState.PENDING,
-                        source_label=src_uri,
-                        destination_label=dst_uri,
                     )
+                tid = await self.transfer_runtime.begin(
+                    source_uri=source_uri,
+                    destination_uri=destination_uri,
+                    bytes_total=entry.entry.size,
+                    descriptor=descriptor,
                 )
-        except Exception:
-            # Mid-loop failure (e.g. ``_journal.begin`` hits disk-full
-            # or permission-denied, ``_hub.send`` raises from a
-            # subscriber) leaves entries 1..K-1 with THREE half-done
-            # side effects that the caller's ``finally`` would
-            # otherwise never reach (the caller iterates the RETURNED
-            # ``transfer_ids``, which never materializes when this
-            # method raises):
-            #   1. cancel_event registrations (memory only)
-            #   2. journal files in PENDING state (misleading interrupted
-            #      transfer records)
-            #   3. in-memory TransferVMs in PENDING (aggregate,
-            #      transfers overlay, cancel_all predicate
-            #      all read off these)
-            # Reap all three so a single mid-batch raise can't
-            # accumulate phantom queued transfers across the session.
-            # Symmetric with the round-19 cleanup in copy_across /
-            # move_across's finally.
-            for entry, transfer_id in transfer_ids:
-                self._cancel_events.pop(transfer_id, None)
-                with contextlib.suppress(Exception):
-                    self._journal.mark_aborted(transfer_id)
-                with contextlib.suppress(Exception):
-                    self._hub.send(
-                        TransferProgressMessage(
-                            transfer_id=transfer_id,
-                            bytes_transferred=0,
-                            bytes_total=entry.entry.size,
-                            state=TransferState.CANCELLED,
-                        )
-                    )
+                transfer_ids.append((entry, tid))
+                self.transfer_runtime.progress(
+                    tid, TransferState.PENDING, 0, entry.entry.size, source_uri, destination_uri
+                )
+        except BaseException:
+            await self.transfer_runtime.settle_batch(
+                [(tid, entry.entry.size) for entry, tid in transfer_ids],
+                set(),
+            )
             raise
         return transfer_ids
 
     async def _run_one_transfer(
         self,
         *,
-        operation: object,  # async callable: (src, dst, *, progress=, on_conflict=) -> Awaitable
+        operation: object,
         src_path: object,
         dst_path: object,
         on_conflict: ConflictResolution,
         transfer_id: str,
         entry: EntryVM,
     ) -> bool:
-        """Run one transfer, racing it against ``self._cancel_events[transfer_id]``.
-
-        Returns ``True`` if the transfer ran to completion (caller is
-        responsible for sending the COMPLETED message + marking the
-        journal finished). Returns ``False`` if the transfer was
-        cancelled (this method has already called ``mark_aborted`` on
-        the journal). Re-raises on a real error — the caller must
-        decide whether to continue the batch or propagate.
-        """
-        # ``_pre_register_pending`` unconditionally creates a
-        # per-transfer cancel event before this method runs, so the
-        # event is guaranteed to be present. We still narrow with an
-        # ``assert`` for the type checker; the previous fallback
-        # branch was dead code (asserted by the comment that used to
-        # live there) and has been removed.
-        cancel_event = self._cancel_events.get(transfer_id)
-        if cancel_event is None:
-            # Raised, not asserted: ``python -O`` strips ``assert``, and the
-            # next line would then fail with ``AttributeError: 'NoneType' has
-            # no attribute 'is_set'`` in the middle of a live transfer.
-            raise RuntimeError(
-                f"cancel event missing for {transfer_id!r} — "
-                "_pre_register_pending should install it"
-            )
-
-        # Pre-cancelled-while-PENDING fast path: the user clicked
-        # cancel before this transfer got its turn. Skip the work
-        # entirely, mark the journal aborted, move on.
-        if cancel_event.is_set():
-            self._journal.mark_aborted(transfer_id)
-            return False
-
-        def _progress(p: TransferProgress, *, _tid: str = transfer_id) -> None:
-            self._hub.send(
-                TransferProgressMessage(
-                    transfer_id=_tid,
-                    bytes_transferred=p.bytes_transferred,
-                    bytes_total=p.bytes_total,
-                    state=TransferState.RUNNING,
-                )
-            )
-
-        def _mark_cancelled() -> None:
-            self._hub.send(
-                TransferProgressMessage(
-                    transfer_id=transfer_id,
-                    bytes_transferred=0,
-                    bytes_total=entry.entry.size,
-                    state=TransferState.CANCELLED,
-                )
-            )
-            self._journal.mark_aborted(transfer_id)
-
-        # Wrap the copy in a task so we can race it against the cancel
-        # event. ``asyncio.create_task`` schedules it on the current
-        # loop; we keep a reference so ``cancel()`` actually reaches
-        # it on the cancel path.
-        copy_task: asyncio.Task[bool | None] = asyncio.create_task(
-            operation(  # type: ignore[operator]
-                src_path,
-                dst_path,
-                progress=_progress,
-                on_conflict=on_conflict,
-            )
+        return await self.transfer_runtime.run_one(
+            operation=operation,
+            src_path=src_path,
+            dst_path=dst_path,
+            on_conflict=on_conflict,
+            transfer_id=transfer_id,
+            bytes_total=entry.entry.size,
         )
-
-        def _settled_copy_result() -> bool:
-            if copy_task.cancelled():
-                _mark_cancelled()
-                return False
-            exc = copy_task.exception()
-            if exc is not None:
-                self._hub.send(
-                    TransferProgressMessage(
-                        transfer_id=transfer_id,
-                        bytes_transferred=0,
-                        bytes_total=entry.entry.size,
-                        state=TransferState.FAILED,
-                    )
-                )
-                self._journal.mark_aborted(transfer_id)
-                raise exc
-            if copy_task.result() is False:
-                self._hub.send(
-                    TransferProgressMessage(
-                        transfer_id=transfer_id,
-                        bytes_transferred=0,
-                        bytes_total=entry.entry.size,
-                        state=TransferState.SKIPPED,
-                    )
-                )
-                self._journal.mark_aborted(transfer_id)
-                return False
-            return True
-
-        cancel_task: asyncio.Task[bool] = asyncio.create_task(cancel_event.wait())
-        try:
-            await asyncio.wait(
-                {copy_task, cancel_task},
-                return_when=asyncio.FIRST_COMPLETED,
-            )
-        except BaseException:
-            # Outer-worker cancellation (a second press of the SAME
-            # operation cancels the prior ``run_worker`` via
-            # exclusive=True within its own group; Settings switch;
-            # shutdown). Copy and delete use separate groups, so a
-            # delete no longer cancels an in-flight copy. Without
-            # this branch the asyncio.wait raises CancelledError, the
-            # finally below only cleans up cancel_task, and copy_task
-            # is left running in the background — a multi-MB S3
-            # upload would keep writing bytes after the user-facing
-            # copy command has logically aborted. Cancel + await
-            # copy_task too, then re-raise so the caller's own
-            # cancellation chain stays intact.
-            if copy_task.done():
-                completed = _settled_copy_result()
-                if completed:
-                    self._mark_transfer_completed(transfer_id, entry)
-                raise
-            if not copy_task.done():
-                copy_task.cancel()
-                while not copy_task.done():
-                    try:
-                        await asyncio.shield(copy_task)
-                    except asyncio.CancelledError:
-                        continue
-                if not copy_task.cancelled():
-                    with contextlib.suppress(Exception):
-                        copy_task.result()
-            if not cancel_task.done():
-                cancel_task.cancel()
-                while not cancel_task.done():
-                    try:
-                        await asyncio.shield(cancel_task)
-                    except asyncio.CancelledError:
-                        continue
-            _mark_cancelled()
-            raise
-        finally:
-            if not cancel_task.done():
-                cancel_task.cancel()
-                with contextlib.suppress(Exception, asyncio.CancelledError):
-                    await cancel_task
-
-        # Prioritise copy_task done over cancel_task — handles the
-        # race where the copy completed naturally a microsecond
-        # before the user-cancel signal arrived. Treating it as
-        # cancelled would wrongly mark a successful copy as aborted.
-        if copy_task.done():
-            return _settled_copy_result()
-
-        # Cancel won the race. Kill the copy task so the underlying
-        # provider (aioboto3 client, file write) bails at its next
-        # await point. Mark journal aborted. The TransferVM has
-        # already transitioned to CANCELLED via the immediate
-        # cancel_command path in TransferVM._cancel, so no progress
-        # message is needed here — the overlay already shows
-        # ``⊘ cancelled`` from the moment the user clicked.
-        copy_task.cancel()
-        current = asyncio.current_task()
-        cancellation_count = current.cancelling() if current is not None else 0
-        cancelled = False
-        while not copy_task.done():
-            try:
-                await asyncio.shield(copy_task)
-            except asyncio.CancelledError:
-                current_count = current.cancelling() if current is not None else 0
-                if current_count > cancellation_count:
-                    cancelled = True
-                    cancellation_count = current_count
-        if not copy_task.cancelled():
-            with contextlib.suppress(Exception):
-                copy_task.result()
-        _mark_cancelled()
-        if cancelled:
-            raise asyncio.CancelledError
-        return False
 
     # ── Internal ────────────────────────────────────────────────────────────
 

@@ -7,6 +7,7 @@ plain helpers that more than one tier imports directly.
 from __future__ import annotations
 
 import asyncio
+import sys
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
@@ -17,6 +18,16 @@ if TYPE_CHECKING:
     from textual.widgets import TextArea
 
 DEFAULT_DRAIN_TIMEOUT_SECONDS = 30.0
+
+
+def local_transfer_filename(*, platform: str = sys.platform) -> str:
+    """Keep literal punctuation in real LocalFS fixtures on each platform.
+
+    Windows reserves question marks in ordinary filenames. POSIX continues to
+    exercise them physically; Windows retains literal hash/percent characters.
+    """
+    return "a#%.txt" if platform == "win32" else "a?#%.txt"
+
 
 # A worker that finishes may spawn further workers before it is removed from the
 # manager, so a bounded number of rounds is required rather than a single wait.

@@ -116,3 +116,37 @@ def test_expired_ids_are_pruned_with_bounded_transfer_history() -> None:
     assert overlay._expired_ids == retained_ids
     assert len(overlay._expired_ids) == 100
     vm.dispose()
+
+
+async def test_composed_overlay_zero_linger_and_history_controls(tmp_path, monkeypatch):
+    import aws_tui.ui.widgets.transfers_overlay as module
+    from tests.helpers import drain_workers
+    from tests.transfer_history_helpers import history_app
+
+    app, _, _, _, _ = history_app(tmp_path)
+    monkeypatch.setattr(module, "_LINGER_SECONDS", 0)
+    async with app.run_test(size=(80, 24)) as pilot:
+        await drain_workers(app)
+        vm = app.app_ctx.transfers_vm
+        vm.register(
+            TransferModel(
+                id="finished",
+                direction="upload",
+                source_label="report.csv",
+                destination_label="s3://reports/report.csv",
+                bytes_done=7,
+                bytes_total=7,
+                state=TransferState.COMPLETED,
+            )
+        )
+        overlay = app.query_one(TransfersOverlay)
+        await wait_until(lambda: "finished" in overlay._expired_ids, what="zero linger settled")
+        await wait_until(
+            lambda: not overlay.query(TransferRowWidget), what="expired session rows removed"
+        )
+        assert not overlay.has_class("-hidden")
+        await pilot.pause()
+        await pilot.click("#transfer-recovery-open")
+        assert app.screen.mode == "recovery"
+        await pilot.press("escape", "ctrl+t")
+        assert app.screen.mode == "history"
