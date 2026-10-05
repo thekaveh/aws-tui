@@ -104,3 +104,22 @@ ServiceTabStrip:focus > .service-tab.-active {
     background: $bg-sel;
     color: $text;
 }
+
+/* Transfer history and explicit recovery endpoint review. */
+TransferHistoryModal, RetryConflictModal { background: $bg 60%; }
+TransferHistoryModal > Vertical, RetryConflictModal > Vertical {
+    background: $bg-elev; color: $text; border: round $rule-dim;
+}
+TransferHistoryModal OptionList, TransferHistoryModal TextArea, RetryConflictModal TextArea {
+    background: $bg; color: $text; border: solid $rule-dim;
+}
+TransferHistoryModal OptionList:focus, TransferHistoryModal TextArea:focus,
+RetryConflictModal TextArea:focus { border: solid $accent; }
+TransferHistoryModal .modal-footer > ModalButton {
+    width: 1fr; min-width: 9; margin: 0; padding: 0 1;
+}
+RetryConflictModal .modal-footer > ModalButton {
+    width: 1fr; min-width: 10; margin: 0; padding: 0 1;
+}
+RetryConflictModal .modal-footer > ModalButton.-primary { min-width: 20; }
+RetryConflictModal .modal-footer > ModalButton.-danger { min-width: 13; }

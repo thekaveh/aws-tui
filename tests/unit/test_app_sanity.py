@@ -385,6 +385,13 @@ async def test_app_shutdown_awaits_hosted_vm_shutdown_before_root_dispose() -> N
 
     events: list[str] = []
 
+    class _HistoryVM:
+        async def shutdown(self) -> None:
+            events.append("history.shutdown")
+
+        def dispose(self) -> None:
+            events.append("history.dispose")
+
     class _ContentHost:
         async def shutdown(self) -> None:
             events.append("content.shutdown")
@@ -412,6 +419,7 @@ async def test_app_shutdown_awaits_hosted_vm_shutdown_before_root_dispose() -> N
         transfers_vm=SimpleNamespace(
             cancel_all_command=SimpleNamespace(execute=lambda: None), dispose=lambda: None
         ),
+        transfer_history_vm=_HistoryVM(),
         aws_session=SimpleNamespace(aclose_all_clients=close_clients),
         log_sink=SimpleNamespace(
             flush=lambda: events.append("logs.flush"),
@@ -431,8 +439,10 @@ async def test_app_shutdown_awaits_hosted_vm_shutdown_before_root_dispose() -> N
     await app._aws_tui_shutdown()
 
     assert events == [
+        "history.shutdown",
         "content.shutdown",
         "clients.close",
+        "history.dispose",
         "clipboard.dispose",
         "os-clipboard.dispose",
         "root.dispose",
@@ -464,6 +474,10 @@ async def test_app_shutdown_records_failures_continues_and_closes_logging_last()
     class _Root(_Disposable):
         content_host = _ContentHost()
 
+    class _HistoryVM(_Disposable):
+        async def shutdown(self) -> None:
+            events.append("history.shutdown")
+
     class _Log:
         def error(self, event: str, **fields: object) -> None:
             events.append(f"log.error:{event}:{fields['step']}")
@@ -492,6 +506,7 @@ async def test_app_shutdown_records_failures_continues_and_closes_logging_last()
             cancel_all_command=SimpleNamespace(execute=lambda: None),
             dispose=lambda: events.append("transfers.dispose"),
         ),
+        transfer_history_vm=_HistoryVM("history"),
         aws_session=SimpleNamespace(aclose_all_clients=close_clients),
         log_sink=_Log(),
         s3_connections_vm=_Disposable("connections", fail=True),
@@ -510,6 +525,8 @@ async def test_app_shutdown_records_failures_continues_and_closes_logging_last()
 
     await app._aws_tui_shutdown()
 
+    assert events.index("history.shutdown") < events.index("content.shutdown")
+    assert events.index("history.dispose") < events.index("root.dispose")
     assert events.index("root.dispose") < events.index("logs.flush")
     assert events.index("focus.dispose") < events.index("logs.flush")
     assert events.index("demo.close") < events.index("logs.flush")
@@ -529,6 +546,13 @@ async def test_app_shutdown_waits_for_host_after_cancellation() -> None:
     events: list[str] = []
     shutdown_started = asyncio.Event()
     finish_shutdown = asyncio.Event()
+
+    class _HistoryVM:
+        async def shutdown(self) -> None:
+            events.append("history.shutdown")
+
+        def dispose(self) -> None:
+            events.append("history.dispose")
 
     class _ContentHost:
         async def shutdown(self) -> None:
@@ -557,6 +581,7 @@ async def test_app_shutdown_waits_for_host_after_cancellation() -> None:
         transfers_vm=SimpleNamespace(
             cancel_all_command=SimpleNamespace(execute=lambda: None), dispose=lambda: None
         ),
+        transfer_history_vm=_HistoryVM(),
         aws_session=SimpleNamespace(aclose_all_clients=lambda: _complete()),
         log_sink=SimpleNamespace(flush=lambda: None, close=lambda: None),
         s3_connections_vm=_Disposable(),
@@ -575,13 +600,19 @@ async def test_app_shutdown_waits_for_host_after_cancellation() -> None:
     shutdown_task.cancel()
     await asyncio.sleep(0)
 
-    assert events == ["content.shutdown.started"]
+    assert events == ["history.shutdown", "content.shutdown.started"]
     assert not shutdown_task.done()
 
     finish_shutdown.set()
     await shutdown_task
 
-    assert events == ["content.shutdown.started", "content.shutdown.finished", "root.dispose"]
+    assert events == [
+        "history.shutdown",
+        "content.shutdown.started",
+        "content.shutdown.finished",
+        "history.dispose",
+        "root.dispose",
+    ]
 
 
 async def _complete() -> None:

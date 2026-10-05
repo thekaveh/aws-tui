@@ -107,6 +107,7 @@ class KeymapStore:
     DEFAULT_BINDINGS: ClassVar[dict[str, tuple[str, ...]]] = {
         "app.quit": ("q", "ctrl+c"),
         "app.command_palette": (":", "ctrl+k"),
+        "app.transfer_history": ("ctrl+t",),
         "app.help": ("?",),
         "app.open_settings": (",",),
         "pane.move_up": ("up", "k"),

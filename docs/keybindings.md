@@ -64,6 +64,7 @@ explicit meaning.
 
 | Action | Default | Notes |
 |---|---|---|
+| Transfer history and recovery | `Ctrl+T` | `app.transfer_history`; also available from the Transfers overlay and palette, including empty history |
 | S3 object details | `Ctrl+O` | Read-only current S3 object properties; Copy / Ctrl+C copies the full selected field |
 | Quick Look | `Space` | In normal file-pane mode, streams the first 64 KB of the cursor file; multi-select toggles its mark |
 | Fuzzy find | `Ctrl+P` | Find and select a loaded entry |
@@ -311,6 +312,7 @@ unbound until a handler ships.
 |---|---|---|---|
 | `app.quit` | `q` / `ctrl+c` | yes | Graceful shutdown |
 | `app.open_settings` | `,` | yes | Open the Settings navigation page |
+| `app.transfer_history` | `ctrl+t` | yes | Transfer history and recovery |
 | `app.command_palette` | `:` / `ctrl+k` | yes | Open the command palette |
 | `app.help` | `?` | yes | Help overlay |
 | `app.themes` | `t` | yes | Open theme picker modal |
@@ -447,3 +449,17 @@ calls. Navigation, source replacement, and committed credential recovery reset
 the filter; refreshing the same directory preserves it. The chosen sort lasts
 for the pane lifetime, including navigation, refresh, and source changes. Only visible real marks
 contribute to transfer targets until Clear restores hidden marks.
+
+## 7. Transfer history binding migration
+
+`app.transfer_history` defaults to `Ctrl+T`. An existing custom action bound to
+that key must move to another key, or explicitly remap/disable the new action:
+
+```toml
+[keybindings]
+"app.transfer_history" = ["ctrl+h"]
+```
+
+Custom bindings replace defaults. A new collision is rejected under the same
+strict rules as other actions; invalid overrides fall back to the default map
+with a startup warning. Choose a free key before saving the override.

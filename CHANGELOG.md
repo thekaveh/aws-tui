@@ -23,6 +23,16 @@ section; the current tree must not be tagged as v0.8.0.
 
 ### Added
 
+- Durable transfer summaries and explicit History / Recovery from `Ctrl+T`,
+  `app.transfer_history`, the palette, and the Transfers overlay. The 100 newest
+  safe summaries survive restart; background startup scanning preserves unknown
+  outcomes and separates publication certainty. User-requested copy retries
+  revalidate original connections and both endpoints, ask for a fresh conflict
+  decision, and use normal progress/cancellation with a new ID. Clear history
+  confirms removal of validated owned metadata only, preserving active operations
+  and source/destination files. No automatic replay or multipart resume.
+
+
 - Read-only current S3 object properties via `Ctrl+O`, `pane.object_details`
   and **S3 object details** in the Commands palette. A literal property table
   and wrapping full-value viewer expose metadata, tags, encryption and reported

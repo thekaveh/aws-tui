@@ -2333,3 +2333,85 @@ def test_windows_reparse_refusal_is_an_unsupported_source_when_reading() -> None
 
     # A file with no reparse attribute is not refused at all.
     local_fs._windows_reject_reparse(0, "C:\\x\\plain.txt", error=UnsupportedSourceError)
+
+
+async def test_publication_hook_precedes_any_destination_mutation_and_each_rename_collision():
+    calls = []
+
+    class ObservedFS(InMemoryFS):
+        atomic_write_replaces = False
+
+        async def claim_directory(self, path):
+            assert calls
+            return await super().claim_directory(path)
+
+        async def atomic_publish_no_replace(self, source, destination, **kwargs):
+            assert calls[-1] == (PathRef(("source",)), destination)
+            if len(calls) == 2:
+                await _put_file(self, destination, b"collision")
+            return await super().atomic_publish_no_replace(source, destination, **kwargs)
+
+    source, destination = InMemoryFS(), ObservedFS()
+    await _put_file(source, PathRef(("source",)), b"payload")
+    await _put_file(destination, PathRef(("target",)), b"existing")
+
+    async def before_publication(src, target):
+        calls.append((src, target))
+
+    copier = CrossFsCopy(
+        source=source, destination=destination, before_publication=before_publication
+    )
+    await copier.copy(
+        PathRef(("source",)), PathRef(("target",)), on_conflict=ConflictResolution.RENAME
+    )
+    assert calls[0] == (PathRef(("source",)), PathRef(("target (1)",)))
+    assert calls[-1] == (PathRef(("source",)), PathRef(("target (2)",)))
+    assert await _read_file(destination, PathRef(("target (2)",))) == b"payload"
+
+
+async def test_direct_atomic_rename_hook_rebinds_before_collision_retry():
+    seen = []
+
+    class AtomicFS(InMemoryFS):
+        async def write_stream(self, destination, source, **kwargs):
+            assert seen[-1][1] == destination
+            if destination.name == "target (1)":
+                await InMemoryFS.write_stream(self, destination, _agen([b"collision"]))
+            return await super().write_stream(destination, source, **kwargs)
+
+    source, destination = InMemoryFS(), AtomicFS()
+    await _put_file(source, PathRef(("source",)), b"payload")
+    await InMemoryFS.write_stream(destination, PathRef(("target",)), _agen([b"existing"]))
+
+    async def bind(src, target):
+        seen.append((src, target))
+
+    copier = CrossFsCopy(source=source, destination=destination, before_publication=bind)
+    await copier.copy(
+        PathRef(("source",)), PathRef(("target",)), on_conflict=ConflictResolution.RENAME
+    )
+    assert seen == [
+        (PathRef(("source",)), PathRef(("target (1)",))),
+        (PathRef(("source",)), PathRef(("target (2)",))),
+    ]
+    assert await _read_file(destination, PathRef(("target (2)",))) == b"payload"
+
+
+async def test_failed_publication_hook_cleans_only_owned_stage():
+    source, destination = InMemoryFS(), InMemoryFS()
+    destination.atomic_write_replaces = False
+    await _put_file(source, PathRef(("source",)), b"payload")
+    await _put_file(destination, PathRef(("unrelated",)), b"keep")
+    calls = 0
+
+    async def bind(src, target):
+        nonlocal calls
+        calls += 1
+        if calls == 2:
+            raise ProviderError("intent refused")
+
+    copier = CrossFsCopy(source=source, destination=destination, before_publication=bind)
+    with pytest.raises(ProviderError, match="intent refused"):
+        await copier.copy(PathRef(("source",)), PathRef(("target",)))
+    assert await _read_file(source, PathRef(("source",))) == b"payload"
+    assert {entry.name for entry in await destination.list(PathRef(()))} == {"unrelated"}

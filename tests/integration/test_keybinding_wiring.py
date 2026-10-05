@@ -46,6 +46,7 @@ _EXPECTED: set[tuple[str, str, bool, bool]] = {
     ("question_mark", "dispatch('app.help')", True, False),
     ("colon", "dispatch('app.command_palette')", True, False),
     ("ctrl+k", "dispatch('app.command_palette')", False, True),
+    ("ctrl+t", "dispatch('app.transfer_history')", False, True),
     ("t", "dispatch('app.themes')", True, False),
     ("T", "dispatch('app.cycle_theme')", True, False),
     ("comma", "dispatch('app.open_settings')", True, False),

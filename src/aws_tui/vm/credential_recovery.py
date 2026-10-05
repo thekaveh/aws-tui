@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 import shlex
 from dataclasses import dataclass
 from enum import StrEnum
@@ -11,6 +13,7 @@ from aws_tui.domain.filesystem import (
     PermissionDeniedError,
     ProviderUnreachableError,
 )
+from aws_tui.domain.transfer_history import TransferConnectionIdentity
 from aws_tui.infra.aws_session import TokenState
 from aws_tui.infra.connection_resolver import Connection
 
@@ -140,4 +143,25 @@ __all__ = [
     "RecoveryGuidance",
     "classify_recovery_failure",
     "connection_binding_identity",
+    "connection_history_identity",
 ]
+
+
+def connection_history_identity(
+    connection: Connection | None, provider: object
+) -> TransferConnectionIdentity:
+    """Hash the original routing and provider namespace without storing secrets."""
+    namespace = getattr(provider, "storage_identity", None)
+    if namespace is None:
+        if connection is None:
+            raise ValueError("transfer local namespace is unavailable")
+        namespace = ("namespace_unavailable",)
+    routing = connection_binding_identity(connection) if connection is not None else ("local",)
+    fingerprint = hashlib.sha256(
+        json.dumps((routing, namespace), separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
+    return TransferConnectionIdentity(
+        kind=connection.kind if connection is not None else "local",
+        name=connection.name if connection is not None else "",
+        fingerprint=fingerprint,
+    )

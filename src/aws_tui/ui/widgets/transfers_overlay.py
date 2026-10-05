@@ -16,7 +16,8 @@ from __future__ import annotations
 
 import math
 import os
-from typing import ClassVar
+from collections.abc import Callable
+from typing import ClassVar, Literal
 
 from reactivex.abc import DisposableBase
 from textual.app import ComposeResult
@@ -29,6 +30,7 @@ from vmx import Message, MessageHub, PropertyChangedMessage
 
 from aws_tui.ui.formatters import humanize_bytes
 from aws_tui.ui.widgets._subscriber import HubSubscriberMixin
+from aws_tui.vm.file_manager.transfer_history_vm import TransferHistoryVM
 from aws_tui.vm.file_manager.transfer_vm import TransferState, TransferVM
 from aws_tui.vm.file_manager.transfers_vm import TransfersVM
 
@@ -311,6 +313,8 @@ class TransfersOverlay(Widget):
         max-height: 60%;
         padding: 1 0;
     }
+    TransfersOverlay #transfers-history-controls { height: 1; padding: 0 1; }
+    TransfersOverlay #transfers-history-controls Button { width: 1fr; min-width: 9; height: 1; }
     TransfersOverlay.-hidden { display: none; }
     TransfersOverlay #transfers-overlay-inner {
         width: 100%;
@@ -331,9 +335,13 @@ class TransfersOverlay(Widget):
         hub: MessageHub[Message],
         id: str | None = None,
         classes: str | None = None,
+        history_vm: TransferHistoryVM | None = None,
+        open_history: Callable[[Literal["history", "recovery"]], None] | None = None,
     ) -> None:
         super().__init__(id=id, classes=classes)
         self._vm: TransfersVM = vm
+        self._history_vm = history_vm
+        self._open_history = open_history
         self._hub: MessageHub[Message] = hub
         self._sub: DisposableBase | None = None
         self._expired_ids: set[str] = set()
@@ -353,6 +361,10 @@ class TransfersOverlay(Widget):
     def compose(self) -> ComposeResult:
         yield Static("▌ TRANSFERS", id="transfers-overlay-title", markup=False)
         yield Vertical(id="transfers-overlay-inner")
+        if self._history_vm is not None:
+            with Horizontal(id="transfers-history-controls"):
+                yield Button("History", id="transfer-history-open", compact=True, flat=True)
+                yield Button("Recovery", id="transfer-recovery-open", compact=True, flat=True)
 
     def on_mount(self) -> None:
         self._sub = self._hub.messages.subscribe(on_next=self._on_hub_message)
@@ -365,6 +377,9 @@ class TransfersOverlay(Widget):
 
     def _on_hub_message(self, msg: object) -> None:
         if not isinstance(msg, PropertyChangedMessage):
+            return
+        if self._history_vm is not None and msg.sender_object is self._history_vm:
+            self.call_after_refresh(self._rebuild)
             return
         if msg.sender_object is not self._vm:
             return
@@ -400,10 +415,22 @@ class TransfersOverlay(Widget):
             if t.id not in currently_mounted:
                 container.mount(TransferRowWidget(t, hub=self._hub))
 
-        if visible:
+        if visible or (self._history_vm is not None and self._history_vm.records):
             self.remove_class("-hidden")
         else:
             self.add_class("-hidden")
+
+    def open_history(self, mode: Literal["history", "recovery"] = "history") -> None:
+        """Keyboard/palette bridge remains usable even when the overlay is empty."""
+        if self._open_history is not None:
+            self._open_history(mode)
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id in {"transfer-history-open", "transfer-recovery-open"}:
+            event.stop()
+            self.open_history(
+                "recovery" if event.button.id == "transfer-recovery-open" else "history"
+            )
 
     def _arm_linger(self, transfer_id: str) -> None:
         """Schedule ``transfer_id`` to expire from the overlay after the
@@ -424,7 +451,10 @@ class TransfersOverlay(Widget):
             self._expired_ids.add(transfer_id)
             self.call_after_refresh(self._rebuild)
 
-        self.set_timer(_LINGER_SECONDS, _expire)
+        if _LINGER_SECONDS == 0:
+            self.call_after_refresh(_expire)
+        else:
+            self.set_timer(_LINGER_SECONDS, _expire)
 
 
 __all__ = ["TransferRowWidget", "TransfersOverlay"]
