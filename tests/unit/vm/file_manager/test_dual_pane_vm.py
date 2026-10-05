@@ -272,13 +272,14 @@ async def test_dual_copy_rejects_oversized_batch_before_journaling(
 @pytest.mark.asyncio
 async def test_dual_queued_cancel_marks_journal_aborted_immediately(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Cancelling a queued row must survive a crash before its turn runs."""
     dp, hub = await _make_dual(tmp_path)
     try:
         dp.left.enter_multiselect_command.execute()
         dp.left.select_all_command.execute()
-        transfer_ids = dp._pre_register_pending(
+        transfer_ids = await dp._pre_register_pending(
             list(dp.left.marked_entries),
             dp.left,
             dp.right,
@@ -286,8 +287,19 @@ async def test_dual_queued_cancel_marks_journal_aborted_immediately(
         assert len(transfer_ids) == 2
 
         queued_id = transfer_ids[1][1]
+        aborted = asyncio.Event()
+        loop = asyncio.get_running_loop()
+        original_abort = dp._journal.mark_aborted
+
+        def record_abort(tid: str) -> None:
+            original_abort(tid)
+            if tid == queued_id:
+                loop.call_soon_threadsafe(aborted.set)
+
+        monkeypatch.setattr(dp._journal, "mark_aborted", record_abort)
         hub.send(TransferCancelRequestedMessage(transfer_id=queued_id))
 
+        await asyncio.wait_for(aborted.wait(), 2)
         unfinished_ids = {
             entry.transfer_id
             for entry in dp._journal.find_unfinished()  # type: ignore[attr-defined]

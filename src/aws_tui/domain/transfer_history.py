@@ -426,8 +426,9 @@ class TransferHistoryStore:
             # a real clear/retention failure which the caller must see.
             path.unlink(missing_ok=True)
 
-    def clear(self) -> None:
+    def clear(self, *, exclude_ids: frozenset[str] = frozenset()) -> None:
         with self._serialized():
             for record in self._load_all():
-                self._remove_owned(record)
+                if record.id not in exclude_ids:
+                    self._remove_owned(record)
             fsync_directory(self.base_dir)

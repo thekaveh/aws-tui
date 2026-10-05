@@ -51,6 +51,7 @@ from aws_tui.domain.filesystem import (
     ProviderError,
     ProviderUnreachableError,
 )
+from aws_tui.domain.transfer_history import TransferConnectionIdentity
 from aws_tui.infra.redaction import redact_text
 from aws_tui.vm._observable import ObserverSafeSubject, send_value_free
 from aws_tui.vm.file_manager.entry_vm import EntryState, EntryVM
@@ -150,6 +151,7 @@ class _ProviderRecoveryStage:
     identity_label: str | None
     path_protocol: str
     connection_key: tuple[str, str]
+    transfer_connection: TransferConnectionIdentity | None
     used_root_fallback: bool
 
 
@@ -267,6 +269,7 @@ class PaneVM:
         identity_label: str | None = None,
         path_protocol: str = "",
         connection_key: tuple[str, str] | None = None,
+        transfer_connection: TransferConnectionIdentity | None = None,
     ) -> None:
         self._hub: MessageHub[Message] = hub
         self._dispatcher: Dispatcher = dispatcher
@@ -286,6 +289,7 @@ class PaneVM:
         # swap_provider BEFORE _reload() runs so hub subscribers always
         # see the correct key when a state change fires.
         self._connection_key: tuple[str, str] | None = connection_key
+        self._transfer_connection = transfer_connection
 
         self._entries: list[EntryVM] = []
         self._filtered: tuple[int, ...] = ()  # indices into self._entries
@@ -847,6 +851,10 @@ class PaneVM:
     async def refresh(self) -> None:
         await self._reload()
 
+    @property
+    def transfer_connection(self) -> TransferConnectionIdentity | None:
+        return self._transfer_connection
+
     async def stage_provider_recovery(
         self,
         provider: FileSystemProvider,
@@ -855,6 +863,7 @@ class PaneVM:
         identity_label: str | None,
         path_protocol: str,
         connection_key: tuple[str, str],
+        transfer_connection: TransferConnectionIdentity | None = None,
     ) -> _ProviderRecoveryStage:
         """Read a replacement provider while leaving the live pane untouched."""
         original_provider = self._provider
@@ -885,6 +894,7 @@ class PaneVM:
             path_protocol=path_protocol,
             connection_key=connection_key,
             used_root_fallback=used_root_fallback,
+            transfer_connection=transfer_connection,
         )
 
     def can_commit_provider_recovery(self, staged: _ProviderRecoveryStage) -> bool:
@@ -905,6 +915,7 @@ class PaneVM:
         self._identity_label = staged.identity_label
         self._path_protocol = staged.path_protocol
         self._connection_key = staged.connection_key
+        self._transfer_connection = staged.transfer_connection
         self._path = staged.path
         filter_reset = bool(self._filter_text)
         self._filter_text = ""
@@ -925,6 +936,7 @@ class PaneVM:
         identity_label: str | None = None,
         path_protocol: str | None = None,
         connection_key: tuple[str, str] | None = None,
+        transfer_connection: TransferConnectionIdentity | None = None,
     ) -> None:
         """Replace this pane's filesystem provider at runtime.
 
@@ -947,6 +959,7 @@ class PaneVM:
         # Update the key ATOMICALLY before _reload so hub subscribers
         # see the correct connection when the state-change fires.
         self._connection_key = connection_key
+        self._transfer_connection = transfer_connection
         self._path = _ROOT_PATH
         self._cursor_index = 0
         filter_reset = bool(self._filter_text)

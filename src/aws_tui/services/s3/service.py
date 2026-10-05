@@ -29,8 +29,10 @@ from aws_tui.domain.s3_fs import S3FS
 from aws_tui.domain.transfer_journal import TransferJournal
 from aws_tui.infra.connection_resolver import Connection
 from aws_tui.infra.redaction import safe_endpoint_display
+from aws_tui.vm.credential_recovery import connection_history_identity
 from aws_tui.vm.file_manager.dual_pane_vm import DualPaneVM
 from aws_tui.vm.file_manager.pane_vm import PaneVM
+from aws_tui.vm.file_manager.transfer_runtime import TransferRuntime
 from aws_tui.vm.services_protocol import ServiceDescriptor
 
 #: Test hook — when provided, replaces the real ``S3FS`` construction.
@@ -128,12 +130,15 @@ class S3Service:
         self._dispatcher: Dispatcher = dispatcher
         self._local_root: Path | None = local_root
         self._s3_fs_factory: S3FsFactory | None = s3_fs_factory
+        self._transfer_runtime = TransferRuntime(transfer_journal, hub) if hub is not None else None
 
     def bind_hub(self, hub: MessageHub[Message]) -> None:
         """Late-wire the hub (used when the service is registered before
         :class:`RootVM` has constructed its hub).
         """
         self._hub = hub
+        if self._transfer_runtime is None:
+            self._transfer_runtime = TransferRuntime(self._journal, hub)
 
     # ── Service protocol ────────────────────────────────────────────────────
 
@@ -172,6 +177,7 @@ class S3Service:
             identity_label=_format_pane_title(connection),
             path_protocol="s3:",
             connection_key=(connection.kind, connection.name),
+            transfer_connection=connection_history_identity(connection, s3_provider),
         )
         right = PaneVM(
             provider=local_provider,
@@ -181,6 +187,7 @@ class S3Service:
             identity_label="local",
             path_protocol="",
             connection_key=None,
+            transfer_connection=connection_history_identity(None, local_provider),
         )
         return DualPaneVM(
             left=left,
@@ -188,7 +195,14 @@ class S3Service:
             hub=hub,
             dispatcher=self._dispatcher,
             transfer_journal=self._journal,
+            transfer_runtime=self.transfer_runtime,
         )
+
+    @property
+    def transfer_runtime(self) -> TransferRuntime:
+        if self._transfer_runtime is None:
+            raise RuntimeError("S3Service runtime requested before bind_hub")
+        return self._transfer_runtime
 
     @property
     def transfer_journal(self) -> TransferJournal:

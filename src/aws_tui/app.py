@@ -109,6 +109,7 @@ from aws_tui.vm.credential_recovery import (
     RecoveryGuidance,
     classify_recovery_failure,
     connection_binding_identity,
+    connection_history_identity,
 )
 from aws_tui.vm.emr_serverless.page_vm import EmrServerlessPageVM
 from aws_tui.vm.file_manager.dual_pane_vm import DualPaneVM, FocusedPane
@@ -1542,23 +1543,26 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
         def _make_local() -> FileSystemProvider:
             return self._make_local_provider()
 
+        left_provider, right_provider = _make_local(), _make_local()
         left = PaneVM(
-            provider=_make_local(),
+            provider=left_provider,
             hub=ctx.hub,
             dispatcher=ctx.dispatcher,
             id_prefix="pane.local",
             identity_label="local",
             path_protocol="",
             connection_key=None,
+            transfer_connection=connection_history_identity(None, left_provider),
         )
         right = PaneVM(
-            provider=_make_local(),
+            provider=right_provider,
             hub=ctx.hub,
             dispatcher=ctx.dispatcher,
             id_prefix="pane.local",
             identity_label="local",
             path_protocol="",
             connection_key=None,
+            transfer_connection=connection_history_identity(None, right_provider),
         )
         journal = s3_service.transfer_journal
         if journal is None:
@@ -1570,6 +1574,7 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
             hub=ctx.hub,
             dispatcher=ctx.dispatcher,
             transfer_journal=journal,
+            transfer_runtime=s3_service.transfer_runtime,
         )
         try:
             # ContentHostVM constructs the candidate before retiring the
@@ -3408,6 +3413,7 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
                 identity_label=_format_pane_title(resolved),
                 path_protocol="s3:",
                 connection_key=(resolved.kind, resolved.name),
+                transfer_connection=connection_history_identity(resolved, provider),
             )
             staged.append((pane, stage))
 
@@ -4034,6 +4040,9 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
             identity_label=next_label,
             path_protocol=new_protocol,
             connection_key=new_conn_key,
+            transfer_connection=connection_history_identity(
+                None if isinstance(payload, str) else payload, new_provider
+            ),
         )
 
     async def action_next_emr_application(self) -> None:
@@ -4493,11 +4502,13 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
         swap = getattr(pane, "swap_provider", None)
         if swap is None:
             return
+        provider = self._make_local_provider()
         await swap(
-            self._make_local_provider(),
+            provider,
             identity_label="local",
             path_protocol="",
             connection_key=None,
+            transfer_connection=connection_history_identity(None, provider),
         )
 
     async def _rebind_pane_to_connection(self, pane: object, conn: object) -> None:
@@ -4519,6 +4530,7 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
             identity_label=_format_pane_title(conn),  # type: ignore[arg-type]
             path_protocol="s3:",
             connection_key=(conn.kind, conn.name),  # type: ignore[attr-defined]
+            transfer_connection=connection_history_identity(conn, provider),  # type: ignore[arg-type]
         )
 
     async def action_themes(self) -> None:

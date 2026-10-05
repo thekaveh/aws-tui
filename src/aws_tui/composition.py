@@ -28,6 +28,7 @@ if TYPE_CHECKING:
 from vmx import Message, MessageHub, RxDispatcher
 from vmx.services.dispatcher import Dispatcher
 
+from aws_tui.domain.transfer_history import TransferConnectionIdentity
 from aws_tui.domain.transfer_journal import TransferJournal
 from aws_tui.infra.aws_session import AwsSession
 from aws_tui.infra.clipboard import ClipboardPort, NativeClipboard
@@ -53,6 +54,13 @@ from aws_tui.vm.chrome.confirm_vm import ConfirmationVM
 from aws_tui.vm.chrome.focus_coordinator_vm import FocusCoordinatorVM
 from aws_tui.vm.chrome.quick_look_vm import QuickLookVM
 from aws_tui.vm.clipboard_vm import ClipboardVM
+from aws_tui.vm.credential_recovery import connection_history_identity
+from aws_tui.vm.file_manager.transfer_history_vm import (
+    RecoveryRefused,
+    ResolvedTransferEndpoint,
+    TransferHistoryVM,
+)
+from aws_tui.vm.file_manager.transfer_runtime import TransferRuntime
 from aws_tui.vm.file_manager.transfers_vm import TransfersVM
 from aws_tui.vm.root_vm import RootVM
 from aws_tui.vm.service_source_vm import ServiceSelectionStore
@@ -90,6 +98,7 @@ class AppContext:
         "s3_connections_vm",
         "table_clipboard_vm",
         "theme_store",
+        "transfer_history_vm",
         "transfer_journal",
         "transfers_vm",
         "unreachable_connections",
@@ -121,6 +130,7 @@ class AppContext:
         clipboard: ClipboardPort | None = None,
         clipboard_vm: ClipboardVM | None = None,
         duckdb_port: DuckDbPort | None = None,
+        transfer_history_vm: TransferHistoryVM | None = None,
         demo: bool = False,
         demo_emrs: dict[str, InMemoryEmr] | None = None,
         unreachable_connections: set[tuple[str, str]] | None = None,
@@ -139,6 +149,54 @@ class AppContext:
         self.quick_look_vm = quick_look_vm
         self.command_palette_vm = command_palette_vm
         self.transfer_journal = transfer_journal
+        service = registry.get("s3") if "s3" in registry else None
+        runtime = (
+            service.transfer_runtime
+            if isinstance(service, S3Service)
+            else TransferRuntime(transfer_journal, hub)
+        )
+
+        async def resolve_history_endpoint(
+            identity: TransferConnectionIdentity,
+        ) -> ResolvedTransferEndpoint:
+            def build() -> ResolvedTransferEndpoint:
+                current_service = registry.get("s3")
+                if not isinstance(current_service, S3Service):
+                    raise RecoveryRefused(
+                        "connection_changed", "The original connection is unavailable or changed."
+                    )
+                if identity.kind == "local":
+                    provider = current_service.build_local_provider()
+                    bound = connection_history_identity(None, provider)
+                else:
+                    connection = connection_resolver.resolve(identity.name)
+                    if connection.kind != identity.kind:
+                        raise RecoveryRefused(
+                            "connection_changed",
+                            "The original connection is unavailable or changed.",
+                        )
+                    provider = current_service.build_remote_provider(connection)
+                    if getattr(provider, "storage_identity", None) is None:
+                        raise RecoveryRefused(
+                            "connection_changed",
+                            "The original connection is unavailable or changed.",
+                        )
+                    bound = connection_history_identity(connection, provider)
+                if bound != identity:
+                    raise RecoveryRefused(
+                        "connection_changed", "The original connection is unavailable or changed."
+                    )
+                return ResolvedTransferEndpoint(provider, bound)
+
+            return await runtime.disk.call(build)
+
+        self.transfer_history_vm = transfer_history_vm or TransferHistoryVM(
+            transfer_journal,
+            resolve_history_endpoint,
+            hub,
+            dispatcher,
+            runtime=runtime,
+        )
         self.hub = hub
         self.dispatcher = dispatcher
         self.initial_theme = initial_theme
@@ -194,6 +252,7 @@ class AppContext:
         workers and AWS clients can exist.
         """
         for disposable in (
+            self.transfer_history_vm,
             self.s3_connections_vm,
             self.command_palette_vm,
             self.quick_look_vm,

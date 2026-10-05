@@ -41,6 +41,7 @@ from aws_tui.domain.transfer_history import (
     descriptor_from_json,
     descriptor_to_json,
     ensure_private_directory,
+    fsync_directory,
     open_regular_metadata,
     parse_metadata_json,
     read_metadata,
@@ -261,6 +262,24 @@ class TransferJournal:
                 if record is not None:
                     records[record.id] = record
             return tuple(sorted(records.values(), key=lambda r: (r.updated_at, r.id), reverse=True))
+
+    def clear_history(
+        self,
+        *,
+        exclude_ids: frozenset[str] = frozenset(),
+        exclude_interrupted: bool = False,
+    ) -> None:
+        """Clear validated owned metadata only, preserving reserved operations."""
+        with self._lock:
+            self.history_store.clear(exclude_ids=exclude_ids)
+            if not exclude_interrupted:
+                for path in self._dir.glob("*.jsonl"):
+                    if path.stem in exclude_ids:
+                        continue
+                    record = self._safe_state(path)
+                    if record is not None and self._safe_state(path) == record:
+                        self.purge(record.id)
+            fsync_directory(self._dir)
 
     def _safe_state(self, path: Path) -> TransferHistoryRecord | None:
         try:
