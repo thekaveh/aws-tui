@@ -77,9 +77,108 @@ async def test_settings_view_shows_connections_section_expanded_by_default(tmp_p
             themes_section = view.query_one("#section-themes", Collapsible)
             assert themes_section.collapsed is True
             assert themes_section.disabled is True
+            assert app.focused is view._section_focus_target()
     finally:
         vm.dispose()
         s3.dispose()
+
+
+@pytest.mark.parametrize(
+    "target",
+    [
+        "athena-title",
+        "drafts-toggle",
+        "connections-button",
+        "initial-title",
+        "initial-scroll",
+        "unset",
+    ],
+)
+async def test_deferred_mount_focus_preserves_selected_settings_control(
+    tmp_path, monkeypatch, target
+):
+    from textual.widgets import Collapsible
+
+    from tests.athena_drafts_helpers import runtime_at
+    from tests.helpers import focus_and_settle, wait_until
+
+    vm, s3 = _make_vm(tmp_path)
+    drafts, _ = runtime_at(tmp_path, enabled=False)
+    vm._athena_drafts = drafts
+    pending = []
+    schedule = SettingsView.call_after_refresh
+
+    def hold_mount_focus(view, callback, *args, **kwargs):
+        pending.append((view, callback, args, kwargs))
+        return True
+
+    monkeypatch.setattr(SettingsView, "call_after_refresh", hold_mount_focus)
+
+    class Host(App[None]):
+        def compose(self):
+            yield SettingsView(vm=vm, hub=_hub())
+
+    app = Host()
+    try:
+        async with app.run_test(size=(80, 24)) as pilot:
+            view = app.query_one(SettingsView)
+            first_title = view._section_focus_target()
+            assert first_title is not None
+            section = view.query_one("#section-athena-drafts", Collapsible)
+            athena_title = next(
+                w
+                for w in section.walk_children()
+                if callable(getattr(w, "action_toggle_collapsible", None))
+            )
+            selected = {
+                "athena-title": athena_title,
+                "drafts-toggle": view.query_one("#athena-drafts-toggle"),
+                "connections-button": view.query_one("#add-empty"),
+                "initial-title": first_title,
+                "initial-scroll": view.query_one("#settings-scroll"),
+                "unset": first_title,
+            }[target]
+            await focus_and_settle(selected)
+            if target == "unset":
+                app.set_focus(None)
+                assert app.focused is None
+            else:
+                assert app.focused is selected
+
+            # Reproduce the loaded-run ordering: the initial mount refresh
+            # callback executes after a newer, explicit control selection.
+            assert len(pending) == 1
+            held_view, callback, args, kwargs = pending.pop()
+            completed = []
+
+            def release_mount_focus():
+                callback(*args, **kwargs)
+                app.call_later(lambda: completed.append(True))
+
+            schedule(held_view, release_mount_focus)
+            held_view.refresh()
+            await wait_until(lambda: bool(completed), what="deferred Settings mount focus applied")
+            await pilot.pause()
+            expected = first_title if target in {"unset", "initial-scroll"} else selected
+            assert app.focused is expected
+            if target == "athena-title":
+                await pilot.press("enter")
+                await pilot.pause()
+                assert section.collapsed
+                assert not view.query_one("#section-connections", Collapsible).collapsed
+                await pilot.press("enter")
+                await pilot.pause()
+                assert not section.collapsed
+
+            # An explicit Settings entry still returns to its first section.
+            view.focus_default()
+            await pilot.pause()
+            assert app.focused is first_title
+    finally:
+        vm.dispose()
+        s3.dispose()
+        await drafts.shutdown()
+        drafts.dispose()
 
 
 async def test_drafts_section_keyboard_reentry_and_real_path(tmp_path):

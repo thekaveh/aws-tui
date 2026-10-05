@@ -136,8 +136,7 @@ class SettingsView(Widget):
         return None
 
     def _maybe_focus(self, title: Widget) -> None:
-        """Land focus on the first section title UNLESS the NavMenu
-        rail already owns Textual focus (user is arrow-walking).
+        """Supply initial title focus without replacing a newer control selection.
 
         Round-3 §9.bis.11 / PR #99(a) closure: when a
         :class:`FocusCoordinatorVM` is wired, the rail-walk gate
@@ -153,7 +152,18 @@ class SettingsView(Widget):
             and self._focus_coordinator.focused_slot is FocusSlot.NAV_MENU
         ):
             return
-        if textual_focused is None or self.has_focus_within:
+        # A later Settings selection owns focus just as the navigation rail
+        # does; mount's deferred default must not redirect its next key press.
+        # Textual's initial focus pass may land on our scroll container first.
+        if (
+            textual_focused is None
+            or textual_focused is title
+            or (
+                isinstance(textual_focused, VerticalScroll)
+                and textual_focused.parent is self
+                and textual_focused.id == "settings-scroll"
+            )
+        ):
             title.focus()
 
     def focus_default(self) -> None:
