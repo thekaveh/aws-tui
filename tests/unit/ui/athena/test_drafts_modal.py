@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from html import unescape
 
+import pytest
 from textual.app import App
 from textual.containers import VerticalScroll
 from textual.widgets import Button, OptionList
@@ -183,6 +184,63 @@ async def test_manager_nonregular_warning_and_clear_preserve_targets(tmp_path):
             assert (owned / "nested").read_text() == "PRIVATE_NESTED"
             assert runtime.skipped == 1
             assert runtime.error_text
+    finally:
+        await page.shutdown()
+        page.dispose()
+        await runtime.shutdown()
+        runtime.dispose()
+
+
+@pytest.mark.parametrize(
+    ("removed_id", "callback"),
+    [
+        *(
+            (name, "runtime")
+            for name in ("list", "warning", "detail", "restore", "delete", "clear", "keep")
+        ),
+        ("list", "highlight"),
+        ("detail", "highlight"),
+        ("list", "focus"),
+        ("restore", "focus"),
+    ],
+)
+async def test_manager_deferred_refresh_during_partial_child_teardown(
+    tmp_path, removed_id, callback
+):
+    from aws_tui.ui.widgets.athena.drafts_modal import AthenaDraftsModal
+
+    runtime, store = runtime_at(tmp_path)
+    page = make_page_vm(PageClient(), drafts=runtime)
+    await page.setup()
+    assert store.save(record(), permit=DraftPermit()).code is None
+    app = App()
+    try:
+        async with app.run_test() as pilot:
+            modal = AthenaDraftsModal(page, hub=page._hub)
+            app.push_screen(modal)
+            await drain_workers(app)
+            await pilot.pause()
+            listing = modal.query_one(OptionList)
+            highlighted = OptionList.OptionHighlighted(listing, listing.get_option_at_index(0), 0)
+            await modal.query_one(f"#athena-drafts-{removed_id}").remove()
+            assert not modal.query(f"#athena-drafts-{removed_id}")
+            assert modal.is_mounted
+            assert modal.is_attached
+            assert modal.is_running
+            if callback == "runtime":
+                await runtime.refresh()
+            elif callback == "highlight":
+                modal.post_message(highlighted)
+            else:
+                if removed_id == "list":
+                    modal.query_one("#athena-drafts-restore", Button).disabled = True
+                modal.call_after_refresh(modal._restore_action_focus, "athena-drafts-restore")
+            await pilot.pause()
+            assert len(runtime.items) == 1
+            assert page.query.sql == ""
+            await pilot.press("escape")
+            await pilot.pause()
+            assert app.screen is not modal
     finally:
         await page.shutdown()
         page.dispose()

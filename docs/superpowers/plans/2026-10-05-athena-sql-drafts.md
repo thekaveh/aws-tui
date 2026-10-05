@@ -1822,6 +1822,7 @@ from typing import ClassVar
 
 from reactivex.abc import DisposableBase
 from textual.app import ComposeResult
+from textual.css.query import NoMatches
 from textual.widget import Widget
 from textual.widgets import Button, Static
 from vmx import Message, MessageHub
@@ -1880,16 +1881,21 @@ class AthenaDraftsPanel(DeferredWorkerMixin, Widget):
     def _refresh(self) -> None:
         if not self.is_mounted or not self.is_attached or not self.is_running:
             return
-        button = self.query_one("#athena-drafts-toggle", Button)
+        try:
+            button = self.query_one("#athena-drafts-toggle", Button)
+            cleanup = self.query_one("#athena-drafts-cleanup", Button)
+            status_widget = self.query_one("#athena-drafts-setting-status", Static)
+        except NoMatches:
+            # Children can be removed before the parent lifecycle flags change.
+            return
         button.label = (
             "Disable and delete drafts" if self._vm.enabled else "Enable local SQL drafts"
         )
         button.disabled = self._vm.read_only or self._vm.busy or self._pending
-        cleanup = self.query_one("#athena-drafts-cleanup", Button)
         cleanup.display = self._vm.cleanup_required
         cleanup.disabled = self._vm.busy or self._pending or self._vm.read_only
         status = "Unavailable in demo mode" if self._vm.read_only else self._vm.error_text
-        self.query_one("#athena-drafts-setting-status", Static).update(status or "")
+        status_widget.update(status or "")
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
         if (
@@ -2039,6 +2045,7 @@ from rich.text import Text
 from textual.app import ComposeResult
 from textual.binding import Binding, BindingType
 from textual.containers import Grid, Vertical, VerticalScroll
+from textual.css.query import NoMatches
 from textual.dom import DOMNode
 from textual.screen import ModalScreen
 from textual.widgets import Button, OptionList, Static
@@ -2154,8 +2161,16 @@ class AthenaDraftsModal(DeferredWorkerMixin, ModalScreen[DraftModalResult]):
     def _refresh_drafts(self) -> None:
         if not self.is_mounted or not self.is_attached or not self.is_running:
             return
-        selected = self._selected_id()
-        listing = self.query_one("#athena-drafts-list", OptionList)
+        try:
+            selected = self._selected_id()
+            listing = self.query_one("#athena-drafts-list", OptionList)
+            buttons = {
+                identity: self.query_one(f"#athena-drafts-{identity}", Button)
+                for identity in ("restore", "delete", "clear", "keep")
+            }
+        except NoMatches:
+            # Children can be removed before the screen lifecycle flags change.
+            return
         listing.clear_options()
         self._ids = [row.id for row in self._drafts.items]
         for item in self._drafts.items:
@@ -2166,12 +2181,17 @@ class AthenaDraftsModal(DeferredWorkerMixin, ModalScreen[DraftModalResult]):
         self._refresh_drafts_detail()
         busy = self._loading or self._pending or self._drafts.busy or not self._drafts.enabled
         for identity in ("restore", "delete"):
-            self.query_one(f"#athena-drafts-{identity}", Button).disabled = busy or row is None
-        self.query_one("#athena-drafts-clear", Button).disabled = busy or not self._ids
-        self.query_one("#athena-drafts-keep", Button).disabled = self._pending
+            buttons[identity].disabled = busy or row is None
+        buttons["clear"].disabled = busy or not self._ids
+        buttons["keep"].disabled = self._pending
 
     def _refresh_drafts_detail(self) -> None:
-        row = next((row for row in self._drafts.items if row.id == self._selected_id()), None)
+        try:
+            selected = self._selected_id()
+            detail = self.query_one("#athena-drafts-detail", Static)
+        except NoMatches:
+            return
+        row = next((row for row in self._drafts.items if row.id == selected), None)
         details = "No local drafts"
         if row is not None:
             labels = ("Connection", "Region", "Workgroup", "Catalog", "Database")
@@ -2182,7 +2202,7 @@ class AthenaDraftsModal(DeferredWorkerMixin, ModalScreen[DraftModalResult]):
         error = self._page.draft_recovery_error or self._drafts.error_text
         if error:
             details += "\n" + error
-        self.query_one("#athena-drafts-detail", Static).update(details)
+        detail.update(details)
 
     def on_option_list_option_highlighted(self, event: OptionList.OptionHighlighted) -> None:
         if event.option_list.id == "athena-drafts-list":
@@ -2246,11 +2266,15 @@ class AthenaDraftsModal(DeferredWorkerMixin, ModalScreen[DraftModalResult]):
     def _restore_action_focus(self, identity: str) -> None:
         if not self.is_mounted or not self.is_attached or self.screen is not self.app.screen:
             return
-        button = self.query_one(f"#{identity}", Button)
+        try:
+            button = self.query_one(f"#{identity}", Button)
+            listing = self.query_one("#athena-drafts-list", OptionList)
+        except NoMatches:
+            return
         if button.display and not button.disabled:
             button.focus()
         else:
-            self.query_one("#athena-drafts-list", OptionList).focus()
+            listing.focus()
 
     async def _confirm(self, title: str, *, danger: bool = False) -> bool:
         return await ask_draft_confirmation(

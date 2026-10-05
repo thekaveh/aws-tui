@@ -207,3 +207,65 @@ async def test_disabled_cleanup_failure_offers_retry_without_enable(tmp_path, mo
         s3.dispose()
         await drafts.shutdown()
         drafts.dispose()
+
+
+@pytest.mark.parametrize(
+    "removed_id",
+    [
+        "athena-drafts-toggle",
+        "athena-drafts-cleanup",
+        "athena-drafts-retry-enable",
+        "athena-drafts-setting-status",
+    ],
+)
+@pytest.mark.parametrize("caller", ["notification", "toggle"])
+async def test_drafts_deferred_refresh_during_partial_child_teardown(tmp_path, removed_id, caller):
+    from textual.widgets import Button
+
+    from aws_tui.ui.widgets.settings.athena_drafts_panel import AthenaDraftsPanel
+    from tests.athena_drafts_helpers import runtime_at
+
+    drafts, _ = runtime_at(tmp_path, enabled=False)
+    panel = AthenaDraftsPanel(vm=drafts, hub=_hub())
+
+    class Host(App[None]):
+        def compose(self):
+            yield panel
+
+    app = Host()
+    try:
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            child = panel.query_one(f"#{removed_id}")
+            await child.remove()
+            assert not panel.query(f"#{removed_id}")
+            assert panel.is_mounted
+            assert panel.is_attached
+            assert panel.is_running
+
+            # The real VM notification queues a refresh while child removal has
+            # completed but the parent still passes every lifecycle guard.
+            if caller == "notification":
+                assert await drafts.set_enabled(True)
+            else:
+                await panel._toggle(cleanup_only=False)
+            await pilot.pause()
+            assert drafts.enabled
+            assert ConfigStore(path=tmp_path / "config.toml").load().athena_sql_drafts
+
+            # A later, complete composition must still project current state.
+            await panel.remove()
+            assert panel._subscription.is_disposed
+            replacement = AthenaDraftsPanel(vm=drafts, hub=_hub())
+            await app.mount(replacement)
+            await pilot.pause()
+            toggle = replacement.query_one("#athena-drafts-toggle", Button)
+            assert str(toggle.label) == "Disable and delete drafts"
+            assert not toggle.disabled
+            assert await drafts.set_enabled(False)
+            await pilot.pause()
+            assert str(toggle.label) == "Enable local SQL drafts"
+            assert not toggle.disabled
+    finally:
+        await drafts.shutdown()
+        drafts.dispose()

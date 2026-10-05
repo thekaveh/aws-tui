@@ -4,6 +4,7 @@ from typing import ClassVar
 
 from reactivex.abc import DisposableBase
 from textual.app import ComposeResult
+from textual.css.query import NoMatches
 from textual.widget import Widget
 from textual.widgets import Button, Static
 from vmx import Message, MessageHub
@@ -67,21 +68,26 @@ class AthenaDraftsPanel(DeferredWorkerMixin, Widget):
     def _refresh(self) -> None:
         if not self.is_mounted or not self.is_attached or not self.is_running:
             return
-        button = self.query_one("#athena-drafts-toggle", Button)
+        try:
+            button = self.query_one("#athena-drafts-toggle", Button)
+            cleanup = self.query_one("#athena-drafts-cleanup", Button)
+            retry = self.query_one("#athena-drafts-retry-enable", Button)
+            status_widget = self.query_one("#athena-drafts-setting-status", Static)
+        except NoMatches:
+            # Children can be removed before the parent lifecycle flags change.
+            return
         button.label = (
             "Disable and delete drafts"
             if self._vm.enabled or not self._vm.preference_confirmed
             else "Enable local SQL drafts"
         )
         button.disabled = self._vm.read_only or self._vm.busy or self._pending
-        cleanup = self.query_one("#athena-drafts-cleanup", Button)
         cleanup.display = self._vm.cleanup_required
         cleanup.disabled = self._vm.busy or self._pending or self._vm.read_only
-        retry = self.query_one("#athena-drafts-retry-enable", Button)
         retry.display = self._vm.enable_required
         retry.disabled = self._vm.busy or self._pending or self._vm.read_only
         status = "Unavailable in demo mode" if self._vm.read_only else self._vm.error_text
-        self.query_one("#athena-drafts-setting-status", Static).update(status or "")
+        status_widget.update(status or "")
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
         if (
