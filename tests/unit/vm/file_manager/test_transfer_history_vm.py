@@ -5,12 +5,18 @@ from __future__ import annotations
 import asyncio
 import threading
 from dataclasses import replace
+from pathlib import Path
 
 import pytest
 from vmx import NULL_DISPATCHER, MessageHub
 
 from aws_tui.domain.cross_fs import ConflictResolution
-from aws_tui.domain.filesystem import ConflictError, NotFoundError, PermissionDeniedError
+from aws_tui.domain.filesystem import (
+    ConflictError,
+    NotFoundError,
+    PermissionDeniedError,
+    ProviderError,
+)
 from aws_tui.domain.local_fs import LocalFS
 from aws_tui.domain.transfer_history import TransferHistoryDescriptor
 from aws_tui.domain.transfer_journal import TransferJournal
@@ -19,9 +25,18 @@ from aws_tui.vm.file_manager.dual_pane_vm import DualPaneVM
 from aws_tui.vm.file_manager.pane_vm import PaneVM
 from aws_tui.vm.file_manager.transfers_vm import TransfersVM
 from aws_tui.vm.messages import (
+    TransferCancelRequestedMessage,
     TransferProgressMessage,
     TransferState,
 )
+from tests.helpers import local_transfer_filename, wait_until
+
+TRANSFER_NAME = local_transfer_filename()
+
+
+def renamed_transfer_name(index):
+    path = Path(TRANSFER_NAME)
+    return f"{path.stem} ({index}){path.suffix}"
 
 
 def identity(provider, connection=None):
@@ -35,7 +50,7 @@ async def make_dual(tmp_path):
     destination = tmp_path / "destination"
     source.mkdir()
     destination.mkdir()
-    (source / "a?#%.txt").write_bytes(b"payload")
+    (source / TRANSFER_NAME).write_bytes(b"payload")
     hub = MessageHub()
     left_fs, right_fs = LocalFS(root=source), LocalFS(root=destination)
     left = PaneVM(
@@ -72,7 +87,7 @@ async def test_real_operations_persist_truthful_history(tmp_path, operation, sta
     dual, _, journal, source, destination = await make_dual(tmp_path)
     try:
         if operation in {"skip", "fail"}:
-            (destination / "a?#%.txt").write_bytes(b"existing")
+            (destination / TRANSFER_NAME).write_bytes(b"existing")
         if operation == "delete":
             await dual.delete_in_focused()
         elif operation == "move":
@@ -91,13 +106,260 @@ async def test_real_operations_persist_truthful_history(tmp_path, operation, sta
         record = records[0]
         assert record.status == status
         assert record.operation == (operation if operation in {"move", "delete"} else "copy")
-        assert record.source_uri == "/a?#%.txt"
+        assert record.source_uri == f"/{TRANSFER_NAME}"
         assert record.bytes_total == 7
         assert record.bytes_done == (7 if status == "completed" and operation != "delete" else 0)
         assert record.failure_reason == ("conflict" if operation == "fail" else None)
         if operation in {"move", "delete"}:
-            assert not (source / "a?#%.txt").exists()
+            assert not (source / TRANSFER_NAME).exists()
     finally:
+        await dual.shutdown()
+        dual.dispose()
+
+
+@pytest.mark.parametrize("failure_count", [1, 2])
+async def test_delete_attempts_all_targets_and_aggregates_truthful_history(
+    tmp_path, monkeypatch, failure_count
+):
+    dual, _, journal, source, _ = await make_dual(tmp_path)
+    for name in ("b.txt", "c.txt"):
+        (source / name).write_bytes(b"payload")
+    await dual.left.refresh()
+    dual.left.select_all_command.execute()
+    attempted = []
+    real_delete = dual.left.provider.delete
+    errors = {TRANSFER_NAME: PermissionDeniedError("permission refusal")}
+    if failure_count == 2:
+        errors["b.txt"] = OSError("provider refusal")
+
+    async def delete(path, **kwargs):
+        attempted.append(path.as_posix())
+        if path.name in errors:
+            raise errors[path.name]
+        await real_delete(path, **kwargs)
+
+    monkeypatch.setattr(dual.left.provider, "delete", delete)
+    try:
+        expected_error = PermissionDeniedError if failure_count == 1 else ProviderError
+        with pytest.raises(expected_error) as caught:
+            await dual.delete_in_focused()
+        assert attempted == [f"/{TRANSFER_NAME}", "/b.txt", "/c.txt"]
+        if failure_count == 1:
+            assert str(caught.value) == f"failed to delete {TRANSFER_NAME!r}: permission refusal"
+        else:
+            assert str(caught.value) == f"failed to delete 2 of 3 entries: {TRANSFER_NAME}, b.txt"
+        assert caught.value.__cause__ is errors[TRANSFER_NAME]
+        assert {path.name for path in source.iterdir()} == set(errors)
+        assert {entry.entry.name for entry in dual.left.entries} == set(errors)
+        records = {record.source_uri: record for record in journal.load_history()}
+        assert len(records) == 3
+        for uri, record in records.items():
+            failed = uri.removeprefix("/") in errors
+            assert record.operation == "delete"
+            assert record.destination_uri is None
+            assert record.status == ("failed" if failed else "completed")
+            assert record.publication == ("possibly_published" if failed else "confirmed_terminal")
+            assert record.failure_reason == (
+                "permission_denied"
+                if uri == f"/{TRANSFER_NAME}"
+                else "provider_error"
+                if failed
+                else None
+            )
+            assert record.bytes_done == 0
+            assert record.bytes_total == 7
+        assert not dual.transfer_runtime.owned_ids
+    finally:
+        await dual.shutdown()
+        dual.dispose()
+
+
+@pytest.mark.parametrize("cancellation", ["chip", "worker"])
+async def test_delete_cancellation_stops_following_targets_and_drains_provider_and_disk(
+    tmp_path, monkeypatch, cancellation
+):
+    dual, hub, journal, source, _ = await make_dual(tmp_path)
+    for name in ("b.txt", "c.txt"):
+        (source / name).write_bytes(b"payload")
+    await dual.left.refresh()
+    dual.left.select_all_command.execute()
+    entered, draining, release_provider = asyncio.Event(), asyncio.Event(), asyncio.Event()
+    disk_entered, release_disk = threading.Event(), threading.Event()
+    attempted = []
+    real_delete, real_terminal = dual.left.provider.delete, journal.mark_terminal
+
+    async def delete(path, **kwargs):
+        attempted.append(path.as_posix())
+        if path.name == "b.txt":
+            entered.set()
+            try:
+                await asyncio.Event().wait()
+            finally:
+                draining.set()
+                await release_provider.wait()
+        await real_delete(path, **kwargs)
+
+    def terminal(tid, **kwargs):
+        if kwargs["status"] == "cancelled":
+            disk_entered.set()
+            assert release_disk.wait(10), "delete terminal disk barrier released"
+        return real_terminal(tid, **kwargs)
+
+    monkeypatch.setattr(dual.left.provider, "delete", delete)
+    monkeypatch.setattr(journal, "mark_terminal", terminal)
+    deletion = asyncio.create_task(dual.delete_in_focused())
+    try:
+        await wait_until(entered.is_set, what="second delete entered provider")
+        assert not (source / TRANSFER_NAME).exists()
+        if cancellation == "chip":
+            tid = next(
+                record.id for record in journal.load_history() if record.source_uri == "/b.txt"
+            )
+            hub.send(TransferCancelRequestedMessage(transfer_id=tid))
+        else:
+            deletion.cancel()
+        await wait_until(draining.is_set, what="cancelled delete draining provider")
+        assert not deletion.done()
+        assert attempted == [f"/{TRANSFER_NAME}", "/b.txt"]
+        release_provider.set()
+        await wait_until(disk_entered.is_set, what="cancelled delete terminal disk write")
+        if cancellation == "worker":
+            deletion.cancel()
+        assert not deletion.done()
+        assert dual.transfer_runtime.disk.tasks
+        assert (source / "b.txt").exists()
+        assert (source / "c.txt").exists()
+        release_disk.set()
+        if cancellation == "worker":
+            with pytest.raises(asyncio.CancelledError):
+                await asyncio.wait_for(deletion, 3)
+        else:
+            await asyncio.wait_for(deletion, 3)
+        assert attempted == [f"/{TRANSFER_NAME}", "/b.txt"]
+        assert {entry.entry.name for entry in dual.left.entries} == {"b.txt", "c.txt"}
+        records = {record.source_uri: record for record in journal.load_history()}
+        assert len(records) == 3
+        assert records[f"/{TRANSFER_NAME}"].status == "completed"
+        assert records[f"/{TRANSFER_NAME}"].publication == "confirmed_terminal"
+        for uri, publication in (("/b.txt", "possibly_published"), ("/c.txt", "never_attempted")):
+            assert records[uri].status == "cancelled"
+            assert records[uri].publication == publication
+            assert records[uri].failure_reason == "cancelled"
+        assert not dual.transfer_runtime.disk.tasks
+        assert not dual.transfer_runtime.owned_ids
+        assert not dual.transfer_runtime.cancel_events
+    finally:
+        release_provider.set()
+        release_disk.set()
+        await dual.shutdown()
+        dual.dispose()
+
+
+async def test_delete_history_refusal_aborts_batch_before_provider_mutation(tmp_path, monkeypatch):
+    from aws_tui.vm.file_manager.transfer_runtime import HistoryWriteError
+
+    dual, _, journal, source, _ = await make_dual(tmp_path)
+    (source / "b.txt").write_bytes(b"payload")
+    await dual.left.refresh()
+    dual.left.select_all_command.execute()
+    attempts = []
+    original = journal.mark_attempted
+
+    def fail_first(tid):
+        attempts.append(tid)
+        if len(attempts) == 1:
+            raise OSError("secret disk details")
+        return original(tid)
+
+    monkeypatch.setattr(journal, "mark_attempted", fail_first)
+    try:
+        with pytest.raises(HistoryWriteError, match="Transfer history could not be saved"):
+            await dual.delete_in_focused()
+        assert len(attempts) == 1
+        assert {path.name for path in source.iterdir()} == {TRANSFER_NAME, "b.txt"}
+        records = {record.source_uri: record for record in journal.load_history()}
+        assert records[f"/{TRANSFER_NAME}"].status == "failed"
+        assert records[f"/{TRANSFER_NAME}"].failure_reason == "persistence_error"
+        assert records[f"/{TRANSFER_NAME}"].publication == "never_attempted"
+        assert records["/b.txt"].status == "cancelled"
+        assert records["/b.txt"].publication == "never_attempted"
+        assert dual.transfer_runtime.error_text == "Transfer history could not be saved."
+    finally:
+        await dual.shutdown()
+        dual.dispose()
+
+
+async def test_delete_repeated_cancellation_drains_pending_settlement_and_final_refresh(
+    tmp_path, monkeypatch
+):
+    dual, hub, journal, source, _ = await make_dual(tmp_path)
+    for name in ("b.txt", "c.txt"):
+        (source / name).write_bytes(b"payload")
+    await dual.left.refresh()
+    dual.left.select_all_command.execute()
+    provider_entered, refresh_entered, release_refresh = (
+        asyncio.Event(),
+        asyncio.Event(),
+        asyncio.Event(),
+    )
+    disk_entered, release_disk = threading.Event(), threading.Event()
+    real_delete = dual.left.provider.delete
+    real_terminal, real_refresh = journal.mark_terminal, dual.left.refresh
+
+    async def delete(path, **kwargs):
+        if path.name == "b.txt":
+            provider_entered.set()
+            await asyncio.Event().wait()
+        await real_delete(path, **kwargs)
+
+    def terminal(tid, **kwargs):
+        record = next(record for record in journal.load_history() if record.id == tid)
+        if record.source_uri == "/c.txt":
+            disk_entered.set()
+            assert release_disk.wait(10), "pending delete settlement disk barrier released"
+        return real_terminal(tid, **kwargs)
+
+    async def refresh():
+        refresh_entered.set()
+        await release_refresh.wait()
+        await real_refresh()
+
+    monkeypatch.setattr(dual.left.provider, "delete", delete)
+    monkeypatch.setattr(journal, "mark_terminal", terminal)
+    monkeypatch.setattr(dual.left, "refresh", refresh)
+    deletion = asyncio.create_task(dual.delete_in_focused())
+    try:
+        await wait_until(provider_entered.is_set, what="second delete waits for cancellation")
+        tid = next(record.id for record in journal.load_history() if record.source_uri == "/b.txt")
+        hub.send(TransferCancelRequestedMessage(transfer_id=tid))
+        await wait_until(disk_entered.is_set, what="untouched delete terminal settlement entered")
+        deletion.cancel()
+        assert not deletion.done()
+        release_disk.set()
+        await wait_until(
+            refresh_entered.is_set, what="final delete refresh entered after settlement"
+        )
+        deletion.cancel()
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+        assert not deletion.done(), "delete returned before owned final refresh drained"
+        release_refresh.set()
+        with pytest.raises(asyncio.CancelledError):
+            await asyncio.wait_for(deletion, 3)
+        assert {entry.entry.name for entry in dual.left.entries} == {"b.txt", "c.txt"}
+        assert {path.name for path in source.iterdir()} == {"b.txt", "c.txt"}
+        records = {record.source_uri: record.status for record in journal.load_history()}
+        assert records == {
+            f"/{TRANSFER_NAME}": "completed",
+            "/b.txt": "cancelled",
+            "/c.txt": "cancelled",
+        }
+        assert not dual.transfer_runtime.owned_ids
+        assert not dual.transfer_runtime.disk.tasks
+        assert not dual._refresh_tasks
+    finally:
+        release_disk.set()
+        release_refresh.set()
         await dual.shutdown()
         dual.dispose()
 
@@ -135,8 +397,8 @@ async def history_case(tmp_path, *, operation="copy", attempted=False):
         operation,
         src_identity,
         dst_identity if operation != "delete" else None,
-        "/a?#%.txt",
-        "/a?#%.txt" if operation != "delete" else None,
+        f"/{TRANSFER_NAME}",
+        f"/{TRANSFER_NAME}" if operation != "delete" else None,
         7,
     )
     tid = journal.begin(
@@ -166,8 +428,75 @@ async def history_case(tmp_path, *, operation="copy", attempted=False):
 
 
 async def choose_error(plan):
-    assert plan.source_uri == "/a?#%.txt"
+    assert plan.source_uri == f"/{TRANSFER_NAME}"
     return ConflictResolution.ERROR
+
+
+@pytest.mark.parametrize("operation", ["copy", "move", "delete", "skip", "fail", "rename", "retry"])
+async def test_windows_compatible_fixture_branch_runs_localfs_lifecycle(
+    tmp_path, monkeypatch, operation
+):
+    # Exercise the Windows naming branch on the host without changing os or
+    # pathlib's platform. This is local filesystem evidence, not a Windows run.
+    assert local_transfer_filename(platform="linux") == "a?#%.txt"
+    name = local_transfer_filename(platform="win32")
+    assert name == "a#%.txt"
+    monkeypatch.setattr(f"{__name__}.TRANSFER_NAME", name)
+    vm = None
+    if operation == "retry":
+        vm, dual, original_id, source, destination, _, _ = await history_case(tmp_path)
+        journal = dual._journal
+    else:
+        dual, _, journal, source, destination = await make_dual(tmp_path)
+    try:
+        if operation in {"skip", "fail", "rename"}:
+            (destination / name).write_bytes(b"existing")
+        if operation == "retry":
+            transfer_id = await vm.retry(original_id, choose_error)
+            assert transfer_id != original_id
+        elif operation == "delete":
+            await dual.delete_in_focused()
+        elif operation == "move":
+            await dual.move_across()
+        elif operation == "fail":
+            with pytest.raises(ConflictError):
+                await dual.copy_across()
+        else:
+            await dual.copy_across(
+                on_conflict={
+                    "skip": ConflictResolution.SKIP,
+                    "rename": ConflictResolution.RENAME,
+                }.get(operation, ConflictResolution.ERROR)
+            )
+        records = journal.load_history()
+        terminal = next(record for record in records if record.finished_at is not None)
+        assert terminal.source_uri == f"/{name}"
+        assert terminal.status == {"skip": "skipped", "fail": "failed"}.get(operation, "completed")
+        assert terminal.operation == (operation if operation in {"move", "delete"} else "copy")
+        assert terminal.failure_reason == ("conflict" if operation == "fail" else None)
+        assert terminal.bytes_total == 7
+        if operation in {"move", "delete"}:
+            assert not (source / name).exists()
+        else:
+            assert (source / name).read_bytes() == b"payload"
+        if operation == "delete":
+            assert terminal.destination_uri is None
+            assert list(destination.iterdir()) == []
+        elif operation == "rename":
+            assert terminal.destination_uri == f"/{renamed_transfer_name(1)}"
+            assert (destination / renamed_transfer_name(1)).read_bytes() == b"payload"
+            assert (destination / name).read_bytes() == b"existing"
+        else:
+            assert terminal.destination_uri == f"/{name}"
+            assert (destination / name).read_bytes() == (
+                b"existing" if operation in {"skip", "fail"} else b"payload"
+            )
+        assert not dual.transfer_runtime.owned_ids
+    finally:
+        if vm is not None:
+            await vm.shutdown()
+        await dual.shutdown()
+        dual.dispose()
 
 
 async def test_recheck_keeps_outcome_unknown_and_retry_creates_new_progress_id(tmp_path):
@@ -187,7 +516,7 @@ async def test_recheck_keeps_outcome_unknown_and_retry_creates_new_progress_id(t
         assert vm.records[0].publication == "possibly_published"
         new_id = await vm.retry(tid, choose_error)
         assert new_id != tid
-        assert (destination / "a?#%.txt").read_bytes() == b"payload"
+        assert (destination / TRANSFER_NAME).read_bytes() == b"payload"
         assert transfers.transfers[0].id == new_id
         assert transfers.transfers[0].state == TransferState.COMPLETED
         assert len(resolutions) == 6
@@ -205,8 +534,8 @@ async def test_noncopy_retry_refused_without_mutation(tmp_path, operation):
     try:
         with pytest.raises(RecoveryRefused):
             await vm.retry(tid, choose_error)
-        assert (source / "a?#%.txt").exists()
-        assert not (destination / "a?#%.txt").exists()
+        assert (source / TRANSFER_NAME).exists()
+        assert not (destination / TRANSFER_NAME).exists()
     finally:
         await vm.shutdown()
         dual.dispose()
@@ -231,17 +560,17 @@ async def test_retry_revalidates_after_fresh_decision(tmp_path, change):
 
             vm._resolve_endpoint = redirected
         elif change == "source":
-            (source / "a?#%.txt").write_bytes(b"changed")
+            (source / TRANSFER_NAME).write_bytes(b"changed")
         else:
-            (destination / "a?#%.txt").write_bytes(b"unrelated")
+            (destination / TRANSFER_NAME).write_bytes(b"unrelated")
         return ConflictResolution.OVERWRITE
 
     try:
         with pytest.raises(RecoveryRefused):
             await vm.retry(tid, decide)
         assert (
-            not destination.joinpath("a?#%.txt").exists()
-            or destination.joinpath("a?#%.txt").read_bytes() == b"unrelated"
+            not destination.joinpath(TRANSFER_NAME).exists()
+            or destination.joinpath(TRANSFER_NAME).read_bytes() == b"unrelated"
         )
         assert len(vm.records) == 1
     finally:
@@ -251,7 +580,7 @@ async def test_retry_revalidates_after_fresh_decision(tmp_path, change):
 
 async def test_recheck_existing_destination_never_claims_success(tmp_path):
     vm, dual, tid, _, destination, _, _ = await history_case(tmp_path, attempted=True)
-    (destination / "a?#%.txt").write_bytes(b"payload")
+    (destination / TRANSFER_NAME).write_bytes(b"payload")
     try:
         observed = await vm.recheck(tid)
         assert observed.destination.size == 7
@@ -293,7 +622,7 @@ async def test_begin_and_attempt_failures_refuse_provider_mutation(tmp_path, mon
     try:
         with pytest.raises(Exception, match="history"):
             await dual.copy_across()
-        assert not (destination / "a?#%.txt").exists()
+        assert not (destination / TRANSFER_NAME).exists()
     finally:
         await dual.shutdown()
         dual.dispose()
@@ -312,7 +641,7 @@ async def test_terminal_write_failure_preserves_live_provider_success(tmp_path, 
     monkeypatch.setattr(journal, "mark_terminal", fail)
     try:
         await dual.copy_across()
-        assert (destination / "a?#%.txt").read_bytes() == b"payload"
+        assert (destination / TRANSFER_NAME).read_bytes() == b"payload"
         assert states[-1] == TransferState.COMPLETED
         assert dual.transfer_runtime.error_text == "Transfer history could not be saved."
         assert journal.load_history()[0].status == "outcome_unknown"
@@ -356,7 +685,7 @@ async def test_owned_disk_begin_drains_cancellation_and_excludes_active_metadata
     with pytest.raises(asyncio.CancelledError):
         await asyncio.wait_for(transfer, 3)
     await asyncio.wait_for(shutdown, 3)
-    assert not destination.joinpath("a?#%.txt").exists()
+    assert not destination.joinpath(TRANSFER_NAME).exists()
     await vm.load()
     assert vm.records[0].status == "cancelled"
     await vm.shutdown()
@@ -372,8 +701,8 @@ async def test_clear_preserves_active_journal_and_corrupt_metadata(tmp_path):
         await vm.clear()
         assert dual._journal.load_history()[0].id == tid
         assert corrupt.read_text() == "garbage"
-        assert source.joinpath("a?#%.txt").exists()
-        assert not destination.joinpath("a?#%.txt").exists()
+        assert source.joinpath(TRANSFER_NAME).exists()
+        assert not destination.joinpath(TRANSFER_NAME).exists()
         dual.transfer_runtime.owned_ids.remove(tid)
         await vm.clear()
         assert dual._journal.load_history() == ()
@@ -409,7 +738,7 @@ async def test_clear_preserves_terminal_summary_while_publication_purge_drains(
     release.set()
     await asyncio.wait_for(transfer, 3)
     await asyncio.wait_for(clearing, 3)
-    assert destination.joinpath("a?#%.txt").read_bytes() == b"payload"
+    assert destination.joinpath(TRANSFER_NAME).read_bytes() == b"payload"
     await vm.shutdown()
     dual.dispose()
 
@@ -417,14 +746,14 @@ async def test_clear_preserves_terminal_summary_while_publication_purge_drains(
 async def test_domain_clear_excludes_owned_terminal_summary_and_journal(tmp_path):
     vm, dual, tid, _, _, _, _ = await history_case(tmp_path)
     other = dual._journal.begin(
-        source_uri="/a?#%.txt",
+        source_uri=f"/{TRANSFER_NAME}",
         destination_uri="/b",
         bytes_total=7,
         descriptor=TransferHistoryDescriptor(
             "copy",
             vm.records[0].source_connection,
             vm.records[0].destination_connection,
-            "/a?#%.txt",
+            f"/{TRANSFER_NAME}",
             "/b",
             7,
         ),
@@ -452,7 +781,7 @@ async def test_shutdown_cancels_retry_waiting_for_decision(tmp_path):
     assert task.done()
     with pytest.raises(asyncio.CancelledError):
         await task
-    assert not destination.joinpath("a?#%.txt").exists()
+    assert not destination.joinpath(TRANSFER_NAME).exists()
     dual.dispose()
 
 
@@ -607,7 +936,7 @@ async def test_cancelled_display_row_stays_owned_until_provider_cleanup_drains(
     assert vm.records == ()
     await vm.clear()
     assert journal.load_history()[0].id == tid
-    assert not destination.joinpath("a?#%.txt").exists()
+    assert not destination.joinpath(TRANSFER_NAME).exists()
     release.set()
     await asyncio.wait_for(transfer, 3)
     await vm.load()
@@ -669,7 +998,7 @@ async def test_rename_history_binds_each_effective_destination_before_publicatio
     tmp_path, monkeypatch, operation
 ):
     dual, _, journal, source, destination = await make_dual(tmp_path)
-    (destination / "a?#%.txt").write_bytes(b"unrelated original")
+    (destination / TRANSFER_NAME).write_bytes(b"unrelated original")
     original_publish = dual.right.provider.atomic_publish_no_replace
     observed = []
 
@@ -686,10 +1015,13 @@ async def test_rename_history_binds_each_effective_destination_before_publicatio
             await dual.move_across(on_conflict=ConflictResolution.RENAME)
         else:
             await dual.copy_across(on_conflict=ConflictResolution.RENAME)
-        assert observed == [("/a?#% (1).txt", "/a?#% (1).txt"), ("/a?#% (2).txt", "/a?#% (2).txt")]
-        assert journal.load_history()[0].destination_uri == "/a?#% (2).txt"
-        assert (destination / "a?#% (2).txt").read_bytes() == b"payload"
-        assert source.joinpath("a?#%.txt").exists() is (operation == "copy")
+        assert observed == [
+            (f"/{renamed_transfer_name(1)}", f"/{renamed_transfer_name(1)}"),
+            (f"/{renamed_transfer_name(2)}", f"/{renamed_transfer_name(2)}"),
+        ]
+        assert journal.load_history()[0].destination_uri == f"/{renamed_transfer_name(2)}"
+        assert (destination / renamed_transfer_name(2)).read_bytes() == b"payload"
+        assert source.joinpath(TRANSFER_NAME).exists() is (operation == "copy")
     finally:
         await dual.shutdown()
         dual.dispose()
@@ -702,14 +1034,14 @@ async def test_renamed_interrupted_publication_rechecks_actual_target(tmp_path, 
     )
 
     dual, hub, journal, _, destination = await make_dual(tmp_path)
-    (destination / "a?#%.txt").write_bytes(b"unrelated")
+    (destination / TRANSFER_NAME).write_bytes(b"unrelated")
 
     def fail_terminal(*args, **kwargs):
         raise OSError("terminal disk failure")
 
     monkeypatch.setattr(journal, "mark_terminal", fail_terminal)
     await dual.copy_across(on_conflict=ConflictResolution.RENAME)
-    destination.joinpath("a?#%.txt").unlink()
+    destination.joinpath(TRANSFER_NAME).unlink()
     providers = {
         dual.left.transfer_connection: dual.left.provider,
         dual.right.transfer_connection: dual.right.provider,
@@ -722,7 +1054,7 @@ async def test_renamed_interrupted_publication_rechecks_actual_target(tmp_path, 
     try:
         await vm.load()
         record = vm.records[0]
-        assert record.destination_uri == "/a?#% (1).txt"
+        assert record.destination_uri == f"/{renamed_transfer_name(1)}"
         assert record.status == "outcome_unknown"
         observed = await vm.recheck(record.id)
         assert observed.destination is not None
@@ -734,7 +1066,7 @@ async def test_renamed_interrupted_publication_rechecks_actual_target(tmp_path, 
 
 async def test_retry_rename_records_actual_target(tmp_path):
     vm, dual, tid, _, destination, _, _ = await history_case(tmp_path)
-    destination.joinpath("a?#%.txt").write_bytes(b"unrelated")
+    destination.joinpath(TRANSFER_NAME).write_bytes(b"unrelated")
 
     async def choose_rename(plan):
         assert plan.destination is not None
@@ -743,8 +1075,8 @@ async def test_retry_rename_records_actual_target(tmp_path):
     try:
         new_id = await vm.retry(tid, choose_rename)
         record = next(record for record in vm.records if record.id == new_id)
-        assert record.destination_uri == "/a?#% (1).txt"
-        assert destination.joinpath("a?#% (1).txt").read_bytes() == b"payload"
+        assert record.destination_uri == f"/{renamed_transfer_name(1)}"
+        assert destination.joinpath(renamed_transfer_name(1)).read_bytes() == b"payload"
     finally:
         await vm.shutdown()
         dual.dispose()
@@ -896,7 +1228,7 @@ async def test_recursive_retry_uses_aggregate_accounting(tmp_path):
 
 async def test_destination_intent_write_failure_refuses_rename_mutation(tmp_path, monkeypatch):
     dual, _, journal, _, destination = await make_dual(tmp_path)
-    destination.joinpath("a?#%.txt").write_bytes(b"unrelated")
+    destination.joinpath(TRANSFER_NAME).write_bytes(b"unrelated")
 
     def fail(*args, **kwargs):
         raise OSError("safe disk category")
@@ -905,8 +1237,8 @@ async def test_destination_intent_write_failure_refuses_rename_mutation(tmp_path
     try:
         with pytest.raises(Exception, match="history could not be saved"):
             await dual.copy_across(on_conflict=ConflictResolution.RENAME)
-        assert destination.joinpath("a?#%.txt").read_bytes() == b"unrelated"
-        assert set(path.name for path in destination.iterdir()) == {"a?#%.txt"}
+        assert destination.joinpath(TRANSFER_NAME).read_bytes() == b"unrelated"
+        assert set(path.name for path in destination.iterdir()) == {TRANSFER_NAME}
         assert journal.load_history()[0].failure_reason == "persistence_error"
     finally:
         await dual.shutdown()
@@ -915,7 +1247,7 @@ async def test_destination_intent_write_failure_refuses_rename_mutation(tmp_path
 
 async def test_retry_renamed_publication_stays_ambiguous_at_actual_target(tmp_path, monkeypatch):
     vm, dual, tid, _, destination, _, _ = await history_case(tmp_path)
-    destination.joinpath("a?#%.txt").write_bytes(b"unrelated")
+    destination.joinpath(TRANSFER_NAME).write_bytes(b"unrelated")
 
     def fail(*args, **kwargs):
         raise OSError("terminal disk category")
@@ -927,9 +1259,9 @@ async def test_retry_renamed_publication_stays_ambiguous_at_actual_target(tmp_pa
 
     try:
         new_id = await vm.retry(tid, rename)
-        destination.joinpath("a?#%.txt").unlink()
+        destination.joinpath(TRANSFER_NAME).unlink()
         record = next(record for record in vm.records if record.id == new_id)
-        assert record.destination_uri == "/a?#% (1).txt"
+        assert record.destination_uri == f"/{renamed_transfer_name(1)}"
         assert record.status == "outcome_unknown"
         result = await vm.recheck(new_id)
         assert result.destination is not None
@@ -943,7 +1275,7 @@ async def test_cancel_during_effective_destination_write_drains_before_mutation(
     tmp_path, monkeypatch
 ):
     dual, _, journal, _, destination = await make_dual(tmp_path)
-    destination.joinpath("a?#%.txt").write_bytes(b"unrelated")
+    destination.joinpath(TRANSFER_NAME).write_bytes(b"unrelated")
     entered, release = threading.Event(), threading.Event()
     original = journal.mark_destination
 
@@ -955,15 +1287,15 @@ async def test_cancel_during_effective_destination_write_drains_before_mutation(
     monkeypatch.setattr(journal, "mark_destination", blocked)
     transfer = asyncio.create_task(dual.copy_across(on_conflict=ConflictResolution.RENAME))
     assert await asyncio.to_thread(entered.wait, 2)
-    assert journal.load_history()[0].destination_uri == "/a?#% (1).txt"
-    assert set(path.name for path in destination.iterdir()) == {"a?#%.txt"}
+    assert journal.load_history()[0].destination_uri == f"/{renamed_transfer_name(1)}"
+    assert set(path.name for path in destination.iterdir()) == {TRANSFER_NAME}
     transfer.cancel()
     release.set()
     with pytest.raises(asyncio.CancelledError):
         await asyncio.wait_for(transfer, 3)
     record = journal.load_history()[0]
     assert record.status == "cancelled"
-    assert record.destination_uri == "/a?#% (1).txt"
-    assert set(path.name for path in destination.iterdir()) == {"a?#%.txt"}
+    assert record.destination_uri == f"/{renamed_transfer_name(1)}"
+    assert set(path.name for path in destination.iterdir()) == {TRANSFER_NAME}
     await dual.shutdown()
     dual.dispose()

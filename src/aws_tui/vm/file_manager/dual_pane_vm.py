@@ -32,7 +32,7 @@ from aws_tui.domain.transfer_journal import TransferJournal
 from aws_tui.vm._observable import ObserverSafeSubject, send_value_free
 from aws_tui.vm.file_manager.entry_vm import EntryVM
 from aws_tui.vm.file_manager.pane_vm import PaneVM
-from aws_tui.vm.file_manager.transfer_runtime import TransferRuntime
+from aws_tui.vm.file_manager.transfer_runtime import HistoryWriteError, TransferRuntime
 from aws_tui.vm.messages import (
     TransferCancelRequestedMessage,
     TransferState,
@@ -517,12 +517,18 @@ class DualPaneVM:
             await self._refresh_after_operation(src_pane, dst_pane)
 
     async def delete_in_focused(self) -> None:
-        """Delete marked original paths through the durable transfer path."""
+        """Attempt every marked original path, aggregating provider failures.
+
+        Each attempted item settles through the durable runtime. Genuine
+        cancellation stops the batch, drains started work and refreshes the
+        pane before returning or propagating worker cancellation.
+        """
         pane = self.focused_pane
         provider, base = pane.provider, pane.path
         targets = list(pane.marked_entries)
         tids = await self._pre_register_pending(targets, pane, None, operation="delete")
         consumed: set[str] = set()
+        failures: list[tuple[str, BaseException]] = []
 
         async def delete(source: object, _destination: object, **_kwargs: object) -> bool:
             await provider.delete(source)  # type: ignore[arg-type]
@@ -531,21 +537,64 @@ class DualPaneVM:
         try:
             for entry, tid in tids:
                 consumed.add(tid)
-                if await self._run_one_transfer(
-                    operation=delete,
-                    src_path=base.join(entry.entry.name),
-                    dst_path=None,
-                    on_conflict=ConflictResolution.ERROR,
-                    transfer_id=tid,
-                    entry=entry,
-                ):
-                    await self.transfer_runtime.complete(tid, 0, entry.entry.size)
+                try:
+                    completed = await self._run_one_transfer(
+                        operation=delete,
+                        src_path=base.join(entry.entry.name),
+                        dst_path=None,
+                        on_conflict=ConflictResolution.ERROR,
+                        transfer_id=tid,
+                        entry=entry,
+                    )
+                except HistoryWriteError:
+                    # A durability refusal aborts the batch before further
+                    # mutation; it is not an ordinary provider failure.
+                    raise
+                except (OSError, ProviderError) as exc:
+                    failures.append((entry.entry.name, exc))
+                    continue
+                # Delete cannot skip: False means the runtime cancelled this
+                # item. Leave following targets untouched and settle them.
+                if not completed:
+                    break
+                await self.transfer_runtime.complete(tid, 0, entry.entry.size)
         finally:
-            await self.transfer_runtime.settle_batch(
-                [(tid, entry.entry.size) for entry, tid in tids],
-                consumed,
-            )
-            await self._refresh_after_operation(pane)
+            try:
+                await self.transfer_runtime.settle_batch(
+                    [(tid, entry.entry.size) for entry, tid in tids],
+                    consumed,
+                )
+            finally:
+                refresh_task = asyncio.create_task(self._refresh_after_operation(pane))
+                cancellation: asyncio.CancelledError | None = None
+                while not refresh_task.done():
+                    try:
+                        await asyncio.shield(refresh_task)
+                    except asyncio.CancelledError as exc:
+                        cancellation = cancellation or exc
+                    except BaseException:
+                        break
+                try:
+                    refresh_task.result()
+                except BaseException as exc:
+                    if cancellation is not None:
+                        cancellation.add_note(
+                            f"pane refresh failed during cancellation: {type(exc).__name__}: {exc}"
+                        )
+                        raise cancellation from exc
+                    raise
+                if cancellation is not None:
+                    raise cancellation
+        if failures:
+            first_name, first_exc = failures[0]
+            if len(failures) == 1:
+                raise type(first_exc)(
+                    f"failed to delete {first_name!r}: {first_exc}"
+                ) from first_exc
+            names = ", ".join(name for name, _ in failures)
+            raise ProviderError(
+                f"failed to delete {len(failures)} of {len(targets)} entries: {names}"
+            ) from first_exc
 
     async def _mark_transfer_completed(self, transfer_id: str, entry: EntryVM) -> None:
         await self.transfer_runtime.complete(transfer_id, entry.entry.size or 0, entry.entry.size)

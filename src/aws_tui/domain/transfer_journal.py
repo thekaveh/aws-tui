@@ -1,4 +1,4 @@
-"""Crash-diagnostics journal for long-running transfers.
+"""Active transfer journal, durable terminal summaries and explicit recovery.
 
 Each transfer owns one append-only JSONL file at
 ``<cache-dir>/transfers/<id>.jsonl``. The journal records:
@@ -11,7 +11,11 @@ Each transfer owns one append-only JSONL file at
   compatibility; current terminal operations purge the file immediately.
 
 :meth:`TransferJournal.find_unfinished` can replay files left by an interrupted
-process. Startup does not currently surface or resume them.
+process as diagnostic entries. Startup loads durable summaries and scans
+current-schema interrupted journals in a background worker, surfacing them as
+outcome-unknown in Recovery. Legacy diagnostic streams are excluded from History
+and Recovery. Automatic replay and multipart resume remain unsupported; upload
+IDs and part metadata are never included in safe history summaries.
 
 The journal is intentionally sync-only. Call disk operations in owned workers;
 await begin/attempt durability before provider mutation, and terminal durability

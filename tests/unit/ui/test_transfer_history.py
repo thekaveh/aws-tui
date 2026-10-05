@@ -9,7 +9,7 @@ from textual.worker import get_current_worker
 
 from aws_tui.ui.widgets.transfers_overlay import TransfersOverlay
 from aws_tui.vm.chrome.focus_coordinator_vm import FocusSlot
-from tests.helpers import drain_workers, wait_until
+from tests.helpers import drain_workers, local_transfer_filename, wait_until
 from tests.transfer_history_helpers import NAME, history_app
 
 
@@ -348,6 +348,72 @@ async def ordinary_copy(app, pilot, source, destination):
         lambda: type(app.screen).__name__ == "ConfirmModal", what="ordinary copy confirmation"
     )
     await pilot.press("enter")
+
+
+async def test_actual_ordinary_delete_reports_aggregate_after_independent_success(
+    tmp_path, monkeypatch
+):
+    from aws_tui.domain.filesystem import PermissionDeniedError
+    from aws_tui.domain.local_fs import LocalFS
+    from aws_tui.vm.credential_recovery import connection_history_identity
+
+    failure_name = local_transfer_filename()
+    app, _, source, _, _ = history_app(tmp_path, seeded=False)
+    for name in (failure_name, "b.txt"):
+        (source / name).write_bytes(b"payload")
+    calls = []
+    async with app.run_test(size=(120, 40)) as pilot:
+        await drain_workers(app)
+        dual = app._dual_pane()
+        provider = LocalFS(root=source)
+        await dual.left.swap_provider(
+            provider,
+            path_protocol="",
+            transfer_connection=connection_history_identity(None, provider),
+        )
+        dual.left.enter_multiselect_command.execute()
+        dual.left.select_all_command.execute()
+        real_delete = provider.delete
+
+        async def delete(path, **kwargs):
+            calls.append((path.as_posix(), get_current_worker()))
+            if path.name in {failure_name, "b.txt"}:
+                raise PermissionDeniedError("permission refusal")
+            await real_delete(path, **kwargs)
+
+        monkeypatch.setattr(provider, "delete", delete)
+        await pilot.press("tab", "d")
+        await wait_until(
+            lambda: type(app.screen).__name__ == "ConfirmModal",
+            what="ordinary multi-delete confirmation",
+        )
+        await pilot.press("right", "enter")
+        await drain_workers(app)
+        assert [path for path, _ in calls] == [f"/{failure_name}", "/b.txt", f"/{NAME}"]
+        assert all(worker.group == "transfer-delete" for _, worker in calls)
+        assert {path.name for path in source.iterdir()} == {failure_name, "b.txt"}
+        assert {entry.entry.name for entry in dual.left.entries} == {failure_name, "b.txt"}
+        toast = next(
+            toast.model
+            for toast in app.app_ctx.root_vm.chrome.toast_stack.toasts
+            if toast.model.id == "delete-failed"
+        )
+        assert toast.text == (
+            f"✖  [b]Transfer:[/] delete failed: failed to delete 2 of 3 entries: {failure_name}, b.txt"
+        )
+        records = {
+            record.source_uri: record for record in app.app_ctx.transfer_journal.load_history()
+        }
+        assert len(records) == 3
+        assert records[f"/{NAME}"].status == "completed"
+        for uri in (f"/{failure_name}", "/b.txt"):
+            assert records[uri].status == "failed"
+            assert records[uri].failure_reason == "permission_denied"
+        await wait_until(
+            lambda: len(app.app_ctx.transfer_history_vm.records) == 3,
+            what="ordinary delete history refreshed after aggregate feedback",
+        )
+        assert not dual.transfer_runtime.owned_ids
 
 
 async def test_actual_ordinary_copy_save_and_trim_worker_overlay_survives_linger(
