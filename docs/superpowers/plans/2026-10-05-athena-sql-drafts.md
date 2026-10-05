@@ -736,6 +736,7 @@ class _WriteCoordinator:
         self.loop = asyncio.get_running_loop()
         self.sequence = 0
         self.current: dict[str, _EditCapture] = {}
+        self.unconfirmed: dict[str, int] = {}
         self.timers: dict[str, asyncio.TimerHandle] = {}
         self.launches: dict[str, Callable[[], None]] = {}
         self.futures: set[Future[DraftStoreResult]] = set()
@@ -803,6 +804,10 @@ class _WriteCoordinator:
             captured_editor_revision, self.sequence, DraftPermit(),
         )
         self.current[identity] = capture
+        if sql.strip():
+            self.unconfirmed[identity] = self.sequence
+        else:
+            self.unconfirmed.pop(identity, None)
 
         def launch() -> None:
             self.timers.pop(identity, None)
@@ -822,7 +827,11 @@ class _WriteCoordinator:
             def apply(done: asyncio.Future[DraftStoreResult]) -> None:
                 if done.cancelled() or self.terminal is not None:
                     return
-                completed(capture, done.result())
+                result = done.result()
+                if (result.code is None
+                    and self.unconfirmed.get(identity) == capture.captured_write_revision):
+                    self.unconfirmed.pop(identity, None)
+                completed(capture, result)
 
             waiter.add_done_callback(apply)
 
@@ -830,16 +839,20 @@ class _WriteCoordinator:
         self.timers[identity] = self.loop.call_later(DEBOUNCE_SECONDS, launch)
         return capture
 
-    def fence(self, ids: set[str] | None) -> None:
-        for identity in tuple(self.current):
+    def fence(self, ids: set[str] | None, *, discard_unconfirmed: bool = True) -> None:
+        for identity in self.current.keys() | self.unconfirmed.keys():
             if ids is not None and identity not in ids:
                 continue
-            self.current[identity].permit.cancel()
+            capture = self.current.get(identity)
+            if capture is not None:
+                capture.permit.cancel()
             timer = self.timers.pop(identity, None)
             if timer is not None:
                 timer.cancel()
             self.launches.pop(identity, None)
             self.current.pop(identity, None)
+            if discard_unconfirmed:
+                self.unconfirmed.pop(identity, None)
 ```
 
 Successive blank revisions retain deletion ownership only from a still-current blank capture, using its immutable origin and a fresh editor/write revision. Successful deletion releases the session capture; a canceled, fenced, or superseded capture supplies no deletion ownership. Clearing still releases the execution context guard immediately.
@@ -943,7 +956,11 @@ def schedule_session(self, session: AthenaDraftSession, sql: str,
     if self._disposed or self._saving_suspended or not self.enabled:
         return
     self._ensure_coordinator()
+    session_reference = weakref.ref(session)  # Import weakref in the runtime module.
     def completed(capture: _EditCapture, result: DraftStoreResult) -> None:
+        session = session_reference()
+        if session is None:
+            return
         current = (
             not session._detached and self.enabled
             and self._coordinator.is_current(
@@ -979,7 +996,9 @@ def _ensure_coordinator(self) -> _WriteCoordinator:
     return self._coordinator
 ```
 
-The runtime initializes `_sessions: set[AthenaDraftSession]`, `_coordinator=None`, a lazy `_worker=DraftWorker()`, `_store`, `_enabled`, `_read_only`, `_disposed=False`, `_saving_suspended=False`, `_items=()`, `_error_text=None`, `_busy=False` and `_cleanup_required=False`; public properties are read-only projections. When disabled, it retains current session text without creating a coordinator. `activate` assigns text/context/complete bound context and flips `_active=True` without calling `edited`. `deleted` sets `_deleted_revision = _editor_revision`, clears saved baseline, and sets empty. `detach` marks detached and cancels its timer through the coordinator but leaves already-submitted future ownership with the runtime; final eligible capture happens before detach.
+The illustrative defaults below assume a confirmed initial preference; unknown initial preference starts suspended with explicit reconciliation feedback. Successful listing results retain a value-safe `skipped` count. The manager shows fixed nonfatal warning copy and enables confirmed Clear all when valid or skipped records remain; valid sibling recovery is still available.
+
+The runtime initializes `_sessions: set[AthenaDraftSession]`, `_coordinator=None`, a lazy `_worker=DraftWorker()`, `_store`, `_enabled`, `_read_only`, `_disposed=False`, `_saving_suspended=False`, `_items=()`, `_error_text=None`, `_busy=False` and `_cleanup_required=False`; public properties are read-only projections. When disabled, it retains current session text without creating a coordinator. `activate` assigns text/context/complete bound context and flips `_active=True` without calling `edited`. `deleted` sets `_deleted_revision = _editor_revision`, clears saved baseline, and sets empty. `detach` submits the final eligible capture before marking the session detached and removing presentation subscriptions. The coordinator retains per-ID/write-revision unconfirmed obligations independently of those subscriptions and acknowledges successful physical saves even after the page is disposed. Completion callbacks use weak session references; retired UI objects are not accounting owners.
 
 - [ ] **2.6 Implement mutation fencing and deadline aggregation.** Before delete/clear/disable, revoke appropriate permits in every session and cancel timers. Queue disk mutations in the same FIFO, then update listings only from successful disk results. Set an in-memory tombstone on matching editor revisions; no untouched text is requeued by shutdown. New edits clear only their own tombstone. Disable also suspends intake before starting I/O; failed cleanup keeps an explicit retry state. Concurrent enable/disable actions serialize through one runtime operation lock; `busy` prevents duplicate UI actions, and generation checks reject late results.
 
@@ -1054,9 +1073,9 @@ async def finish(
         return self.terminal
 ```
 
-Place these as methods on `_WriteCoordinator` (remove the explicit `self: _WriteCoordinator` annotation). Runtime `shutdown` computes `deadline = loop.time() + SHUTDOWN_SECONDS` once and passes a callback counting each active session with `has_unsaved_text` and no matching `_deleted_revision`. On cancellation, retain the terminal report for a later shutdown caller; do not close the coordinator twice. The ordinary page-navigation flush uses the same observation wait pattern without `close_intake` or setting `terminal`; app-terminal flush immediately returns the cached report. Define `_session_is_unconfirmed` as `session._active and session._sql.strip() and session._deleted_revision != session._editor_revision and session.has_unsaved_text(session._sql, session._context)` when context exists, with incomplete-context nonempty text also counted. Never count two sessions' identical superseded revisions as two current edits; select only the runtime's current writer per ID.
+Place these as methods on `_WriteCoordinator` (remove the explicit `self: _WriteCoordinator` annotation). Runtime `shutdown` computes `deadline = loop.time() + SHUTDOWN_SECONDS` once and passes a callback counting the union of current per-ID unconfirmed coordinator obligations and active unsaved editor origins with no matching `_deleted_revision`. Retired pages remain represented by their obligations until confirmed success, supersession, or destructive fencing; failures remain unresolved. Count each origin once, without an additional wait budget. On cancellation, retain the terminal report for a later shutdown caller; do not close the coordinator twice. The ordinary page-navigation flush uses the same observation wait pattern without `close_intake` or setting `terminal`; app-terminal flush immediately returns the cached report. Define `_session_is_unconfirmed` as `session._active and session._sql.strip() and session._deleted_revision != session._editor_revision and session.has_unsaved_text(session._sql, session._context)` when context exists, with incomplete-context nonempty text also counted. Never count two sessions' identical superseded revisions as two current edits; select only the runtime's current writer per ID.
 
-Runtime delete passes `ids={selected_id}` and a tombstone callback iterating all matching bound contexts. Clear passes `ids=None` and tombstones all sessions. Disable first sets local saving suspension and then passes `store.set_enabled(False)` with all-session tombstoning; enabled/error state is taken from the returned `enabled` field, and local suspension remains until a successful enable. Enable uses the same mutation lock without cancelling new edits until its initialized success; only then schedules the current nonempty text of active sessions once. All mutators notify `items`, `enabled`, `busy`, `error_text` with property names only.
+Runtime delete passes `ids={selected_id}` and a tombstone callback iterating all matching bound contexts. Clear passes `ids=None` and tombstones all sessions. Disable first sets local saving suspension and then passes `store.set_enabled(False)` with all-session tombstoning; enabled/error state is taken from the returned `enabled` field, and local suspension remains until a successful enable. Enable suspends saving before I/O and uses the same mutation lock, revoking pending permits without discarding unconfirmed obligations. Only confirmed successful initialization releases suspension and schedules the current nonempty text of active sessions once. Failed initialization or rollback preserves the last confirmed preference, separately marks unknown readback, and keeps fixed suspension feedback across listing refreshes. Settings provides explicit enable retry and confirmed disable/delete routes; failed off cleanup retains its existing retry route. All mutators notify `items`, `enabled`, `busy`, `error_text` with property names only.
 
 - [ ] **2.7 Run green and review races.**
 

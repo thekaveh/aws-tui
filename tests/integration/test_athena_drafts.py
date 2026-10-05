@@ -473,3 +473,143 @@ async def test_closing_manager_does_not_cancel_owned_draft_deletion(tmp_path, mo
         )
         assert runtime.items == ()
         assert not (runtime.directory / f"{saved.id}.json").exists()
+
+
+@pytest.mark.parametrize("mixed", [False, True])
+async def test_actual_manager_skipped_records_warning_and_confirmed_clear(
+    tmp_path, monkeypatch, mixed
+):
+    from aws_tui.infra.athena_draft_store import draft_id
+
+    async with mounted_draft_app(tmp_path, monkeypatch) as (
+        app,
+        ctx,
+        runtime,
+        store,
+        _config,
+        client,
+        pilot,
+    ):
+        assert await runtime.set_enabled(True)
+        await open_service(ctx, pilot, "athena")
+        await drain_workers(app)
+        page = app.query_one(AthenaPage)
+        await page.vm.select_workgroup("primary")
+        await page.vm.select_catalog("AwsDataCatalog")
+        await page.vm.select_database("default")
+        valid = record(page.vm.context.cache_key)
+        if mixed:
+            assert store.save(valid, permit=DraftPermit()).code is None
+        corrupt = runtime.directory / (draft_id((*valid.context[:4], "broken")) + ".json")
+        runtime.directory.mkdir(exist_ok=True)
+        corrupt.write_bytes(b'{"PRIVATE_CORRUPT_PAYLOAD":')
+        unrelated = runtime.directory / "notes.txt"
+        unrelated.write_text("leave me")
+        modal = AthenaDraftsModal(page.vm, hub=ctx.hub)
+        app.push_screen(modal)
+        await drain_workers(app)
+        await pilot.pause()
+        detail = modal.query_one("#athena-drafts-warning", Static)
+        assert "1 local draft record(s) could not be read" in str(detail.content)
+        assert "1 local draft record(s) could not be read" in _visible_wrapped_text(detail)
+        assert runtime.skipped == 1
+        assert runtime.error_text is None
+        assert "PRIVATE_CORRUPT_PAYLOAD" not in app.export_screenshot()
+        assert not modal.query_one("#athena-drafts-clear", Button).disabled
+        assert modal.query_one("#athena-drafts-restore", Button).disabled == (not mixed)
+        capture_ui(app, "skipped-mixed" if mixed else "skipped-only")
+        if mixed:
+            await tab_to(pilot, "athena-drafts-restore")
+            await pilot.press("enter")
+            await drain_workers(app)
+            assert page.vm.query.sql == valid.sql
+            assert client.start_calls == []
+            modal = AthenaDraftsModal(page.vm, hub=ctx.hub)
+            app.push_screen(modal)
+            await drain_workers(app)
+        await tab_to(pilot, "athena-drafts-clear")
+        await pilot.press("enter")
+        await pilot.pause()
+        assert isinstance(app.screen, ConfirmModal)
+        assert corrupt.exists()
+        await pilot.press("escape")
+        await drain_workers(app)
+        assert corrupt.exists()
+        await tab_to(pilot, "athena-drafts-clear")
+        await pilot.press("enter")
+        await pilot.pause()
+        await pilot.press("tab", "enter")
+        await drain_workers(app)
+        await pilot.pause()
+        assert not corrupt.exists()
+        assert store.list().records == ()
+        assert runtime.items == ()
+        assert runtime.skipped == 0
+        assert "could not be read" not in str(
+            modal.query_one("#athena-drafts-warning", Static).content
+        )
+        assert unrelated.read_text() == "leave me"
+
+
+@pytest.mark.parametrize("unknown", [False, True])
+async def test_actual_settings_failed_enable_has_keyboard_retry(tmp_path, monkeypatch, unknown):
+    from aws_tui.infra import athena_draft_store as module
+
+    async with mounted_draft_app(tmp_path, monkeypatch) as (
+        app,
+        _ctx,
+        runtime,
+        _store,
+        config,
+        _client,
+        pilot,
+    ):
+        setting, directory = config.set_athena_sql_drafts, module._private_directory
+        load = config.load
+        rollback_attempted = False
+
+        def fail_load():
+            if unknown and rollback_attempted:
+                raise OSError("PRIVATE_SETTINGS_READBACK")
+            return load()
+
+        def fail_rollback(enabled):
+            nonlocal rollback_attempted
+            if not enabled:
+                rollback_attempted = True
+                raise OSError("PRIVATE_SETTINGS_FAILURE")
+            setting(enabled)
+
+        def fail_directory(*args, **kwargs):
+            raise OSError("PRIVATE_SETTINGS_FAILURE")
+
+        monkeypatch.setattr(config, "load", fail_load)
+        monkeypatch.setattr(config, "set_athena_sql_drafts", fail_rollback)
+        monkeypatch.setattr(module, "_private_directory", fail_directory)
+        app.action_open_settings()
+        await wait_until(lambda: bool(app.query(SettingsView)), what="Settings mounted")
+        await drain_workers(app)
+        app.focus_active_service_pane()
+        await pilot.pause()
+        await pilot.press("enter")
+        await tab_to(pilot, "athena-drafts-toggle")
+        await pilot.press("enter")
+        await drain_workers(app)
+        await pilot.pause()
+        status = app.query_one("#athena-drafts-setting-status", Static)
+        assert "saving is suspended" in str(status.content)
+        assert runtime.enabled == (not unknown)
+        assert load().athena_sql_drafts
+        assert "Disable and delete" in str(app.query_one("#athena-drafts-toggle", Button).label)
+        assert "PRIVATE_SETTINGS_FAILURE" not in app.export_screenshot()
+        capture_ui(app, "settings-enable-unknown" if unknown else "settings-enable-failed")
+        monkeypatch.setattr(config, "load", load)
+        monkeypatch.setattr(config, "set_athena_sql_drafts", setting)
+        monkeypatch.setattr(module, "_private_directory", directory)
+        await tab_to(pilot, "athena-drafts-retry-enable")
+        await pilot.press("enter")
+        await drain_workers(app)
+        assert runtime.enabled
+        assert not runtime._saving_suspended
+        assert not runtime.enable_required
+        assert runtime.error_text is None

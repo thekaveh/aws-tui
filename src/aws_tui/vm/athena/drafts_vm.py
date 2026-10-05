@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import weakref
 from collections.abc import Callable
 from concurrent.futures import Future
 from dataclasses import dataclass, field
@@ -34,6 +35,8 @@ _SAVE_ERROR = "Athena SQL draft could not be saved. Edit again to retry."
 _CONTEXT_ERROR = "Editor belongs to another context. Return to that context or clear the editor."
 _INCOMPLETE_CONTEXT = "Select a complete Athena context and edit to save."
 _OPERATION_ERROR = "Athena SQL draft operation failed. Retry the operation."
+_ENABLE_ERROR = "Local saving is suspended. Retry enabling drafts or disable and delete drafts."
+_PREFERENCE_UNKNOWN = "Draft preference could not be confirmed. " + _ENABLE_ERROR
 
 
 @dataclass(frozen=True, slots=True)
@@ -58,6 +61,7 @@ class _WriteCoordinator:
         self.sequence = 0
         self.latest_revision: dict[str, int] = {}
         self.current: dict[str, _EditCapture] = {}
+        self.unconfirmed: dict[str, int] = {}
         self.timers: dict[str, asyncio.TimerHandle] = {}
         self.launches: dict[str, Callable[[], None]] = {}
         self.futures: set[Future[DraftStoreResult]] = set()
@@ -133,6 +137,10 @@ class _WriteCoordinator:
         )
         self.current[identity] = capture
         self.latest_revision[identity] = self.sequence
+        if sql.strip():
+            self.unconfirmed[identity] = self.sequence
+        else:
+            self.unconfirmed.pop(identity, None)
 
         def launch() -> None:
             self.timers.pop(identity, None)
@@ -152,7 +160,13 @@ class _WriteCoordinator:
             def apply(done: asyncio.Future[DraftStoreResult]) -> None:
                 if done.cancelled() or self.terminal is not None or not self.active:
                     return
-                completed(capture, done.result())
+                result = done.result()
+                if (
+                    result.code is None
+                    and self.unconfirmed.get(identity) == capture.captured_write_revision
+                ):
+                    self.unconfirmed.pop(identity, None)
+                completed(capture, result)
 
             waiter.add_done_callback(apply)
 
@@ -170,16 +184,20 @@ class _WriteCoordinator:
         if launch is not None:
             launch()
 
-    def fence(self, ids: set[str] | None) -> None:
-        for identity in tuple(self.current):
+    def fence(self, ids: set[str] | None, *, discard_unconfirmed: bool = True) -> None:
+        for identity in self.current.keys() | self.unconfirmed.keys():
             if ids is not None and identity not in ids:
                 continue
-            self.current[identity].permit.cancel()
+            capture = self.current.get(identity)
+            if capture is not None:
+                capture.permit.cancel()
             timer = self.timers.pop(identity, None)
             if timer is not None:
                 timer.cancel()
             self.launches.pop(identity, None)
             self.current.pop(identity, None)
+            if discard_unconfirmed:
+                self.unconfirmed.pop(identity, None)
 
     async def mutate(
         self,
@@ -263,7 +281,11 @@ class AthenaDraftsVM:
         self._hub = hub
         self._dispatcher = dispatcher
         self._disposed = False
-        self._saving_suspended = False
+        self._saving_suspended = preference_error
+        self._preference_confirmed = not preference_error
+        self._enable_required = preference_error
+        self._preference_error: str | None = _PREFERENCE_UNKNOWN if preference_error else None
+        self._skipped = 0
         self._items: tuple[SqlDraft, ...] = ()
         self._error_text: str | None = _OPERATION_ERROR if preference_error else None
         self._busy = False
@@ -291,6 +313,18 @@ class AthenaDraftsVM:
         return self._items
 
     @property
+    def skipped(self) -> int:
+        return self._skipped
+
+    @property
+    def preference_confirmed(self) -> bool:
+        return self._preference_confirmed
+
+    @property
+    def enable_required(self) -> bool:
+        return self._enable_required
+
+    @property
     def busy(self) -> bool:
         return self._busy
 
@@ -304,7 +338,7 @@ class AthenaDraftsVM:
 
     @property
     def error_text(self) -> str | None:
-        return self._error_text
+        return self._preference_error or self._error_text
 
     @property
     def on_property_changed(self) -> rx.Observable[str]:
@@ -333,8 +367,12 @@ class AthenaDraftsVM:
         if self._disposed or self._saving_suspended or not self.enabled:
             return
         coordinator = self._ensure_coordinator()
+        session_reference = weakref.ref(session)
 
         def completed(capture: _EditCapture, result: DraftStoreResult) -> None:
+            session = session_reference()
+            if session is None:
+                return
             current = (
                 not self._disposed
                 and not session._detached
@@ -424,6 +462,17 @@ class AthenaDraftsVM:
                 return False
         return True
 
+    def _unconfirmed_count(self) -> int:
+        # Persistence obligations outlive presentation sessions. Count each origin
+        # once, including edits without a schedulable capture (incomplete context).
+        identities = set(self._coordinator.unconfirmed) if self._coordinator else set()
+        for session in self._sessions:
+            if self._session_is_unconfirmed(session):
+                context = session._bound_context or session._context
+                if context is not None:
+                    identities.add(context_draft_id(context.cache_key))
+        return len(identities)
+
     async def refresh(self) -> None:
         if not self.enabled or self._disposed or self._terminal is not None:
             return
@@ -477,25 +526,39 @@ class AthenaDraftsVM:
         coordinator = self._coordinator
         if self._disposed or coordinator is None or not coordinator.intake:
             return
+        self._preference_confirmed = result.enabled is not None
         if result.enabled is not None:
             self._enabled = result.enabled
         self._operation_completed(result)
         if generation != self._preference_generation:
             self._notify("enabled")
             return
-        self._cleanup_required = not enabled and result.code is not None
-        if enabled and result.code is None and self.enabled:
+        succeeded = result.code is None and result.enabled is enabled
+        self._cleanup_required = not enabled and not succeeded
+        self._enable_required = enabled and not succeeded
+        self._preference_error = (
+            None
+            if succeeded
+            else _ENABLE_ERROR
+            if self.preference_confirmed
+            else _PREFERENCE_UNKNOWN
+        )
+        if enabled and succeeded:
             self._saving_suspended = False
             for session in self._sessions:
                 if session._active and session._context is not None and session._sql.strip():
                     session.edited(session._sql, session._context)
-        elif not enabled:
+        else:
             self._saving_suspended = True
             for session in self._sessions:
-                session._state = "off" if not self.enabled else "empty"
+                session._state = "off" if not self.enabled else "error"
                 session._notify("state")
+                session._notify("error_text")
         self._notify("enabled")
         self._notify("cleanup_required")
+        self._notify("enable_required")
+        self._notify("preference_confirmed")
+        self._notify("error_text")
 
     async def set_enabled(self, enabled: bool) -> bool:
         if self._read_only or self._disposed or self._terminal is not None:
@@ -504,8 +567,7 @@ class AthenaDraftsVM:
             self._operation_lock = asyncio.Lock()
         self._preference_generation += 1
         generation = self._preference_generation
-        if not enabled:
-            self._saving_suspended = True
+        self._saving_suspended = True
         async with self._operation_lock:
             coordinator = self._ensure_coordinator()
             if not coordinator.intake:
@@ -520,6 +582,7 @@ class AthenaDraftsVM:
                 async with coordinator.mutation_lock:
                     if not coordinator.intake:
                         return False
+                    coordinator.fence(None, discard_unconfirmed=False)
                     self._begin_mutation()
                     waiter = coordinator.observe(
                         self._worker.submit(lambda: self._store.set_enabled(True))
@@ -541,8 +604,10 @@ class AthenaDraftsVM:
     def _apply_result(self, result: DraftStoreResult) -> None:
         if result.code is None:
             self._items = result.records
+            self._skipped = result.skipped
         self._error_text = None if result.code is None else _OPERATION_ERROR
         self._notify("items")
+        self._notify("skipped")
         self._notify("error_text")
 
     async def shutdown(self) -> DraftFlushReport:
@@ -565,7 +630,7 @@ class AthenaDraftsVM:
         try:
             self._terminal = await coordinator.finish(
                 deadline=deadline,
-                unconfirmed=lambda: sum(self._session_is_unconfirmed(s) for s in self._sessions),
+                unconfirmed=self._unconfirmed_count,
             )
         finally:
             if coordinator.terminal is not None:
@@ -623,6 +688,8 @@ class AthenaDraftSession:
     @property
     def error_text(self) -> str | None:
         if self._state == "error":
+            if self._runtime._saving_suspended:
+                return self._runtime.error_text or _ENABLE_ERROR
             return _SAVE_ERROR
         if self._state == "context_required":
             if self._bound_context is not None:
@@ -678,6 +745,9 @@ class AthenaDraftSession:
         if not self._active or not self._runtime.enabled:
             self._runtime._revoke_session_capture(self)
             self._state = "off"
+        elif self._runtime._saving_suspended:
+            self._runtime._revoke_session_capture(self)
+            self._state = "error"
         elif not sql.strip():
             if bound_origin is not None:
                 self._state = "pending"

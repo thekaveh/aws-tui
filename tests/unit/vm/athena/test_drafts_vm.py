@@ -1005,3 +1005,169 @@ async def test_disabled_terminal_shutdown_detaches_observers(tmp_path):
     session.edited("SELECT 2", QueryContext(*CTX))
     assert len(names) == count
     assert session._detached
+
+
+@pytest.mark.parametrize("outcome", ["failure", "success", "timeout", "late_success"])
+async def test_retired_page_keeps_current_write_obligation(tmp_path, monkeypatch, outcome):
+    from tests.unit.vm.athena.test_page_vm import PageClient, make_page_vm
+
+    runtime, store = runtime_at(tmp_path)
+    entered, release = threading.Event(), threading.Event()
+    save = store.save
+
+    def held(record, *, permit):
+        result = save(record, permit=permit) if outcome == "late_success" else None
+        entered.set()
+        assert release.wait(10)
+        if outcome == "failure":
+            return DraftStoreResult(code="io")
+        return result if result is not None else save(record, permit=permit)
+
+    monkeypatch.setattr(store, "save", held)
+    page = make_page_vm(PageClient(), drafts=runtime)
+    await page.setup()
+    notifications = []
+    page._draft_session.on_property_changed.subscribe(notifications.append)
+    page.query.set_sql("SELECT 'RETIRED_PRIVATE'")
+    try:
+        await page.shutdown()
+        assert entered.is_set()
+        page.dispose()
+        assert not runtime._sessions
+        notification_count = len(notifications)
+        if outcome in {"failure", "success"}:
+            release.set()
+        begin = time.monotonic()
+        report = await runtime.shutdown()
+        assert report.unpersisted == (0 if outcome == "success" else 1)
+        assert report.timed_out == (outcome in {"timeout", "late_success"})
+        assert time.monotonic() - begin < 2.5
+        if report.timed_out:
+            assert runtime._worker.pending_count == 1
+        release.set()
+        await wait_until(lambda: runtime._worker.pending_count == 0, what="retired writer drained")
+        await asyncio.sleep(0)
+        assert await runtime.shutdown() is report
+        assert len(notifications) == notification_count
+        assert "RETIRED_PRIVATE" not in repr(report) + repr(runtime._coordinator)
+        assert bool(store.list().records) == (outcome in {"success", "late_success"})
+    finally:
+        release.set()
+        await page.shutdown()
+        page.dispose()
+        await runtime.shutdown()
+        runtime.dispose()
+
+
+@pytest.mark.parametrize(
+    "resolution", ["supersede", "supersede_failure", "delete", "clear", "disable"]
+)
+async def test_retired_page_obligation_is_superseded_or_fenced(tmp_path, monkeypatch, resolution):
+    from tests.unit.vm.athena.test_page_vm import PageClient, make_page_vm
+
+    runtime, store = runtime_at(tmp_path)
+    save = store.save
+    monkeypatch.setattr(store, "save", lambda record, *, permit: DraftStoreResult(code="io"))
+    page = make_page_vm(PageClient(), drafts=runtime)
+    await page.setup()
+    context = page.query.context
+    page.query.set_sql("SELECT old")
+    await page.shutdown()
+    page.dispose()
+    await wait_until(lambda: runtime._worker.pending_count == 0, what="retired failed retry")
+    if resolution != "supersede_failure":
+        monkeypatch.setattr(store, "save", save)
+    if resolution in {"supersede", "supersede_failure"}:
+        newer = make_page_vm(PageClient(), drafts=runtime)
+        await newer.setup()
+        newer.query.set_sql("SELECT newer")
+        await newer.shutdown()
+        newer.dispose()
+    elif resolution == "delete":
+        assert await runtime.delete(record(context.cache_key).id)
+    elif resolution == "clear":
+        assert await runtime.clear()
+    else:
+        assert await runtime.set_enabled(False)
+    assert (await runtime.shutdown()).unpersisted == (1 if resolution == "supersede_failure" else 0)
+    assert [row.sql for row in store.list().records] == (
+        ["SELECT newer"] if resolution == "supersede" else []
+    )
+    runtime.dispose()
+
+
+@pytest.mark.parametrize("unknown", [False, True])
+@pytest.mark.parametrize("retry", [False, True])
+async def test_failed_enable_suspends_real_config_until_explicit_success(
+    tmp_path, monkeypatch, unknown, retry
+):
+    from aws_tui.infra import athena_draft_store as module
+
+    runtime, store = runtime_at(tmp_path, enabled=False)
+    config = store._config
+    setting, load, directory = config.set_athena_sql_drafts, config.load, module._private_directory
+    rolled_back = False
+
+    def broken_setting(enabled):
+        nonlocal rolled_back
+        if not enabled:
+            rolled_back = True
+            raise OSError("PRIVATE_ROLLBACK_PAYLOAD")
+        setting(enabled)
+
+    def broken_load():
+        if unknown and rolled_back:
+            raise OSError("PRIVATE_READBACK_PAYLOAD")
+        return load()
+
+    def broken_directory(*args, **kwargs):
+        raise OSError("PRIVATE_DIRECTORY_PAYLOAD")
+
+    monkeypatch.setattr(config, "set_athena_sql_drafts", broken_setting)
+    monkeypatch.setattr(config, "load", broken_load)
+    monkeypatch.setattr(module, "_private_directory", broken_directory)
+    try:
+        assert not await runtime.set_enabled(True)
+        assert load().athena_sql_drafts
+        assert runtime.enabled == (not unknown)
+        assert runtime._saving_suspended
+        assert runtime.preference_confirmed == (not unknown)
+        assert runtime.enable_required
+        assert "saving is suspended" in runtime.error_text
+        if unknown:
+            assert "could not be confirmed" in runtime.error_text
+        assert "PRIVATE_" not in runtime.error_text + repr(runtime)
+        session = runtime.open_session()
+        session.edited("SELECT private", QueryContext(*CTX))
+        assert session._capture is None
+        assert session.state != "pending"
+        monkeypatch.setattr(config, "set_athena_sql_drafts", setting)
+        monkeypatch.setattr(config, "load", load)
+        monkeypatch.setattr(module, "_private_directory", directory)
+        await runtime.refresh()
+        assert "saving is suspended" in runtime.error_text
+        session.edited("SELECT latest", QueryContext(*CTX))
+        assert session._capture is None
+        if retry:
+            assert await runtime.set_enabled(True)
+            assert not runtime._saving_suspended
+            assert not runtime.enable_required
+            assert runtime.preference_confirmed
+        await runtime.shutdown()
+        assert [row.sql for row in store.list().records] == (["SELECT latest"] if retry else [])
+    finally:
+        runtime.dispose()
+
+
+async def test_failed_reenable_keeps_retired_obligation_without_queued_save(tmp_path, monkeypatch):
+    runtime, store = runtime_at(tmp_path)
+    session = runtime.open_session()
+    session.edited("SELECT pending", QueryContext(*CTX))
+    monkeypatch.setattr(
+        store, "set_enabled", lambda enabled: DraftStoreResult(code="io", enabled=True)
+    )
+    assert not await runtime.set_enabled(True)
+    session.detach()
+    assert (await runtime.shutdown()).unpersisted == 1
+    assert not store.list().records
+    runtime.dispose()

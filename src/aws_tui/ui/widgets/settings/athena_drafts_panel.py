@@ -36,7 +36,9 @@ class AthenaDraftsPanel(DeferredWorkerMixin, Widget):
             markup=False,
         )
         button = Button(
-            "Disable and delete drafts" if self._vm.enabled else "Enable local SQL drafts",
+            "Disable and delete drafts"
+            if self._vm.enabled or not self._vm.preference_confirmed
+            else "Enable local SQL drafts",
             id="athena-drafts-toggle",
             flat=True,
         )
@@ -45,6 +47,9 @@ class AthenaDraftsPanel(DeferredWorkerMixin, Widget):
         cleanup = Button("Retry draft cleanup", id="athena-drafts-cleanup", flat=True)
         cleanup.display = self._vm.cleanup_required
         yield cleanup
+        retry = Button("Retry enabling drafts", id="athena-drafts-retry-enable", flat=True)
+        retry.display = self._vm.enable_required
+        yield retry
         yield Static("", id="athena-drafts-setting-status", markup=False)
 
     def on_mount(self) -> None:
@@ -64,18 +69,24 @@ class AthenaDraftsPanel(DeferredWorkerMixin, Widget):
             return
         button = self.query_one("#athena-drafts-toggle", Button)
         button.label = (
-            "Disable and delete drafts" if self._vm.enabled else "Enable local SQL drafts"
+            "Disable and delete drafts"
+            if self._vm.enabled or not self._vm.preference_confirmed
+            else "Enable local SQL drafts"
         )
         button.disabled = self._vm.read_only or self._vm.busy or self._pending
         cleanup = self.query_one("#athena-drafts-cleanup", Button)
         cleanup.display = self._vm.cleanup_required
         cleanup.disabled = self._vm.busy or self._pending or self._vm.read_only
+        retry = self.query_one("#athena-drafts-retry-enable", Button)
+        retry.display = self._vm.enable_required
+        retry.disabled = self._vm.busy or self._pending or self._vm.read_only
         status = "Unavailable in demo mode" if self._vm.read_only else self._vm.error_text
         self.query_one("#athena-drafts-setting-status", Static).update(status or "")
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
         if (
-            event.button.id not in {"athena-drafts-toggle", "athena-drafts-cleanup"}
+            event.button.id
+            not in {"athena-drafts-toggle", "athena-drafts-cleanup", "athena-drafts-retry-enable"}
             or self._pending
             or self._vm.busy
         ):
@@ -84,16 +95,20 @@ class AthenaDraftsPanel(DeferredWorkerMixin, Widget):
         self._pending = True
         self._refresh()
         cleanup_only = event.button.id == "athena-drafts-cleanup"
+        retry_enable = event.button.id == "athena-drafts-retry-enable"
         self._run_lifecycle_worker(
-            lambda: self._toggle(cleanup_only), group="athena-drafts-setting"
+            lambda: self._toggle(cleanup_only, retry_enable), group="athena-drafts-setting"
         )
 
-    async def _toggle(self, cleanup_only: bool) -> None:
+    async def _toggle(self, cleanup_only: bool, retry_enable: bool = False) -> None:
         try:
+            if retry_enable:
+                await self._vm.set_enabled(True)
+                return
             if cleanup_only:
                 await self._vm.set_enabled(False)
                 return
-            enabled = self._vm.enabled
+            enabled = self._vm.enabled or not self._vm.preference_confirmed
             if enabled and not await ask_draft_confirmation(
                 self,
                 drafts=self._vm,

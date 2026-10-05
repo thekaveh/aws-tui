@@ -103,9 +103,14 @@ def test_bad_config_disables_drafts_with_fixed_preference_error(tmp_path):
     ctx = build_app_context(config_dir=tmp_path, cache_dir=tmp_path / "cache")
     try:
         assert not ctx.athena_drafts_vm.enabled
+        assert not ctx.athena_drafts_vm.preference_confirmed
+        assert ctx.athena_drafts_vm.enable_required
+        assert ctx.athena_drafts_vm._saving_suspended
+        assert ctx.athena_drafts_vm._worker._thread is None
         assert (
             ctx.athena_drafts_vm.error_text
-            == "Athena SQL draft operation failed. Retry the operation."
+            == "Draft preference could not be confirmed. Local saving is suspended. "
+            "Retry enabling drafts or disable and delete drafts."
         )
     finally:
         ctx.close_unstarted()

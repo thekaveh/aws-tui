@@ -54,6 +54,7 @@ class AthenaDraftsModal(DeferredWorkerMixin, ModalScreen[DraftModalResult]):
     AthenaDraftsModal { align: center middle; background: $background 60%; }
     AthenaDraftsModal > Vertical { width: 76; max-width: 96%; height: 90%; border: round $accent; background: $surface; padding: 0 1; }
     AthenaDraftsModal .modal-title { height: 1; color: $accent; text-style: bold; }
+    #athena-drafts-warning { height: auto; color: $warning; }
     #athena-drafts-list { height: 1fr; min-height: 3; }
     #athena-drafts-detail-scroll { height: 7; scrollbar-size: 1 1; }
     #athena-drafts-detail { height: auto; }
@@ -83,6 +84,9 @@ class AthenaDraftsModal(DeferredWorkerMixin, ModalScreen[DraftModalResult]):
     def compose(self) -> ComposeResult:
         with Vertical(classes="modal-frame"):
             yield Static("Local Athena SQL drafts", classes="modal-title", markup=False)
+            warning = Static("", id="athena-drafts-warning", markup=False)
+            warning.display = False
+            yield warning
             yield OptionList(id="athena-drafts-list")
             with VerticalScroll(id="athena-drafts-detail-scroll"):
                 yield Static("", id="athena-drafts-detail", markup=False)
@@ -131,11 +135,21 @@ class AthenaDraftsModal(DeferredWorkerMixin, ModalScreen[DraftModalResult]):
         if self._ids:
             listing.highlighted = self._ids.index(selected) if selected in self._ids else 0
         row = next((row for row in self._drafts.items if row.id == self._selected_id()), None)
+        warning = self.query_one("#athena-drafts-warning", Static)
+        warning.display = self._drafts.skipped > 0
+        warning.update(
+            f"{self._drafts.skipped} local draft record(s) could not be read. "
+            "Valid drafts remain available. Clear all can remove unreadable records."
+            if self._drafts.skipped
+            else ""
+        )
         self._refresh_drafts_detail()
         busy = self._loading or self._pending or self._drafts.busy or not self._drafts.enabled
         for identity in ("restore", "delete"):
             self.query_one(f"#athena-drafts-{identity}", Button).disabled = busy or row is None
-        self.query_one("#athena-drafts-clear", Button).disabled = busy or not self._ids
+        self.query_one("#athena-drafts-clear", Button).disabled = busy or not (
+            self._ids or self._drafts.skipped
+        )
         self.query_one("#athena-drafts-keep", Button).disabled = self._pending
 
     def _refresh_drafts_detail(self) -> None:

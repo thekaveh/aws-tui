@@ -130,3 +130,61 @@ async def test_manager_loading_disables_recovery_without_blocking_keyboard(tmp_p
         page.dispose()
         await runtime.shutdown()
         runtime.dispose()
+
+
+async def test_manager_nonregular_warning_and_clear_preserve_targets(tmp_path):
+    from textual.widgets import Static
+
+    from aws_tui.ui.widgets.athena.drafts_modal import AthenaDraftsModal
+    from aws_tui.ui.widgets.confirm_modal import ConfirmModal
+    from tests.helpers import wait_until
+
+    runtime, _store = runtime_at(tmp_path)
+    page = make_page_vm(PageClient(), drafts=runtime)
+    await page.setup()
+    target = tmp_path / "private-target"
+    target.write_text("PRIVATE_EXTERNAL")
+    owned = runtime.directory / (record().id + ".json")
+    runtime.directory.mkdir(exist_ok=True)
+    owned.symlink_to(target)
+    app = App()
+    try:
+        async with app.run_test(size=(80, 24)) as pilot:
+            modal = AthenaDraftsModal(page, hub=page._hub)
+            app.push_screen(modal)
+            await drain_workers(app)
+            await pilot.pause()
+            assert "1 local draft record(s)" in str(
+                modal.query_one("#athena-drafts-warning", Static).content
+            )
+            assert "PRIVATE_EXTERNAL" not in app.export_screenshot()
+            clear = modal.query_one("#athena-drafts-clear", Button)
+            assert not clear.disabled
+            await focus_and_settle(clear)
+            await pilot.press("enter")
+            await wait_until(
+                lambda: isinstance(app.screen, ConfirmModal), what="safe clear confirm"
+            )
+            await pilot.press("tab", "enter")
+            await drain_workers(app)
+            assert not owned.is_symlink()
+            assert target.read_text() == "PRIVATE_EXTERNAL"
+            assert runtime.skipped == 0
+            owned.mkdir(parents=True)
+            (owned / "nested").write_text("PRIVATE_NESTED")
+            await runtime.refresh()
+            await pilot.pause()
+            await focus_and_settle(clear)
+            await pilot.press("enter")
+            await wait_until(lambda: isinstance(app.screen, ConfirmModal), what="directory confirm")
+            await pilot.press("tab", "enter")
+            await drain_workers(app)
+            assert owned.is_dir()
+            assert (owned / "nested").read_text() == "PRIVATE_NESTED"
+            assert runtime.skipped == 1
+            assert runtime.error_text
+    finally:
+        await page.shutdown()
+        page.dispose()
+        await runtime.shutdown()
+        runtime.dispose()
