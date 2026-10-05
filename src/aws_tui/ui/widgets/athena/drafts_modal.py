@@ -131,6 +131,7 @@ class AthenaDraftsModal(DeferredWorkerMixin, ModalScreen[DraftModalResult]):
             selected = self._selected_id()
             listing = self.query_one("#athena-drafts-list", OptionList)
             warning = self.query_one("#athena-drafts-warning", Static)
+            self.query_one("#athena-drafts-detail", Static)
             buttons = {
                 identity: self.query_one(f"#athena-drafts-{identity}", Button)
                 for identity in ("restore", "delete", "clear", "keep")

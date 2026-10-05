@@ -1,11 +1,12 @@
 from __future__ import annotations
 
+import asyncio
 from html import unescape
 
 import pytest
 from textual.app import App
 from textual.containers import VerticalScroll
-from textual.widgets import Button, OptionList
+from textual.widgets import Button, OptionList, Static
 
 from aws_tui.infra.athena_draft_store import DraftPermit
 from tests.athena_drafts_helpers import record, runtime_at
@@ -241,6 +242,129 @@ async def test_manager_deferred_refresh_during_partial_child_teardown(
             await pilot.press("escape")
             await pilot.pause()
             assert app.screen is not modal
+    finally:
+        await page.shutdown()
+        page.dispose()
+        await runtime.shutdown()
+        runtime.dispose()
+
+
+@pytest.mark.parametrize("remove_detail", [True, False], ids=["missing-detail", "healthy"])
+async def test_manager_main_refresh_requires_complete_projection(tmp_path, remove_detail):
+    from aws_tui.ui.widgets.athena.drafts_modal import AthenaDraftsModal
+
+    runtime, store = runtime_at(tmp_path)
+    client = PageClient()
+    page = make_page_vm(client, drafts=runtime)
+    await page.setup()
+    initial = record()
+    assert store.save(initial, permit=DraftPermit()).code is None
+    app = App()
+    try:
+        async with app.run_test() as pilot:
+            modal = AthenaDraftsModal(page, hub=page._hub)
+            app.push_screen(modal)
+            await drain_workers(app)
+            await pilot.pause()
+            listing = modal.query_one(OptionList)
+            warning = modal.query_one("#athena-drafts-warning", Static)
+            buttons = [
+                modal.query_one(f"#athena-drafts-{name}", Button)
+                for name in ("restore", "delete", "clear", "keep")
+            ]
+
+            def projection():
+                return (
+                    tuple(
+                        (
+                            listing.get_option_at_index(index).id,
+                            str(listing.get_option_at_index(index).prompt),
+                        )
+                        for index in range(listing.option_count)
+                    ),
+                    tuple(modal._ids),
+                    listing.highlighted,
+                    modal._selected_id(),
+                    warning.display,
+                    str(warning.content),
+                    tuple(button.disabled for button in buttons),
+                )
+
+            before = projection()
+            assert listing.option_count == 1
+            assert modal._selected_id() == initial.id
+            assert not warning.display
+            assert not any(button.disabled for button in buttons)
+            if remove_detail:
+                await modal.query_one("#athena-drafts-detail", Static).remove()
+                assert not modal.query("#athena-drafts-detail")
+            assert modal.is_mounted
+            assert modal.is_attached
+            assert modal.is_running
+
+            assert store.delete(initial.id).code is None
+            for connection in ("second", "third"):
+                saved = record(
+                    context=(connection, "us-west-2", "primary", "AwsDataCatalog", "default")
+                )
+                assert store.save(saved, permit=DraftPermit()).code is None
+            unreadable = record(
+                context=("unreadable", "us-west-2", "primary", "AwsDataCatalog", "default")
+            )
+            (runtime.directory / f"{unreadable.id}.json").write_text("invalid record")
+            await runtime.refresh()
+            assert len(runtime.items) == 2
+            assert runtime.skipped == 1
+
+            completed = asyncio.Event()
+
+            def refresh_once():
+                assert modal.is_mounted
+                assert modal.is_attached
+                assert modal.is_running
+                modal._refresh_drafts()
+                completed.set()
+
+            modal.call_after_refresh(refresh_once)
+            await asyncio.wait_for(completed.wait(), timeout=5)
+            if remove_detail:
+                assert projection() == before
+            else:
+                assert listing.option_count == 2
+                assert set(modal._ids) == {row.id for row in runtime.items}
+                assert modal._selected_id() in modal._ids
+                assert modal._selected_id() != initial.id
+                assert warning.display
+                assert "1 local draft record(s)" in str(warning.content)
+                assert not any(button.disabled for button in buttons)
+
+            await pilot.press("escape")
+            await pilot.pause()
+            assert modal._subscription.is_disposed
+            # Closing the borrowed modal leaves the runtime owner available.
+            await runtime.refresh()
+            replacement = AthenaDraftsModal(page, hub=page._hub)
+            app.push_screen(replacement)
+            await drain_workers(app)
+            await pilot.pause()
+            assert replacement.query_one(OptionList).option_count == 2
+            assert replacement.query_one("#athena-drafts-warning", Static).display
+            assert "Saved:" in str(replacement.query_one("#athena-drafts-detail", Static).content)
+            assert await runtime.clear()
+            await pilot.pause()
+            assert replacement.query_one(OptionList).option_count == 0
+            assert replacement._selected_id() is None
+            assert not replacement.query_one("#athena-drafts-warning", Static).display
+            expected = "No local drafts"
+            if page.draft_recovery_error:
+                expected += "\n" + page.draft_recovery_error
+            assert str(replacement.query_one("#athena-drafts-detail", Static).content) == expected
+            for name in ("restore", "delete", "clear"):
+                assert replacement.query_one(f"#athena-drafts-{name}", Button).disabled
+            assert not replacement.query_one("#athena-drafts-keep", Button).disabled
+            assert page.query.sql == ""
+            assert client.start_calls == []
+            assert client.result_calls == []
     finally:
         await page.shutdown()
         page.dispose()
