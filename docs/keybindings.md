@@ -93,10 +93,24 @@ explicit meaning.
 | Action | Default | Notes |
 |---|---|---|
 | Retry active source credentials | `a` | Re-probes the same source in credential/error contexts and other AWS pages; a ready file pane selects all visible entries. **Retry active source credentials** in the palette always retries. |
-| Connection switcher | no shipped command — *(deferred)* | Dynamic `connection switch <name>` palette entries are not registered. |
+| Exact configured source | `:` / `Ctrl+K`, then **Use &lt;name&gt; · &lt;region&gt; for &lt;service&gt;** | Search by connection name or region. On S3, changes the focused pane; on Athena, Glue and EMR Serverless, changes the page's source. |
 
-The command palette opens today with `:` or `Ctrl+K`; only the dynamic
-connection-switch entries in the row above remain deferred.
+Help (`?`) and the command palette (`:` / `Ctrl+K`) show the same command
+names and configured shortcuts. Help groups Global and active-service commands;
+palette rows mark their scope. Commands unavailable in the current context are
+omitted. `Unbound` means a command has no configured keyboard shortcut.
+
+Search **Go to Athena**, **Go to Glue**, **Go to EMR Serverless**, **Go to S3**,
+or **Settings** to change pages. Service choices follow the active connection's
+supported services; S3-compatible connections offer S3 and Settings.
+
+Exact-source commands use locally configured or resolved connection/region
+tuples. Source names and regions display literally, including punctuation;
+terminal control characters appear as visible escape notation. An empty region
+displays `(default region)`. S3 source choices require a focused pane; Settings
+has no source choices. No remote resource search or additional regions are
+fetched when Help or the palette opens. **Switch source** and `Shift+S` retain
+their existing source-cycle behavior.
 
 ### 1.7. App
 
@@ -333,6 +347,10 @@ unbound until a handler ships.
 | `app.themes` | `t` | yes | Open theme picker modal |
 | `app.cycle_theme` | `T` (`shift+t`) | yes | Cycle to next theme without opening the modal |
 | `app.swap_source` | `S` (`shift+s`) | yes | Switch the focused S3 pane source, or rebuild the current single-context AWS service under the next profile |
+| `service.open.s3` | none (`Unbound`) | yes | Go to S3 when the active connection supports it; configurable in `[keybindings]` |
+| `service.open.athena` | none (`Unbound`) | yes | Go to Athena when the active connection supports it; configurable in `[keybindings]` |
+| `service.open.glue` | none (`Unbound`) | yes | Go to Glue when the active connection supports it; configurable in `[keybindings]` |
+| `service.open.emr-serverless` | none (`Unbound`) | yes | Go to EMR Serverless when the active connection supports it; configurable in `[keybindings]` |
 | `pane.move_up` / `pane.move_down` | `up` / `down` (also `k` / `j`) | yes | Move cursor |
 | `pane.descend` | `enter` | yes | Descend into folder / bucket |
 | `pane.ascend` | `backspace` | yes | Parent path |

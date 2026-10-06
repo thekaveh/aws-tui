@@ -195,9 +195,14 @@ class JobRunLogsPane(Widget, can_focus=True):
 
     # ── Actions ─────────────────────────────────────────────────────────────
 
+    @property
+    def can_load(self) -> bool:
+        """Whether Enter can request an on-demand load."""
+        return self._vm.state in (LogsState.IDLE, LogsState.NO_FILES)
+
     def action_load(self) -> None:
         """Post LoadRequested when in a loadable state."""
-        if self._vm.state in (LogsState.IDLE, LogsState.NO_FILES):
+        if self.can_load:
             self.post_message(self.LoadRequested())
 
     def action_reload(self) -> None:

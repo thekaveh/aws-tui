@@ -211,7 +211,7 @@ async def test_help_and_palette_filter_discovery_and_execution(app_context_facto
         await pilot.press("question_mark")
         assert isinstance(app.screen, HelpModal)
         assert any(
-            "filter loaded names" in str(row.render()) for row in app.screen.query(".help-row")
+            "Filter loaded entries" in str(row.content) for row in app.screen.query(".help-row")
         )
         await pilot.press("escape", "colon", *"Filter loaded entries")
         assert [e.id for e in ctx.command_palette_vm.filtered_entries] == ["pane.filter"]

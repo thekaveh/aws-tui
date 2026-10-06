@@ -8,8 +8,8 @@ effect. A binding is emitted only for an action with a registered
 :class:`ActionRegistry` handler; each dispatches through the App's single
 ``action_dispatch`` entry point.
 
-The action description shown by Textual's help footer is taken from a
-small label map kept in this module; missing entries fall back to the
+The action description shown by Textual's help footer is taken from the
+shared action catalog; missing entries fall back to the
 tail-segment of the action id (e.g. ``pane.copy`` -> ``copy``).
 """
 
@@ -19,60 +19,13 @@ from textual.binding import Binding
 
 from aws_tui.infra.keymap_store import KeymapStore, textual_key_name
 from aws_tui.ui.actions import ActionRegistry
-
-#: Human-readable label per action id used in Textual binding descriptions.
-#: Mirrors (and is intentionally separate from) the chip-label dict in
-#: ``vm/chrome/hint_legend_vm.py`` so the chrome and Textual's own help
-#: footer can render different copy if needed.
-_ACTION_DESCRIPTIONS: dict[str, str] = {
-    "app.quit": "Quit",
-    "app.command_palette": "Command palette",
-    "app.help": "Help",
-    "app.themes": "Theme picker",
-    "app.transfer_history": "Transfer history and recovery",
-    "app.cycle_theme": "Cycle theme",
-    "app.swap_source": "Switch source",
-    "glue.choose_run_state": "Choose Glue run state",
-    "glue.choose_crawler_state": "Choose Glue crawler state",
-    "glue.copy_table_ref": "Copy Glue table reference",
-    "glue.query_in_athena": "Open selected Glue table in Athena",
-    "athena.choose_workgroup": "Choose Athena workgroup",
-    "athena.choose_catalog": "Choose Athena catalog",
-    "athena.choose_database": "Choose Athena database",
-    "athena.insert_table_ref": "Insert copied table reference",
-    "emr.next_application": "Next EMR application",
-    "pane.move_up": "Up",
-    "pane.move_down": "Down",
-    "pane.descend": "Open",
-    "pane.ascend": "Up",
-    "pane.switch_focus": "Switch pane",
-    "pane.switch_focus_back": "Switch pane back",
-    "pane.quick_look": "Quick look",
-    "pane.object_details": "S3 object details",
-    "pane.filter": "Filter",
-    "pane.fuzzy_find": "Find",
-    "pane.enter_multiselect": "Multi-select",
-    "pane.toggle_select": "Select",
-    "pane.select_all": "Select all",
-    "pane.clear_selection": "Clear selection",
-    "pane.exit_multiselect": "Exit multi-select",
-    "pane.copy": "Copy",
-    "pane.copy_entry_path": "Copy path",
-    "pane.copy_path": "Copy dir",
-    "pane.move": "Move",
-    "pane.delete": "Delete",
-    "pane.new": "New",
-    "pane.refresh": "Refresh",
-    "auth.authenticate": "Retry credentials",
-    "emr.clone": "Clone EMR run",
-    "emr.cancel": "Cancel selected EMR job run",
-    "emr.logs.filter": "Filter EMR logs",
-}
+from aws_tui.vm.chrome.action_catalog import ACTION_SPECS
 
 
 def _describe(action_id: str) -> str:
-    if action_id in _ACTION_DESCRIPTIONS:
-        return _ACTION_DESCRIPTIONS[action_id]
+    for spec in ACTION_SPECS:
+        if spec.id == action_id:
+            return spec.label
     return action_id.rsplit(".", 1)[-1].replace("_", " ").title()
 
 

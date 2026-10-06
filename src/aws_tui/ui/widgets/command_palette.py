@@ -7,6 +7,7 @@ executes; ``Esc`` closes.
 
 from __future__ import annotations
 
+from rich.text import Text
 from textual.app import ComposeResult
 from textual.containers import Vertical
 from textual.screen import ModalScreen
@@ -14,33 +15,46 @@ from textual.widgets import Input, Static
 from vmx import Message, MessageHub
 
 from aws_tui.ui.widgets._subscriber import HubSubscriberMixin
-from aws_tui.vm.chrome.command_palette_vm import CommandPaletteVM
+from aws_tui.vm.chrome.action_catalog import (
+    ActionPresentation,
+    format_effective_keys,
+    literal_display,
+    scope_label,
+)
+from aws_tui.vm.chrome.command_palette_vm import CommandPaletteVM, PaletteEntry
 
 
 class CommandPaletteItem(Static):
     """Single row inside the command palette list."""
 
+    action_id: str
+    presentation: ActionPresentation
+
     def __init__(
         self,
-        label: str,
-        category: str,
+        entry: PaletteEntry,
         *,
+        active_service_id: str | None = None,
         is_selected: bool = False,
     ) -> None:
-        classes = "palette-item"
-        if is_selected:
-            classes += " -selected"
-        super().__init__(self._format(label, category), classes=classes)
-        self._label = label
-        self._category = category
-
-    @staticmethod
-    def _format(label: str, category: str) -> str:
-        return f"{label}    {category}"
+        self.action_id = entry.id
+        self.presentation = entry
+        classes = "palette-item" + (" -selected" if is_selected else "")
+        text = Text(format_effective_keys(entry.effective_keys))
+        text.append("  ")
+        text.append(literal_display(entry.label))
+        text.append("  " + scope_label(entry.service_ids, active_service_id), style="dim")
+        super().__init__(text, classes=classes)
 
 
 class CommandPalette(HubSubscriberMixin, ModalScreen[None]):
     """Modal palette screen."""
+
+    DEFAULT_CSS = """
+    CommandPalette .palette-list {
+        overflow-y: auto;
+    }
+    """
 
     BINDINGS = [  # noqa: RUF012 - Textual expects a class-level mutable
         ("escape", "close", "Close"),
@@ -69,8 +83,8 @@ class CommandPalette(HubSubscriberMixin, ModalScreen[None]):
             yield Input(placeholder="type a command...", id="palette-input")
             yield Vertical(id="palette-list", classes="palette-list")
 
-    def on_mount(self) -> None:
-        self._rebuild_list()
+    async def on_mount(self) -> None:
+        await self._rebuild_list()
         self.subscribe_to_vm(
             hub=self._hub,
             vm=self._vm,
@@ -111,19 +125,32 @@ class CommandPalette(HubSubscriberMixin, ModalScreen[None]):
         if property_name in {"filtered_entries", "selected_index"}:
             self.call_after_refresh(self._rebuild_list)
 
-    def _rebuild_list(self) -> None:
+    async def _rebuild_list(self) -> None:
         try:
             container = self.query_one("#palette-list", Vertical)
         except Exception:
             return
-        for child in list(container.children):
-            child.remove()
+        await container.remove_children()
         entries = self._vm.filtered_entries
         selected = self._vm.selected_index
-        for idx, entry in enumerate(entries):
-            container.mount(
-                CommandPaletteItem(entry.label, entry.category, is_selected=(idx == selected))
+        if entries:
+            await container.mount(
+                *(
+                    CommandPaletteItem(
+                        entry,
+                        active_service_id=self._vm.active_service_id,
+                        is_selected=(idx == selected),
+                    )
+                    for idx, entry in enumerate(entries)
+                )
             )
+        self.call_after_refresh(self._scroll_selected_into_view)
+
+    def _scroll_selected_into_view(self) -> None:
+        if self.is_mounted:
+            selected = next(iter(self.query(".palette-item.-selected")), None)
+            if selected is not None:
+                selected.scroll_visible(animate=False, immediate=True)
 
 
 __all__ = ["CommandPalette", "CommandPaletteItem"]

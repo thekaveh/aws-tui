@@ -447,8 +447,9 @@ class AthenaPage(DeferredWorkerMixin, HubSubscriberMixin, Widget):
             elif self._vm.has_more_workgroups:
                 await self._vm.load_more_workgroups()
 
-    def can_load_more(self) -> bool:
-        focused_ids = self._focused_ids()
+    def can_load_more(self, *, focused_ids: frozenset[str] | None = None) -> bool:
+        if focused_ids is None:
+            focused_ids = frozenset(self._focused_ids())
         if focused_ids & {"athena-workgroup", "athena-more-workgroups"}:
             return self._vm.has_more_workgroups and not self._vm.is_loading_more_workgroups
         if focused_ids & {"athena-catalog", "athena-more-catalogs"}:
@@ -742,6 +743,19 @@ class AthenaPage(DeferredWorkerMixin, HubSubscriberMixin, Widget):
                 focused.action_scroll_up()
             else:
                 focused.action_scroll_down()
+
+    def can_activate_focused(self, focused: Widget | None) -> bool:
+        """Check Enter readiness without treating editor or inert detail as actions."""
+        if focused is None or focused.disabled or not self._contains_focus(focused):
+            return False
+        if isinstance(focused, OptionList):
+            return (
+                focused.highlighted is not None
+                and not focused.get_option_at_index(focused.highlighted).disabled
+            )
+        if isinstance(focused, DataTable):
+            return focused.row_count > 0
+        return isinstance(focused, (ServiceTabStrip, ServiceSourceHeader, ContextPicker, Button))
 
     def activate_focused(self) -> bool:
         focused = self.app.focused

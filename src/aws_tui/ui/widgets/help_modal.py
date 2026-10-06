@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import ClassVar
 from unicodedata import category
 
+from rich.text import Text
 from textual.app import ComposeResult
 from textual.binding import Binding, BindingType
 from textual.containers import Vertical, VerticalScroll
@@ -23,29 +24,27 @@ from textual.widgets import Static
 from aws_tui.infra.keymap_store import KeymapStore
 from aws_tui.infra.paths import cache_home
 from aws_tui.infra.redaction import redact_text
-
-_KEY_LABELS: dict[str, str] = {
-    "backspace": "Backspace",
-    "enter": "Enter",
-    "escape": "Esc",
-    "left": "←",
-    "right": "→",
-    "tab": "Tab",
-    "up": "↑",
-    "down": "↓",
-}
+from aws_tui.vm.chrome.action_catalog import (
+    ActionPresentation,
+    format_effective_keys,
+    literal_display,
+    scope_label,
+)
 
 
-def _format_key(key: str) -> str:
-    """Return a compact, reader-facing label for one configured key."""
-    parts = key.split("+")
-    labels = {
-        "alt": "Alt",
-        "ctrl": "Ctrl",
-        "meta": "Meta",
-        "shift": "Shift",
-    }
-    return "+".join(labels.get(part, _KEY_LABELS.get(part, part)) for part in parts)
+class HelpActionRow(Static):
+    """Literal action row shared with the palette's presentation."""
+
+    action_id: str
+    presentation: ActionPresentation
+
+    def __init__(self, presentation: ActionPresentation) -> None:
+        self.action_id = presentation.id
+        self.presentation = presentation
+        text = Text(format_effective_keys(presentation.effective_keys), style="bold")
+        text.append("  ")
+        text.append(literal_display(presentation.label))
+        super().__init__(text, classes="help-row")
 
 
 class HelpModal(ModalScreen[None]):
@@ -75,6 +74,9 @@ class HelpModal(ModalScreen[None]):
         height: 1fr;
         scrollbar-gutter: stable;
     }
+    HelpModal #help-actions {
+        height: auto;
+    }
     HelpModal .help-section {
         text-style: bold;
         padding: 1 2 0 2;
@@ -99,11 +101,15 @@ class HelpModal(ModalScreen[None]):
     def __init__(
         self,
         *,
+        actions: tuple[ActionPresentation, ...] = (),
+        active_service_id: str | None = None,
         keymap: KeymapStore | None = None,
         log_path: Path | None = None,
         crash_path: Path | None = None,
     ) -> None:
         super().__init__()
+        self._actions = actions
+        self._active_service_id = active_service_id
         self._keymap = keymap or KeymapStore()
         self._log_path = log_path if log_path is not None else cache_home() / "log" / "aws-tui.log"
         self._crash_path = crash_path if crash_path is not None else cache_home() / "crash"
@@ -113,60 +119,14 @@ class HelpModal(ModalScreen[None]):
             yield Static("aws-tui — help", id="help-title")
             yield Static("keyboard · mouse · themes · docs", id="help-subtitle")
             with VerticalScroll():
-                yield Static("Navigation", classes="help-section")
-                yield self._action_row(
-                    ("pane.switch_focus", "pane.switch_focus_back"), "switch pane focus"
-                )
-                yield self._action_row(("pane.move_up", "pane.move_down"), "move cursor")
-                yield self._action_row("pane.descend", "descend into directory")
-                yield self._action_row("pane.ascend", "ascend to parent")
-                yield self._action_row("pane.refresh", "refresh focused pane")
-
-                yield Static("Loaded listing", classes="help-section")
-                yield self._action_row("pane.filter", "filter loaded names; Clear restores rows")
-                yield self._action_row("pane.fuzzy_find", "find and select a loaded entry")
-                yield self._key_row("Palette", "Sort loaded entries / Clear pane filter")
-
-                yield Static("Loaded Athena results", classes="help-section")
-                yield self._action_row(
-                    "athena.inspect_cell", "inspect the complete loaded Athena cell"
-                )
-                yield self._action_row(
-                    "athena.copy_cell", "copy original loaded Athena cell as JSON"
-                )
-                yield self._action_row("athena.copy_row", "copy original loaded Athena row as JSON")
-                yield self._action_row("athena.filter_results", "filter loaded Athena rows only")
-                yield self._action_row(
-                    "athena.sort_results",
-                    "sort loaded Athena column; ascending / descending / reset",
-                )
-                yield self._action_row(
-                    "athena.reset_results", "clear loaded Athena filter and sort"
-                )
+                with Vertical(id="help-actions"):
+                    yield from self._action_widgets()
 
                 yield Static("Mouse / Trackpad", classes="help-section")
                 yield self._key_row("Click pane", "switch focus to it")
                 yield self._key_row("Click row", "move cursor")
                 yield self._key_row("Click again", "descend / ascend on '..'")
                 yield self._key_row("Scroll wheel", "scroll pane content")
-
-                yield Static("File operations", classes="help-section")
-                yield self._action_row("pane.copy", "copy selected entry to the other pane")
-                yield self._action_row("pane.copy_entry_path", "copy the cursor entry's path")
-                yield self._action_row("pane.copy_path", "copy this pane's current path")
-                yield self._action_row("pane.delete", "delete selected entry")
-                yield self._action_row(("pane.mark_up", "pane.mark_down"), "extend selection")
-
-                yield Static("Connections", classes="help-section")
-                yield self._action_row("app.swap_source", "cycle the focused pane source")
-
-                yield Static("App", classes="help-section")
-                yield self._action_row("app.open_settings", "open Settings")
-                yield self._action_row("app.themes", "open the theme picker")
-                yield self._action_row("app.cycle_theme", "cycle theme")
-                yield self._action_row("app.help", "open this help overlay")
-                yield self._action_row("app.command_palette", "open the command palette")
-                yield self._action_row("app.quit", "quit")
 
                 yield Static("Docs", classes="help-section")
                 yield Static(
@@ -190,8 +150,13 @@ class HelpModal(ModalScreen[None]):
                     classes="help-dim",
                     markup=False,
                 )
-            help_keys = self._action_keys("app.help")
-            yield Static(f"press {help_keys} / Esc to close", id="help-footer")
+            help_row = next((row for row in self._actions if row.id == "app.help"), None)
+            help_keys = format_effective_keys(
+                help_row.effective_keys
+                if help_row is not None
+                else self._keymap.resolve("app.help")
+            )
+            yield Static(Text(f"press {help_keys} / Esc to close"), id="help-footer")
 
     def action_move_up(self) -> None:
         self._scroll_body(-1)
@@ -226,20 +191,38 @@ class HelpModal(ModalScreen[None]):
             else:
                 body.scroll_down(animate=False)
 
-    def _action_row(self, action: str | tuple[str, ...], label: str) -> Static:
-        actions = (action,) if isinstance(action, str) else action
-        keys = "  /  ".join(self._action_keys(item) for item in actions)
-        return self._key_row(keys, label)
+    def _action_widgets(self) -> ComposeResult:
+        groups: dict[tuple[str, str], list[ActionPresentation]] = {}
+        for action in self._actions:
+            if action.available:
+                group = (scope_label(action.service_ids, self._active_service_id), action.category)
+                groups.setdefault(group, []).append(action)
+        for (scope, action_category), actions in groups.items():
+            yield Static(Text(f"{scope} — {action_category}"), classes="help-section")
+            for action in actions:
+                yield HelpActionRow(action)
 
-    def _action_keys(self, action: str) -> str:
-        return " / ".join(_format_key(key) for key in self._keymap.resolve(action))
+    def update_actions(self, actions: tuple[ActionPresentation, ...]) -> None:
+        if actions == self._actions:
+            return
+        self._actions = actions
+        self.call_after_refresh(self._replace_action_widgets)
+
+    async def _replace_action_widgets(self) -> None:
+        if not self.is_mounted:
+            return
+        body = self.query_one(VerticalScroll)
+        offset = body.scroll_offset
+        container = self.query_one("#help-actions", Vertical)
+        await container.remove_children()
+        await container.mount(*self._action_widgets())
+        body.scroll_to(offset.x, offset.y, animate=False)
 
     def _key_row(self, key: str, label: str) -> Static:
-        return Static(
-            f"  [b]{key:<18}[/]  [dim]{label}[/]",
-            classes="help-row",
-            markup=True,
-        )
+        text = Text(key, style="bold")
+        text.append("  ")
+        text.append(label, style="dim")
+        return Static(text, classes="help-row")
 
 
-__all__ = ["HelpModal"]
+__all__ = ["HelpActionRow", "HelpModal"]

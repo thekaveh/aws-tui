@@ -282,9 +282,9 @@ class GluePage(DeferredWorkerMixin, HubSubscriberMixin, Widget):
         self.query_one(GlueIcebergView).request_preview_load_more()
         return None
 
-    def _load_more_target(self) -> str | None:
+    def _load_more_target(self, *, focused_ids: frozenset[str] | None = None) -> str | None:
         """The list the user means: the focused one, else the first with a page."""
-        focused = self._focused_ids()
+        focused = self._focused_ids() if focused_ids is None else focused_ids
         for pane_id, target in self._PANE_LOADERS.items():
             if pane_id in focused:
                 return target
@@ -312,8 +312,8 @@ class GluePage(DeferredWorkerMixin, HubSubscriberMixin, Widget):
                 return target
         return candidates[0] if candidates else None
 
-    def can_load_more(self) -> bool:
-        target = self._load_more_target()
+    def can_load_more(self, *, focused_ids: frozenset[str] | None = None) -> bool:
+        target = self._load_more_target(focused_ids=focused_ids)
         return target is not None and self._loader(target)[1]
 
     async def action_load_more(self) -> None:
@@ -560,6 +560,19 @@ class GluePage(DeferredWorkerMixin, HubSubscriberMixin, Widget):
         )
         if action is not None:
             action()
+
+    def can_activate_focused(self, focused: Widget | None) -> bool:
+        """Check the existing page and Iceberg Enter routes without dispatch."""
+        if focused is None or focused.disabled or not self._contains_focus(focused):
+            return False
+        if self.query_one(GlueIcebergView).can_activate_focused(focused):
+            return True
+        if isinstance(focused, OptionList):
+            return (
+                focused.highlighted is not None
+                and not focused.get_option_at_index(focused.highlighted).disabled
+            )
+        return isinstance(focused, (ServiceTabStrip, ServiceSourceHeader, ContextPicker))
 
     def activate_focused(self, *, space: bool) -> bool:
         focused = self.app.focused
