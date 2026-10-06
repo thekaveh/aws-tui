@@ -106,7 +106,8 @@ async def test_local_cancel_open_closes_descriptor(tmp_path, monkeypatch):
     (tmp_path / "sample").write_bytes(b"hello")
     entered, release, done = threading.Event(), threading.Event(), threading.Event()
     opened = []
-    original = local_fs._rooted_open
+    opener_name = "_windows_open" if local_fs._WINDOWS else "_rooted_open"
+    original = getattr(local_fs, opener_name)
 
     def slow_open(*args):
         fd = original(*args)
@@ -116,26 +117,41 @@ async def test_local_cancel_open_closes_descriptor(tmp_path, monkeypatch):
         done.set()
         return fd
 
-    monkeypatch.setattr(local_fs, "_rooted_open", slow_open)
+    monkeypatch.setattr(local_fs, opener_name, slow_open)
     task = asyncio.create_task(
         LocalFS(root=tmp_path).open_preview(PathRef(("sample",)), budget=PreviewBudget.start())
     )
-    await asyncio.to_thread(entered.wait, 2)
-    assert entered.is_set()
-    task.cancel()
-    with pytest.raises(asyncio.CancelledError):
-        await task
-    release.set()
-    await asyncio.to_thread(done.wait, 2)
-    # The claim closes on the worker's return; join the worker hand-off.
-    for _ in range(100):
-        try:
-            os.fstat(opened[0])
-        except OSError:
-            break
-        await asyncio.sleep(0.001)
-    with pytest.raises(OSError, match="Bad file descriptor"):
-        os.fstat(opened[0])
+    try:
+        await asyncio.to_thread(entered.wait, 2)
+        assert entered.is_set()
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+    finally:
+        release.set()
+        if not task.done():
+            task.cancel()
+        result = await asyncio.gather(task, return_exceptions=True)
+        returned_fd = None
+        if result and not isinstance(result[0], BaseException):
+            # A missed interception returns a live session before the assertion
+            # above fails; close it so the failure itself cannot leak its fd.
+            returned_fd = result[0]._fd
+            await result[0].aclose()
+        if returned_fd is not None:
+            with pytest.raises(OSError, match="Bad file descriptor"):
+                os.fstat(returned_fd)
+        if entered.is_set():
+            assert await asyncio.to_thread(done.wait, 2)
+            # The claim closes on the worker's return; join the worker hand-off.
+            for _ in range(100):
+                try:
+                    os.fstat(opened[0])
+                except OSError:
+                    break
+                await asyncio.sleep(0.001)
+            with pytest.raises(OSError, match="Bad file descriptor"):
+                os.fstat(opened[0])
 
 
 async def test_local_cancel_read_retains_fd_until_worker_drained(tmp_path, monkeypatch):
