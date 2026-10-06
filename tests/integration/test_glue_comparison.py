@@ -391,6 +391,51 @@ async def test_more_buttons_partial_error_and_independent_refresh(tmp_path, monk
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("side", ["left", "right"])
+async def test_partial_metadata_positions_match_completed_comparison(side, tmp_path, monkeypatch):
+    get_table = RecordingSDK.get_table
+
+    async def get_table_with_positions(self, **kwargs):
+        response = await get_table(self, **kwargs)
+        response["Table"]["StorageDescriptor"]["Columns"].append(
+            {"Name": "payload", "Type": "string"}
+        )
+        response["Table"]["PartitionKeys"] = [
+            {"Name": "year", "Type": "int"},
+            {"Name": "month", "Type": "int"},
+        ]
+        return response
+
+    monkeypatch.setattr(RecordingSDK, "get_table", get_table_with_positions)
+    app, ctx, session, _, _, _ = make_app(tmp_path, monkeypatch)
+    expected = [
+        ("columns", 'position=1; name="[red]id[/red]"'),
+        ("columns", 'position=2; name="payload"'),
+        ("partition keys", 'position=1; name="year"'),
+        ("partition keys", 'position=2; name="month"'),
+    ]
+    async with app.run_test(size=(120, 40)) as pilot:
+        screen, _, _ = await open_comparison(app, ctx, session, pilot)
+        await select_table(screen, pilot, side)
+        assert screen.vm.comparison is None
+        partial_body = screen.query_one("#comparison-body", TextArea).text
+        for section, value in expected:
+            assert f"{side.title()} {section}: {value}" in partial_body
+        assert "position=0;" not in partial_body
+
+        counterpart = "right" if side == "left" else "left"
+        await select_table(screen, pilot, counterpart)
+        assert screen.vm.comparison is not None
+        completed_body = screen.query_one("#comparison-body", TextArea).text
+        summary = screen.vm.summary_text()
+        assert summary is not None
+        for _, value in expected:
+            assert f"{side.title()}: {value}" in completed_body
+            assert value in summary
+        assert "position=0;" not in completed_body
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("size", [(120, 40), (60, 24)])
 async def test_real_viewport_headers_controls_summary_and_focus(size, tmp_path, monkeypatch):
     clipboard = InMemoryClipboard(ok=False, mechanism="none")

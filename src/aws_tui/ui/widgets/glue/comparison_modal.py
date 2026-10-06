@@ -304,7 +304,7 @@ class GlueComparisonModal(DeferredWorkerMixin, ModalScreen[None]):
                         ("columns", detail.columns),
                         ("partition keys", detail.partition_keys),
                     ):
-                        for position, column in enumerate(columns):
+                        for position, column in enumerate(columns, 1):
                             lines.append(
                                 f"{side.title()} {label}: {format_value(ColumnValue(column, position))}"
                             )
