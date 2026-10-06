@@ -1479,3 +1479,46 @@ async def test_demo_cancel_cannot_be_resurrected_by_any_pending_transition(
         release.set()
         await fake.aclose()
     assert not fake._state_tasks
+
+
+@pytest.mark.parametrize(
+    ("config", "expected"),
+    [
+        (None, None),
+        ({"enabled": True}, (True, None, None)),
+        ({"enabled": False, "logGroupName": "group"}, (False, "group", None)),
+        (
+            {"enabled": True, "logGroupName": "/custom/emr", "logStreamNamePrefix": "literal/"},
+            (True, "/custom/emr", "literal/"),
+        ),
+        ({}, (None, None, None)),
+        ({"enabled": "true"}, (None, None, None)),
+        ({"enabled": True, "logGroupName": ""}, (None, None, None)),
+        ({"enabled": True, "logGroupName": "invalid:group"}, (None, None, None)),
+        ({"enabled": True, "logGroupName": "g" * 513}, (None, None, None)),
+        ({"enabled": True, "logStreamNamePrefix": "invalid*prefix"}, (None, None, None)),
+        ({"enabled": True, "logStreamNamePrefix": "😀" * 512}, (True, None, "😀" * 512)),
+        ({"enabled": True, "logStreamNamePrefix": "\ud800"}, (None, None, None)),
+        ([], (None, None, None)),
+    ],
+)
+async def test_get_job_run_parses_cloudwatch_alongside_s3(config, expected) -> None:
+    source = _clone_source_response()
+    monitoring = source["configurationOverrides"]["monitoringConfiguration"]
+    if config is None:
+        monitoring.pop("cloudWatchLoggingConfiguration")
+    else:
+        monitoring["cloudWatchLoggingConfiguration"] = config
+    stub = _StubClient()
+    stub.get_job_run.return_value = {"jobRun": source}
+    detail = await EmrServerlessClient(session=_StubSession(stub)).get_job_run("00abc", "jr-source")
+    assert detail.s3_monitoring_log_uri == "s3://logs/jobs/"
+    actual = detail.cloudwatch_monitoring
+    assert (
+        None
+        if actual is None
+        else (actual.enabled, actual.log_group_name, actual.log_stream_name_prefix)
+    ) == expected
+    assert detail.configuration_overrides == source["configurationOverrides"]
+    monitoring["cloudWatchLoggingConfiguration"] = {"enabled": False}
+    assert detail.configuration_overrides != source["configurationOverrides"]

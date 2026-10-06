@@ -359,3 +359,43 @@ not establish permissions or successful execution in a live AWS account.
 | Object details reads | `botocore==1.40.61`, S3 API `2006-03-01` | `HeadObject` consumes `Bucket`, `Key` and optional `ChecksumMode=ENABLED`; ordinary HEAD is retried after denied/unsupported optional checksum access. `GetObjectTagging` consumes `Bucket`, `Key` and the reported `VersionId` when present, including literal `null`. Required IAM is `s3:GetObject`, `s3:GetObjectTagging` and, for version tagging, `s3:GetObjectVersionTagging`. Optional KMS checksum access may require `kms:Decrypt` / `kms:GenerateDataKey`. | Locked SDK input models, recorded read-only request traces, partial-denial/redaction tests and actual app/Pilot rendering. |
 | Inspector UI/lifetime | Internal PaneVM and Textual modal contracts | `pane.object_details`, unique default `ctrl+o`, label **S3 object details**; actual navigation/input focus refuses cached pane selections. Current cursor focus resolves the coordinator's active rendered S3 pane and selected row. Palette/Commands defer and revalidate their exact origin. Selection generations discard late results; source/page replacement closes; close/unmount cancels and drains reads and removes subscriptions. | Physical nav focus, separate bucket/prefix/parent/local/empty refusals, captured cursor/rendered-row restoration, held-read/source/page and modal containment Pilot tests. |
 | Literal read-only values | `ObjectDetailField(label, value, copy_value)` | Full-value wrapping viewer, Copy / Ctrl+C; missing fields and denied partial sections are unavailable, returned empty strings/maps remain copyable. User data is literal Rich Text / read-only TextArea. ETag/checksums remain separate; checksum verification is not performed. No content verification, content download, editing, version browsing or listing hot-path HEAD/tagging reads. | Complete/minimal HEAD fixtures, long Unicode/markup/JSON copy tests, truthful clipboard failures, normal/narrow ready/partial snapshots and six actual-app rendered states. |
+
+## 14. 2026-10-06 EMR CloudWatch log reader
+
+Verified against installed `botocore==1.40.61`, CloudWatch Logs API `2014-03-28`.
+The connection-owned logs facade uses `DescribeLogStreams` with `logGroupName`,
+`logStreamNamePrefix`, `orderBy=LogStreamName`, `limit=50` and optional `nextToken`.
+`FilterLogEvents` receives `logGroupName`, exactly one discovered name in
+`logStreamNames`, inclusive `startTime`/`endTime`, `limit=1000` and optional
+`nextToken`. The fixed interval is reused across every page. No server filter,
+unmask option, account-wide search, or newer `startFromHead` field is consumed.
+
+Missing `nextToken` ends pagination; empty pages with a token continue, and a
+repeated/cyclic token raises a safe provider error. Discovery fails above
+100 pages or 200 streams, counting rejected/duplicate returned records. Reads
+fail above 100 pages, 10,000 events (including duplicates), 8 MiB of UTF-8 message
+bytes or 1 MiB per event. Each operation has a 30 seconds deadline, including
+client cleanup. Stream names allow 512 Unicode characters / 2048 UTF-8 bytes;
+ids and tokens have separate bounded storage. Configuration must explicitly
+report CloudWatch enabled. A literal custom prefix is discovered conservatively;
+only names unambiguously identifying the selected application/run are accepted.
+
+Reader permissions are `logs:DescribeLogStreams` and `logs:FilterLogEvents` on
+the configured group; these are separate from the job runtime role's logging
+write permissions. See the [EMR logging guide](https://docs.aws.amazon.com/emr/latest/EMR-Serverless-UserGuide/logging.html)
+and [FilterLogEvents API](https://docs.aws.amazon.com/AmazonCloudWatchLogs/latest/APIReference/API_FilterLogEvents.html).
+The provider classifies failures through the existing AWS error mapper, then
+exposes fresh fixed-message exceptions with no original exception chain or log
+bodies. S3's reader remains unchanged.
+
+Exact CloudWatch Logs operation ledger:
+
+```text
+DescribeLogStreams
+FilterLogEvents
+```
+
+Evidence: `tests/unit/domain/test_emr_cloudwatch_logs.py`, metadata tests in
+`tests/unit/domain/test_emr_serverless.py`, facade tests, network-free demo
+parity tests and `tests/docs/test_contract_parity.py`. These are local stubs and
+in-memory reads, not evidence of permissions or live AWS execution.

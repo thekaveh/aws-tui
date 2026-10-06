@@ -15,7 +15,7 @@ from typing import Any, Literal
 from vmx import ComponentVMOf, Message, MessageHub, PropertyChangedMessage
 from vmx.services.dispatcher import Dispatcher
 
-from aws_tui.domain.emr_logs import EmrServerlessLogsClient, LogFilter
+from aws_tui.domain.emr_logs import EmrServerlessLogsClientProtocol, LogFilter
 from aws_tui.domain.emr_serverless import (
     CANCELLABLE_JOB_RUN_STATES,
     EmrServerlessClientProtocol,
@@ -87,7 +87,7 @@ class EmrServerlessPageVM:
         self,
         *,
         client: EmrServerlessClientProtocol,
-        logs_client: EmrServerlessLogsClient,
+        logs_client: EmrServerlessLogsClientProtocol,
         hub: MessageHub[Message],
         dispatcher: Dispatcher,
         connection: Connection,

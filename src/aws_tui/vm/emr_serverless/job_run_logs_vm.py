@@ -22,7 +22,7 @@ from vmx.services.dispatcher import Dispatcher
 
 from aws_tui.domain.emr_logs import (
     DEFAULT_LOG_FILTER,
-    EmrServerlessLogsClient,
+    EmrServerlessLogsClientProtocol,
     FilterMode,
     LogFile,
     LogFileKind,
@@ -70,11 +70,11 @@ class JobRunLogsVM:
     def __init__(
         self,
         *,
-        client: EmrServerlessLogsClient,
+        client: EmrServerlessLogsClientProtocol,
         hub: MessageHub[Message],
         dispatcher: Dispatcher,
     ) -> None:
-        self._client: EmrServerlessLogsClient = client
+        self._client: EmrServerlessLogsClientProtocol = client
         self._hub: MessageHub[Message] = hub
         self._inner: ComponentVMOf[None] = (
             ComponentVMOf[None]
