@@ -67,6 +67,14 @@ def test_path_ref_str_is_posix() -> None:
     assert str(PathRef.from_posix("/x/y")) == "/x/y"
 
 
+@pytest.mark.parametrize("segments", [("bucket", "daily", ""), ("bucket", "", "daily")])
+def test_path_ref_preserves_literal_empty_components_when_navigating(segments) -> None:
+    path = PathRef(segments)
+    assert path.join("report.csv").segments == (*segments, "report.csv")
+    assert path.join("child").parent() == path
+    assert path.parent().segments == segments[:-1]
+
+
 # ---------------------------------------------------------------------------
 # Protocol sanity: an implementor type-checks structurally
 # ---------------------------------------------------------------------------

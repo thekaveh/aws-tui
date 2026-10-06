@@ -21,11 +21,13 @@ import asyncio
 import logging
 from collections.abc import Awaitable, Callable
 from contextlib import ExitStack, suppress
+from dataclasses import replace
 from pathlib import Path
 from typing import TYPE_CHECKING, cast
 
 if TYPE_CHECKING:
     from aws_tui.demo.in_memory_emr import InMemoryEmr
+    from aws_tui.launch import ResolvedLaunch
 
 from vmx import Message, MessageHub, RxDispatcher
 from vmx.services.dispatcher import Dispatcher
@@ -36,7 +38,7 @@ from aws_tui.infra.athena_draft_store import AthenaDraftStore
 from aws_tui.infra.aws_session import AwsSession
 from aws_tui.infra.clipboard import ClipboardPort, NativeClipboard
 from aws_tui.infra.config_store import Config, ConfigStore, ConnectionEntry, Defaults, Keybindings
-from aws_tui.infra.connection_resolver import Connection, ConnectionResolver
+from aws_tui.infra.connection_resolver import Connection, ConnectionNotFound, ConnectionResolver
 from aws_tui.infra.duckdb import DuckDbPort, NativeDuckDb
 from aws_tui.infra.keychain import KeychainBackend, Keyring
 from aws_tui.infra.keymap_store import (
@@ -115,9 +117,17 @@ def make_source_check_factory(
 
         def read_identity() -> tuple[object, ...] | None:
             try:
-                before = entry_source_identity(config.load().connections.get(captured.name))
+                before = entry_source_identity(
+                    config.load().connections.get(captured.name)
+                    if captured.source == "config"
+                    else None
+                )
                 current = resolver.resolve_selected(captured.name)
-                after = entry_source_identity(config.load().connections.get(captured.name))
+                after = entry_source_identity(
+                    config.load().connections.get(captured.name)
+                    if captured.source == "config"
+                    else None
+                )
                 if before != after or connection_route(current) != expected_route:
                     return None
                 return after
@@ -143,6 +153,77 @@ def make_source_check_factory(
     return factory
 
 
+class _LaunchConnectionResolver(ConnectionResolver):
+    """Keep the session override on the unchanged exact underlying source.
+
+    Listing stays metadata-only. Credential reads are restricted to an exact
+    selection, including recovery; source edits/removal never adopt the override.
+    """
+
+    def __init__(
+        self, *, config_store: ConfigStore, keychain: KeychainBackend | None, launch: ResolvedLaunch
+    ) -> None:
+        super().__init__(config_store=config_store, keychain=keychain, read_credentials=False)
+        self._launch = launch
+        self._selected_resolver = ConnectionResolver(config_store=config_store, keychain=keychain)
+
+    def _apply_session(self, current: Connection, *, strict: bool = False) -> Connection:
+        launch = self._launch
+        if launch.underlying is None or launch.connection is None:
+            return current
+        # Other names retain ordinary resolution. The selected name must still
+        # match its retained source, even if an edit now equals the CLI override.
+        if current.name != launch.underlying.name:
+            return current
+        if connection_route(current) != connection_route(launch.underlying) or (
+            current.source == "config"
+            and entry_source_identity(self._config_store.load().connections.get(current.name))
+            != entry_source_identity(launch.source_entry)
+        ):
+            if strict:
+                raise ConnectionNotFound(current.name)
+            return current
+        return replace(current, region=launch.connection.region)
+
+    def resolve_selected(self, name: str) -> Connection:
+        if (
+            self._launch.request.profile is not None
+            and self._launch.connection is not None
+            and name == self._launch.connection.name
+        ):
+            current = self._selected_resolver.resolve_profile(self._launch.request.profile)
+        else:
+            current = self._selected_resolver.resolve_selected(name)
+        return self._apply_session(current, strict=True)
+
+    def resolve(self, name: str) -> Connection:
+        return self.resolve_selected(name)
+
+    def list(self) -> list[Connection]:
+        connections = super().list()
+        selected = self._launch.connection
+        if selected is not None and self._launch.request.profile is not None:
+            try:
+                current = super().resolve_profile(self._launch.request.profile)
+            except Exception:
+                return connections
+            connections = [
+                connection for connection in connections if connection.name != selected.name
+            ]
+            connections.insert(0, current)
+        return [self._apply_session(connection) for connection in connections]
+
+
+ServiceDefinition = (
+    type[S3Service] | type[AthenaService] | type[GlueService] | type[EmrServerlessService]
+)
+
+
+def service_definitions() -> tuple[ServiceDefinition, ...]:
+    """Client-free metadata and predicates shared by launch validation and registry."""
+    return (S3Service, EmrServerlessService, GlueService, AthenaService)
+
+
 class AppContext:
     """The bag of pre-wired objects the Textual app consumes."""
 
@@ -165,6 +246,7 @@ class AppContext:
         "initial_theme",
         "keychain",
         "keymap_store",
+        "launch",
         "log_sink",
         "quick_look_vm",
         "registry",
@@ -209,6 +291,7 @@ class AppContext:
         demo: bool = False,
         demo_emrs: dict[str, InMemoryEmr] | None = None,
         unreachable_connections: set[tuple[str, str]] | None = None,
+        launch: ResolvedLaunch | None = None,
     ) -> None:
         self.athena_drafts_vm = (
             athena_drafts_vm
@@ -225,6 +308,7 @@ class AppContext:
             )
         )
         self.athena_drafts_shutdown_warning: str | None = None
+        self.launch = launch
         self.root_vm = root_vm
         self.registry = registry
         self.config_store = config_store
@@ -372,6 +456,7 @@ def build_app_context(
     demo: bool = False,
     clipboard: ClipboardPort | None = None,
     duckdb_port: DuckDbPort | None = None,
+    launch: ResolvedLaunch | None = None,
 ) -> AppContext:
     """Build the full ``AppContext`` for a fresh aws-tui session.
 
@@ -411,6 +496,7 @@ def build_app_context(
             config_dir=config_dir,
             cache_dir=cache_dir,
             demo=demo,
+            launch=launch,
             log_sink=log_sink,
             clipboard=clipboard,
             duckdb_port=duckdb_port,
@@ -428,6 +514,7 @@ def _build_app_context(
     log_sink: LogSink,
     clipboard: ClipboardPort | None = None,
     duckdb_port: DuckDbPort | None = None,
+    launch: ResolvedLaunch | None = None,
 ) -> AppContext:
     # read_only=demo: in demo mode all write methods on ConfigStore are
     # silent no-ops so the user's real config.toml is never mutated.
@@ -520,9 +607,10 @@ def _build_app_context(
         athena_client_factory = demo_athena
     else:
         keychain: KeychainBackend | None = Keyring()
-        connection_resolver = ConnectionResolver(
-            config_store=config_store,
-            keychain=keychain,
+        connection_resolver = (
+            _LaunchConnectionResolver(config_store=config_store, keychain=keychain, launch=launch)
+            if launch is not None
+            else ConnectionResolver(config_store=config_store, keychain=keychain)
         )
         demo_emrs_ref = {}
         s3_fs_factory = None
@@ -588,6 +676,25 @@ def _build_app_context(
             hub=hub,
             dispatcher=dispatcher,
             s3_fs_factory=s3_fs_factory,
+            initial_local_root=(
+                launch.location.native_root
+                if launch is not None and launch.location is not None
+                else None
+            ),
+            initial_left_path=(
+                launch.location.path
+                if launch is not None
+                and launch.location is not None
+                and launch.location.scheme == "s3"
+                else None
+            ),
+            initial_right_path=(
+                launch.location.path
+                if launch is not None
+                and launch.location is not None
+                and launch.location.scheme == "local"
+                else None
+            ),
         )
         # cast to Service: S3Service satisfies the protocol structurally; mypy
         # rejects ClassVar `descriptor` here so we widen explicitly.
@@ -675,6 +782,7 @@ def _build_app_context(
             clipboard=clipboard,
             duckdb_port=resolved_duckdb_port,
             demo=demo,
+            launch=launch,
             demo_emrs=demo_emrs_ref,
             unreachable_connections=set(),
         )

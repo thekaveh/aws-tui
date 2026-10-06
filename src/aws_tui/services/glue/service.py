@@ -253,7 +253,8 @@ class GlueService:
         self._selections = selection_store or ServiceSelectionStore()
         self._duckdb_port = duckdb_port
 
-    def supports(self, connection: Connection) -> bool:
+    @staticmethod
+    def supports(connection: Connection) -> bool:
         return connection.kind == "aws"
 
     def build_vm(self, connection: Connection) -> GluePageVM:

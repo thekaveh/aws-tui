@@ -72,7 +72,7 @@ uv python install 3.11
 echo "==> uv sync --locked --all-groups"
 uv sync --locked --all-groups
 
-# Ask git, rather than testing for a `.git` directory.
+# Require this checkout's own marker, then ask git whether it is valid.
 #
 # `pre-commit install` needs a resolvable git dir and exits non-zero without
 # one, which under `set -e` aborted bootstrap after a successful sync -- that
@@ -81,13 +81,13 @@ uv sync --locked --all-groups
 # `gitdir:` pointer, so the hook install was silently skipped in exactly the
 # checkouts a contributor is most likely to be developing in.
 #
-# `[ -e .git ]` would accept both shapes but also accepts a `.git` file whose
-# pointer DANGLES (an orphaned or moved worktree), where `pre-commit install`
-# still fails and bootstrap would still abort. `git rev-parse --git-dir`
-# answers the question that actually matters -- can a git dir be resolved from
-# here -- and is false for a tarball, a dangling pointer, and a missing git
-# binary alike.
-if git rev-parse --git-dir >/dev/null 2>&1; then
+# A marker may be dangling or invalid. Git discovery can skip an invalid .git
+# directory and resolve an unrelated parent repository, so require the resolved
+# worktree root to be this checkout. Compare physical paths so a symlink used
+# to invoke bootstrap does not make a valid checkout appear foreign.
+if [ -e .git ] &&
+  bootstrap_git_root="$(git rev-parse --show-toplevel 2>/dev/null)" &&
+  [ "$(cd "$bootstrap_git_root" && pwd -P)" = "$(pwd -P)" ]; then
   echo "==> installing pre-commit hooks"
   uv run pre-commit install
 else

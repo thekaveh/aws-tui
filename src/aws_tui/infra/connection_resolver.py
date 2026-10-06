@@ -39,7 +39,7 @@ def _is_aws_file(path: Path, source: str, invalid_sources: set[str] | None) -> b
         return False
 
 
-def _read_ini(parser: configparser.RawConfigParser, path: Path) -> bool:
+def _read_ini(parser: configparser.RawConfigParser, path: Path, *, quiet: bool = False) -> bool:
     """Read an AWS ini file, tolerating a malformed one.
 
     ``~/.aws/config`` is written by other tools and by hand, so a duplicate
@@ -58,10 +58,11 @@ def _read_ini(parser: configparser.RawConfigParser, path: Path) -> bool:
         with path.open(encoding="utf-8-sig") as file:
             parser.read_file(file)
     except (configparser.Error, OSError, UnicodeDecodeError) as exc:
-        _logger.warning(
-            "ignoring unreadable AWS ini file",
-            extra={"path": str(path), "error_type": type(exc).__name__},
-        )
+        if not quiet:
+            _logger.warning(
+                "ignoring unreadable AWS ini file",
+                extra={"path": str(path), "error_type": type(exc).__name__},
+            )
         return False
     return True
 
@@ -169,8 +170,12 @@ class ConnectionResolver:
         keychain: KeychainBackend | None = None,
         aws_config_path: Path | None = None,
         aws_credentials_path: Path | None = None,
+        read_credentials: bool = True,
+        quiet_discovery: bool = False,
     ) -> None:
         self._config_store: ConfigStore = config_store
+        self._quiet_discovery = quiet_discovery
+        self._read_credentials = read_credentials
         self._keychain: KeychainBackend | None = keychain
         self._aws_config_path: Path = (
             aws_config_path if aws_config_path is not None else _default_aws_config_path()
@@ -235,6 +240,48 @@ class ConnectionResolver:
                 return connection
         raise ConnectionNotFound(name)
 
+    def resolve_profile(self, name: str) -> Connection:
+        """Resolve an exact discovered AWS profile, ignoring configured aliases."""
+        for connection in self._auto_connections():
+            if connection.profile == name:
+                return connection
+        raise ConnectionNotFound(name)
+
+    def resolve_default(self) -> Connection | None:
+        """Apply startup precedence while dereferencing only the selected source."""
+        cfg = self._config_store.load()
+        autos = self._auto_connections()
+        names = {*cfg.connections, *(connection.name for connection in autos)}
+        if cfg.defaults.connection in names:
+            return self.resolve_selected(cfg.defaults.connection)
+        profile = (
+            os.environ.get("AWS_DEFAULT_PROFILE") or os.environ.get("AWS_PROFILE") or ""
+        ).strip()
+        if profile:
+            alias = next(
+                (
+                    entry.name
+                    for entry in cfg.connections.values()
+                    if entry.kind == "aws" and entry.profile == profile
+                ),
+                None,
+            )
+            if alias is not None:
+                return self.resolve_selected(alias)
+            selected = next(
+                (
+                    connection
+                    for connection in autos
+                    if connection.profile == profile and connection.name not in cfg.connections
+                ),
+                None,
+            )
+            if selected is not None:
+                return selected
+        if cfg.connections:
+            return self.resolve_selected(next(iter(cfg.connections)))
+        return next(iter(autos), None)
+
     def materialize(self, name: str) -> ConnectionEntry:
         """Promote an auto-discovered connection to an explicit config entry.
 
@@ -279,8 +326,10 @@ class ConnectionResolver:
                     )
                 )
             elif entry.kind == "s3-compatible":
-                access_key_id, secret_access_key, session_token = self._dispatch_s3_credentials(
-                    entry, invalid_sources
+                access_key_id, secret_access_key, session_token = (
+                    self._dispatch_s3_credentials(entry, invalid_sources)
+                    if self._read_credentials
+                    else (None, None, None)
                 )
                 out.append(
                     Connection(
@@ -330,7 +379,10 @@ class ConnectionResolver:
 
         cfg_parser = configparser.RawConfigParser()
         if _is_aws_file(self._aws_config_path, "aws-config", invalid_sources):
-            if not _read_ini(cfg_parser, self._aws_config_path) and invalid_sources is not None:
+            if (
+                not _read_ini(cfg_parser, self._aws_config_path, quiet=self._quiet_discovery)
+                and invalid_sources is not None
+            ):
                 invalid_sources.add("aws-config")
             for section in cfg_parser.sections():
                 if section == "default":
@@ -346,7 +398,7 @@ class ConnectionResolver:
         creds_parser = configparser.RawConfigParser()
         if _is_aws_file(self._aws_credentials_path, "aws-credentials", invalid_sources):
             if (
-                not _read_ini(creds_parser, self._aws_credentials_path)
+                not _read_ini(creds_parser, self._aws_credentials_path, quiet=self._quiet_discovery)
                 and invalid_sources is not None
             ):
                 invalid_sources.add("aws-credentials")

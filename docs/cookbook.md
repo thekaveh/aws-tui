@@ -23,6 +23,7 @@ Walks through three setups people hit on day one:
 - **§1.6** — jump between AWS profiles with one keystroke
   (multi-account flows).
 - **§1.7** — run several `s3-compatible` endpoints side-by-side.
+- **§1.8** — open an exact source, service, or directory from the CLI.
 
 You have S3Mock running on `http://localhost:9000` with arbitrary test
 credentials `test / test`. The shipped harness creates the canonical
@@ -272,6 +273,48 @@ See [`docs/connections.md` §4](connections.md#4-switching-between-connections-a
 for the full source-cycle semantics and the unreachable-skip behavior.
 
 ---
+
+### 1.8. Open a source, service, or directory from the CLI
+
+```bash
+aws-tui --connection dev --region eu-west-1 --service athena
+aws-tui --profile analytics --location 's3://reports-bucket/daily/'
+aws-tui --location './downloads'
+```
+
+These selectors apply to this session only; no configuration is saved.
+`--connection NAME` selects an exact known connection, including an AWS alias
+or S3-compatible source. `--profile NAME` selects an exact locally discoverable
+AWS profile and ignores configured name collisions. These identity flags are
+mutually exclusive and take precedence over `[defaults].connection`,
+`AWS_DEFAULT_PROFILE`, and `AWS_PROFILE`. Without them, other explicit selectors
+use the ordinary startup precedence: a resolvable configured default, then an
+AWS environment profile (including an AWS connection alias), then the first
+available connection. The resolved source is pinned for startup.
+
+`--region REGION` overrides only that session's region. Use lowercase
+letters/digits separated by hyphens and ending in digits, for example
+`eu-west-1` or `ap-southeast-2`. `--service ID` accepts `s3`, `athena`, `glue`, or
+`emr-serverless`; S3-compatible sources support `s3` only. With no service flag,
+S3 is the default.
+
+`--location LOCATION` implies S3 and cannot be combined with another service.
+Use `s3://BUCKET[/PREFIX]` to initialize and focus the left pane at the literal
+bucket/prefix before its first listing. Percent escapes, spaces, repeated
+slashes, and other literal key characters are preserved. Use an existing native
+directory to initialize and focus the right pane; relative paths resolve from
+CWD and `~` expands to your home. If no remote source is available, a local
+location opens local-only panes. Startup lists/reads only and does not copy,
+delete, upload, submit SQL, or start jobs.
+
+All five flags conflict with `--demo`, effective `AWS_TUI_DEMO`, and `doctor`.
+Unknown sources, unsupported service/source pairs, malformed regions, missing
+local directories, file paths, missing S3 buckets, control characters, and
+unsupported URI/ARN forms fail before UI startup with a nonzero status and a
+one-line error. Parser errors use argparse's usage output. Runtime failure of
+the selected source exits nonzero without trying another account or silently
+mounting local fallback. `--help` and `--version` exit before source discovery
+or UI startup.
 
 ## 2. Switch the theme on the fly
 ### 2.1. One-off (session-only)

@@ -174,7 +174,8 @@ class EmrServerlessService:
 
     # ── Service protocol ────────────────────────────────────────────────────
 
-    def supports(self, connection: Connection) -> bool:
+    @staticmethod
+    def supports(connection: Connection) -> bool:
         """EMR Serverless is AWS-only — s3-compatible connections
         never see the EMR nav row because the NavMenuVM filter consults
         this predicate."""

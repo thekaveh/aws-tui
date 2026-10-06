@@ -23,7 +23,7 @@ import aioboto3
 from vmx import Message, MessageHub
 from vmx.services.dispatcher import Dispatcher
 
-from aws_tui.domain.filesystem import AuthRequiredError, FileSystemProvider
+from aws_tui.domain.filesystem import AuthRequiredError, FileSystemProvider, PathRef
 from aws_tui.domain.local_fs import LocalFS
 from aws_tui.domain.s3_fs import S3FS
 from aws_tui.domain.transfer_journal import TransferJournal
@@ -124,7 +124,13 @@ class S3Service:
         dispatcher: Dispatcher,
         local_root: Path | None = None,
         s3_fs_factory: S3FsFactory | None = None,
+        initial_left_path: PathRef | None = None,
+        initial_right_path: PathRef | None = None,
+        initial_local_root: Path | None = None,
     ) -> None:
+        self._initial_local_root = initial_local_root
+        self._initial_left_path = initial_left_path
+        self._initial_right_path = initial_right_path
         self._journal: TransferJournal = transfer_journal
         self._hub: MessageHub[Message] | None = hub
         self._dispatcher: Dispatcher = dispatcher
@@ -142,7 +148,8 @@ class S3Service:
 
     # ── Service protocol ────────────────────────────────────────────────────
 
-    def supports(self, connection: Connection) -> bool:
+    @staticmethod
+    def supports(connection: Connection) -> bool:
         """S3Service works for both ``aws`` and ``s3-compatible`` connections."""
         return connection.kind in {"aws", "s3-compatible"}
 
@@ -167,7 +174,12 @@ class S3Service:
             raise RuntimeError("S3Service.build_vm called before bind_hub — composition wiring bug")
         hub = self._hub
         s3_provider = self.build_remote_provider(connection)
-        local_provider = self.build_local_provider()
+        local_identity = (
+            f"local · {self._initial_local_root}"
+            if self._initial_local_root is not None
+            else "local"
+        )
+        local_provider = self.build_initial_local_provider()
 
         left = PaneVM(
             provider=s3_provider,
@@ -176,6 +188,7 @@ class S3Service:
             id_prefix="pane.s3",
             identity_label=_format_pane_title(connection),
             path_protocol="s3:",
+            initial_path=self._initial_left_path or PathRef(),
             connection_key=(connection.kind, connection.name),
             transfer_connection=connection_history_identity(connection, s3_provider),
         )
@@ -184,11 +197,13 @@ class S3Service:
             hub=hub,
             dispatcher=self._dispatcher,
             id_prefix="pane.local",
-            identity_label="local",
+            identity_label=local_identity,
             path_protocol="",
+            initial_path=self._initial_right_path or PathRef(),
             connection_key=None,
             transfer_connection=connection_history_identity(None, local_provider),
         )
+        self._initial_left_path = self._initial_right_path = None
         return DualPaneVM(
             left=left,
             right=right,
@@ -212,6 +227,12 @@ class S3Service:
     def build_local_provider(self) -> FileSystemProvider:
         """Build the local pane provider with the service's configured root."""
         return LocalFS(root=self._local_root) if self._local_root else LocalFS()
+
+    def build_initial_local_provider(self) -> FileSystemProvider:
+        """Use a native share root only for the initial launch pane."""
+        root = self._initial_local_root
+        self._initial_local_root = None
+        return LocalFS(root=root) if root is not None else self.build_local_provider()
 
     def build_remote_provider(self, connection: Connection) -> FileSystemProvider:
         """Pull from the test factory, or build a fresh :class:`S3FS`."""

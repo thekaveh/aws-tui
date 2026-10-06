@@ -172,10 +172,10 @@ class S3FS:
         return self._session.client("s3", **kwargs)
 
     def _key_for(self, path: PathRef) -> str:
-        """Convert a PathRef to an absolute S3 object key (within bucket)."""
+        """Resolve a base key; directory markers always add one more slash."""
         joined = "/".join(path.segments)
         if self._prefix:
-            return f"{self._prefix}/{joined}" if joined else self._prefix
+            return f"{self._prefix}/{joined}" if path.segments else self._prefix
         return joined
 
     def _resolve(self, path: PathRef) -> tuple[str, str]:
@@ -201,6 +201,20 @@ class S3FS:
         sub = PathRef(path.segments[1:])
         return bucket, self._key_for(sub)
 
+    @staticmethod
+    def _directory_only_key(key: str) -> bool:
+        # No final name can denote a file. In particular, daily/ is the
+        # base key for the daily// directory, not its parent's marker.
+        return not key or key.endswith("/")
+
+    def _resolve_file(self, path: PathRef) -> tuple[str, str]:
+        if path.is_root or (self._bucket is None and len(path.segments) == 1):
+            raise ProviderError("S3 operation requires a file path")
+        bucket, key = self._resolve(path)
+        if self._directory_only_key(key):
+            raise ProviderError("S3 operation requires a file path")
+        return bucket, key
+
     # ------------------------------------------------------------------
     # list / stat
     # ------------------------------------------------------------------
@@ -216,11 +230,13 @@ class S3FS:
             bucket = path.segments[0]
             sub = PathRef(path.segments[1:])
             prefix = self._key_for(sub)
-            if prefix and not prefix.endswith("/"):
+            # Directory PathRefs omit one delimiter; a final empty segment is
+            # part of the key, not that delimiter. Even ("",) lists "/".
+            if prefix or sub.segments:
                 prefix = f"{prefix}/"
             return await self._list_objects(prefix, bucket=bucket)
         prefix = self._key_for(path)
-        if prefix and not prefix.endswith("/"):
+        if prefix or path.segments:
             prefix = f"{prefix}/"
         return await self._list_objects(prefix)
 
@@ -363,44 +379,41 @@ class S3FS:
         bucket, key = self._resolve(path)
         try:
             async with self._client() as s3:
-                try:
-                    resp = await s3.head_object(Bucket=bucket, Key=key)
-                except ClientError as exc:
-                    if _error_code(exc) in {"404", "NoSuchKey", "NotFound"}:
-                        # Maybe it's a directory; probe via list with that
-                        # prefix.
-                        marker = f"{key}/" if not key.endswith("/") else key
-                        resp_list = await s3.list_objects_v2(
-                            Bucket=bucket, Prefix=marker, MaxKeys=1
+                if not self._directory_only_key(key):
+                    try:
+                        resp = await s3.head_object(Bucket=bucket, Key=key)
+                    except ClientError as exc:
+                        if _error_code(exc) not in {"404", "NoSuchKey", "NotFound"}:
+                            raise _map_client_error(exc, key) from exc
+                    else:
+                        return FileEntry(
+                            name=path.name,
+                            kind=EntryKind.FILE,
+                            size=int(resp.get("ContentLength", 0)),
+                            modified=_to_aware(resp.get("LastModified")),
+                            etag=_s3_revision_token(resp),
                         )
-                        if resp_list.get("KeyCount", 0) > 0:
-                            return FileEntry(
-                                name=path.name,
-                                kind=EntryKind.DIRECTORY,
-                                size=None,
-                                modified=None,
-                            )
-                        raise NotFoundError(path.as_posix()) from exc
-                    raise _map_client_error(exc, key) from exc
+                resp_list = await s3.list_objects_v2(Bucket=bucket, Prefix=f"{key}/", MaxKeys=1)
+                if resp_list.get("KeyCount", 0) > 0:
+                    return FileEntry(
+                        name=path.name,
+                        kind=EntryKind.DIRECTORY,
+                        size=None,
+                        modified=None,
+                    )
+                raise NotFoundError(path.as_posix())
         except _AUTH_FAILURE_EXCEPTIONS as exc:
             raise _auth_error(exc) from exc
         except _TRANSPORT_FAILURE_EXCEPTIONS as exc:
             raise ProviderUnreachableError(str(exc)) from exc
         except ClientError as exc:
             raise _map_client_error(exc, key) from exc
-        return FileEntry(
-            name=path.name,
-            kind=EntryKind.FILE,
-            size=int(resp.get("ContentLength", 0)),
-            modified=_to_aware(resp.get("LastModified")),
-            etag=_s3_revision_token(resp),
-        )
 
     async def read_object_details(self, path: PathRef) -> S3ObjectDetails:
         """Read current-object headers and tags, with independent section failures."""
         if path.is_root or (self._bucket is None and len(path.segments) < 2):
             raise ProviderError("S3 object details require an object path")
-        bucket, key = self._resolve(path)
+        bucket, key = self._resolve_file(path)
         checksums_error: str | None = None
         tags_error: str | None = None
         tags: tuple[tuple[str, str], ...] | None = None
@@ -487,13 +500,12 @@ class S3FS:
     async def mkdir(self, path: PathRef) -> None:
         if path.is_root:
             return
-        bucket, key = self._resolve(path)
-        if not key:
+        if self._bucket is None and len(path.segments) == 1:
             # Single-segment path on a bucketless FS == bucket itself.
             # Creating buckets is out of scope for this layer.
             raise ProviderError("cannot mkdir a bucket via S3FS — use the AWS console / CLI")
-        if not key.endswith("/"):
-            key = f"{key}/"
+        bucket, key = self._resolve(path)
+        key = f"{key}/"
         try:
             async with self._client() as s3:
                 await s3.put_object(Bucket=bucket, Key=key, Body=b"")
@@ -532,8 +544,9 @@ class S3FS:
             # deletion of that configured prefix.
             raise ProviderError("cannot delete a bucket via S3FS — use the AWS console / CLI")
         bucket, key = self._resolve(path)
-        if not key:
-            raise ProviderError("cannot delete a bucket via S3FS — use the AWS console / CLI")
+        directory_only = self._directory_only_key(key)
+        if expected_etag is not None and directory_only:
+            raise ProviderError("conditional S3 deletion requires a file path")
         try:
             async with self._client() as s3:
                 if expected_etag is not None:
@@ -541,14 +554,14 @@ class S3FS:
                     return
                 # Try object delete first; if that "succeeds" but no
                 # such object existed, fall through to prefix-delete.
-                try:
-                    await s3.head_object(Bucket=bucket, Key=key)
-                    file_exists = True
-                except ClientError as exc:
-                    if _error_code(exc) in {"404", "NoSuchKey", "NotFound"}:
-                        file_exists = False
-                    else:
-                        raise _map_client_error(exc, key) from exc
+                file_exists = False
+                if not directory_only:
+                    try:
+                        await s3.head_object(Bucket=bucket, Key=key)
+                        file_exists = True
+                    except ClientError as exc:
+                        if _error_code(exc) not in {"404", "NoSuchKey", "NotFound"}:
+                            raise _map_client_error(exc, key) from exc
 
                 if file_exists:
                     # S3 permits an object ``k`` and a prefix ``k/`` to coexist,
@@ -569,7 +582,7 @@ class S3FS:
                     return
 
                 # Directory delete: enumerate + batch-delete.
-                prefix = f"{key}/" if not key.endswith("/") else key
+                prefix = f"{key}/"
                 deleted_any = False
                 token: str | None = None
                 seen_tokens: set[str] = set()
@@ -646,9 +659,7 @@ class S3FS:
         if self._bucket is None and len(path.segments) == 1:
             raise ProviderError("cannot delete a bucket via S3FS — use the AWS console / CLI")
         bucket, key = self._resolve(path)
-        if not key:
-            raise ProviderError("cannot delete a bucket via S3FS — use the AWS console / CLI")
-        marker = f"{key.rstrip('/')}/"
+        marker = f"{key}/"
         try:
             async with self._client() as s3:
                 response = await s3.list_objects_v2(Bucket=bucket, Prefix=marker, MaxKeys=2)
@@ -671,6 +682,7 @@ class S3FS:
             raise _map_client_error(exc, marker) from exc
 
     async def rename(self, src: PathRef, dst: PathRef) -> None:
+        dst_bucket, dst_key = self._resolve_file(dst)
         source_entry = await self.stat(src)
         if source_entry.kind == EntryKind.DIRECTORY:
             raise ProviderError("S3 directory rename is unsupported; move the directory instead")
@@ -681,7 +693,6 @@ class S3FS:
         else:
             raise ConflictError(dst.as_posix())
         src_bucket, src_key = self._resolve(src)
-        dst_bucket, dst_key = self._resolve(dst)
         if not src_key or not dst_key:
             raise ProviderError("cannot rename buckets via S3FS — use the AWS console / CLI")
         if src_bucket != dst_bucket:
@@ -893,9 +904,7 @@ class S3FS:
         ``head_object`` is roughly free compared to a `get_object`
         round-trip and keeps the failure surface at the call site.
         """
-        bucket, key = self._resolve(path)
-        if not key:
-            raise ProviderError("cannot read a bucket — pass a key path")
+        bucket, key = self._resolve_file(path)
         try:
             async with self._client() as s3:
                 try:
@@ -943,9 +952,7 @@ class S3FS:
     ) -> None:
         if path.is_root:
             raise ConflictError("cannot write to root")
-        bucket, key = self._resolve(path)
-        if not key:
-            raise ProviderError("cannot write to a bucket itself — pass a key path")
+        bucket, key = self._resolve_file(path)
 
         reader = _AsyncStreamReader(source)
         part_size = _multipart_part_size(total_size)
