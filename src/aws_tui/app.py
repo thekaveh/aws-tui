@@ -813,6 +813,8 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
         self._service_navigation_sub: DisposableBase | None = None
         self._palette_failure_sub: DisposableBase | None = None
         self._table_clipboard_sub: DisposableBase | None = None
+        self.launch_ready = False
+        self.launch_error: str | None = None
         self._service_navigation_closed = False
         self._table_navigation_generation = 0
         self._service_navigation_owner: tuple[str, int] | None = None
@@ -983,6 +985,11 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
             on_next=self._on_table_clipboard_changed
         )
 
+        if ctx.launch is not None:
+            self._boot_in_flight = True
+            self._run_lifecycle_worker(self._explicit_mount_worker, group="content-mount")
+            return
+
         initial_conn = self._resolve_initial_connection()
         if initial_conn is not None:
             try:
@@ -1095,6 +1102,110 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
             return
         subscription.dispose()
         self._table_clipboard_sub = None
+
+    async def _explicit_mount_worker(self) -> None:
+        """Adopt and prove exactly one selected launch; never enter the boot chain."""
+        from aws_tui.composition import connection_route
+
+        ctx = self._app_ctx
+        launch = ctx.launch
+        assert launch is not None
+        owner = asyncio.current_task()
+        assert owner is not None
+        try:
+            async with asyncio.timeout(_BOOT_CHAIN_BUDGET_SECONDS):
+                if launch.connection is None:
+                    dual = self._compose_local_dual_pane(
+                        initial_right_path=launch.location.path
+                        if launch.location is not None
+                        else None,
+                    )
+                    await ctx.root_vm.content_host.set_content(dual, service_id="s3")
+                    setup = ctx.root_vm.content_host._setup_task
+                    if setup is not None:
+                        await setup
+                    # ContentHost's setup wrapper consumes cancellation. Honor
+                    # this worker's cancellation before any view/focus publication.
+                    if owner.cancelling():
+                        raise asyncio.CancelledError
+                    host = self.query_one("#content-host", Container)
+                    await self._replace_content_widget(
+                        host,
+                        DualPane(
+                            dual,
+                            hub=ctx.hub,
+                            focus_coordinator=ctx.focus_coordinator,
+                            id="content-dual-pane",
+                        ),
+                    )
+                else:
+                    connection = await asyncio.to_thread(
+                        ctx.connection_resolver.resolve_selected, launch.connection.name
+                    )
+                    if connection_route(connection) != connection_route(launch.connection):
+                        raise RuntimeError("selected source changed before startup")
+                    await ctx.root_vm.switch_connection_and_service(
+                        connection, TokenState.CONNECTED, launch.service_id
+                    )
+                    setup = ctx.root_vm.content_host._setup_task
+                    if setup is not None:
+                        await setup
+                    # ContentHost's setup wrapper consumes cancellation. Honor
+                    # this worker's cancellation before any view/focus publication.
+                    if owner.cancelling():
+                        raise asyncio.CancelledError
+                    if not await self._mount_service_view(
+                        launch.service_id, required_connection=connection
+                    ):
+                        raise RuntimeError("selected service could not be mounted")
+                current = ctx.root_vm.content_host.current
+                states: tuple[PaneState, ...]
+                if isinstance(current, DualPaneVM):
+                    states = (current.left.state, current.right.state)
+                elif isinstance(current, (AthenaPageVM, GluePageVM)):
+                    states = (current.credential_recovery_state(),)
+                elif isinstance(current, EmrServerlessPageVM):
+                    states = (
+                        current.applications.state,
+                        current.job_runs.state,
+                        current.job_run_detail.state,
+                    )
+                else:
+                    raise RuntimeError("selected service has no readiness state")
+                if any(state not in {PaneState.IDLE, PaneState.EMPTY} for state in states):
+                    raise RuntimeError("selected service did not become ready")
+            if not self._service_navigation_closed and not self._exit:
+                self.call_after_refresh(partial(self._finish_explicit_launch, current))
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            if not self._service_navigation_closed and not self._exit:
+                ctx.log_sink.error("app.explicit_launch.failed", error_type=type(exc).__name__)
+                self.launch_error = "explicit launch failed for the selected source or location"
+                self.exit(return_code=1)
+        finally:
+            self._boot_in_flight = False
+
+    def _finish_explicit_launch(self, expected_vm: object) -> None:
+        if (
+            self._service_navigation_closed
+            or self._exit
+            or self._app_ctx.root_vm.content_host.current is not expected_vm
+        ):
+            return
+        launch = self._app_ctx.launch
+        assert launch is not None
+        if launch.service_id == "s3":
+            slot = (
+                FocusSlot.S3_RIGHT
+                if launch.location is not None and launch.location.scheme == "local"
+                else FocusSlot.S3_LEFT
+            )
+            self._app_ctx.focus_coordinator.set_focused_slot(slot)
+            self._project_focus_slot(slot)
+        else:
+            self.focus_active_service_pane()
+        self.launch_ready = True
 
     async def _initial_mount_worker(self, *, initial_conn: Connection) -> None:
         """Walk the configured-connections chain, narrating each step
@@ -1415,6 +1526,54 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
             "error": "errored",
         }.get(outcome, outcome)
 
+    def _compose_local_dual_pane(self, *, initial_right_path: PathRef | None = None) -> DualPaneVM:
+        """Compose local panes without marking or inventing a failed remote source."""
+        from aws_tui.domain.filesystem import PathRef
+        from aws_tui.services.s3.service import S3Service
+        from aws_tui.vm.file_manager.dual_pane_vm import DualPaneVM
+        from aws_tui.vm.file_manager.pane_vm import PaneVM
+
+        ctx = self._app_ctx
+        s3_service = cast("S3Service", ctx.registry.get("s3"))
+        _make_local = self._make_local_provider
+        left_provider = _make_local()
+        right_provider = s3_service.build_initial_local_provider()
+        native_root = (
+            ctx.launch.location.native_root
+            if ctx.launch is not None and ctx.launch.location is not None
+            else None
+        )
+        left = PaneVM(
+            provider=left_provider,
+            hub=ctx.hub,
+            dispatcher=ctx.dispatcher,
+            id_prefix="pane.local",
+            identity_label="local",
+            path_protocol="",
+            connection_key=None,
+            transfer_connection=connection_history_identity(None, left_provider),
+        )
+        right = PaneVM(
+            provider=right_provider,
+            initial_path=initial_right_path or PathRef(),
+            hub=ctx.hub,
+            dispatcher=ctx.dispatcher,
+            id_prefix="pane.local",
+            identity_label=f"local · {native_root}" if native_root is not None else "local",
+            path_protocol="",
+            connection_key=None,
+            transfer_connection=connection_history_identity(None, right_provider),
+        )
+        journal = s3_service.transfer_journal
+        return DualPaneVM(
+            left=left,
+            right=right,
+            hub=ctx.hub,
+            dispatcher=ctx.dispatcher,
+            transfer_journal=journal,
+            transfer_runtime=s3_service.transfer_runtime,
+        )
+
     async def _mount_local_only_dual_pane(
         self,
         *,
@@ -1430,8 +1589,6 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
         so ``Shift+S`` skips it until a successful in-session credential
         retry clears the mark.
         """
-        from aws_tui.vm.file_manager.dual_pane_vm import DualPaneVM
-        from aws_tui.vm.file_manager.pane_vm import PaneVM
 
         ctx = self._app_ctx
         await self._cancel_transfer_workers_before_content_swap()
@@ -1439,48 +1596,13 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
         # skips it (consistent with the reactive auto-fallback path).
         self._mark_connection_unreachable(initial_conn.kind, initial_conn.name)
 
-        # Use the registered service's public local-provider factory so the
-        # fallback keeps the same configured root as ordinary S3 views.
         from aws_tui.services.s3.service import S3Service
 
         s3_service = cast("S3Service", ctx.registry.get("s3"))
-
-        def _make_local() -> FileSystemProvider:
-            return self._make_local_provider()
-
-        left_provider, right_provider = _make_local(), _make_local()
-        left = PaneVM(
-            provider=left_provider,
-            hub=ctx.hub,
-            dispatcher=ctx.dispatcher,
-            id_prefix="pane.local",
-            identity_label="local",
-            path_protocol="",
-            connection_key=None,
-            transfer_connection=connection_history_identity(None, left_provider),
-        )
-        right = PaneVM(
-            provider=right_provider,
-            hub=ctx.hub,
-            dispatcher=ctx.dispatcher,
-            id_prefix="pane.local",
-            identity_label="local",
-            path_protocol="",
-            connection_key=None,
-            transfer_connection=connection_history_identity(None, right_provider),
-        )
-        journal = s3_service.transfer_journal
-        if journal is None:
+        if s3_service.transfer_journal is None:
             ctx.log_sink.error("app.local_only_mount.missing_journal")
             return False
-        dual = DualPaneVM(
-            left=left,
-            right=right,
-            hub=ctx.hub,
-            dispatcher=ctx.dispatcher,
-            transfer_journal=journal,
-            transfer_runtime=s3_service.transfer_runtime,
-        )
+        dual = self._compose_local_dual_pane()
         try:
             # ContentHostVM constructs the candidate before retiring the
             # outgoing VM, so a malformed fallback cannot empty the host.
@@ -6361,6 +6483,17 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
         # #content-host and one silently clobbers the other → blank
         # screen at startup.
         if self._boot_in_flight:
+            launch = getattr(ctx, "launch", None)
+            if launch is not None:
+                if selected == launch.service_id:
+                    return
+                self._boot_in_flight = False
+                self.workers.cancel_group(self, "content-mount")
+                self._run_lifecycle_worker(
+                    partial(self._mount_external_navigation, selected, generation),
+                    group="content-mount",
+                )
+                return
             if selected != "s3":
                 self._boot_in_flight = False
                 self.workers.cancel_group(self, "content-mount")
@@ -7195,7 +7328,37 @@ def main() -> None:
     doctor.add_argument(
         "--probe", metavar="NAME", help="perform a read-only network probe of one exact source name"
     )
+    from aws_tui.launch import LaunchError, LaunchRequest, resolve_launch, service_definitions
+
+    identity = parser.add_mutually_exclusive_group()
+    identity.add_argument("--connection", metavar="NAME", help="exact known connection name")
+    identity.add_argument(
+        "--profile", metavar="NAME", help="exact locally discoverable AWS profile"
+    )
+    parser.add_argument(
+        "--region",
+        metavar="REGION",
+        help="session region: lowercase letters/digits separated by hyphens, ending in digits (eu-west-1)",
+    )
+    parser.add_argument(
+        "--service",
+        choices=[definition.descriptor.id for definition in service_definitions()],
+        help="registered service ID (default: s3)",
+    )
+    parser.add_argument(
+        "--location",
+        metavar="LOCATION",
+        help="s3://BUCKET[/PREFIX] or existing native directory; implies s3",
+    )
+    parser.epilog = (
+        "Selectors override [defaults].connection and AWS_DEFAULT_PROFILE/AWS_PROFILE "
+        "for this session only; configuration is not saved."
+    )
     args = parser.parse_args()
+    request = LaunchRequest(args.connection, args.profile, args.region, args.service, args.location)
+    demo = args.demo or is_demo_mode_enabled(argv=[])
+    if request.explicit and (demo or args.command == "doctor"):
+        parser.error("launch selectors cannot be combined with demo mode or doctor")
 
     if args.command == "doctor":
         if args.demo or args.version:
@@ -7212,21 +7375,34 @@ def main() -> None:
         print(doctor_report.render_json() if args.json else doctor_report.render_text())
         raise SystemExit(doctor_report.exit_code)
 
-    demo = args.demo or is_demo_mode_enabled(argv=[])
-
     if args.version:
         status = "enabled" if demo else "disabled"
         # Match the pip convention: ``project-name 0.8.0``.
         print(f"aws-tui {__version__} (demo: {status})")
         return
 
+    launch = None
+    if request.explicit:
+        try:
+            launch = resolve_launch(request)
+        except LaunchError as exc:
+            print(f"aws-tui: {exc}", file=sys.stderr)
+            raise SystemExit(2) from None
+
     context: AppContext | None = None
     try:
-        context = build_app_context(demo=demo)
+        context = (
+            build_app_context(demo=demo, launch=launch)
+            if launch is not None
+            else build_app_context(demo=demo)
+        )
         app = AwsTuiApp(context=context)
     except Exception as exc:
         if context is not None:
             context.close_unstarted()
+        if launch is not None:
+            print("aws-tui: explicit launch could not be constructed", file=sys.stderr)
+            raise SystemExit(1) from None
         message = redact_text(str(exc)) or "startup failed"
         print(
             f"\naws-tui failed to start.\n  {type(exc).__name__}: {message}\n",
@@ -7253,6 +7429,9 @@ def main() -> None:
         )
         raise
     else:
+        if launch is not None and app.launch_error is not None:
+            print(f"aws-tui: {app.launch_error}", file=sys.stderr)
+            raise SystemExit(1)
         # Normal exit; crash report would be set only if `_handle_exception`
         # fired and Textual swallowed the exception (it does this when
         # rendering a fatal panel).
