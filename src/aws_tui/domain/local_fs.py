@@ -663,10 +663,12 @@ class LocalFS:
                 def current() -> os.stat_result:
                     return _windows_lstat(self._root, path)[0]
             elif self._root is not None:
-                opener = partial(_rooted_open, self._root, path, os.O_RDONLY)
+                # Regular files ignore O_NONBLOCK. A FIFO must not strand an
+                # uncancellable opener before the regular-file check can run.
+                opener = partial(_rooted_open, self._root, path, os.O_RDONLY | os.O_NONBLOCK)
                 current = partial(_rooted_lstat, self._root, path)
             else:
-                opener = partial(_open_nofollow, host.as_posix(), os.O_RDONLY)
+                opener = partial(_open_nofollow, host.as_posix(), os.O_RDONLY | os.O_NONBLOCK)
                 current = partial(os.lstat, host.as_posix())
 
             snapshots: list[ReadSnapshot] = []
@@ -692,6 +694,8 @@ class LocalFS:
             claim.release()
             return session
         except OSError as exc:
+            if exc.errno == errno.EISDIR:
+                raise UnsupportedSourceError(f"not a regular file: {host.as_posix()}") from exc
             if exc.errno == errno.ELOOP:
                 raise UnsupportedSourceError(f"refusing symlink: {host.as_posix()}") from exc
             raise _map_os_error(exc, host.as_posix()) from exc

@@ -8,7 +8,12 @@ import pytest
 
 from aws_tui.demo.in_memory_fs import InMemoryFS
 from aws_tui.domain import local_fs
-from aws_tui.domain.filesystem import BoundedPreviewProvider, PathRef, PreviewSourceChangedError
+from aws_tui.domain.filesystem import (
+    BoundedPreviewProvider,
+    PathRef,
+    PreviewSourceChangedError,
+    UnsupportedSourceError,
+)
 from aws_tui.domain.local_fs import LocalFS
 from aws_tui.domain.preview_limits import PreviewBudget
 
@@ -250,3 +255,29 @@ async def test_local_close_refuses_queued_read_after_cancel(tmp_path, monkeypatc
     await first
     await closing
     assert calls == [2]
+
+
+@pytest.mark.parametrize("kind", ["directory", *(["fifo"] if hasattr(os, "mkfifo") else [])])
+async def test_local_rejects_nonregular_without_blocking(tmp_path, kind):
+    host = tmp_path / "special"
+    if kind == "directory":
+        host.mkdir()
+    else:
+        os.mkfifo(host)
+    task = asyncio.create_task(
+        LocalFS(root=tmp_path).open_preview(PathRef(("special",)), budget=PreviewBudget.start())
+    )
+    blocked = False
+    try:
+        with pytest.raises(UnsupportedSourceError, match="not a regular file"):
+            await asyncio.wait_for(asyncio.shield(task), timeout=0.2)
+    except TimeoutError:
+        blocked = True
+        # Drain the defective opener so the RED test itself owns no orphan.
+        writer = os.open(host, os.O_WRONLY | os.O_NONBLOCK)
+        try:
+            with pytest.raises(UnsupportedSourceError, match="not a regular file"):
+                await task
+        finally:
+            os.close(writer)
+    assert not blocked, "preview blocked opening a nonregular source"
