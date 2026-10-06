@@ -81,13 +81,13 @@ uv sync --locked --all-groups
 # `gitdir:` pointer, so the hook install was silently skipped in exactly the
 # checkouts a contributor is most likely to be developing in.
 #
-# `[ -e .git ]` would accept both shapes but also accepts a `.git` file whose
-# pointer DANGLES (an orphaned or moved worktree), where `pre-commit install`
-# still fails and bootstrap would still abort. `git rev-parse --git-dir`
-# checks whether a git dir can be resolved, rejecting a dangling pointer or a
-# missing git binary. Require the local marker as well: otherwise Git walks upwards
-# and mistakes an archive inside an unrelated repository for its checkout.
-if [ -e .git ] && git rev-parse --git-dir >/dev/null 2>&1; then
+# A marker may be dangling or invalid. Git discovery can skip an invalid .git
+# directory and resolve an unrelated parent repository, so require the resolved
+# worktree root to be this checkout. Compare physical paths so a symlink used
+# to invoke bootstrap does not make a valid checkout appear foreign.
+if [ -e .git ] &&
+  bootstrap_git_root="$(git rev-parse --show-toplevel 2>/dev/null)" &&
+  [ "$(cd "$bootstrap_git_root" && pwd -P)" = "$(pwd -P)" ]; then
   echo "==> installing pre-commit hooks"
   uv run pre-commit install
 else
