@@ -422,3 +422,27 @@ async def test_glue_handoff_starter_sql_is_runnable_in_demo(
     )
 
     assert execution.execution_id
+
+
+async def test_cloudwatch_showcase_sources_are_profile_isolated():
+    from aws_tui.domain.emr_serverless import CloudWatchLogConfiguration
+
+    dev, prod = seeded_demo_emr("demo-dev"), seeded_demo_emr("demo-prod")
+    configuration = CloudWatchLogConfiguration(True, "/demo/demo-dev/emr")
+    streams = await dev.list_cloudwatch_streams(
+        configuration=configuration, application_id="etl-pipeline-1", job_run_id="r-cloudwatch-only"
+    )
+    assert len(streams) == 4
+    assert any(stream.attempt == 2 for stream in streams)
+    assert dev._details[("etl-pipeline-1", "r-cloudwatch-only")].s3_monitoring_log_uri is None
+    assert dev._details[("etl-pipeline-1", "r-both-logs")].s3_monitoring_log_uri is not None
+    with pytest.raises(NotFoundError):
+        await prod.list_cloudwatch_streams(
+            configuration=configuration,
+            application_id="etl-pipeline-1",
+            job_run_id="r-cloudwatch-only",
+        )
+    assert all(
+        "ERROR CloudWatch demo failure" in event.message
+        for event in dev._cloudwatch_events[("/demo/demo-dev/emr", streams[0].name)]
+    )

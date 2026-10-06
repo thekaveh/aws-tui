@@ -57,6 +57,12 @@ class _PaneApp(App[None]):
         # Capture all posted messages for testing
         self._messages.append(message)
 
+    def on_job_run_logs_pane_cloud_watch_stream_selected(self, message):
+        self._messages.append(message)
+
+    def on_job_run_logs_pane_follow_requested(self, message):
+        self._messages.append(message)
+
     def on_job_run_logs_pane_log_file_selected(
         self,
         message: JobRunLogsPane.LogFileSelected,
@@ -251,3 +257,112 @@ async def test_left_and_right_select_exact_duplicate_kind_log_files() -> None:
             if isinstance(message, JobRunLogsPane.LogFileSelected)
         ]
         assert selected[-1].key == first.key
+
+
+async def test_cloudwatch_literal_caption_selectors_freshness_and_clicks(monkeypatch):
+    from textual.widgets import Static
+
+    from tests.unit.vm.emr_serverless.test_job_run_logs_vm import _cw_vm
+
+    vm, _fake, names = _cw_vm(monkeypatch)
+    await vm.load()
+    app = _PaneApp(vm, vm._hub)
+    async with app.run_test(size=(80, 24)) as pilot:
+        await pilot.pause()
+        pane = app.query_one(JobRunLogsPane)
+        assert "filter: loaded data only" in str(pane.query_one("#logs-filter", Static).render())
+        assert "CloudWatch: configured" in " ".join(
+            str(chip.render()) for chip in pane.query_one("#logs-sources").query(Static)
+        )
+        assert "Stopped" in str(pane.query_one("#logs-status", Static).render())
+        assert "Start follow" in str(pane.query_one("#logs-status", Static).render())
+        assert "ERROR CloudWatch 0" in str(pane.query_one("#logs-content", Static).render())
+        await focus_and_settle(pane)
+        await pilot.press("right")
+        await pilot.pause()
+        assert any(
+            isinstance(m, JobRunLogsPane.CloudWatchStreamSelected) and m.name == names[1]
+            for m in app._messages
+        )
+        await pilot.click("#logs-status")
+        await pilot.pause()
+        assert any(isinstance(m, JobRunLogsPane.FollowRequested) for m in app._messages)
+    await vm.shutdown()
+    vm.dispose()
+
+
+@pytest.mark.parametrize(
+    ("prefix", "join", "worker"),
+    [
+        (None, "/", "applications/jobs/stdout"),
+        ("custom", "/", "applications/jobs/stdout"),
+        ("custom/", "", "applications/jobs/stdout"),
+        ("custom/", "/", "applications/jobs/stdout"),
+        ("/applications/a/jobs/r/", "", "applications/jobs/stdout"),
+        (
+            "/applications/foreign/jobs/prefix/applications/a/jobs/r/",
+            "/",
+            "applications/jobs/[stdout]",
+        ),
+    ],
+)
+async def test_cloudwatch_chips_preserve_run_relative_attempt_worker_identity(prefix, join, worker):
+    from aws_tui.domain.emr_cloudwatch_logs import classify_cloudwatch_stream
+    from aws_tui.domain.emr_serverless import CloudWatchLogConfiguration
+    from aws_tui.ui.widgets.emr_serverless.job_run_logs_pane import _LogFileChip
+
+    configuration = CloudWatchLogConfiguration(True, "/group", prefix)
+    names = tuple(
+        f"{prefix or ''}{join}applications/a/jobs/r/attempts/{attempt}/SPARK_EXECUTOR/{worker}"
+        for attempt in (1, 2)
+    )
+    fake = _InMemoryEmr()
+    for name in names:
+        stream = classify_cloudwatch_stream(
+            name, configuration=configuration, application_id="a", job_run_id="r"
+        )
+        assert stream is not None
+        fake.add_cloudwatch_stream(
+            application_id="a", job_run_id="r", log_group_name="/group", stream=stream, events=()
+        )
+    hub = MessageHub()
+    vm = JobRunLogsVM(client=fake, hub=hub, dispatcher=NULL_DISPATCHER)
+    vm.construct()
+    vm.set_target("a", "r", None, cloudwatch=configuration)
+    app = _PaneApp(vm, hub)
+    try:
+        await vm.load()
+        assert tuple(stream.name for stream in vm.available_streams) == names
+        async with app.run_test(size=(180, 24)) as pilot:
+            pane = app.query_one(JobRunLogsPane)
+            chips = list(pane.query_one(".logs-chip-row").query(_LogFileChip))
+            assert [str(chip.render()) for chip in chips] == [
+                f"attempts/1/SPARK_EXECUTOR/{worker}",
+                f"attempts/2/SPARK_EXECUTOR/{worker}",
+            ]
+            assert [chip.key for chip in chips] == [f"stream:{name}" for name in names]
+            await focus_and_settle(pane)
+            await pilot.press("right")
+            await pilot.pause()
+            selected = [
+                message.name
+                for message in app._messages
+                if isinstance(message, JobRunLogsPane.CloudWatchStreamSelected)
+            ]
+            assert selected == [names[1]]
+            vm.select_cloudwatch_stream(selected[-1])
+            await pilot.pause()
+            assert vm.current_stream.name == names[1]
+            active = list(pane.query_one(".logs-chip-row").query(".-active"))
+            assert len(active) == 1
+            assert active[0].key == f"stream:{names[1]}"
+            await pilot.press("left")
+            await pilot.pause()
+            assert [
+                message.name
+                for message in app._messages
+                if isinstance(message, JobRunLogsPane.CloudWatchStreamSelected)
+            ] == [names[1], names[0]]
+    finally:
+        await vm.shutdown()
+        vm.dispose()

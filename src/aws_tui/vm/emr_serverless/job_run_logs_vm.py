@@ -12,17 +12,29 @@ matches in batched ``PropertyChangedMessage`` broadcasts.
 from __future__ import annotations
 
 import asyncio
-from collections import OrderedDict
+import re
+import time
+from collections import OrderedDict, deque
+from collections.abc import Iterator
 from contextlib import aclosing
+from dataclasses import dataclass
 from enum import StrEnum
+from typing import Literal, cast
 
 import reactivex as rx
 from vmx import ComponentVMOf, Message, MessageHub, PropertyChangedMessage
 from vmx.services.dispatcher import Dispatcher
 
+from aws_tui.domain.emr_cloudwatch_logs import (
+    CloudWatchLogEvent,
+    CloudWatchLogSnapshot,
+    CloudWatchLogStream,
+    cloudwatch_location,
+    safe_cloudwatch_error,
+)
 from aws_tui.domain.emr_logs import (
     DEFAULT_LOG_FILTER,
-    EmrServerlessLogsClient,
+    EmrServerlessLogsClientProtocol,
     FilterMode,
     LogFile,
     LogFileKind,
@@ -30,13 +42,80 @@ from aws_tui.domain.emr_logs import (
     build_run_prefix,
     parse_log_uri,
 )
-from aws_tui.domain.filesystem import ProviderError
+from aws_tui.domain.emr_serverless import CloudWatchLogConfiguration
+from aws_tui.domain.filesystem import (
+    AuthRequiredError,
+    NotFoundError,
+    PermissionDeniedError,
+    ProviderError,
+    ProviderUnreachableError,
+    ThrottledError,
+    ValidationError,
+)
 from aws_tui.infra.redaction import redact_text
 from aws_tui.vm._observable import ObserverSafeSubject, send_value_free
 from aws_tui.vm.emr_serverless._errors import map_provider_error
 from aws_tui.vm.file_manager.pane_vm import PaneState
 from aws_tui.vm.operation_owner import OperationOwner, OperationSuperseded
 from aws_tui.vm.service_diagnostics import report_unexpected_service_error
+
+
+class LogSource(StrEnum):
+    S3 = "s3"
+    CLOUDWATCH = "cloudwatch"
+
+
+class LogSourceState(StrEnum):
+    CONFIGURED = "configured"
+    UNAVAILABLE = "unavailable"
+    UNKNOWN = "unknown"
+    ACCESS_DENIED = "access denied"
+
+
+@dataclass(frozen=True, slots=True)
+class LogSourceStatus:
+    source: LogSource
+    state: LogSourceState
+    detail: str
+
+
+FailureKind = Literal[
+    "auth_required",
+    "access_denied",
+    "throttled",
+    "unreachable",
+    "not_found",
+    "invalid",
+    "limit",
+    "unexpected",
+]
+_CW_EVENT_CAP = 5_000
+_CW_BYTE_CAP = 4 * 1024 * 1024
+_CW_ID_CAP = 20_000
+_LINE_BREAK = re.compile(r"\r\n|[\n\r\v\f\x1c-\x1e\x85\u2028\u2029]")
+_LIMIT_ERRORS = frozenset(
+    {
+        "CloudWatch log page limit exceeded",
+        "CloudWatch log stream limit exceeded",
+        "CloudWatch log read limit exceeded",
+        "CloudWatch repeated a continuation token",
+        "CloudWatch follow duplicate-id limit exceeded",
+    }
+)
+_sleep = asyncio.sleep
+
+
+def _now_ms() -> int:
+    return int(time.time() * 1000)
+
+
+def _message_lines(message: str) -> Iterator[str]:
+    start = 0
+    for match in _LINE_BREAK.finditer(message):
+        yield message[start : match.start()]
+        start = match.end()
+    if start < len(message):
+        yield message[start:]
 
 
 class LogsState(StrEnum):
@@ -70,11 +149,11 @@ class JobRunLogsVM:
     def __init__(
         self,
         *,
-        client: EmrServerlessLogsClient,
+        client: EmrServerlessLogsClientProtocol,
         hub: MessageHub[Message],
         dispatcher: Dispatcher,
     ) -> None:
-        self._client: EmrServerlessLogsClient = client
+        self._client: EmrServerlessLogsClientProtocol = client
         self._hub: MessageHub[Message] = hub
         self._inner: ComponentVMOf[None] = (
             ComponentVMOf[None]
@@ -88,6 +167,20 @@ class JobRunLogsVM:
         self._application_id: str | None = None
         self._job_run_id: str | None = None
         self._log_uri: str | None = None
+        self._generation = 0
+        self._cloudwatch: CloudWatchLogConfiguration | None = None
+        self._metadata_known = True
+        self._run_created_at_ms = 0
+        self._selected_source: LogSource | None = None
+        self._sources: tuple[LogSourceStatus, ...] = ()
+        self._available_streams: tuple[CloudWatchLogStream, ...] = ()
+        self._current_stream: CloudWatchLogStream | None = None
+        self._raw_events: deque[CloudWatchLogEvent] = deque()
+        self._following = False
+        self._last_successful_read_at_ms: int | None = None
+        self._last_event_at_ms: int | None = None
+        self._buffer_capped = False
+        self._failure_kind: FailureKind | None = None
         # Loaded state
         self._state: LogsState = LogsState.EMPTY_TARGET
         self._failure_state: PaneState | None = None
@@ -110,7 +203,7 @@ class JobRunLogsVM:
         # here instead of filtering shared MessageHub events by
         # ``sender_object``.
         self._on_property_changed = ObserverSafeSubject[str]()
-        # LRU response cache: key=(app_id, run_id, file_key, patterns,
+        # LRU response cache: key=(app_id, run_id, bucket, file_key, size, patterns,
         # mode, case_insensitive); value=(lines, truncated, bytes_read,
         # lines_scanned). Use the
         # raw filter triple instead of hash(triple) — hash() collapses
@@ -121,7 +214,7 @@ class JobRunLogsVM:
         # dataclass so the tuple is hashable directly. Cleared on
         # application switch in :meth:`set_target`.
         self._cache: OrderedDict[
-            tuple[str, str, str, int | None, tuple[str, ...], FilterMode, bool],
+            tuple[str, str, str, str, int | None, tuple[str, ...], FilterMode, bool],
             tuple[tuple[str, ...], bool, int, int, int],
         ] = OrderedDict()
 
@@ -199,45 +292,191 @@ class JobRunLogsVM:
 
     # ── Public mutators ────────────────────────────────────────────────────
 
-    def set_target(self, app_id: str | None, run_id: str | None, log_uri: str | None) -> None:
-        """Update the target run; flush loaded state. NOT a fetch."""
-        if (
-            self._application_id == app_id
-            and self._job_run_id == run_id
-            and self._log_uri == log_uri
-        ):
-            return
-        # Drop the cache on application switch — entries for the
-        # previous application can't be revisited from this UI
-        # session in a useful way and keeping them around just
-        # bloats memory. Run-switch within the same application
-        # keeps the cache so flipping between recent runs stays
-        # snappy.
-        if app_id != self._application_id:
-            self._cache.clear()
-        self._application_id = app_id
-        self._job_run_id = run_id
-        self._log_uri = log_uri
+    @property
+    def sources(self) -> tuple[LogSourceStatus, ...]:
+        return self._sources
+
+    @property
+    def selected_source(self) -> LogSource | None:
+        return self._selected_source
+
+    @property
+    def available_streams(self) -> tuple[CloudWatchLogStream, ...]:
+        return self._available_streams
+
+    @property
+    def current_stream(self) -> CloudWatchLogStream | None:
+        return self._current_stream
+
+    @property
+    def cloudwatch_configuration(self) -> CloudWatchLogConfiguration | None:
+        return self._cloudwatch
+
+    @property
+    def following(self) -> bool:
+        return self._following
+
+    @property
+    def can_follow(self) -> bool:
+        return (
+            self._selected_source is LogSource.CLOUDWATCH
+            and self._cloudwatch is not None
+            and self._cloudwatch.enabled is True
+            and not self._disposed
+            and self._operations.accepting
+        )
+
+    @property
+    def last_successful_read_at_ms(self) -> int | None:
+        return self._last_successful_read_at_ms
+
+    @property
+    def last_event_at_ms(self) -> int | None:
+        return self._last_event_at_ms
+
+    @property
+    def buffer_capped(self) -> bool:
+        return self._buffer_capped
+
+    @property
+    def failure_kind(self) -> FailureKind | None:
+        return self._failure_kind
+
+    def _invalidate(self) -> int:
+        self._generation += 1
+        self._operations.cancel()
+        self._following = False
+        self._notify("following")
+        return self._generation
+
+    def _current(self, generation: int) -> bool:
+        return not self._disposed and self._operations.accepting and generation == self._generation
+
+    def _clear_loaded(self) -> None:
         self._available_files = ()
         self._current_file = None
+        self._available_streams = ()
+        self._current_stream = None
+        self._raw_events.clear()
         self._lines = ()
-        self._bytes_read = 0
-        self._lines_scanned = 0
-        self._matched_count = 0
-        self._error_text = None
-        self._failure_state = None
-        if app_id is None or run_id is None:
-            self._set_state(LogsState.EMPTY_TARGET)
-        elif log_uri is None:
-            self._set_state(LogsState.NO_LOG_CONFIG)
-        else:
-            self._set_state(LogsState.IDLE)
+        self._bytes_read = self._lines_scanned = self._matched_count = 0
+        self._last_successful_read_at_ms = self._last_event_at_ms = None
+        self._buffer_capped = False
+        self._error_text = self._failure_state = self._failure_kind = None
+
+    def set_target(
+        self,
+        app_id: str | None,
+        run_id: str | None,
+        log_uri: str | None,
+        *,
+        cloudwatch: CloudWatchLogConfiguration | None = None,
+        run_created_at_ms: int = 0,
+        metadata_known: bool = True,
+    ) -> None:
+        """Capture exact metadata without fetching; equal detail polls are a no-op."""
+        if (
+            self._application_id,
+            self._job_run_id,
+            self._log_uri,
+            self._cloudwatch,
+            self._run_created_at_ms,
+            self._metadata_known,
+        ) == (app_id, run_id, log_uri, cloudwatch, run_created_at_ms, metadata_known):
+            return
+        self._invalidate()
+        if app_id != self._application_id:
+            self._cache.clear()
+        self._application_id, self._job_run_id, self._log_uri = app_id, run_id, log_uri
+        self._cloudwatch, self._run_created_at_ms, self._metadata_known = (
+            cloudwatch,
+            run_created_at_ms,
+            metadata_known,
+        )
+        self._clear_loaded()
+        self._sources = (
+            (
+                LogSourceStatus(
+                    LogSource.S3,
+                    LogSourceState.UNKNOWN
+                    if not metadata_known
+                    else LogSourceState.CONFIGURED
+                    if log_uri
+                    else LogSourceState.UNAVAILABLE,
+                    "" if log_uri or not metadata_known else "not configured",
+                ),
+                LogSourceStatus(
+                    LogSource.CLOUDWATCH,
+                    LogSourceState.UNKNOWN
+                    if not metadata_known or (cloudwatch is not None and cloudwatch.enabled is None)
+                    else LogSourceState.CONFIGURED
+                    if cloudwatch is not None and cloudwatch.enabled is True
+                    else LogSourceState.UNAVAILABLE,
+                    "disabled"
+                    if cloudwatch is not None and cloudwatch.enabled is False
+                    else "not configured"
+                    if cloudwatch is None and metadata_known
+                    else "",
+                ),
+            )
+            if app_id is not None and run_id is not None
+            else ()
+        )
+        self._selected_source = (
+            LogSource.S3
+            if log_uri
+            else LogSource.CLOUDWATCH
+            if cloudwatch is not None and cloudwatch.enabled is True
+            else None
+        )
+        self._set_state(
+            LogsState.EMPTY_TARGET
+            if not app_id or not run_id
+            else LogsState.IDLE
+            if self._selected_source is not None
+            or any(s.state is LogSourceState.UNKNOWN for s in self._sources)
+            else LogsState.NO_LOG_CONFIG
+        )
+        self._notify_all()
+
+    def select_source(self, source: LogSource) -> None:
+        if source == self._selected_source or not self.source_selectable(source):
+            return
+        self._invalidate()
+        self._selected_source = source
+        self._clear_loaded()
+        self._set_state(LogsState.IDLE)
+        self._notify_all()
+
+    def source_selectable(self, source: LogSource) -> bool:
+        return (
+            bool(self._log_uri)
+            if source is LogSource.S3
+            else self._cloudwatch is not None and self._cloudwatch.enabled is True
+        )
+
+    def select_cloudwatch_stream(self, name: str) -> None:
+        stream = next((s for s in self._available_streams if s.name == name), None)
+        if stream is None or stream == self._current_stream:
+            return
+        self._invalidate()
+        self._current_stream = stream
+        self._raw_events.clear()
+        self._lines = ()
+        self._last_successful_read_at_ms = self._last_event_at_ms = None
+        self._buffer_capped = False
+        self._bytes_read = self._lines_scanned = self._matched_count = 0
+        self._set_state(LogsState.IDLE)
         self._notify_all()
 
     def set_filter(self, filter_: LogFilter) -> None:
         if filter_ == self._filter:
             return
         self._filter = filter_
+        if self._selected_source is LogSource.CLOUDWATCH:
+            self._project_cloudwatch()
+        else:
+            self._invalidate()
         self._notify("filter")
 
     def select_log_file_key(self, key: str) -> None:
@@ -245,6 +484,7 @@ class JobRunLogsVM:
         match = next((file for file in self._available_files if file.key == key), None)
         if match is None or match == self._current_file:
             return
+        self._invalidate()
         self._current_file = match
         self._lines = ()
         self._bytes_read = 0
@@ -260,18 +500,36 @@ class JobRunLogsVM:
         *,
         use_cache: bool = True,
         preferred_file_key: str | None = None,
+        preferred_cloudwatch_stream_name: str | None = None,
     ) -> None:
+        generation = self._invalidate()
         try:
             await self._operations.run(
-                lambda: self._load(
-                    use_cache=use_cache,
-                    preferred_file_key=preferred_file_key,
+                lambda: (
+                    self._load_cloudwatch(generation, preferred_cloudwatch_stream_name)
+                    if self._selected_source is LogSource.CLOUDWATCH
+                    else self._load(
+                        use_cache=use_cache,
+                        preferred_file_key=preferred_file_key,
+                        generation=generation,
+                    )
                 )
             )
         except OperationSuperseded:
             return
+        except asyncio.CancelledError:
+            caller = asyncio.current_task()
+            if caller is not None and caller.cancelling():
+                raise
+            if self._current(generation):
+                raise
+        finally:
+            if self._current(generation) and self._state is LogsState.LOADING:
+                self._set_state(LogsState.READY if self._lines else LogsState.IDLE)
 
-    async def _load(self, *, use_cache: bool, preferred_file_key: str | None) -> None:
+    async def _load(
+        self, *, use_cache: bool, preferred_file_key: str | None, generation: int
+    ) -> None:
         """Fetch + stream the selected log file.
 
         View-side ``exclusive=True, group="emr-logs"`` cancels any
@@ -292,9 +550,8 @@ class JobRunLogsVM:
         # target's state nor poison the LRU cache under the prior
         # key. The load worker and set_target run in different
         # contexts (Textual worker vs synchronous VM call), and
-        # set_target deliberately leaves the load() worker alive
-        # (cancellation is a view-side concern via worker group
-        # ``emr-logs``).
+        # Target changes cancel the owned operation; guards also reject a
+        # provider that suppresses cancellation and completes late.
         target = (self._application_id, self._job_run_id, self._log_uri)
         # Do NOT eagerly wipe self._lines / _bytes_read / _lines_scanned
         # here — if list_files / stream raise (transient
@@ -312,7 +569,10 @@ class JobRunLogsVM:
                 bucket=loc.bucket,
                 run_prefix=run_prefix,
             )
-            if (self._application_id, self._job_run_id, self._log_uri) != target:
+            if (
+                not self._current(generation)
+                or (self._application_id, self._job_run_id, self._log_uri) != target
+            ):
                 return  # target changed mid-flight; drop the stale list
             # Past list_files, about to commit to a fresh stream —
             # NOW it's safe to drop the prior accumulator.
@@ -332,6 +592,7 @@ class JobRunLogsVM:
                     self._current_file = None
                     self._notify("current_file")
                 self._failure_state = None
+                self._source_status(LogSource.S3, LogSourceState.UNAVAILABLE, "not created yet")
                 self._set_state(LogsState.NO_FILES)
                 return
             current_key = (
@@ -361,6 +622,7 @@ class JobRunLogsVM:
             cache_key = (
                 self._application_id,
                 self._job_run_id,
+                loc.bucket,
                 self._current_file.key,
                 self._current_file.size,
                 self._filter.patterns,
@@ -387,12 +649,13 @@ class JobRunLogsVM:
                 self._notify("matched_count")
                 self._notify("progress")
                 self._failure_state = None
+                self._source_status(LogSource.S3, LogSourceState.CONFIGURED)
                 self._set_state(LogsState.TRUNCATED if cached_truncated else LogsState.READY)
                 return
             buffered: list[str] = []
             # ``aclosing``: the per-chunk guard below returns out of this loop
-            # by design, and ``set_target`` deliberately does not cancel this
-            # worker group. A bare ``async for`` therefore abandoned the
+            # by design, in addition to owned cancellation. A bare ``async for``
+            # previously abandoned the
             # generator on every job-run switch, stranding an open S3
             # connection until the GC hook collected it.
             async with aclosing(
@@ -404,16 +667,18 @@ class JobRunLogsVM:
                 )
             ) as source:
                 async for chunk in source:
-                    # Re-check target on EVERY chunk — set_target runs
-                    # in a different worker group (emr-select-run /
-                    # emr-select-app) and does NOT cancel emr-logs, so
-                    # the stream can keep feeding chunks AFTER the user
-                    # moved on. Without this guard, ``_notify("lines")``
+                    # Re-check target on EVERY chunk — a provider can
+                    # suppress owned cancellation after set_target runs
+                    # in another worker group and keep feeding chunks
+                    # after the user moved on. Without this guard, ``_notify("lines")``
                     # would paint the OLD run's lines under the NEW
                     # run's pane header. (Post-loop guard only catches
                     # the cache-write — the per-chunk paints already
                     # shipped to the view.)
-                    if (self._application_id, self._job_run_id, self._log_uri) != target:
+                    if (
+                        not self._current(generation)
+                        or (self._application_id, self._job_run_id, self._log_uri) != target
+                    ):
                         return
                     buffered.extend(chunk.lines)
                     self._matched_count += chunk.matched_count
@@ -426,7 +691,10 @@ class JobRunLogsVM:
                     self._notify("matched_count")
                     self._notify("progress")
                     truncated = chunk.truncated
-            if (self._application_id, self._job_run_id, self._log_uri) != target:
+            if (
+                not self._current(generation)
+                or (self._application_id, self._job_run_id, self._log_uri) != target
+            ):
                 # Target changed during stream — drop the cache write
                 # (would key under the wrong target) and the state
                 # transition (caller already moved on).
@@ -442,17 +710,27 @@ class JobRunLogsVM:
             while len(self._cache) > _CACHE_MAX_ENTRIES:
                 self._cache.popitem(last=False)
             self._failure_state = None
+            self._source_status(LogSource.S3, LogSourceState.CONFIGURED)
             self._set_state(LogsState.TRUNCATED if truncated else LogsState.READY)
         except ProviderError as exc:
             # Identity guard on the error path too — set_target is
-            # synchronous and does NOT cancel the in-flight load
-            # worker. Without this check the OLD target's error
+            # synchronous; cancellation-resistant providers can still complete
+            # late. Without this check the OLD target's error
             # text would stomp the NEW target's state, leaving the
             # logs pane stuck on ERROR with an error message
             # describing the prior run's failure.
-            if (self._application_id, self._job_run_id, self._log_uri) != target:
+            if (
+                not self._current(generation)
+                or (self._application_id, self._job_run_id, self._log_uri) != target
+            ):
                 return
             self._failure_state, self._error_text = map_provider_error(exc)
+            self._source_status(
+                LogSource.S3,
+                LogSourceState.ACCESS_DENIED
+                if isinstance(exc, PermissionDeniedError)
+                else LogSourceState.UNKNOWN,
+            )
             # Re-map the file-pane states the EMR mapper returns to a
             # logs-specific state. UNREACHABLE / AUTH_REQUIRED /
             # FORBIDDEN / ERROR all collapse to LogsState.ERROR for
@@ -464,14 +742,264 @@ class JobRunLogsVM:
             raise
         except Exception as exc:  # defensive
             # Same identity guard as the ProviderError branch above.
-            if (self._application_id, self._job_run_id, self._log_uri) != target:
+            if (
+                not self._current(generation)
+                or (self._application_id, self._job_run_id, self._log_uri) != target
+            ):
                 return
+            self._source_status(LogSource.S3, LogSourceState.UNKNOWN)
             self._error_text = redact_text(f"unexpected error: {exc}")
             self._failure_state = PaneState.ERROR
             report_unexpected_service_error(
                 self._hub, service="emr-serverless", operation="load_job_logs", error=exc
             )
             self._set_state(LogsState.ERROR)
+
+    def _cloudwatch_status(self, state: LogSourceState, detail: str = "") -> None:
+        self._source_status(LogSource.CLOUDWATCH, state, detail)
+
+    def _source_status(self, source: LogSource, state: LogSourceState, detail: str = "") -> None:
+        self._sources = tuple(
+            LogSourceStatus(row.source, state, detail) if row.source is source else row
+            for row in self._sources
+        )
+        self._notify("sources")
+
+    def _cloudwatch_failure(self, error: Exception, generation: int) -> None:
+        if not self._current(generation):
+            return
+        safe = safe_cloudwatch_error(error)
+        self._failure_kind = "unexpected"
+        for cls, kind in (
+            (AuthRequiredError, "auth_required"),
+            (PermissionDeniedError, "access_denied"),
+            (ThrottledError, "throttled"),
+            (ProviderUnreachableError, "unreachable"),
+            (NotFoundError, "not_found"),
+            (ValidationError, "invalid"),
+        ):
+            if isinstance(safe, cls):
+                self._failure_kind = cast("FailureKind", kind)
+                break
+        if isinstance(error, ProviderError) and str(error) in _LIMIT_ERRORS:
+            safe = ProviderError(str(error))
+            self._failure_kind = "limit"
+        self._error_text = str(safe)
+        self._failure_state, _ = map_provider_error(safe)
+        self._cloudwatch_status(
+            LogSourceState.ACCESS_DENIED
+            if self._failure_kind == "access_denied"
+            else LogSourceState.UNAVAILABLE
+            if self._failure_kind == "not_found"
+            else LogSourceState.UNKNOWN,
+            "not created yet" if self._failure_kind == "not_found" else "",
+        )
+        if self._failure_kind == "unexpected":
+            report_unexpected_service_error(
+                self._hub,
+                service="emr-serverless",
+                operation="load_cloudwatch_logs",
+                error=ProviderError("CloudWatch log read failed"),
+            )
+        self._set_state(
+            LogsState.NO_FILES if self._failure_kind == "not_found" else LogsState.ERROR
+        )
+        self._notify_all()
+
+    def _prepare_events(
+        self, events: tuple[CloudWatchLogEvent, ...]
+    ) -> tuple[deque[CloudWatchLogEvent], bool]:
+        retained = deque(
+            sorted(events, key=lambda e: (e.timestamp_ms, e.ingestion_time_ms, e.event_id))
+        )
+        size = sum(len(e.message.encode("utf-8")) for e in retained)
+        capped = False
+        while len(retained) > _CW_EVENT_CAP or size > _CW_BYTE_CAP:
+            size -= len(retained.popleft().message.encode("utf-8"))
+            capped = True
+        return retained, capped
+
+    def _project_cloudwatch(self) -> None:
+        display: deque[tuple[str, int]] = deque()
+        size = scanned = matched = 0
+        for event in self._raw_events:
+            for line in _message_lines(event.message):
+                scanned += 1
+                if not self._filter.matches(line):
+                    continue
+                matched += 1
+                n = len(line.encode("utf-8")) + 1
+                display.append((line, n))
+                size += n
+                while len(display) > _MAX_MATCHED_LINES or size - 1 > _CW_BYTE_CAP:
+                    size -= display.popleft()[1]
+        self._lines = tuple(line for line, _ in display)
+        self._lines_scanned, self._matched_count = scanned, matched
+        self._bytes_read = sum(len(e.message.encode("utf-8")) for e in self._raw_events)
+        self._buffer_capped = self._buffer_capped or matched > len(display)
+        self._notify("lines")
+        self._notify("progress")
+        self._notify("buffer_capped")
+
+    async def _load_cloudwatch(
+        self, generation: int, preferred: str | None = None
+    ) -> CloudWatchLogSnapshot | None:
+        configuration = self._cloudwatch
+        if (
+            not self._current(generation)
+            or not self.can_follow
+            or configuration is None
+            or self._application_id is None
+            or self._job_run_id is None
+        ):
+            return None
+        self._set_state(LogsState.LOADING)
+        try:
+            group, _ = cloudwatch_location(configuration, self._application_id, self._job_run_id)
+            streams = await self._client.list_cloudwatch_streams(
+                configuration=configuration,
+                application_id=self._application_id,
+                job_run_id=self._job_run_id,
+            )
+            if not self._current(generation):
+                return None
+            selected_name = (
+                preferred
+                if preferred is not None
+                else self._current_stream.name
+                if self._current_stream is not None
+                else None
+            )
+            selected = (
+                next((row for row in streams if row.name == selected_name), None)
+                if selected_name is not None
+                else next(iter(streams), None)
+            )
+            self._available_streams = streams
+            self._current_stream = selected
+            self._notify("available_streams")
+            self._notify("current_stream")
+            if selected is None:
+                self._cloudwatch_status(LogSourceState.UNAVAILABLE, "not created yet")
+                self._set_state(LogsState.NO_FILES)
+                return None
+            end = max(self._run_created_at_ms, _now_ms())
+            snapshot = await self._client.read_cloudwatch_events(
+                log_group_name=group,
+                stream_name=selected.name,
+                start_time_ms=self._run_created_at_ms,
+                end_time_ms=end,
+            )
+            prepared, capped = self._prepare_events(snapshot.events)
+            if not self._current(generation):
+                return None
+            self._raw_events, self._buffer_capped = prepared, capped
+            self._project_cloudwatch()
+            self._last_successful_read_at_ms = snapshot.end_time_ms
+            self._last_event_at_ms = max((e.timestamp_ms for e in snapshot.events), default=None)
+            self._error_text = self._failure_state = self._failure_kind = None
+            self._cloudwatch_status(LogSourceState.CONFIGURED)
+            self._set_state(LogsState.READY)
+            self._notify_all()
+            return snapshot
+        except Exception as error:
+            self._cloudwatch_failure(error, generation)
+            return None
+
+    async def follow(self) -> None:
+        if not self.can_follow or self._following:
+            return
+        generation = self._invalidate()
+        self._following = True
+        self._notify("following")
+        try:
+            await self._operations.run(lambda: self._follow(generation))
+        except OperationSuperseded:
+            return
+        finally:
+            if self._current(generation):
+                self._following = False
+                if self._state is LogsState.LOADING:
+                    self._set_state(LogsState.READY if self._lines else LogsState.IDLE)
+                self._notify("following")
+
+    def stop_follow(self) -> None:
+        self._invalidate()
+        if self._state is LogsState.LOADING:
+            self._set_state(LogsState.READY if self._lines else LogsState.IDLE)
+
+    async def _follow(self, generation: int) -> None:
+        seen: dict[str, int] = {}
+        last_end = self._run_created_at_ms
+        initialized = False
+        try:
+            while self._current(generation) and self._following:
+                if not initialized:
+                    preferred = self._current_stream.name if self._current_stream else None
+                    initial = await self._load_cloudwatch(generation, preferred)
+                    if not self._current(generation):
+                        return
+                    if initial is None:
+                        if self._state is not LogsState.NO_FILES or preferred is not None:
+                            return
+                        await _sleep(2.0)
+                        continue
+                    seen = {e.event_id: e.timestamp_ms for e in initial.events}
+                    last_end = initial.end_time_ms
+                    initialized = True
+                await _sleep(2.0)
+                if (
+                    not self._current(generation)
+                    or not self._following
+                    or self._current_stream is None
+                    or self._cloudwatch is None
+                ):
+                    return
+                stream, configuration = self._current_stream, self._cloudwatch
+                group, _ = cloudwatch_location(
+                    configuration, self._application_id or "", self._job_run_id or ""
+                )
+                start = max(self._run_created_at_ms, last_end - 60_000)
+                end = max(last_end, _now_ms())
+                snapshot = await self._client.read_cloudwatch_events(
+                    log_group_name=group,
+                    stream_name=stream.name,
+                    start_time_ms=start,
+                    end_time_ms=end,
+                )
+                if not self._current(generation):
+                    return
+                ids = {key: stamp for key, stamp in seen.items() if stamp >= start}
+                incoming = []
+                for event in snapshot.events:
+                    if event.event_id not in ids:
+                        ids[event.event_id] = event.timestamp_ms
+                        incoming.append(event)
+                if len(ids) > _CW_ID_CAP:
+                    raise ProviderError("CloudWatch follow duplicate-id limit exceeded")
+                prepared, capped = self._prepare_events((*self._raw_events, *incoming))
+                if not self._current(generation):
+                    return
+                self._raw_events, self._buffer_capped = prepared, self._buffer_capped or capped
+                self._project_cloudwatch()
+                seen, last_end = ids, end
+                self._last_successful_read_at_ms = end
+                self._last_event_at_ms = (
+                    max((e.timestamp_ms for e in snapshot.events), default=self._last_event_at_ms)
+                    if self._last_event_at_ms is None
+                    else max(
+                        self._last_event_at_ms,
+                        max(
+                            (e.timestamp_ms for e in snapshot.events),
+                            default=self._last_event_at_ms,
+                        ),
+                    )
+                )
+                self._cloudwatch_status(LogSourceState.CONFIGURED)
+                self._set_state(LogsState.READY)
+                self._notify_all()
+        except Exception as error:
+            self._cloudwatch_failure(error, generation)
 
     # ── Lifecycle ──────────────────────────────────────────────────────────
 
@@ -481,20 +1009,20 @@ class JobRunLogsVM:
     def dispose(self) -> None:
         if self._disposed:
             return
+        self._invalidate()
         self._disposed = True
         self._operations.close()
         # Drop the response cache so a recycled VM (e.g. test
         # harnesses or future content-host reuse) doesn't carry
-        # stale entries forward. In-flight ``load()`` workers are
-        # owned by the view (Textual's ``run_worker(group="emr-logs")``
-        # auto-cancels on widget unmount) — the VM holds no task
-        # handle of its own.
+        # stale entries forward. Owned operations are cancelled above;
+        # shutdown awaits their cleanup before connection replacement.
         self._cache.clear()
         self._on_property_changed.on_completed()
         self._on_property_changed.dispose()
         self._inner.dispose()
 
     async def shutdown(self) -> None:
+        self._invalidate()
         self._operations.close()
         await self._operations.cancel_and_drain()
 
@@ -519,8 +1047,23 @@ class JobRunLogsVM:
         self._on_property_changed.on_next(prop)
 
     def _notify_all(self) -> None:
-        for prop in ("state", "lines", "current_file", "available_files", "filter"):
+        for prop in (
+            "state",
+            "lines",
+            "current_file",
+            "available_files",
+            "filter",
+            "sources",
+            "selected_source",
+            "available_streams",
+            "current_stream",
+            "following",
+            "last_successful_read_at_ms",
+            "last_event_at_ms",
+            "buffer_capped",
+            "failure_kind",
+        ):
             self._notify(prop)
 
 
-__all__ = ["JobRunLogsVM", "LogsState"]
+__all__ = ["JobRunLogsVM", "LogSource", "LogSourceState", "LogSourceStatus", "LogsState"]

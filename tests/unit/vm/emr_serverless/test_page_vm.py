@@ -609,7 +609,14 @@ async def test_failed_detail_refresh_retargets_logs_away_from_previous_run(
     assert page.job_run_detail.detail is None
     assert page.job_run_logs.application_id == "a1"
     assert page.job_run_logs.job_run_id == "r2"
-    assert page.job_run_logs.state is LogsState.NO_LOG_CONFIG
+    from aws_tui.vm.emr_serverless.job_run_logs_vm import LogSourceState
+
+    assert page.job_run_logs.state is LogsState.IDLE
+    assert len(page.job_run_logs.sources) == 2
+    assert all(source.state is LogSourceState.UNKNOWN for source in page.job_run_logs.sources)
+    assert page.job_run_logs.lines == ()
+    assert page.job_run_logs.current_file is None
+    assert page.job_run_logs.current_stream is None
 
 
 @pytest.mark.asyncio
@@ -695,3 +702,83 @@ async def test_clone_source_guard_tracks_selection_and_disposal() -> None:
     finally:
         page.dispose()
         fake.dispose()
+
+
+@pytest.mark.parametrize("explicit_default", [False, True])
+async def test_cloudwatch_detail_target_and_recovery_exact_stream(monkeypatch, explicit_default):
+    from aws_tui.domain.emr_cloudwatch_logs import CloudWatchLogEvent, CloudWatchLogStream
+    from aws_tui.domain.emr_serverless import CloudWatchLogConfiguration
+    from aws_tui.vm.emr_serverless import job_run_logs_vm as module
+    from aws_tui.vm.emr_serverless.job_run_logs_vm import LogSource
+
+    monkeypatch.setattr(module, "_now_ms", lambda: 2_000_000_000_000)
+    page, fake = _make()
+    fake.add_application(app_id="a", name="etl")
+    fake.add_job_run(application_id="a", job_run_id="r")
+    fake.add_job_run_detail(
+        application_id="a", job_run_id="r", cloudwatch_monitoring=CloudWatchLogConfiguration(True)
+    )
+    name = "/applications/a/jobs/r/attempts/2/SPARK_DRIVER"
+    stamp = int(fake._runs["a"]["r"].created_at.timestamp() * 1000)
+    fake.add_cloudwatch_stream(
+        application_id="a",
+        job_run_id="r",
+        log_group_name="/aws/emr-serverless",
+        stream=CloudWatchLogStream(name, "SPARK_DRIVER", 2),
+        events=(CloudWatchLogEvent("1", stamp, stamp, "ERROR recovery"),),
+    )
+    await page.setup()
+    assert page.job_run_logs.selected_source is LogSource.CLOUDWATCH
+    await page.job_run_logs.load()
+    snapshot = page.export_credential_recovery_snapshot()
+    assert snapshot.cloudwatch_stream_name == name
+    assert snapshot.cloudwatch_configuration == CloudWatchLogConfiguration(True)
+    assert "ERROR recovery" not in repr(snapshot)
+    if explicit_default:
+        from dataclasses import replace
+
+        fake._details[("a", "r")] = replace(
+            fake._details[("a", "r")],
+            cloudwatch_monitoring=CloudWatchLogConfiguration(True, "/aws/emr-serverless"),
+        )
+    candidate, _ = _make(fake=fake)
+    fake.calls.clear()
+    assert (
+        await candidate.restore_and_refresh_for_credential_recovery(snapshot, "logs")
+        is PaneState.IDLE
+    )
+    reads = [args for call, args in fake.calls if call == "read_cloudwatch_events"]
+    assert len(reads) == 1
+    assert reads[0][1] == name
+    assert candidate.job_run_logs.lines == ("ERROR recovery",)
+    assert not candidate.job_run_logs.following
+    await candidate.shutdown()
+    candidate.dispose()
+    await page.shutdown()
+    page.dispose()
+
+
+async def test_application_selection_invalidates_old_logs_before_list_wait(monkeypatch):
+    page, fake = _make()
+    fake.add_application(app_id="a", name="a")
+    fake.add_application(app_id="b", name="b")
+    fake.add_job_run(application_id="a", job_run_id="r")
+    fake.add_job_run_detail(application_id="a", job_run_id="r", s3_monitoring_log_uri="s3://b/logs")
+    await page.setup()
+    started, release = asyncio.Event(), asyncio.Event()
+    original = fake.list_job_runs_page
+
+    async def blocked(*args, **kwargs):
+        started.set()
+        await release.wait()
+        return await original(*args, **kwargs)
+
+    monkeypatch.setattr(fake, "list_job_runs_page", blocked)
+    task = asyncio.create_task(page.select_application("b"))
+    await started.wait()
+    assert page.job_run_logs.application_id != "a"
+    assert not page.job_run_logs.following
+    release.set()
+    await task
+    await page.shutdown()
+    page.dispose()

@@ -207,3 +207,100 @@ def test_job_run_logs_ready_renders_filter_affordance_row(theme: str) -> None:
         "how to customise the patterns"
     )
     assert "shift+f&#160;reset" in svg, f"filter reset hint missing for theme {theme!r}"
+
+
+@pytest.mark.parametrize("theme", THEMES)
+def test_cloudwatch_ready_snapshot(theme, snap_compare):
+    from tests.snapshot.apps.emr_logs import CloudWatchLogsApp
+
+    assert snap_compare(CloudWatchLogsApp(theme), terminal_size=TERMINAL_SIZE)
+
+
+@pytest.mark.parametrize("variant", ["both", "missing", "denied", "follow"])
+def test_cloudwatch_states_snapshot(variant, snap_compare):
+    from tests.snapshot.apps.emr_logs import CloudWatchLogsApp
+
+    assert snap_compare(CloudWatchLogsApp("carbon", variant), terminal_size=TERMINAL_SIZE)
+
+
+@pytest.mark.parametrize("theme", ["carbon", "github-light"])
+def test_cloudwatch_compact_page_snapshot(theme, snap_compare):
+    from tests.snapshot.apps.emr_logs import CompactCloudWatchPageApp
+
+    assert snap_compare(CompactCloudWatchPageApp(theme), terminal_size=(80, 24))
+
+
+@pytest.mark.parametrize("theme", THEMES)
+def test_cloudwatch_ready_content(theme):
+    import html
+
+    p = (
+        Path(__file__).parent
+        / "__snapshots__"
+        / "test_emr_logs"
+        / f"test_cloudwatch_ready_snapshot[{theme}].raw"
+    )
+    svg = html.unescape(p.read_text()).replace("\u00a0", " ")
+    for expected in (
+        "ERROR [literal] CloudWatch demo failure",
+        "CloudWatch: configured",
+        "filter: loaded data only",
+        "Start follow",
+        "Stopped",
+        "checked 00:01:40 UTC",
+        "attempts/2/SPARK_DRIVER",
+        "ctrl+alt+l",
+    ):
+        assert expected in svg, expected
+
+
+@pytest.mark.parametrize(
+    ("variant", "expected"),
+    [
+        ("both", "S3: configured"),
+        ("missing", "not created yet"),
+        ("denied", "CloudWatch log access denied"),
+        ("follow", "Stop follow"),
+    ],
+)
+def test_cloudwatch_states_content(variant, expected):
+    import html
+
+    p = (
+        Path(__file__).parent
+        / "__snapshots__"
+        / "test_emr_logs"
+        / f"test_cloudwatch_states_snapshot[{variant}].raw"
+    )
+    svg = html.unescape(p.read_text()).replace("\u00a0", " ")
+    assert expected in svg
+    assert "CloudWatch:" in svg
+    assert "filter: loaded data only" in svg
+    assert "checked 00:01:40 UTC" in svg
+    assert "ctrl+alt+l" in svg
+    if variant != "missing":
+        assert "ERROR [literal] CloudWatch demo failure" in svg
+
+
+@pytest.mark.parametrize("theme", ["carbon", "github-light"])
+def test_cloudwatch_compact_page_content(theme):
+    import html
+
+    p = (
+        Path(__file__).parent
+        / "__snapshots__"
+        / "test_emr_logs"
+        / f"test_cloudwatch_compact_page_snapshot[{theme}].raw"
+    )
+    svg = html.unescape(p.read_text()).replace("\u00a0", " ")
+    for expected in (
+        "ERROR CloudWatch demo failure",
+        "CloudWatch: configured",
+        "filter: loaded data only",
+        "Start follow",
+        "Stopped",
+        "00:01:40 UTC",
+        "attempts/2/SPARK_DRIVER",
+        "ctrl+alt+l",
+    ):
+        assert expected in svg, expected

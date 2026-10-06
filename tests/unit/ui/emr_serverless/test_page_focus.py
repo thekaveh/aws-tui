@@ -509,3 +509,47 @@ async def test_tab_cycle_closes_departed_source_picker() -> None:
 
         assert not picker.is_open
         assert app.query_one(ApplicationPicker).has_focus
+
+
+@pytest.mark.parametrize("transition", ["unchanged", "aba", "uri", "unmount"])
+async def test_owned_log_filter_result_is_bound_to_monotonic_target(transition):
+    from textual.widgets import TextArea
+
+    from aws_tui.domain.emr_logs import DEFAULT_LOG_FILTER
+    from aws_tui.ui.widgets.emr_serverless.job_run_logs_pane import JobRunLogsPane
+    from aws_tui.ui.widgets.emr_serverless.log_filter_modal import LogFilterModal
+    from aws_tui.ui.widgets.modal_button import ModalButton
+
+    app = EmrPageApp("carbon")
+    async with app.run_test(size=(80, 24)) as pilot:
+        await pilot.pause()
+        page = app.query_one(EmrServerlessPage)
+        logs = page.vm.job_run_logs
+        logs.set_target("00abc", "r-001", "s3://bucket-a/logs")
+        pane = app.query_one(JobRunLogsPane)
+        await focus_and_settle(pane)
+        pane.action_open_filter()
+        await wait_until(lambda: isinstance(app.screen, LogFilterModal), what="owned log form")
+        modal = app.screen
+        modal.query_one("#log-patterns", TextArea).load_text("FATAL")
+        if transition == "aba":
+            logs.set_target("00abc", "other", "s3://bucket-a/logs")
+            logs.set_target("00abc", "r-001", "s3://bucket-a/logs")
+        elif transition == "uri":
+            logs.set_target("00abc", "r-001", "s3://bucket-b/logs")
+        elif transition == "unmount":
+            await page.remove()
+            await wait_until(
+                lambda: not isinstance(app.screen, LogFilterModal),
+                what="unmount dismisses owned form",
+            )
+            assert logs.filter == DEFAULT_LOG_FILTER
+            return
+        await pilot.click(next(b for b in modal.query(ModalButton) if b.button_id == "apply"))
+        await wait_until(
+            lambda: not isinstance(app.screen, LogFilterModal), what="apply returns owned form"
+        )
+        await app.workers.wait_for_complete(list(app.workers._workers))
+        assert logs.filter.patterns == (
+            ("FATAL",) if transition == "unchanged" else DEFAULT_LOG_FILTER.patterns
+        )

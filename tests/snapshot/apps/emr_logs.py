@@ -184,3 +184,94 @@ __all__ = [
     "JobRunLogsNoLogConfigApp",
     "JobRunLogsReadyApp",
 ]
+
+
+class CloudWatchLogsApp(App[None]):
+    """Deterministic CloudWatch pane states with literal body content."""
+
+    def __init__(self, theme: str, variant: str = "ready") -> None:
+        super().__init__()
+        self.CSS = _load_css(theme)
+        self._vm = _build_logs_vm()
+        self._variant = variant
+
+    def compose(self) -> ComposeResult:
+        yield Container(id="content-host")
+
+    async def on_mount(self) -> None:
+        from aws_tui.domain.emr_cloudwatch_logs import CloudWatchLogStream
+        from aws_tui.domain.emr_serverless import CloudWatchLogConfiguration
+        from aws_tui.vm.emr_serverless.job_run_logs_vm import LogSource, LogSourceState
+
+        vm = self._vm
+        vm.set_target(
+            "app",
+            "run",
+            "s3://bucket/logs" if self._variant == "both" else None,
+            cloudwatch=CloudWatchLogConfiguration(True, "/demo/emr"),
+        )
+        if self._variant == "both":
+            vm.select_source(LogSource.CLOUDWATCH)
+        streams = tuple(
+            CloudWatchLogStream(
+                f"/applications/app/jobs/run/attempts/{i}/SPARK_DRIVER", "SPARK_DRIVER", i
+            )
+            for i in (1, 2)
+        )
+        vm._available_streams = streams
+        vm._current_stream = streams[1]
+        vm._lines = ("ERROR [literal] CloudWatch demo failure",)
+        vm._last_successful_read_at_ms = 100_000
+        vm._last_event_at_ms = 90_000
+        vm._state = LogsState.READY
+        if self._variant == "missing":
+            vm._available_streams = ()
+            vm._current_stream = None
+            vm._lines = ()
+            vm._state = LogsState.NO_FILES
+            vm._cloudwatch_status(LogSourceState.UNAVAILABLE, "not created yet")
+        elif self._variant == "denied":
+            vm._state = LogsState.ERROR
+            vm._error_text = "CloudWatch log access denied"
+            vm._cloudwatch_status(LogSourceState.ACCESS_DENIED)
+        elif self._variant == "follow":
+            vm._following = True
+        host = self.query_one("#content-host", Container)
+        await host.mount(JobRunLogsPane(self._vm, id="logs-pane"))
+
+
+class CompactCloudWatchPageApp(App[None]):
+    """Whole EMR page at 80x24, retaining one visible log body line."""
+
+    def __init__(self, theme: str) -> None:
+        super().__init__()
+        from dataclasses import replace
+
+        from aws_tui.domain.emr_serverless import CloudWatchLogConfiguration
+        from tests.snapshot.apps.emr import _build_page_vm, _seeded_fake
+
+        self.CSS = _load_css(theme)
+        fake = _seeded_fake()
+        fake._details[("00abc", "r-001")] = replace(
+            fake._details[("00abc", "r-001")],
+            cloudwatch_monitoring=CloudWatchLogConfiguration(True, "/demo/emr"),
+        )
+        self._page_vm = _build_page_vm(fake)
+
+    async def on_mount(self) -> None:
+        from aws_tui.domain.emr_cloudwatch_logs import CloudWatchLogStream
+        from aws_tui.ui.widgets.emr_serverless.page import EmrServerlessPage
+
+        await self._page_vm.setup()
+        await self._page_vm.select_job_run("r-001")
+        vm = self._page_vm.job_run_logs
+        stream = CloudWatchLogStream(
+            "/applications/00abc/jobs/r-001/attempts/2/SPARK_DRIVER", "SPARK_DRIVER", 2
+        )
+        vm._available_streams = (stream,)
+        vm._current_stream = stream
+        vm._lines = ("ERROR CloudWatch demo failure",)
+        vm._last_successful_read_at_ms = 100_000
+        vm._last_event_at_ms = 90_000
+        vm._state = LogsState.READY
+        await self.mount(EmrServerlessPage(self._page_vm, hub=self._page_vm.hub))

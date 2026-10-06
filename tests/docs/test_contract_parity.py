@@ -68,6 +68,7 @@ _MODELED_OPERATIONS = {
         "AbortMultipartUpload",
     },
     "sts": {"GetCallerIdentity"},
+    "logs": {"DescribeLogStreams", "FilterLogEvents"},
 }
 
 _OPERATION_SOURCES = {
@@ -76,9 +77,25 @@ _OPERATION_SOURCES = {
     "glue": ("src/aws_tui/domain/glue.py",),
     "s3": ("src/aws_tui/domain/s3_fs.py", "scripts/test-services/s3/seed.py"),
     "sts": ("src/aws_tui/infra/aws_session.py", "src/aws_tui/domain/glue.py"),
+    "logs": ("src/aws_tui/domain/emr_cloudwatch_logs.py",),
 }
 
 _CONSUMED_INPUT_MEMBERS = {
+    ("logs", "DescribeLogStreams"): {
+        "logGroupName",
+        "logStreamNamePrefix",
+        "orderBy",
+        "limit",
+        "nextToken",
+    },
+    ("logs", "FilterLogEvents"): {
+        "logGroupName",
+        "logStreamNames",
+        "startTime",
+        "endTime",
+        "limit",
+        "nextToken",
+    },
     ("athena", "StartQueryExecution"): {
         "QueryString",
         "ClientRequestToken",
@@ -551,3 +568,23 @@ def test_s3_object_details_documented_read_only_contract() -> None:
         "listing hot-path",
     ):
         assert value in ledger
+
+
+def test_cloudwatch_operation_ledger_matches_reader_contract() -> None:
+    ledger = _text("docs/contract-ledger.md")
+    assert (
+        set(_text_ledger_block(ledger, "Exact CloudWatch Logs operation ledger"))
+        == _MODELED_OPERATIONS["logs"]
+    )
+    section = _numbered_section(ledger, "2026-10-06 EMR CloudWatch log reader")
+    for required in (
+        "100 pages",
+        "200 streams",
+        "10,000 events",
+        "8 MiB",
+        "30 seconds",
+        "inclusive",
+        "nextToken",
+        "logStreamNames",
+    ):
+        assert required in section

@@ -287,6 +287,18 @@ ACTION_SPECS: tuple[ActionSpec, ...] = (
         service_ids=frozenset(("emr-serverless",)),
     ),
     ActionSpec(
+        "emr.logs.source",
+        "Choose EMR log source",
+        "EMR Serverless",
+        service_ids=frozenset(("emr-serverless",)),
+    ),
+    ActionSpec(
+        "emr.logs.follow",
+        "Start or stop following CloudWatch logs",
+        "EMR Serverless",
+        service_ids=frozenset(("emr-serverless",)),
+    ),
+    ActionSpec(
         "emr.logs.filter",
         "Filter EMR logs",
         "EMR Serverless",
