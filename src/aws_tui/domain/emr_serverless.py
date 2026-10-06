@@ -145,9 +145,9 @@ def parse_cloudwatch_monitoring(
     monitoring = overrides.get("monitoringConfiguration", {})
     if not isinstance(monitoring, dict):
         return CloudWatchLogConfiguration(None)
-    config = monitoring.get("cloudWatchLoggingConfiguration")
-    if config is None:
+    if "cloudWatchLoggingConfiguration" not in monitoring:
         return None
+    config = monitoring["cloudWatchLoggingConfiguration"]
     if not isinstance(config, dict):
         return CloudWatchLogConfiguration(None)
     enabled = config.get("enabled")

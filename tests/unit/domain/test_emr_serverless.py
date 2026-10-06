@@ -1522,3 +1522,15 @@ async def test_get_job_run_parses_cloudwatch_alongside_s3(config, expected) -> N
     assert detail.configuration_overrides == source["configurationOverrides"]
     monitoring["cloudWatchLoggingConfiguration"] = {"enabled": False}
     assert detail.configuration_overrides != source["configurationOverrides"]
+
+
+async def test_get_job_run_explicit_null_cloudwatch_block_is_unknown_not_absent() -> None:
+    source = _clone_source_response()
+    source["configurationOverrides"]["monitoringConfiguration"][
+        "cloudWatchLoggingConfiguration"
+    ] = None
+    stub = _StubClient()
+    stub.get_job_run.return_value = {"jobRun": source}
+    detail = await EmrServerlessClient(session=_StubSession(stub)).get_job_run("00abc", "jr-source")
+    assert detail.cloudwatch_monitoring is not None
+    assert detail.cloudwatch_monitoring.enabled is None
