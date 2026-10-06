@@ -242,9 +242,13 @@ async def test_source_open_close_reorder_retains_registry_and_vm_children(tmp_pa
     try:
         async with app.run_test() as pilot:
             await pilot.pause()
+            ctx.focus_coordinator.set_focused_slot(FocusSlot.S3_RIGHT)
+            app.set_focus(None)
+            await pilot.pause()
             await pilot.press("ctrl+k")
             await pilot.pause()
             retained = app._discovery_source_ids.copy()
+            assert all(entry_id in ctx.command_palette_vm._items for entry_id in retained.values())
             actions = len(app._actions.known_actions())
             children = tuple(ctx.command_palette_vm._inner_registry)
             for _ in range(3):
@@ -284,12 +288,19 @@ async def test_source_stale_row_refuses_mutated_target_and_reopen_removes_child(
     try:
         async with app.run_test() as pilot:
             await pilot.pause()
+            ctx.focus_coordinator.set_focused_slot(FocusSlot.S3_RIGHT)
+            app.set_focus(None)
+            await pilot.pause()
             monkeypatch.setattr(
                 app, "_make_s3_provider_for_connection", lambda c: calls.append(c) or InMemoryFS()
             )
             await pilot.press("ctrl+k")
             app.screen.query_one(Input).value = "Use exact · us-west-2 for S3"
             await pilot.pause()
+            assert ctx.command_palette_vm.filtered_entries
+            assert (
+                ctx.command_palette_vm.filtered_entries[0].label == "Use exact · us-west-2 for S3"
+            )
             old = ctx.command_palette_vm.filtered_entries[0].id
             child = ctx.command_palette_vm._items[old].inner
             if mutation == "remove":
