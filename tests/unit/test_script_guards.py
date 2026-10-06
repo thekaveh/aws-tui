@@ -215,6 +215,82 @@ exit 0
     assert "run pre-commit install" not in calls.read_text(encoding="utf-8").splitlines()
 
 
+def test_bootstrap_archive_does_not_install_hooks_for_its_parent_repo(tmp_path: Path) -> None:
+    """Git upward discovery must not turn a nested archive into a checkout."""
+    parent = tmp_path / "unrelated-parent"
+    subprocess.run(["git", "init", "-q", str(parent)], check=True, capture_output=True)
+    checkout = parent / "archive"
+    checkout.mkdir()
+    assert not (checkout / ".git").exists()
+    discovered = subprocess.run(
+        ["git", "-C", str(checkout), "rev-parse", "--show-toplevel"],
+        check=True,
+        text=True,
+        capture_output=True,
+    )
+    assert Path(discovered.stdout.strip()).resolve() == parent.resolve()
+    calls = tmp_path / "uv-calls.txt"
+    _fake_uv(
+        tmp_path,
+        version="0.11.19",
+        body=f'printf "%s\\n" "$*" >> "{calls}"\nexit 0\n',
+    )
+
+    result = _bootstrap_in(checkout, path=f"{tmp_path}:{BASE_PATH}")
+
+    assert result.returncode == 0, result.stderr
+    assert "skipping pre-commit hooks" in result.stdout
+    assert calls.read_text(encoding="utf-8").splitlines() == [
+        "python install 3.11",
+        "sync --locked --all-groups",
+    ]
+
+
+def test_bootstrap_installs_hooks_for_its_own_git_directory(tmp_path: Path) -> None:
+    checkout = tmp_path / "checkout"
+    subprocess.run(["git", "init", "-q", str(checkout)], check=True, capture_output=True)
+    assert (checkout / ".git").is_dir()
+    calls = tmp_path / "uv-calls.txt"
+    _fake_uv(
+        tmp_path,
+        version="0.11.19",
+        body=f'printf "%s\\n" "$*" >> "{calls}"\nexit 0\n',
+    )
+
+    result = _bootstrap_in(checkout, path=f"{tmp_path}:{BASE_PATH}")
+
+    assert result.returncode == 0, result.stderr
+    assert "skipping pre-commit hooks" not in result.stdout
+    assert calls.read_text(encoding="utf-8").splitlines() == [
+        "python install 3.11",
+        "sync --locked --all-groups",
+        "run pre-commit install",
+    ]
+
+
+def test_bootstrap_skips_hooks_when_git_is_missing(tmp_path: Path) -> None:
+    checkout = tmp_path / "checkout"
+    subprocess.run(["git", "init", "-q", str(checkout)], check=True, capture_output=True)
+    # Bootstrap still needs dirname and awk; exclude every Git binary from PATH.
+    for command in ("dirname", "awk"):
+        (tmp_path / command).symlink_to(Path("/usr/bin") / command)
+    calls = tmp_path / "uv-calls.txt"
+    _fake_uv(
+        tmp_path,
+        version="0.11.19",
+        body=f'printf "%s\\n" "$*" >> "{calls}"\nexit 0\n',
+    )
+
+    result = _bootstrap_in(checkout, path=str(tmp_path))
+
+    assert result.returncode == 0, result.stderr
+    assert "skipping pre-commit hooks" in result.stdout
+    assert calls.read_text(encoding="utf-8").splitlines() == [
+        "python install 3.11",
+        "sync --locked --all-groups",
+    ]
+
+
 def test_bootstrap_skips_hooks_when_the_git_pointer_dangles(tmp_path: Path) -> None:
     """A `.git` file can exist and still resolve to nothing.
 

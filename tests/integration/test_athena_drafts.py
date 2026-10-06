@@ -115,6 +115,72 @@ def capture_ui(app, label):
         )
 
 
+async def reveal_settings_field(pilot, widget):
+    # Focusing the toggle scrolls it into view; long text above it may then be
+    # clipped by Settings' viewport. Reveal each field and observe its settled
+    # composited frame, just as a reader scrolls through this Settings section.
+    widget.scroll_visible(animate=False, top=True)
+    await pilot.pause()
+
+
+@pytest.mark.parametrize("size", [(80, 24), (120, 40)])
+@pytest.mark.parametrize("deep", [False, True], ids=["ordinary", "deep"])
+async def test_actual_settings_reveals_literal_draft_path_and_full_policy(
+    tmp_path, monkeypatch, size, deep
+):
+    directory = tmp_path / "meaningful  spaces [配置]"
+    if deep:
+        # Fixed continuation text reproduces wrapping independently of pytest's
+        # random temporary directory names, including on shorter system paths.
+        directory /= "meaningful  spaces [配置] " * 4
+        directory /= "directory continuation " * 3
+    async with mounted_draft_app(directory, monkeypatch, size=size) as (
+        app,
+        _ctx,
+        runtime,
+        _store,
+        config,
+        _client,
+        pilot,
+    ):
+        app.action_open_settings()
+        await wait_until(lambda: bool(app.query(SettingsView)), what="Settings mounted")
+        await drain_workers(app)
+        app.focus_active_service_pane()
+        await pilot.pause()
+        await pilot.press("enter")
+        await pilot.pause()
+        await tab_to(pilot, "athena-drafts-toggle")
+        await pilot.press("enter")
+        await drain_workers(app)
+        await pilot.pause()
+        assert runtime.enabled
+        assert config.load().athena_sql_drafts
+        if deep:
+            assert len(str(runtime.directory)) >= 161
+        path_widget = app.query_one("#athena-drafts-path", Static)
+        await reveal_settings_field(pilot, path_widget)
+        assert str(path_widget.content) == str(runtime.directory)
+        expected = Text(str(runtime.directory)).wrap(app.console, path_widget.content_size.width)
+        visible = _visible_wrapped_text(path_widget)
+        assert "".join(row.plain.rstrip(" ") for row in expected) in visible
+        assert "[配置]" in visible
+        assert "athena-drafts" in visible
+        if deep:
+            assert "meaningful  spaces" in visible
+            assert "directory continuation" in visible
+        retention = app.query_one("#athena-drafts-retention", Static)
+        await reveal_settings_field(pilot, retention)
+        expected_retention = Text(str(retention.content)).wrap(
+            app.console, retention.content_size.width
+        )
+        assert "".join(
+            row.plain.rstrip(" ") for row in expected_retention
+        ) in _visible_wrapped_text(retention)
+        assert "SQL is stored as plaintext" in str(retention.content)
+        capture_ui(app, f"settings-readable-{'deep' if deep else 'ordinary'}")
+
+
 @pytest.mark.parametrize("size", [(80, 24), (120, 40)])
 async def test_actual_app_keyboard_enable_save_restore_delete_disable(tmp_path, monkeypatch, size):
     async with mounted_draft_app(tmp_path, monkeypatch, size=size) as (
@@ -140,11 +206,13 @@ async def test_actual_app_keyboard_enable_save_restore_delete_disable(tmp_path, 
         assert runtime.enabled
         assert config.load().athena_sql_drafts
         path_widget = app.query_one("#athena-drafts-path", Static)
+        await reveal_settings_field(pilot, path_widget)
         expected = Text(str(runtime.directory)).wrap(app.console, path_widget.content_size.width)
         assert "".join(row.plain.rstrip(" ") for row in expected) in _visible_wrapped_text(
             path_widget
         )
         retention = app.query_one("#athena-drafts-retention", Static)
+        await reveal_settings_field(pilot, retention)
         expected_retention = Text(str(retention.content)).wrap(
             app.console, retention.content_size.width
         )

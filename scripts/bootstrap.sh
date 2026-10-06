@@ -72,7 +72,7 @@ uv python install 3.11
 echo "==> uv sync --locked --all-groups"
 uv sync --locked --all-groups
 
-# Ask git, rather than testing for a `.git` directory.
+# Require this checkout's own marker, then ask git whether it is valid.
 #
 # `pre-commit install` needs a resolvable git dir and exits non-zero without
 # one, which under `set -e` aborted bootstrap after a successful sync -- that
@@ -84,10 +84,10 @@ uv sync --locked --all-groups
 # `[ -e .git ]` would accept both shapes but also accepts a `.git` file whose
 # pointer DANGLES (an orphaned or moved worktree), where `pre-commit install`
 # still fails and bootstrap would still abort. `git rev-parse --git-dir`
-# answers the question that actually matters -- can a git dir be resolved from
-# here -- and is false for a tarball, a dangling pointer, and a missing git
-# binary alike.
-if git rev-parse --git-dir >/dev/null 2>&1; then
+# checks whether a git dir can be resolved, rejecting a dangling pointer or a
+# missing git binary. Require the local marker as well: otherwise Git walks upwards
+# and mistakes an archive inside an unrelated repository for its checkout.
+if [ -e .git ] && git rev-parse --git-dir >/dev/null 2>&1; then
   echo "==> installing pre-commit hooks"
   uv run pre-commit install
 else
