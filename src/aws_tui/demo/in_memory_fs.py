@@ -22,11 +22,14 @@ from aws_tui.domain.filesystem import (
     FileEntry,
     NotFoundError,
     PathRef,
+    PreviewSourceChangedError,
     ProgressCallback,
     ProviderError,
+    ReadSnapshot,
     StageManifestEntry,
     TransferProgress,
 )
+from aws_tui.domain.preview_limits import PreviewBudget, PreviewRequestKind
 
 # Internal node: bytes = file content, None = directory.
 _Node = bytes | None
@@ -300,6 +303,17 @@ class InMemoryFS:
     # Streaming I/O
     # ------------------------------------------------------------------
 
+    async def open_preview(self, path: PathRef, *, budget: PreviewBudget) -> _MemoryPreviewSession:
+        budget.charge_request(kind=PreviewRequestKind.OPEN)
+        if path not in self._tree:
+            raise NotFoundError(path.as_posix())
+        data = self._tree[path]
+        if data is None:
+            raise ConflictError(f"is a directory: {path.as_posix()}")
+        revision = self._entry_for(path, data).etag
+        assert revision is not None
+        return _MemoryPreviewSession(self, path, data, revision, budget)
+
     async def read_stream(
         self, path: PathRef, *, chunk_size: int = 8 * 1024 * 1024
     ) -> AsyncIterator[bytes]:
@@ -364,6 +378,41 @@ class InMemoryFS:
             raise ProviderError("in-memory object safety limit exceeded")
         if retained_size + object_size > _MAX_STORAGE_BYTES:
             raise ProviderError("in-memory storage safety limit exceeded")
+
+
+class _MemoryPreviewSession:
+    def __init__(
+        self, fs: InMemoryFS, path: PathRef, data: bytes, revision: str, budget: PreviewBudget
+    ) -> None:
+        self.snapshot = ReadSnapshot(len(data), revision)
+        self._fs, self._path, self._data, self._budget = fs, path, data, budget
+        self._closed = False
+
+    def _check(self) -> None:
+        if self._closed:
+            raise ValueError("preview session is closed")
+        self._budget.check()
+        if str(self._fs._revision.get(self._path)) != self.snapshot.revision:
+            raise PreviewSourceChangedError("Preview cancelled: source changed")
+
+    async def read_range(self, offset: int, length: int) -> bytes:
+        self._check()
+        if offset < 0 or length < 0 or offset + length > self.snapshot.size:
+            raise ValueError("preview range outside snapshot")
+        if length == 0:
+            return b""
+        self._budget.charge_request(kind=PreviewRequestKind.RANGE, length=length)
+        return self._data[offset : offset + length]
+
+    async def validate(self) -> None:
+        if self._closed:
+            raise ValueError("preview session is closed")
+        self._budget.charge_request(kind=PreviewRequestKind.VALIDATE)
+        self._check()
+
+    async def aclose(self) -> None:
+        self._closed = True
+        self._data = b""
 
 
 __all__ = ["InMemoryFS"]

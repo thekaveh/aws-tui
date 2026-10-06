@@ -24,7 +24,10 @@ from collections.abc import AsyncIterator, Callable
 from dataclasses import dataclass
 from datetime import datetime
 from enum import StrEnum
-from typing import Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Protocol, runtime_checkable
+
+if TYPE_CHECKING:
+    from aws_tui.domain.preview_limits import PreviewBudget
 
 
 class EntryKind(StrEnum):
@@ -251,6 +254,31 @@ class ProviderError(Exception):
     """Base class for all provider-surfaced errors. Per spec §7.2."""
 
 
+@dataclass(frozen=True, slots=True)
+class ReadSnapshot:
+    """Size and opaque source identity captured at preview open."""
+
+    size: int
+    revision: str
+
+
+class PreviewReadSession(Protocol):
+    snapshot: ReadSnapshot
+
+    async def read_range(self, offset: int, length: int) -> bytes: ...
+    async def validate(self) -> None: ...
+    async def aclose(self) -> None: ...
+
+
+@runtime_checkable
+class BoundedPreviewProvider(Protocol):
+    async def open_preview(self, path: PathRef, *, budget: PreviewBudget) -> PreviewReadSession: ...
+
+
+class PreviewSourceChangedError(ProviderError):
+    """The captured preview source is no longer current."""
+
+
 class NotFoundError(ProviderError):
     """The requested path does not exist."""
 
@@ -299,6 +327,7 @@ __all__ = [
     "AtomicDirectoryPublisher",
     "AtomicNoReplacePublisher",
     "AuthRequiredError",
+    "BoundedPreviewProvider",
     "ConflictError",
     "EntryKind",
     "ExclusiveDirectoryClaimer",
@@ -308,9 +337,12 @@ __all__ = [
     "NotFoundError",
     "PathRef",
     "PermissionDeniedError",
+    "PreviewReadSession",
+    "PreviewSourceChangedError",
     "ProgressCallback",
     "ProviderError",
     "ProviderUnreachableError",
+    "ReadSnapshot",
     "StageManifestEntry",
     "ThrottledError",
     "TransferProgress",
