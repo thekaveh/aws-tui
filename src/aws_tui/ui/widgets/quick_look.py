@@ -216,8 +216,9 @@ class QuickLook(HubSubscriberMixin, DeferredWorkerMixin, ModalScreen[None]):
                 table.add_column(Text(header), width=width, no_wrap=True, overflow="crop")
             table_width = sum(column.width or 0 for column in table.columns) + 3 * len(headers) + 1
             # Padding and borders count too, including sparse rows with wide columns.
+            # Each note character may wrap, plus the note's final newline.
             render_chars = (table_width + 1) * (len(rows) + 4) + sum(
-                len(note) + 1 for note in notes
+                2 * len(note) + 1 for note in notes
             )
             # Zero-width characters add text beyond the terminal-cell rectangle.
             # Wide characters already fit within that conservative estimate.

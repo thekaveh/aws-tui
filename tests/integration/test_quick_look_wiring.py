@@ -546,3 +546,98 @@ async def test_actual_app_unicode_render_budget_and_cached_toggle(
             assert tuple(fs.requests) == before
         assert fs.writes == writes
         assert app._crash_report is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("cell_chars", "structured"),
+    [
+        pytest.param(204, False, id="near-cap-wrapped-notes"),
+        pytest.param(190, True, id="below-cap-wrapped-notes"),
+    ],
+)
+async def test_actual_app_wrapped_notes_render_budget_and_cached_toggle(
+    app_context_factory, cell_chars, structured
+):
+    from rich.console import Console
+    from textual.widgets import Static
+
+    from aws_tui.domain.preview import (
+        PreviewCell,
+        PreviewCellKind,
+        PreviewColumn,
+        PreviewFormat,
+        _bounded_result,
+    )
+    from aws_tui.domain.preview_limits import PREVIEW_MAX_RENDER_CHARS
+    from aws_tui.vm.chrome.quick_look_vm import QuickLookContent
+
+    columns = tuple(PreviewColumn("c") for _ in range(24))
+    rows = tuple(
+        tuple(
+            PreviewCell(
+                "a" + "\u0301" * (cell_chars - 1 + (23 if row < 16 and col == 0 else 0)),
+                PreviewCellKind.SCALAR,
+            )
+            for col in range(24)
+        )
+        for row in range(50)
+    )
+    notes = tuple("n" * 256 for _ in range(50))
+    raw = b"cached-wrapped-notes-raw"
+    result = _bounded_result(PreviewFormat.PARQUET, raw, columns, rows, notes)
+    assert result.format is PreviewFormat.PARQUET
+    assert result.columns == columns
+    assert result.rows == rows
+    assert result.notes == notes
+    loader_calls = 0
+
+    async def loader():
+        nonlocal loader_calls
+        loader_calls += 1
+        return result
+
+    fs = RecordingFS()
+    await fs.write_stream(PathRef(("sample.csv",)), _stream(b"a,b\n1,2\n"))
+    writes = fs.writes
+    ctx = app_context_factory(fs=fs)
+    _inject_connection(ctx)
+    app = AwsTuiApp(ctx)
+    async with app.run_test(size=(120, 40)) as pilot:
+        await _open_file(app, pilot)
+        await wait_until(fs.closed.is_set, what="initial preview session drained")
+        screen = app.screen
+        screen.vm.open_command.execute(
+            QuickLookContent(
+                "notes.parquet", "application/octet-stream", _stream(raw), None, loader
+            )
+        )
+        await wait_until(lambda: screen._result is result, what="wrapped-note result loaded")
+        await pilot.pause()
+        before = tuple(fs.requests)
+        mode = screen.query_one("#quicklook-mode", Static)
+        body = screen.query_one("#quicklook-body", Static)
+        for toggle in range(3):
+            if toggle:
+                await pilot.press("r")
+                await pilot.pause()
+            assert body.size.width > 0
+            console = Console(width=body.size.width, force_terminal=False)
+            with console.capture() as capture:
+                console.print(body.content)
+            rendered = capture.get()
+            assert len(rendered) <= PREVIEW_MAX_RENDER_CHARS
+            if structured and toggle != 1:
+                assert "Structured" in str(mode.render())
+                assert console.width == 97
+                assert rendered.count("n") == 50 * 256
+                assert rendered.endswith("n" * 62 + "\n")
+            else:
+                assert "Raw" in str(mode.render())
+                assert raw.decode() in rendered
+                if not structured and toggle != 1:
+                    assert "Structured output exceeds preview budget" in rendered
+            assert loader_calls == 1
+            assert tuple(fs.requests) == before
+        assert fs.writes == writes
+        assert app._crash_report is None
