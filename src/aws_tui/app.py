@@ -3152,6 +3152,9 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
 
     def action_move_up(self) -> None:
         self.record_action("pane.move_up")
+        if isinstance(self.screen, CommandPalette):
+            self.screen.action_move_up()
+            return
         if len(self.screen_stack) > 1 and isinstance(self.focused, (Input, TextArea)):
             move = getattr(self.focused, "action_cursor_up", None)
             if callable(move):
@@ -3163,6 +3166,9 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
 
     def action_move_down(self) -> None:
         self.record_action("pane.move_down")
+        if isinstance(self.screen, CommandPalette):
+            self.screen.action_move_down()
+            return
         if len(self.screen_stack) > 1 and isinstance(self.focused, (Input, TextArea)):
             move = getattr(self.focused, "action_cursor_down", None)
             if callable(move):

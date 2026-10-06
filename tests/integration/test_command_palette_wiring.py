@@ -751,7 +751,7 @@ async def test_athena_result_palette_labels_show_actual_configured_keys(
 async def test_help_projects_hosted_athena(tmp_path):
     from aws_tui.composition import build_app_context
     from aws_tui.ui.widgets.athena.page import AthenaPage
-    from aws_tui.ui.widgets.help_modal import HelpModal
+    from aws_tui.ui.widgets.help_modal import HelpActionRow, HelpModal
 
     ctx = build_app_context(config_dir=tmp_path, cache_dir=tmp_path, demo=True)
     app = AwsTuiApp(ctx)
@@ -772,6 +772,9 @@ async def test_help_projects_hosted_athena(tmp_path):
             sections = [str(row.content) for row in app.screen.query(".help-section")]
             assert any("Athena" in text and "Loaded Athena" not in text for text in sections)
             assert any("Global" in text for text in sections)
+            ids = {row.action_id for row in app.screen.query(HelpActionRow)}
+            assert "athena.query" in ids
+            assert not {"glue.jobs", "emr.cancel", "athena.cancel", "athena.load_more"} & ids
     finally:
         ctx.root_vm.dispose()
         ctx.log_sink.close()
@@ -791,6 +794,77 @@ async def test_palette_renders_effective_key(app_context_factory):
             row for row in app.screen.query(".palette-item") if "Cycle theme" in str(row.content)
         )
         assert "Ctrl+g" in str(row.content)
+
+
+async def test_hosted_athena_unavailable_commands_are_omitted_from_both_surfaces(tmp_path):
+    from aws_tui.ui.widgets.help_modal import HelpActionRow, HelpModal
+
+    ctx = build_app_context(config_dir=tmp_path, cache_dir=tmp_path, demo=True)
+    app = AwsTuiApp(ctx)
+    try:
+        async with app.run_test(size=(120, 40)) as pilot:
+            await pilot.pause()
+            await _host_demo_service(app, ctx, "athena")
+            page = app.query_one(AthenaPage)
+            page.vm.query.set_sql("")
+            assert not page.vm.query.execute_command.can_execute()
+            await pilot.press("question_mark")
+            await wait_until(lambda: isinstance(app.screen, HelpModal), what="Athena Help opened")
+            help_ids = {row.action_id for row in app.screen.query(HelpActionRow)}
+            unavailable = {
+                "athena.execute",
+                "athena.cancel",
+                "athena.load_more",
+                "glue.jobs",
+                "emr.cancel",
+            }
+            assert not unavailable & help_ids
+            assert all(app._actions.has(action_id) for action_id in help_ids)
+            await pilot.press("escape")
+            await pilot.press("ctrl+k")
+            await wait_until(
+                lambda: isinstance(app.screen, CommandPalette), what="Athena palette opened"
+            )
+            palette_ids = {row.action_id for row in app.screen.query(".palette-item")}
+            assert palette_ids == help_ids
+            assert not unavailable & palette_ids
+            assert all(app._actions.has(action_id) for action_id in palette_ids)
+    finally:
+        ctx.root_vm.dispose()
+        ctx.log_sink.close()
+
+
+async def test_palette_arrows_with_focused_input_select_and_execute_second_match(
+    app_context_factory,
+):
+    from textual.widgets import Input
+
+    ctx = app_context_factory()
+    app = AwsTuiApp(ctx)
+    calls = []
+    app._actions.register("app.cycle_theme", lambda: calls.append("cycle"))
+    app._actions.register("app.themes", lambda: calls.append("picker"))
+    async with app.run_test(size=(80, 24)) as pilot:
+        await pilot.pause()
+        pane = app._focused_file_pane()
+        before = (pane.path, pane.cursor_index, pane.listing_revision)
+        await pilot.press("ctrl+k")
+        await pilot.press(*"theme")
+        await pilot.pause()
+        entries = ctx.command_palette_vm.filtered_entries
+        assert len(entries) == 2
+        assert isinstance(app.focused, Input)
+        await pilot.press("down")
+        await pilot.pause()
+        assert ctx.command_palette_vm.selected_index == 1
+        await pilot.press("up")
+        await pilot.pause()
+        assert ctx.command_palette_vm.selected_index == 0
+        await pilot.press("down", "enter")
+        await wait_until(lambda: bool(calls), what="second palette match invoked")
+        assert calls == ["cycle" if entries[1].id == "app.cycle_theme" else "picker"]
+        assert not isinstance(app.screen, CommandPalette)
+        assert (pane.path, pane.cursor_index, pane.listing_revision) == before
 
 
 @pytest.mark.parametrize("keys", [["ctrl+g", "alt+g"], []])

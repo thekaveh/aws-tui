@@ -167,7 +167,7 @@ CommandPalette .palette-list {
 
 CommandPalette .palette-list > .palette-item {
     color: $text;
-    height: 1;
+    height: auto;
 }
 
 CommandPalette .palette-list > .palette-item.-selected {

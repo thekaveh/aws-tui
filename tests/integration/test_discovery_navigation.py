@@ -18,7 +18,7 @@ from tests.helpers import wait_until
 
 async def _choose(pilot, app, ctx, label, entry_id=None):
     await pilot.press("ctrl+k")
-    app.screen.query_one("#palette-input", Input).value = label
+    await pilot.press(*label)
     await pilot.pause()
     rows = ctx.command_palette_vm.filtered_entries
     assert any(row.id == entry_id if entry_id else row.label == label for row in rows)
@@ -858,6 +858,133 @@ async def test_source_s3_missing_captured_pane_omits_inert_choices(tmp_path):
             ctx.focus_coordinator.set_focused_slot(FocusSlot.S3_RIGHT)
             rows = app._project_discovery_actions(app._capture_discovery_origin())
             assert all(r.available for r in rows if r.id.startswith("source.choice."))
+    finally:
+        ctx.root_vm.dispose()
+        ctx.log_sink.close()
+
+
+@pytest.mark.parametrize("size", [(80, 24), (120, 40)])
+async def test_discovery_overlays_wrap_scroll_and_contain_keyboard(tmp_path, monkeypatch, size):
+    """Inspect real modal rendering, including values longer than the terminal."""
+    import os
+    from xml.etree import ElementTree
+
+    from textual.containers import VerticalScroll
+
+    from aws_tui.infra.keymap_store import KeymapStore
+    from aws_tui.ui.widgets.command_palette import CommandPalette, CommandPaletteItem
+    from aws_tui.ui.widgets.help_modal import HelpActionRow, HelpModal
+    from aws_tui.ui.widgets.pane import Pane
+
+    name = "[bold] literal 雪 " + "configured-source-" * 7 + "END-SOURCE [/]"
+    ctx = build_app_context(config_dir=tmp_path, demo=True, cache_dir=tmp_path / "cache")
+    ctx.keymap_store = KeymapStore(
+        overlay={"app.cycle_theme": ["ctrl+g", "alt+g", "ctrl+shift+g", "alt+shift+g", "f12"]}
+    )
+    monkeypatch.setattr(ctx.connection_resolver, "list", lambda: [_connection(name, "us-west-2")])
+    app = AwsTuiApp(ctx)
+
+    def rendered(scene):
+        svg = app.export_screenshot()
+        if directory := os.environ.get("AWS_TUI_DISCOVERY_RENDER_EVIDENCE"):
+            Path(directory, f"{size[0]}x{size[1]}-{scene}.svg").write_text(svg)
+        tree = ElementTree.fromstring(svg)
+        # Textual's export contains only composited cells. Drop frame/border
+        # segments between wrapped lines, retaining their visible text cells.
+        cells = (
+            node.text
+            for node in tree.iter("{http://www.w3.org/2000/svg}text")
+            if node.text and any(character.isalnum() for character in node.text)
+        )
+        return " ".join(" ".join(cells).split())
+
+    try:
+        async with app.run_test(size=size) as pilot:
+            await pilot.pause()
+            app.query_one("#pane-right", Pane).focus()
+            ctx.focus_coordinator.set_focused_slot(FocusSlot.S3_RIGHT)
+            await pilot.pause()
+            pane = ctx.root_vm.content_host.current.right
+            before = (pane.path, pane.cursor_index, pane.listing_revision)
+            await pilot.press("question_mark")
+            await wait_until(
+                lambda: isinstance(app.screen, HelpModal), what="Help at terminal size"
+            )
+            headings = [str(row.content) for row in app.screen.query(".help-section")]
+            assert "Global — App" in headings
+            assert any(text.startswith("S3 —") for text in headings)
+            rendered("help-top")
+            source = next(
+                row
+                for row in app.screen.query(HelpActionRow)
+                if row.action_id.startswith("source.choice.")
+            )
+            assert source.presentation.label == f"Use {name} · us-west-2 for S3"
+            assert source.render().plain.endswith("us-west-2 for S3")
+            body = app.screen.query_one(VerticalScroll)
+            source.scroll_visible(animate=False, immediate=True)
+            await pilot.pause()
+            help_source = rendered("help-long-source")
+            assert "Unbound Use [bold] literal 雪" in help_source
+            assert "us-west-2 for S3" in help_source
+            await pilot.press(*(["down"] * int(body.max_scroll_y + 2)))
+            await pilot.pause()
+            assert body.scroll_y == body.max_scroll_y
+            diagnostics = rendered("help-diagnostics")
+            assert "Crash directory:" in diagnostics
+            assert "doctor --probe NAME" in diagnostics
+            await pilot.press("escape")
+            await pilot.press("ctrl+k")
+            await pilot.press(*"END-SOURCE")
+            await pilot.pause()
+            assert isinstance(app.focused, Input)
+            row = app.screen.query_one(CommandPaletteItem)
+            assert row.presentation.label == source.presentation.label
+            assert row.render().plain.startswith("Unbound  Use [bold] literal 雪")
+            palette = rendered("palette-long-source")
+            assert "Unbound Use [bold] literal 雪" in palette
+            assert "us-west-2 for S3" in palette, (
+                "source label tail must be visible in the rendered frame"
+            )
+            assert "END-SOURCE" in palette
+            assert row.size.height > 1, "long source label must wrap into readable lines"
+            await pilot.press("escape")
+            assert (pane.path, pane.cursor_index, pane.listing_revision) == before
+            await pilot.press("ctrl+k")
+            await pilot.press(*"Cycle theme")
+            await pilot.pause()
+            keys = rendered("palette-long-keys")
+            assert "Ctrl+Shift+g" in keys
+            assert "Alt+Shift+g" in keys
+            assert "f12" in keys
+            app.screen.query_one(Input).value = ""
+            await pilot.pause()
+            entries = ctx.command_palette_vm.filtered_entries
+            await pilot.press(*(["down"] * (len(entries) - 1)))
+            await pilot.pause()
+            assert ctx.command_palette_vm.selected_index == len(entries) - 1
+            selected = app.screen.query_one(".palette-item.-selected", CommandPaletteItem)
+            assert selected.action_id == entries[-1].id
+            visible = selected.region.intersection(
+                app.screen.query_one("#palette-list").content_region
+            )
+            final = rendered("palette-final-selection")
+            listing = app.screen.query_one("#palette-list")
+            metrics = (
+                selected.region,
+                listing.region,
+                listing.virtual_size,
+                listing.scroll_y,
+                listing.max_scroll_y,
+                listing.styles.overflow_y,
+            )
+            assert visible.height > 0, (
+                f"keyboard selection must scroll the final command into view: {metrics}"
+            )
+            assert "us-west-2 for S3" in final
+            assert (pane.path, pane.cursor_index, pane.listing_revision) == before
+            await pilot.press("escape")
+            assert not isinstance(app.screen, CommandPalette)
     finally:
         ctx.root_vm.dispose()
         ctx.log_sink.close()

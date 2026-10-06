@@ -150,6 +150,25 @@ should populate immediately.
 > `app.swap_source` and cycles resolver order; `Shift+S` is the one-keystroke
 > equivalent. Neither path selects one exact source.
 
+To discover and select an exact source:
+
+1. Press `?` to open Help. Global and active-service sections show available
+   commands with their configured shortcuts; `Unbound` means no shortcut is
+   configured. Press `Esc` to close Help.
+2. Open the palette with `:` or `Ctrl+K`, type **Go to Glue** (or **Go to Athena**,
+   **Go to EMR Serverless**, **Go to S3**, or **Settings**), and press `Enter`.
+   Service choices follow the active connection's supported services; an
+   S3-compatible connection offers S3 and Settings.
+3. Reopen the palette and type a configured connection name or region. Select
+   **Use &lt;name&gt; · &lt;region&gt; for &lt;service&gt;** with the arrow keys, then press
+   `Enter`. For example, **Use prod · us-west-2 for Glue** selects that exact
+   configured source. On S3, focus the pane to change before opening the palette;
+   Athena, Glue and EMR Serverless change the whole page's source.
+
+Names and regions display literally. Unavailable commands are omitted, and
+Settings has no source choices. Opening the palette reads local configuration;
+it performs no remote resource search or extra region enumeration.
+
 ---
 
 ### 1.6. Jump between AWS profiles with one keystroke
