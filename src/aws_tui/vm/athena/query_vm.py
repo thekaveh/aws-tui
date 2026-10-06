@@ -403,8 +403,7 @@ class AthenaQueryVM:
         if prepared is None:
             raise ValueError(_SNAPSHOT_ERROR)
         self._context = prepared.context
-        self._results.set_context(prepared.context)
-        self._results._install_snapshot(prepared.results)
+        self._results._install_snapshot(prepared.results, context=prepared.context)
         self._generation += 1
         self._sql = prepared.sql
         self._validation_error = prepared.validation_error

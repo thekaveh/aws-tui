@@ -430,7 +430,7 @@ class AthenaPage(DeferredWorkerMixin, HubSubscriberMixin, Widget):
         elif self._vm.active_view == "history":
             await self._vm.history.load_more()
         elif self._vm.active_view == "results":
-            await self._vm.results.load_more()
+            self.query_one(AthenaResultsView).dispatch_load_more()
         elif self._vm.active_view == "saved":
             if focused_ids & {
                 "athena-prepared-pane-options",

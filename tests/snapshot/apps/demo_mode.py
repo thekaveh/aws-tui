@@ -12,6 +12,7 @@ from pathlib import Path
 
 from aws_tui.app import AwsTuiApp
 from aws_tui.composition import build_app_context
+from aws_tui.infra.keymap_store import KeymapStore
 
 # Matches a single SVG <rect> element used for background fills in the
 # Rich terminal SVG output.
@@ -72,7 +73,7 @@ def _normalise_svg(svg: str) -> str:
 
 
 class DemoModeApp(AwsTuiApp):
-    def __init__(self, *, theme: str) -> None:
+    def __init__(self, *, theme: str, keymap: KeymapStore | None = None) -> None:
         # snapshot tier reuses the per-theme theme-store: passing
         # the theme via env preserves the existing fixture style.
         tmpdir = Path(tempfile.mkdtemp(prefix="demo-snapshot-"))
@@ -97,6 +98,8 @@ class DemoModeApp(AwsTuiApp):
         # the snapshot harness deterministic across host machines and dates.
         ctx.registry.get("s3")._local_root = local_root  # type: ignore[attr-defined]
         ctx.initial_theme = theme
+        if keymap is not None:
+            ctx.keymap_store = keymap
         super().__init__(context=ctx)
 
     def export_screenshot(  # type: ignore[override]

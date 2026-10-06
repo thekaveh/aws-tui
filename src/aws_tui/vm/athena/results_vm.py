@@ -36,6 +36,7 @@ from aws_tui.vm.athena._pager_compat import (
     SnapshotTokenPager,
     seed_token_pager,
 )
+from aws_tui.vm.athena.result_projection import ResultRow, SortDirection, project_row_indices
 from aws_tui.vm.file_manager.pane_vm import PaneState
 from aws_tui.vm.messages import OpenS3LocationRequest
 from aws_tui.vm.service_diagnostics import report_unexpected_service_error
@@ -53,8 +54,6 @@ _SNAPSHOT_ERROR_STATES = frozenset(
     }
 )
 _MAX_RESULT_ROWS = 10_000
-
-ResultRow = tuple[str | None, ...]
 
 
 @dataclass(frozen=True, slots=True)
@@ -130,6 +129,10 @@ class AthenaResultsVM:
         self._is_loading_more = False
         self._loading_more_worker: _PagerGeneration | None = None
         self._workers: set[_PagerGeneration] = set()
+        self._filter_text = ""
+        self._sort_column: int | None = None
+        self._sort_direction: SortDirection = "ascending"
+        self._selection: tuple[int, int] | None = None
         self._worker = self._make_worker(None, self._generation)
         self._pager = self._worker.pager
 
@@ -149,6 +152,113 @@ class AthenaResultsVM:
     @property
     def rows(self) -> tuple[ResultRow, ...]:
         return tuple(self._pager.items)
+
+    @property
+    def filter_text(self) -> str:
+        return self._filter_text
+
+    @property
+    def sort_column(self) -> int | None:
+        return self._sort_column
+
+    @property
+    def sort_direction(self) -> SortDirection:
+        return self._sort_direction
+
+    @property
+    def visible_row_indices(self) -> tuple[int, ...]:
+        return project_row_indices(
+            self.rows,
+            self._filter_text,
+            self._sort_column,
+            self._sort_direction,
+        )
+
+    @property
+    def visible_rows(self) -> tuple[ResultRow, ...]:
+        rows = self.rows
+        return tuple(rows[index] for index in self.visible_row_indices)
+
+    @property
+    def selection(self) -> tuple[int, int] | None:
+        if self._selection is None or self._disposed or self._shutdown_started:
+            return None
+        row, column = self._selection
+        rows = self.rows
+        if (
+            row not in self.visible_row_indices
+            or not 0 <= row < len(rows)
+            or not 0 <= column < len(rows[row])
+        ):
+            return None
+        return self._selection
+
+    @property
+    def projection_generation(self) -> int:
+        return self._generation
+
+    @property
+    def selected_cell(self) -> str | None:
+        selection = self.selection
+        if selection is None:
+            return None
+        row, column = selection
+        return self.rows[row][column]
+
+    @property
+    def selected_row(self) -> ResultRow | None:
+        selection = self.selection
+        return None if selection is None else self.rows[selection[0]]
+
+    def set_filter(self, text: str) -> None:
+        if self._disposed or self._shutdown_started:
+            return
+        self._filter_text = text
+        self._selection = self.selection
+        self._notify_projection()
+
+    def set_sort(self, column: int | None, direction: SortDirection = "ascending") -> bool:
+        if self._disposed or self._shutdown_started:
+            return False
+        if column is not None and not 0 <= column < len(self._columns):
+            return False
+        self._sort_column = column
+        self._sort_direction = "ascending" if column is None else direction
+        self._selection = self.selection
+        self._notify_projection()
+        return True
+
+    def select_cell(
+        self,
+        visible_row: int,
+        column: int,
+        *,
+        generation: int | None = None,
+    ) -> bool:
+        if (
+            self._disposed
+            or self._shutdown_started
+            or (generation is not None and generation != self._generation)
+        ):
+            return False
+        indices = self.visible_row_indices
+        if not 0 <= visible_row < len(indices) or not 0 <= column < len(self._columns):
+            return False
+        original_row = indices[visible_row]
+        if not 0 <= column < len(self.rows[original_row]):
+            return False
+        self._selection = (original_row, column)
+        self._notify_selection()
+        return True
+
+    def reset_projection(self) -> None:
+        if self._disposed or self._shutdown_started:
+            return
+        self._filter_text = ""
+        self._sort_column = None
+        self._sort_direction = "ascending"
+        self._selection = self.selection
+        self._notify_projection()
 
     @property
     def rendered_rows(self) -> tuple[tuple[RenderedResultCell, ...], ...]:
@@ -288,7 +398,12 @@ class AthenaResultsVM:
         self._install_snapshot(prepared)
         self._notify_snapshot_restored()
 
-    def _install_snapshot(self, snapshot: AthenaResultsSnapshot) -> None:
+    def _install_snapshot(
+        self,
+        snapshot: AthenaResultsSnapshot,
+        *,
+        context: QueryContext | None = None,
+    ) -> None:
         self._generation += 1
         generation = self._generation
         self._execution_id = snapshot.execution_id
@@ -298,6 +413,8 @@ class AthenaResultsVM:
             snapshot.execution_id,
             generation,
         )
+        if context is not None:
+            self._context = context
         worker.columns = snapshot.columns
         seed_token_pager(
             worker.pager,
@@ -310,8 +427,13 @@ class AthenaResultsVM:
         self._is_loading_more = snapshot.is_loading_more
 
     def _notify_snapshot_restored(self) -> None:
-        self._notify_all()
+        # Rows expose the coherent filter/sort/generation reset to existing
+        # subscribers; publish only these new dependencies to keep the shared
+        # snapshot notification batch bounded.
+        self._notify_all(include_projection=False)
         self._notify("is_loading_more")
+        self._notify("visible_rows")
+        self._notify("selection")
 
     @staticmethod
     def snapshot_is_valid(snapshot: object) -> bool:
@@ -419,6 +541,9 @@ class AthenaResultsVM:
         return True
 
     def set_context(self, context: QueryContext) -> None:
+        if self._disposed or self._shutdown_started or context == self._context:
+            return
+        self.clear()
         self._context = context
 
     def clear(self) -> None:
@@ -523,6 +648,7 @@ class AthenaResultsVM:
         self._notify("error_text")
         self._notify("rows")
         self._notify("rendered_rows")
+        self._notify_projection()
         self._notify("has_more")
         self._set_state(PaneState.IDLE if self.rows else PaneState.EMPTY)
 
@@ -601,6 +727,10 @@ class AthenaResultsVM:
         *,
         restored_page: ResultPage | None = None,
     ) -> _PagerGeneration:
+        self._filter_text = ""
+        self._sort_column = None
+        self._sort_direction = "ascending"
+        self._selection = None
         old_worker = self._worker
         self._finish_loading_more(old_worker)
         worker = self._make_worker(
@@ -663,7 +793,7 @@ class AthenaResultsVM:
             and not self._shutdown_started
         )
 
-    def _notify_all(self) -> None:
+    def _notify_all(self, *, include_projection: bool = True) -> None:
         for property_name in (
             "execution_id",
             "columns",
@@ -673,6 +803,25 @@ class AthenaResultsVM:
             "state",
             "error_text",
         ):
+            self._notify(property_name)
+
+        if include_projection:
+            self._notify_projection()
+
+    def _notify_projection(self) -> None:
+        for property_name in (
+            "filter_text",
+            "sort_column",
+            "sort_direction",
+            "visible_row_indices",
+            "visible_rows",
+            "projection_generation",
+        ):
+            self._notify(property_name)
+        self._notify_selection()
+
+    def _notify_selection(self) -> None:
+        for property_name in ("selection", "selected_cell", "selected_row"):
             self._notify(property_name)
 
     def _set_state(self, state: PaneState) -> None:

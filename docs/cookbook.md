@@ -937,6 +937,41 @@ collected by diagnostics. Demo mode does not save local SQL drafts. See
 and permissions, and [Athena](services/athena.md#6-local-sql-draft-recovery) for
 fresh context validation and same-name credential-account limitations.
 
+### 6.7. Inspect, copy, filter, and sort loaded result cells
+
+1. Open Results with `3` after a successful query or a History selection.
+   Use arrow keys to select a row and column, including either column when
+   labels are duplicated. Press Enter or click the current cell to select it,
+   including the first cell or a result containing only one cell.
+2. Press `Alt+Enter` to read the full original value. Scroll the read-only
+   inspector; Escape or Close returns to the same cell if it is still current.
+3. Press `Alt+C` for one cell or `Alt+Shift+C` for a row. The payload is JSON:
+   null is `null`, empty is `""`, and a literal `NULL` string is `"NULL"`.
+   Rows are arrays preserving column order, newlines (escaped in JSON), and
+   readable Unicode. Terminal/platform clipboard delivery can fail; the app's
+   outcome message identifies whether a write was acknowledged.
+4. Press `Alt+F`, type a literal substring, and Apply. Matching ignores case
+   across all loaded cells; null matches `null`. Cancel keeps the old filter;
+   Clear shows all loaded rows. Read visible/loaded counts and `local` in the
+   footer: this is loaded-only scope, even when zero rows match.
+5. On a selected column, press `Alt+S` for ascending, again for descending,
+   and again for loaded order. Strings compare lexically by Unicode value,
+   including numeric-looking text; null stays last and equal values keep
+   loaded order. `Alt+R` clears both filter and sort.
+6. Use **Load more** or `l` explicitly to include another page in the current
+   filter and order. `more available` means unfetched rows may match; `safety
+   limit` means the 10,000-row ceiling prevented further loading. These controls
+   neither rerun SQL nor perform server-side operations or full-result export.
+   Full-execution export is tracked separately in
+   [#254](https://github.com/thekaveh/aws-tui/issues/254).
+
+Changing source/context or replacing/reloading the execution clears these
+transient controls and selection. Filtering a selected row out clears its
+selection; sorting and explicit paging preserve a surviving original cell.
+An open inspector is invalidated when its execution is retired. Help and the
+Athena palette show configured keys; customize the six `athena.*` actions in
+[Keybindings](keybindings.md#110-amazon-athena).
+
 ## 7. Inspect and query Glue tables through Athena
 
 Glue → Athena navigation is an explicit, read-only handoff. It carries the
