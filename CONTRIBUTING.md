@@ -82,6 +82,22 @@ Scopes follow the layer names (`infra`, `domain`, `vm`, `services`, `ui`, `app`,
 - New services go under `src/aws_tui/services/<name>/` and register in `src/aws_tui/composition.py`. See [docs/adding-a-service.md](docs/adding-a-service.md).
 - Adding an AWS API call? Run integration tests against `moto`. For S3-compatible quirks, add a note in [docs/connections.md](docs/connections.md).
 
+### 5.1. Windows unit reliability
+
+The unit workflow retains its manual OS/Python matrix: `macos-14`, `ubuntu-24.04`, and `windows-latest`, each on Python 3.11, 3.12, and 3.13. It uses `fail-fast: false` and sets no explicit `strategy.max-parallel` cap; actual capacity depends on runner availability. No capacity measurement supports a speculative change.
+
+The `PermissionError` in #284 came from the test predicate racing atomic TOML replacement; #284 fixed that Settings polling/read race. The retained Windows Peek failure reached `the first preview scan finished` after the selected table's detail and preview availability waits passed. The old click had no rendered-geometry readiness check. #282 adds display, positive-geometry, and hit-test waits, asserts click delivery, and covers deferred projection with a controlled Pilot regression. Historical click geometry and interleaving were not logged, so the exact cause of that occurrence is not established.
+
+The following consecutive main promotions had all three Windows Python jobs pass on attempt 1:
+
+| Promotion | Main CI run | Windows 3.11 / 3.12 / 3.13 |
+| --- | --- | --- |
+| [#304](https://github.com/thekaveh/aws-tui/pull/304) | [36764453874](https://github.com/thekaveh/aws-tui/actions/runs/36764453874) | pass / pass / pass |
+| [#310](https://github.com/thekaveh/aws-tui/pull/310) | [36807953838](https://github.com/thekaveh/aws-tui/actions/runs/36807953838) | pass / pass / pass |
+| [#315](https://github.com/thekaveh/aws-tui/pull/315) | [37036579717](https://github.com/thekaveh/aws-tui/actions/runs/37036579717) | pass / pass / pass |
+
+The final PR-head push and pull-request runs also passed on attempt 1. These historical results do not establish current Windows or Linux verification or permanent reliability. See [#283](https://github.com/thekaveh/aws-tui/issues/283) for the diagnosis and decision record.
+
 ## 6. Code of conduct
 
 Participation in this project is governed by the [Contributor Covenant Code of Conduct](CODE_OF_CONDUCT.md).
