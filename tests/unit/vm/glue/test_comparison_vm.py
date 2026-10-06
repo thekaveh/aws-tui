@@ -568,3 +568,79 @@ async def test_foreign_selection_rejected_without_provider_or_clock(h) -> None:
     assert h.router.clients["prod"].calls == []
     assert h.clock_calls == []
     await h.vm.shutdown()
+
+
+@pytest.mark.parametrize("remove", [False, True])
+async def test_diagnostic_route_change_cannot_publish_old_provider_failure(h, remove) -> None:
+    from aws_tui.vm.messages import ServiceOperationFailedMessage
+
+    await h.pin("right", ref("r", "dev"))
+    right = h.vm.side("right")
+    published_errors = []
+
+    def change_route(message):
+        if isinstance(message, ServiceOperationFailedMessage):
+            if remove:
+                del h.router.connections["prod"]
+            else:
+                h.router.connections["prod"] = replace(
+                    h.router.connections["prod"], profile="replacement"
+                )
+        else:
+            published_errors.append(h.vm.side("left").error_text)
+
+    sub = h.hub.messages.subscribe(change_route)
+    h.router.clients["prod"].details.append(RuntimeError("old provider failed"))
+    try:
+        await h.pin()
+        state = h.vm.side("left")
+        assert state.state is PaneState.ERROR
+        assert state.error_text == "Source changed; refresh or reselect"
+        assert state.status_text == "Source changed; refresh or reselect"
+        assert state.snapshot is None
+        assert "unexpected error: old provider failed" not in published_errors
+        assert h.vm.side("right") == right
+        assert h.clock_calls == [NOW]
+    finally:
+        sub.dispose()
+        await h.vm.shutdown()
+
+
+@pytest.mark.parametrize("transition", ["selection", "close"])
+async def test_diagnostic_reentry_preserves_revision_and_close_guards(h, transition) -> None:
+    from aws_tui.vm.messages import ServiceOperationFailedMessage
+
+    terminal = []
+
+    def reenter(message):
+        if isinstance(message, ServiceOperationFailedMessage):
+            if transition == "close":
+                h.vm.close()
+            else:
+                h.vm.choose_table("left", ref("replacement"))
+            terminal.append(h.vm.side("left"))
+
+    sub = h.hub.messages.subscribe(reenter)
+    h.router.clients["prod"].details.append(RuntimeError("old provider failed"))
+    try:
+        await h.pin()
+        assert h.vm.side("left") == terminal[0]
+        assert h.vm.side("left").error_text is None
+        assert h.clock_calls == []
+    finally:
+        sub.dispose()
+        await h.vm.shutdown()
+
+
+async def test_resolve_failure_without_captured_route_is_still_reported(h) -> None:
+    del h.router.connections["prod"]
+    try:
+        await h.pin()
+        assert h.vm.side("left").state is PaneState.ERROR
+        assert h.vm.side("left").status_text == "Fetch failed"
+        assert h.vm.side("left").error_text is not None
+        assert h.vm.side("left").snapshot is None
+        assert h.router.clients["prod"].calls == []
+        assert h.clock_calls == []
+    finally:
+        await h.vm.shutdown()

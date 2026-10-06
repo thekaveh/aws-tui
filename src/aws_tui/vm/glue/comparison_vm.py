@@ -340,7 +340,7 @@ class GlueComparisonVM:
             raise
         except Exception as exc:
             if self._accept(side, revision, route):
-                self._fail(side, exc, name)
+                self._fail(side, exc, name, revision=revision, route=route)
             return None
         return result if self._accept(side, revision, route) else None
 
@@ -368,6 +368,8 @@ class GlueComparisonVM:
                     side,
                     ValidationError("comparison table response identity is invalid"),
                     "get_table",
+                    revision=revision,
+                    route=route,
                 )
                 return
             snapshot = TableSnapshot(ref, detail, self._clock())
@@ -445,6 +447,8 @@ class GlueComparisonVM:
                 side,
                 ValidationError("comparison discovery response identity is invalid"),
                 f"list_{kind}",
+                revision=revision,
+                route=route,
             )
             return
         existing = record.state.databases if kind == "databases" else record.state.tables
@@ -509,11 +513,20 @@ class GlueComparisonVM:
             and row.ref.database == database
         )
 
-    def _fail(self, side: Side, error: Exception, operation: str) -> None:
-        if self._closed:
-            return
+    def _fail(
+        self,
+        side: Side,
+        error: Exception,
+        operation: str,
+        *,
+        revision: int | None = None,
+        route: ResolvedSource | None = None,
+    ) -> None:
         record = self._sides[side]
-        revision = record.state.revision
+        revision = record.state.revision if revision is None else revision
+        route = record.route if route is None else route
+        if self._closed or record.state.revision != revision:
+            return
         if isinstance(error, ProviderError):
             state, text = map_provider_error(error)
         else:
@@ -522,6 +535,11 @@ class GlueComparisonVM:
                 self._hub, service="glue", operation=operation, error=error
             )
         if self._closed or record.state.revision != revision:
+            return
+        # Diagnostics notify synchronous subscribers, which may replace/remove
+        # configuration without advancing this side's selection revision.
+        # Source resolution failures intentionally have no route to validate.
+        if route is not None and not self._accept(side, revision, route):
             return
         record.state = replace(
             record.state,
