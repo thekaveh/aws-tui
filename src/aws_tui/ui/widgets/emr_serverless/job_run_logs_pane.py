@@ -60,6 +60,17 @@ def _match_label(vm: JobRunLogsVM) -> str:
     return f"{shown} matches"
 
 
+def _format_cloudwatch_stream_label(name: str, vm: JobRunLogsVM) -> str:
+    """Keep the full suffix after the classified run root, outside the literal prefix."""
+    configuration = vm.cloudwatch_configuration
+    remaining = name
+    if configuration is not None and configuration.log_stream_name_prefix is not None:
+        remaining = name.removeprefix(configuration.log_stream_name_prefix)
+    root = f"/applications/{vm.application_id}/jobs/{vm.job_run_id}/"
+    _, boundary, suffix = f"/{remaining.lstrip('/')}".partition(root)
+    return suffix if boundary else name
+
+
 class JobRunLogsPane(Widget, can_focus=True):
     DEFAULT_CSS: ClassVar[str] = """
     JobRunLogsPane {
@@ -392,7 +403,7 @@ class JobRunLogsPane(Widget, can_focus=True):
         chip_row.remove_children()
         if self._vm.selected_source is LogSource.CLOUDWATCH:
             for stream in self._vm.available_streams:
-                suffix = stream.name.rsplit("/jobs/", 1)[-1].split("/", 1)[-1]
+                suffix = _format_cloudwatch_stream_label(stream.name, self._vm)
                 classes = "logs-chip -active" if stream == self._vm.current_stream else "logs-chip"
                 chip = _LogFileChip(suffix, key=f"stream:{stream.name}", classes=classes)
                 chip_row.mount(chip)

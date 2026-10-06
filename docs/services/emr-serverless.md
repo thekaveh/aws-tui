@@ -98,8 +98,10 @@ not provide an atomic AWS snapshot. The status shows Following/Stopped, last
 successful check time and latest event time; an empty successful poll advances
 the check time. Failures retain the last complete body and stop follow.
 
-Changing connection, application, run, source, stream or monitoring identity
-stops the old read/follow operation and drains it before replacement. Credential
+Changing application, run, source, stream or monitoring identity immediately
+invalidates old read/follow results and requests cancellation. Late results
+cannot update the new target; owned work is durably drained at lifecycle teardown
+and connection replacement. Credential
 recovery restores the exact source/group/stream and filter with one fresh
 uncached read. Missing streams or changed monitoring identity reject the
 candidate; no default stream is substituted and following stays stopped.
