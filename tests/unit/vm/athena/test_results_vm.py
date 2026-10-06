@@ -785,3 +785,266 @@ def _page(
     next_token: str | None = None,
 ) -> ResultPage:
     return ResultPage(tuple(columns), tuple(rows), next_token)
+
+
+@pytest.mark.asyncio
+async def test_loaded_projection_preserves_snapshot_pager_and_original_selection() -> None:
+    duplicate = replace(_VALUE, name="duplicate")
+    original = (("z", "keep\n[bold]雪[/bold]"), ("a", None), ("b", "keep"))
+    client = ResultClient(
+        {
+            ("q-1", None): ResultPage((duplicate, duplicate), original, "next"),
+            ("q-1", "next"): ResultPage((duplicate, duplicate), (("0", "keep"),), None),
+        }
+    )
+    vm = make_results_vm(client)
+    await vm.load("q-1")
+    snapshot = vm.export_snapshot()
+    generation = vm.projection_generation
+    assert vm.selection is None
+    assert vm.selected_cell is None
+    assert vm.selected_row is None
+    assert vm.select_cell(0, 1, generation=generation)
+
+    vm.set_filter("KEEP")
+    assert vm.set_sort(0)
+
+    assert vm.visible_row_indices == (2, 0)
+    assert vm.visible_rows == (original[2], original[0])
+    assert vm.selection == (0, 1)
+    assert vm.selected_cell == "keep\n[bold]雪[/bold]"
+    assert vm.selected_row == original[0]
+    assert vm.rows == original
+    assert vm.export_snapshot() == snapshot
+    assert vm.has_more
+    assert vm.projection_generation == generation
+    assert client.calls == [("q-1", None)]
+
+    await vm.load_more()
+
+    assert vm.rows == (*original, ("0", "keep"))
+    assert vm.visible_row_indices == (3, 2, 0)
+    assert vm.selection == (0, 1)
+    assert vm.selected_cell == original[0][1]
+    assert vm.projection_generation == generation
+    assert not vm.has_more
+    assert client.calls == [("q-1", None), ("q-1", "next")]
+
+    assert vm.select_cell(0, 1)
+    assert vm.selection == (3, 1)
+    assert vm.set_sort(1, "descending")
+    assert vm.selection == (3, 1)
+    vm.reset_projection()
+    assert vm.filter_text == ""
+    assert vm.sort_column is None
+    assert vm.sort_direction == "ascending"
+    assert vm.visible_row_indices == (0, 1, 2, 3)
+    assert vm.selection == (3, 1)
+    assert client.calls == [("q-1", None), ("q-1", "next")]
+
+
+@pytest.mark.asyncio
+async def test_projection_hidden_selection_and_zero_matches_do_not_select_stale_cells() -> None:
+    client = ResultClient({("q-1", None): ResultPage((_ID,), ((None,), ("",), ("NULL",)), None)})
+    vm = make_results_vm(client)
+    await vm.load("q-1")
+    assert vm.select_cell(0, 0)
+    assert vm.selection == (0, 0)
+    assert vm.selected_cell is None
+    assert vm.selected_row == (None,)
+    assert vm.select_cell(1, 0)
+    assert vm.selected_cell == ""
+    vm.set_filter("null")
+    assert vm.selection is None
+    assert vm.selected_cell is None
+    assert vm.selected_row is None
+    assert vm.visible_row_indices == (0, 2)
+    vm.set_filter("missing")
+    assert vm.visible_rows == ()
+    assert not vm.select_cell(0, 0)
+    assert vm.selection is None
+    vm.reset_projection()
+    assert vm.visible_rows == vm.rows
+    assert vm.selection is None
+
+
+@pytest.mark.asyncio
+async def test_projection_rejects_invalid_columns_coordinates_and_retired_generation() -> None:
+    client = ResultClient({("q-1", None): ResultPage((_ID,), (("one",),), None)})
+    vm = make_results_vm(client)
+    assert not vm.select_cell(0, 0)
+    assert not vm.set_sort(0)
+    await vm.load("q-1")
+    generation = vm.projection_generation
+    vm.set_filter("one")
+    assert vm.set_sort(0, "descending")
+    assert vm.select_cell(0, 0)
+    for row, column in ((-1, 0), (1, 0), (0, -1), (0, 1)):
+        assert not vm.select_cell(row, column)
+    assert not vm.select_cell(0, 0, generation=generation - 1)
+    assert vm.selection == (0, 0)
+    for column in (-1, 1):
+        assert not vm.set_sort(column)
+        assert vm.sort_column == 0
+        assert vm.sort_direction == "descending"
+        assert vm.selection == (0, 0)
+    assert vm.set_sort(None, "descending")
+    assert vm.sort_column is None
+    assert vm.sort_direction == "ascending"
+    assert vm.filter_text == "one"
+    assert vm.visible_row_indices == (0,)
+
+
+@pytest.mark.asyncio
+async def test_projection_mutation_notifications_are_value_free(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    marker = "PROJECTION_PRIVATE_VALUE"
+    client = ResultClient({("q-1", None): ResultPage((_ID,), ((marker,), ("other",)), None)})
+    vm = make_results_vm(client)
+    await vm.load("q-1")
+    notifications: list[str] = []
+    subscription = vm.on_property_changed.subscribe(notifications.append)
+    vm.select_cell(0, 0)
+    vm.set_filter(marker)
+    vm.set_sort(0, "descending")
+    vm.reset_projection()
+    assert {
+        "filter_text",
+        "sort_column",
+        "sort_direction",
+        "visible_row_indices",
+        "visible_rows",
+        "selection",
+        "selected_cell",
+        "selected_row",
+    } <= set(notifications)
+    assert marker not in repr(notifications)
+    assert marker not in repr(vm)
+    assert marker not in repr(vm.export_snapshot())
+    assert marker not in caplog.text
+    subscription.dispose()
+
+
+@pytest.mark.asyncio
+async def test_projection_same_context_preserves_state_and_snapshot_restore_resets_without_fetch() -> (
+    None
+):
+    client = ResultClient({("q-1", None): ResultPage((_ID,), (("one",),), "next")})
+    vm = make_results_vm(client)
+    await vm.load("q-1")
+    snapshot = vm.export_snapshot()
+    generation = vm.projection_generation
+    vm.select_cell(0, 0)
+    vm.set_filter("one")
+    vm.set_sort(0, "descending")
+    vm.set_context(replace(_CONTEXT))
+    assert vm.projection_generation == generation
+    assert vm.selection == (0, 0)
+    assert vm.filter_text == "one"
+    assert vm.sort_column == 0
+    assert vm.sort_direction == "descending"
+
+    await vm.restore_snapshot(snapshot)
+
+    assert vm.projection_generation > generation
+    assert vm.selection is None
+    assert vm.filter_text == ""
+    assert vm.sort_column is None
+    assert vm.sort_direction == "ascending"
+    assert vm.export_snapshot() == snapshot
+    assert not vm.select_cell(0, 0, generation=generation)
+    assert client.calls == [("q-1", None)]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("transition", ["reload", "clear", "context", "shutdown", "dispose"])
+async def test_projection_lifecycle_resets_all_transient_state(transition: str) -> None:
+    client = ResultClient({("q-1", None): ResultPage((_ID,), (("one",),), "next")})
+    vm = make_results_vm(client)
+    await vm.load("q-1")
+    generation = vm.projection_generation
+    vm.select_cell(0, 0)
+    vm.set_filter("one")
+    vm.set_sort(0, "descending")
+    if transition == "reload":
+        await vm.load("q-1")
+    elif transition == "clear":
+        vm.clear()
+    elif transition == "context":
+        vm.set_context(replace(_CONTEXT, region="us-west-2"))
+    elif transition == "shutdown":
+        await vm.shutdown()
+    else:
+        vm.dispose()
+    assert vm.projection_generation > generation
+    assert vm.filter_text == ""
+    assert vm.sort_column is None
+    assert vm.sort_direction == "ascending"
+    assert vm.selection is None
+    assert vm.selected_cell is None
+    assert vm.selected_row is None
+    assert not vm.select_cell(0, 0, generation=generation)
+    if transition != "reload":
+        assert vm.execution_id is None
+        assert vm.rows == ()
+        assert not vm.has_more
+        assert not vm.load_more_command.can_execute()
+        assert vm.visible_rows == ()
+    if transition in {"shutdown", "dispose"}:
+        vm.set_filter("late")
+        assert not vm.set_sort(0)
+        assert vm.filter_text == ""
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("transition", ["execution", "context"])
+async def test_projection_retired_continuation_cannot_restore_values_or_selection(
+    transition: str,
+) -> None:
+    client = ResultClient(
+        {
+            ("q-old", None): ResultPage((_ID,), (("old-first",),), "old-next"),
+            ("q-old", "old-next"): ResultPage((_ID,), (("retired-late",),), None),
+            ("q-new", None): ResultPage((_VALUE,), (("new",),), None),
+        }
+    )
+    vm = make_results_vm(client)
+    await vm.load("q-old")
+    vm.select_cell(0, 0)
+    vm.set_filter("old")
+    vm.set_sort(0, "descending")
+    old_generation = vm.projection_generation
+    client.blocked_request = ("q-old", "old-next")
+    client.ignore_cancellation = True
+    loading = asyncio.create_task(vm.load_more())
+    await client.fetch_started.wait()
+    try:
+        if transition == "context":
+            vm.set_context(replace(_CONTEXT, region="us-west-2"))
+            assert vm.execution_id is None
+            assert vm.rows == ()
+            assert not vm.has_more
+            assert not vm.is_loading_more
+        else:
+            await vm.load("q-new")
+        assert vm.projection_generation > old_generation
+        assert vm.filter_text == ""
+        assert vm.sort_column is None
+        assert vm.sort_direction == "ascending"
+        assert vm.selection is None
+        assert not vm.select_cell(0, 0, generation=old_generation)
+        if transition == "context":
+            await vm.load("q-new")
+        assert vm.select_cell(0, 0)
+        new_generation = vm.projection_generation
+    finally:
+        client.release_fetch.set()
+        await loading
+    assert vm.execution_id == "q-new"
+    assert vm.rows == (("new",),)
+    assert vm.visible_rows == (("new",),)
+    assert vm.projection_generation == new_generation
+    assert vm.selection == (0, 0)
+    assert vm.selected_cell == "new"
+    assert client.calls == [("q-old", None), ("q-old", "old-next"), ("q-new", None)]

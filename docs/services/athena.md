@@ -116,3 +116,47 @@ running recovered SQL. Completed autosaves can be recovered after an abrupt
 exit; pending or failed edits are not guaranteed to be recoverable. Follow the
 [keyboard recovery recipe](../cookbook.md#66-save-and-recover-local-sql-drafts)
 for restart and shutdown details.
+
+## 7. Inspect and control loaded results
+
+On Results, arrow keys select individual cells. Press Enter or click the current
+cell to select it, including the first cell or a result containing only one cell.
+`Alt+Enter` opens the complete
+original value in a read-only, scrollable inspector. Escape or Close returns
+to the same original row and column when that execution and cell remain
+available. Null and empty strings have explicit status. Enter in the inspector
+does not execute SQL.
+
+`Alt+C` copies the selected cell as JSON; `Alt+Shift+C` copies its row as a
+JSON array in column order. Null becomes `null`, an empty string becomes `""`,
+and the literal string `NULL` becomes `"NULL"`. JSON escapes newlines and quotes;
+Unicode remains readable. Duplicate column labels remain separate array
+positions. Copy uses original values, including complete multiline strings.
+Clipboard delivery depends on the terminal and platform clipboard helper; a
+failed or unacknowledged terminal write is not a confirmed native copy. Check
+the app's clipboard outcome message.
+
+`Alt+F` opens a literal, case-insensitive substring filter across every cell
+of the loaded rows. Null is searchable as `null`. Apply changes the filter,
+Cancel leaves it unchanged, and Clear restores all loaded rows. A zero-match
+filter still reports visible and loaded counts and whether more rows are
+available. The footer's `local` scope means loaded rows only.
+
+`Alt+S` cycles the selected column through ascending, descending, and original
+loaded order. Sorting compares Unicode strings lexically, without converting
+numeric-looking text; null stays last in both directions and ties retain
+loaded order. `Alt+R` clears both the local filter and sort. Filtering a selected
+row out clears its selection; sorting preserves a surviving original cell.
+
+Only explicit **Load more** or `l` fetches the next page. New rows enter the
+current filter and order. The 10,000-row safety ceiling can leave unfetched
+results: `more available` and `safety limit` are scope warnings, including when
+no loaded rows match. Local controls never rewrite or rerun SQL or fetch all
+pages. Source/context changes, execution replacement or reload, and page
+shutdown reset selection, filter, and sort and invalidate an open inspector.
+These settings are transient. Full-execution export is separate scope in
+[#254](https://github.com/thekaveh/aws-tui/issues/254).
+
+These six actions can be remapped in `[keybindings]`; Help and the Athena
+command palette display their actual configured keys. They apply to the
+current Results view and yield while typing in an editor or modal.

@@ -127,6 +127,23 @@ class HelpModal(ModalScreen[None]):
                 yield self._action_row("pane.fuzzy_find", "find and select a loaded entry")
                 yield self._key_row("Palette", "Sort loaded entries / Clear pane filter")
 
+                yield Static("Loaded Athena results", classes="help-section")
+                yield self._action_row(
+                    "athena.inspect_cell", "inspect the complete loaded Athena cell"
+                )
+                yield self._action_row(
+                    "athena.copy_cell", "copy original loaded Athena cell as JSON"
+                )
+                yield self._action_row("athena.copy_row", "copy original loaded Athena row as JSON")
+                yield self._action_row("athena.filter_results", "filter loaded Athena rows only")
+                yield self._action_row(
+                    "athena.sort_results",
+                    "sort loaded Athena column; ascending / descending / reset",
+                )
+                yield self._action_row(
+                    "athena.reset_results", "clear loaded Athena filter and sort"
+                )
+
                 yield Static("Mouse / Trackpad", classes="help-section")
                 yield self._key_row("Click pane", "switch focus to it")
                 yield self._key_row("Click row", "move cursor")

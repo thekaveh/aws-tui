@@ -202,6 +202,8 @@ class BindingResolver:
                         "pane.toggle_select",
                         "auth.authenticate",
                         "pane.select_all",
+                        "glue.load_more",
+                        "athena.load_more",
                     }
                     else f"dispatch({action_id!r})"
                 )
