@@ -72,12 +72,12 @@ _ATHENA = {
     "Load more Athena rows",
     "Open Athena result in S3",
     "Open query table in Glue",
-    "Inspect Athena cell",
-    "Copy Athena cell as JSON",
-    "Copy Athena row as JSON",
-    "Filter loaded Athena results",
-    "Sort loaded Athena results",
-    "Reset loaded Athena results",
+    "Inspect Athena cell (alt+enter)",
+    "Copy Athena cell as JSON (alt+c)",
+    "Copy Athena row as JSON (alt+shift+c)",
+    "Filter loaded Athena results (alt+f)",
+    "Sort loaded Athena results (alt+s)",
+    "Reset loaded Athena results (alt+r)",
 }
 
 
@@ -696,3 +696,44 @@ async def test_athena_result_control_configured_key_dispatch_replaces_default(ap
         assert calls == []
         await pilot.press("ctrl+g")
         assert calls == ["copy"]
+
+
+@pytest.mark.parametrize("remapped", [False, True])
+async def test_athena_result_palette_labels_show_actual_configured_keys(
+    app_context_factory, remapped
+):
+    from aws_tui.infra.keymap_store import KeymapStore
+
+    labels = {
+        "athena.inspect_cell": "Inspect Athena cell",
+        "athena.copy_cell": "Copy Athena cell as JSON",
+        "athena.copy_row": "Copy Athena row as JSON",
+        "athena.filter_results": "Filter loaded Athena results",
+        "athena.sort_results": "Sort loaded Athena results",
+        "athena.reset_results": "Reset loaded Athena results",
+    }
+    ctx = app_context_factory()
+    if remapped:
+        ctx.keymap_store = KeymapStore(
+            overlay={
+                "athena.inspect_cell": "ctrl+shift+i",
+                "athena.copy_cell": ["ctrl+g", "alt+g"],
+                "athena.copy_row": "alt+shift+x",
+                "athena.filter_results": "alt+d",
+                "athena.sort_results": "alt+n",
+                "athena.reset_results": "alt+z",
+            }
+        )
+    app = AwsTuiApp(ctx)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        app._populate_command_palette()
+        palette = ctx.command_palette_vm
+        palette.set_active_service("athena")
+        actual = {entry.id: entry.label for entry in palette.filtered_entries}
+        for action, label in labels.items():
+            keys = " / ".join(ctx.keymap_store.resolve(action))
+            assert actual[action] == f"{label} ({keys})"
+        assert actual["athena.query"] == "Athena query"
+        palette.set_active_service("s3")
+        assert not set(labels) & {entry.id for entry in palette.filtered_entries}

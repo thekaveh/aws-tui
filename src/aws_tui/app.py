@@ -201,6 +201,16 @@ class _ThemeApplyFailure:
 _SOURCE_SERVICE_IDS = frozenset({"s3", "emr-serverless", "glue", "athena"})
 _GLUE_SERVICE_IDS = frozenset({"glue"})
 _ATHENA_SERVICE_IDS = frozenset({"athena"})
+_ATHENA_RESULT_ACTIONS = frozenset(
+    {
+        "athena.inspect_cell",
+        "athena.copy_cell",
+        "athena.copy_row",
+        "athena.filter_results",
+        "athena.sort_results",
+        "athena.reset_results",
+    }
+)
 # The dual-pane file manager, and therefore every ``pane.*`` action that
 # resolves through ``_focused_file_pane()``. Only ``S3Service`` builds a
 # ``DualPaneVM`` (``services/s3/service.py``); EMR, Glue and Athena host page
@@ -2490,6 +2500,9 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
             return
         vm = self._app_ctx.command_palette_vm
         for entry in _PALETTE_COMMANDS:
+            if entry.id in _ATHENA_RESULT_ACTIONS:
+                keys = " / ".join(self._app_ctx.keymap_store.resolve(entry.id))
+                entry = replace(entry, label=f"{entry.label} ({keys})")
             vm.register_entry(
                 entry,
                 # PaletteVM invokes before CommandPalette dismisses its screen.
@@ -2500,17 +2513,12 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
                 else partial(self._schedule_palette_selection, entry.id)
                 if entry.id
                 in _PANE_SELECTION_ACTIONS
+                | _ATHENA_RESULT_ACTIONS
                 | {
                     "pane.filter",
                     "pane.fuzzy_find",
                     "pane.sort",
                     "pane.clear_filter",
-                    "athena.inspect_cell",
-                    "athena.copy_cell",
-                    "athena.copy_row",
-                    "athena.filter_results",
-                    "athena.sort_results",
-                    "athena.reset_results",
                 }
                 else partial(self._actions.invoke, entry.id),
             )
