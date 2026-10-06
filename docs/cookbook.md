@@ -941,7 +941,8 @@ fresh context validation and same-name credential-account limitations.
 
 1. Open Results with `3` after a successful query or a History selection.
    Use arrow keys to select a row and column, including either column when
-   labels are duplicated.
+   labels are duplicated. Press Enter or click the current cell to select it,
+   including the first cell or a result containing only one cell.
 2. Press `Alt+Enter` to read the full original value. Scroll the read-only
    inspector; Escape or Close returns to the same cell if it is still current.
 3. Press `Alt+C` for one cell or `Alt+Shift+C` for a row. The payload is JSON:

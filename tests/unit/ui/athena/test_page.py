@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from collections.abc import Callable
 
 import pytest
@@ -2183,3 +2184,227 @@ async def test_result_refresh_recovers_after_real_control_replacement(control):
             view.query_one("#athena-results-footer", Static).content
             == "3 visible / 3 loaded · local · more available"
         )
+
+
+@pytest.mark.parametrize("gesture", ["enter", "click"])
+@pytest.mark.parametrize("value", [None, "", "[bold]é[/bold]\noriginal string"])
+async def test_explicit_current_sole_result_cell_admits_original_selection(gesture, value):
+    client = PageClient()
+    calls = []
+
+    async def results(execution_id, *, start_token=None):
+        calls.append((execution_id, start_token))
+        return ResultPage((ResultColumn("one", "varchar", "NULLABLE"),), ((value,),), None)
+
+    client.get_results_page = results
+    vm, _ = _build_vm(client)
+    await vm.setup()
+    await vm.results.load("sole")
+    await vm.select_view("results")
+    app = _AthenaApp(vm)
+    copies = []
+    app.copy_value = lambda payload, label: copies.append(payload)
+    async with app.run_test(size=(80, 24)) as pilot:
+        await pilot.pause()
+        table = app.query_one(DataTable)
+        view = app.query_one(AthenaResultsView)
+        await focus_and_settle(table)
+        assert table.row_count == len(table.columns) == 1
+        assert vm.results.selection is None
+        view.action_copy_cell()
+        view.action_inspect_cell()
+        assert copies == []
+        assert len(app.screen_stack) == 1
+        await pilot.press("right", "down", "left", "up")
+        assert vm.results.selection is None
+        if gesture == "enter":
+            await pilot.press("enter")
+        else:
+            assert await pilot.click(table, offset=(2, 2))
+        await pilot.pause()
+        assert vm.results.selection == (0, 0)
+        view.action_copy_cell()
+        view.action_copy_row()
+        assert copies == [
+            json.dumps(value, ensure_ascii=False),
+            json.dumps([value], ensure_ascii=False, separators=(",", ":")),
+        ]
+        view.action_inspect_cell()
+        await pilot.pause()
+        assert app.screen.query_one(TextArea).text == ("" if value is None else value)
+        await pilot.press("escape")
+        await pilot.pause()
+        assert table.has_focus
+        assert (table.cursor_row, table.cursor_column) == (0, 0)
+        assert vm.results.selection == (0, 0)
+        assert calls == [("sole", None)]
+
+
+@pytest.mark.parametrize("gesture", ["enter", "click"])
+async def test_explicit_first_result_cell_after_filter_and_reset_uses_original_ordinal(gesture):
+    vm, calls = await _loaded_result_controls_vm()
+    app = _AthenaApp(vm)
+    copies = []
+    app.copy_value = lambda value, label: copies.append(value)
+    async with app.run_test(size=(80, 24)) as pilot:
+        await pilot.pause()
+        table = app.query_one(DataTable)
+        view = app.query_one(AthenaResultsView)
+        await focus_and_settle(table)
+        assert vm.results.selection is None
+        for filter_text, ordinal, expected in (("", 0, "null"), ("tail", 2, '"2"')):
+            vm.results.set_filter("no matching cells")
+            await pilot.pause()
+            assert table.row_count == 0
+            await pilot.press("enter")
+            assert vm.results.selection is None
+            if filter_text:
+                vm.results.set_filter(filter_text)
+            else:
+                view.action_reset_results()
+            await pilot.pause()
+            assert vm.results.selection is None
+            assert (table.cursor_row, table.cursor_column) == (0, 0)
+            if gesture == "enter":
+                await pilot.press("enter")
+            else:
+                assert await pilot.click(table, offset=(2, 2))
+            await pilot.pause()
+            assert vm.results.selection == (ordinal, 0)
+            view.action_copy_cell()
+            assert copies[-1] == expected
+            view.action_inspect_cell()
+            await pilot.pause()
+            assert app.screen.query_one(TextArea).text == ("" if ordinal == 0 else "2")
+            await pilot.press("escape")
+            await pilot.pause()
+            assert table.has_focus
+            assert vm.results.selection == (ordinal, 0)
+            assert (table.cursor_row, table.cursor_column) == (0, 0)
+        assert calls == [("controls", None)]
+
+
+@pytest.mark.parametrize("retirement", ["revision", "generation", "table", "footer"])
+async def test_stamped_selected_result_event_cannot_reselect_retired_data(retirement, monkeypatch):
+    vm, _ = await _loaded_result_controls_vm()
+    app = _AthenaApp(vm)
+    selected = []
+    post = DataTable.post_message
+
+    def capture(table, message):
+        if isinstance(message, DataTable.CellSelected):
+            selected.append(message)
+        return post(table, message)
+
+    monkeypatch.setattr(DataTable, "post_message", capture)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        table = app.query_one(DataTable)
+        view = app.query_one(AthenaResultsView)
+        await focus_and_settle(table)
+        await pilot.press("enter")
+        await pilot.pause()
+        assert vm.results.selection == (0, 0)
+        stale = selected[-1]
+        assert stale.value is None
+        assert stale.athena_revision == table.projection_revision
+        assert stale.athena_generation == vm.results.projection_generation
+        if retirement == "revision":
+            vm.results.set_filter("missing")
+            await pilot.pause()
+            vm.results.reset_projection()
+            await pilot.pause()
+        elif retirement == "generation":
+            await vm.results.load("controls")
+            await pilot.pause()
+        else:
+            # Retire the control without asking the page to focus an incomplete ring.
+            await focus_and_settle(app.query_one("#nav-menu", NavMenu))
+            await view.query_one(
+                "#athena-results-table" if retirement == "table" else "#athena-results-footer"
+            ).remove()
+            vm.results.set_filter("missing")
+        assert vm.results.selection is None
+        await view._on_message(stale)
+        assert vm.results.selection is None
+
+
+@pytest.mark.parametrize("operation", ["enter", "apply", "clear", "cancel"])
+async def test_private_result_filter_events_are_scrubbed_before_post_and_event_logging(
+    operation, monkeypatch
+):
+    import textual.message_pump as message_pump
+    from textual.widgets import Input
+
+    from aws_tui.ui.widgets.modal_button import ModalButton
+
+    marker = "FILTER_PRIVATE_FINAL_FIX_MARKER"
+    outgoing = []
+    logged = []
+    kinds = (Input.Changed, Input.Submitted, Input.Blurred)
+    post = Input.post_message
+
+    def capture(field, message):
+        if isinstance(message, kinds) and field.id == "athena-result-filter":
+            outgoing.append((type(message), message.value, repr(message)))
+        return post(field, message)
+
+    class EventLog:
+        @property
+        def event(self):
+            return self
+
+        def verbosity(self, verbose):
+            return self
+
+        def __call__(self, *args, **kwargs):
+            for message in args:
+                if isinstance(message, kinds) and message.input.id == "athena-result-filter":
+                    logged.append((type(message), message.value, repr(message)))
+
+    monkeypatch.setattr(Input, "post_message", capture)
+    monkeypatch.setattr(message_pump, "log", EventLog())
+    vm, calls = await _loaded_result_controls_vm()
+    vm.results.set_filter("tail")
+    app = _AthenaApp(vm)
+    async with app.run_test(size=(80, 24)) as pilot:
+        await pilot.pause()
+        table = app.query_one(DataTable)
+        view = app.query_one(AthenaResultsView)
+        await focus_and_settle(table)
+        view.action_filter_results()
+        await pilot.pause()
+        field = app.screen.query_one(Input)
+        assert field.value == "tail"
+        await pilot.press("home", "shift+end", "backspace", *marker)
+        assert field.value == marker
+        if operation == "enter":
+            await pilot.press("enter")
+        elif operation == "cancel":
+            await pilot.press("escape")
+        else:
+            button = next(b for b in app.screen.query(ModalButton) if b.button_id == operation)
+            await focus_and_settle(button)
+            await pilot.press("enter")
+        await pilot.pause()
+        expected = {"enter": marker, "apply": marker, "clear": "", "cancel": "tail"}[operation]
+        assert vm.results.filter_text == expected
+        assert table.has_focus
+        view.action_filter_results()
+        await pilot.pause()
+        assert app.screen.query_one(Input).value == expected
+        await pilot.press("escape")
+        await pilot.pause()
+        assert vm.results.filter_text == expected
+        assert {kind for kind, _, _ in outgoing} >= {Input.Changed, Input.Blurred}
+        assert {kind for kind, _, _ in logged} >= {Input.Changed, Input.Blurred}
+        if operation == "enter":
+            assert Input.Submitted in {kind for kind, _, _ in outgoing}
+            assert Input.Submitted in {kind for kind, _, _ in logged}
+        assert all(
+            value == "" and marker not in representation for _, value, representation in outgoing
+        )
+        assert all(
+            value == "" and marker not in representation for _, value, representation in logged
+        )
+        assert calls == [("controls", None)]

@@ -380,3 +380,62 @@ async def test_actual_app_slow_keyboard_load_more_keeps_inspector_responsive(siz
             assert not page.vm.results.has_more
     finally:
         app.app_ctx.root_vm.dispose()
+
+
+@pytest.mark.parametrize("first", ["key", "button"])
+async def test_actual_app_repeated_load_more_declines_inflight_page_without_restarting(first):
+    class GatedPages(LoadedPages):
+        def __init__(self):
+            super().__init__()
+            self.cancelled = []
+
+        async def get_results_page(self, execution_id, *, start_token=None):
+            if start_token is None:
+                return await super().get_results_page(execution_id, start_token=start_token)
+            self.calls.append((execution_id, start_token))
+            assert self.allow_more
+            assert start_token == "second"
+            self.started.set()
+            try:
+                await self.release.wait()
+            except asyncio.CancelledError:
+                self.cancelled.append(start_token)
+                raise
+            return ResultPage(COLUMNS, (("1", "match"),), None)
+
+    app = DemoModeApp(theme="carbon")
+    pages = GatedPages()
+    try:
+        async with app.run_test(size=(80, 24)) as pilot:
+            page, table, _ = await show_loaded_results(pilot, pages=pages)
+            vm = page.vm.results
+            original = vm.export_snapshot()
+            pages.allow_more = True
+            if first == "button":
+                assert await pilot.click("#athena-more-results")
+            else:
+                await pilot.press("l")
+            await wait_until(pages.started.is_set, what="authorized continuation is in flight")
+            assert vm.is_loading_more
+            assert vm._pager.current_token == original.next_token == "second"
+            await focus_and_settle(table)
+            try:
+                await pilot.press("l", "l")
+                await pilot.pause()
+                assert vm.is_loading_more
+                assert pages.calls == [("acceptance", None), ("acceptance", "second")]
+                assert pages.cancelled == []
+                assert vm.rows == ROWS
+                assert vm._pager.current_token == "second"
+            finally:
+                pages.release.set()
+                await drain_workers(app)
+            assert vm.rows == (*ROWS, ("1", "match"))
+            assert pages.calls == [("acceptance", None), ("acceptance", "second")]
+            assert pages.cancelled == []
+            assert not vm.is_loading_more
+            assert not vm.has_more
+            assert vm.export_snapshot().next_token is None
+    finally:
+        pages.release.set()
+        app.app_ctx.root_vm.dispose()

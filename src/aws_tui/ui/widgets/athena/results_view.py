@@ -26,7 +26,7 @@ class _ClipboardApp(Protocol):
 
 
 class _AthenaResultTable(DataTable[Text | None]):
-    """Stamp highlights when posted, before asynchronous table rebuilds."""
+    """Stamp cell events when posted, before asynchronous table rebuilds."""
 
     projection_revision = 0
     execution_generation = -1
@@ -37,7 +37,6 @@ class _AthenaResultTable(DataTable[Text | None]):
         # carry a rendered result value into diagnostics.
         if isinstance(message, (DataTable.CellHighlighted, DataTable.CellSelected)):
             message.__dict__["value"] = None
-        if isinstance(message, DataTable.CellHighlighted):
             message.__dict__.update(
                 athena_revision=self.projection_revision,
                 athena_generation=self.execution_generation,
@@ -126,6 +125,8 @@ class AthenaResultsView(DeferredWorkerMixin, Widget):
             self.dispatch_load_more()
 
     def dispatch_load_more(self) -> None:
+        if self._vm.is_loading_more:
+            return
         self._run_lifecycle_worker(
             self._vm.load_more,
             group="athena-more-results",
@@ -256,6 +257,12 @@ class AthenaResultsView(DeferredWorkerMixin, Widget):
         self._on_vm_changed("screen")
 
     def on_data_table_cell_highlighted(self, event: DataTable.CellHighlighted) -> None:
+        self._select_cell(event)
+
+    def on_data_table_cell_selected(self, event: DataTable.CellSelected) -> None:
+        self._select_cell(event)
+
+    def _select_cell(self, event: DataTable.CellHighlighted | DataTable.CellSelected) -> None:
         table = event.data_table
         if (
             not self._can_act()
@@ -274,6 +281,7 @@ class AthenaResultsView(DeferredWorkerMixin, Widget):
         row, column = event.coordinate
         if (
             not 0 <= row < len(indices)
+            or not 0 <= column < len(self._vm.columns)
             or event.cell_key.row_key.value != str(indices[row])
             or event.cell_key.column_key.value != f"athena-result-column-{column}"
         ):

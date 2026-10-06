@@ -8,10 +8,20 @@ from textual.app import ComposeResult
 from textual.binding import Binding, BindingType
 from textual.containers import Horizontal, Vertical
 from textual.events import Click
+from textual.message import Message
 from textual.screen import ModalScreen
 from textual.widgets import Input, Static
 
 from aws_tui.ui.widgets.modal_button import ModalButton
+
+
+class _PrivateFilterInput(Input):
+    """Keep authoritative text in the field, out of outgoing event diagnostics."""
+
+    def post_message(self, message: Message) -> bool:
+        if isinstance(message, (Input.Changed, Input.Submitted, Input.Blurred)):
+            message.value = ""
+        return super().post_message(message)
 
 
 class AthenaResultFilterModal(ModalScreen[str | None]):
@@ -30,7 +40,7 @@ class AthenaResultFilterModal(ModalScreen[str | None]):
 
     def __init__(self, current: str) -> None:
         super().__init__()
-        self._field = Input(current, id="athena-result-filter")
+        self._field = _PrivateFilterInput(current, id="athena-result-filter")
         self._invalidated = False
 
     def compose(self) -> ComposeResult:

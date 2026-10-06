@@ -119,7 +119,9 @@ for restart and shutdown details.
 
 ## 7. Inspect and control loaded results
 
-On Results, arrow keys select individual cells. `Alt+Enter` opens the complete
+On Results, arrow keys select individual cells. Press Enter or click the current
+cell to select it, including the first cell or a result containing only one cell.
+`Alt+Enter` opens the complete
 original value in a read-only, scrollable inspector. Escape or Close returns
 to the same original row and column when that execution and cell remain
 available. Null and empty strings have explicit status. Enter in the inspector
