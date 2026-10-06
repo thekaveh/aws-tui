@@ -160,6 +160,7 @@ class KeymapStore:
         "glue.crawlers": ("3",),
         "glue.choose_run_state": ("F",),
         "glue.choose_crawler_state": ("G",),
+        "glue.compare_tables": ("ctrl+g",),
         "glue.copy_table_ref": ("y",),
         "glue.query_in_athena": ("Q",),
         "glue.time_travel_in_athena": ("V",),

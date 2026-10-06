@@ -177,10 +177,17 @@ same size.
 | Refresh active view | `r` | Reloads only the selected Catalog, Jobs, or Crawlers view. |
 | Load more rows in the focused list | `l`, or `:` / `Ctrl+K`, then **Load more Glue rows** | Runs `glue.load_more`. Fetches the next page for the focused Glue list (databases, tables, partitions, jobs, runs, crawlers, or the focused Iceberg metadata tab); clicking a list footer that reads `more available` does the same. Disabled when the list has no further page or hit its 1,000-item safety limit. On the Iceberg **Peek** tab the same control instead reruns a genuinely new local DuckDB query at the next row-limit step (100 → 1,000 → 10,000); its ceiling is real, not a local-window widen, and its footer never reads `more available`. |
 | Switch AWS source | `Shift+S` | Runs `app.swap_source` and rebuilds Glue under the next resolver-ordered supported AWS profile and region. The bordered **Source** selector can instead choose an exact source. |
+| Compare table definitions | `Ctrl+G` | Runs `glue.compare_tables`. Opens independent Left/Right source, region and table selection; no counterpart is selected automatically. See the [comparison workflow](services/glue.md#5-compare-table-definitions) for modal keys, refresh and full-summary copy. |
 | Copy selected table reference | `y` | Runs `glue.copy_table_ref`. The canonical, fully quoted identifier and its source identity are retained in the authoritative typed in-app clipboard; the OS clipboard write then goes through the single app-level writer, whose toast names the channel that actually accepted the text and never reports an unacknowledged OSC 52 write as a copy. |
 | Open selected table location in S3 | `:` / `Ctrl+K`, then **Open table location in S3** | `glue.open_s3_location` is palette-only and absent from `KeymapStore.DEFAULT_BINDINGS`. It preserves the exact Glue connection name and region; malformed or missing locations do not navigate. |
 | Query selected table in Athena | `Shift+Q` (`Q`) or `:` / `Ctrl+K`, then **Query table in Athena** | Runs `glue.query_in_athena` for a visible selected Glue table. It opens Athena, resolves the exact catalog/database request context, and prefills the quoted `SELECT * FROM "database"."table" LIMIT 5`; it does not execute the query. |
 | Query selected Iceberg snapshot in Athena | `Shift+V` (`V`), `:` / `Ctrl+K`, then **Query Iceberg snapshot in Athena**, or the Iceberg time-travel button | Runs `glue.time_travel_in_athena` only for a visible selected snapshot on the Snapshots tab. It opens Athena with the same exact source and bounded SQL plus `FOR VERSION AS OF <snapshot-id>` before `LIMIT 5`; it does not execute the query. |
+
+`Ctrl+G` is reserved by `glue.compare_tables` in the default keymap. If an
+existing configuration assigns it to another action, explicitly disable
+`"glue.compare_tables" = []` or remap that action (for example to `"alt+g"`)
+in `[keybindings]`; otherwise the existing collision validator rejects the
+overlay. The comparison remains available in the command palette when unbound.
 
 Glue's forward focus order is:
 
@@ -270,6 +277,7 @@ A binding can be a single keystroke or a list of fallback keystrokes:
 "glue.crawlers" = "3"
 "glue.choose_run_state" = "F"
 "glue.choose_crawler_state" = "G"
+"glue.compare_tables" = "ctrl+g"
 "glue.copy_table_ref" = "y"
 "glue.query_in_athena" = "Q"
 "glue.time_travel_in_athena" = "V"
@@ -411,6 +419,7 @@ unbound until a handler ships.
 | `glue.crawlers` | `3` | yes | Select the Glue Crawlers view |
 | `glue.choose_run_state` | `F` (`shift+f`) | yes | Focus and open the Jobs run-state selector |
 | `glue.choose_crawler_state` | `G` (`shift+g`) | yes | Focus and open the Crawlers state selector |
+| `glue.compare_tables` | `ctrl+g` | yes | Open a read-only comparison with explicit, independent Left/Right table selection |
 | `glue.copy_table_ref` | `y` | yes | Copy the selected table's canonical identifier and source identity |
 | `glue.open_s3_location` | none (command palette) | yes | Open the selected Glue table's S3 location under the exact source connection and region |
 | `glue.query_in_athena` | `Q` (`shift+q`) | yes | Open the selected Glue table in Athena and prefill exact quoted `SELECT * ... LIMIT 5` SQL without executing it |
