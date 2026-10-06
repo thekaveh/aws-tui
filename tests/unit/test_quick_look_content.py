@@ -79,3 +79,191 @@ async def test_build_content_stream_is_capped() -> None:
     assert content.chunks is not None
     total = b"".join([c async for c in content.chunks])
     assert len(total) == 64 * 1024
+
+
+# Structured engine contracts; the historical helper assertions above stay intact.
+async def _structured(raw: bytes, name: str, mime: str = ""):
+    from aws_tui.demo.in_memory_fs import InMemoryFS
+    from aws_tui.domain.filesystem import PathRef
+    from aws_tui.domain.preview import load_preview
+
+    fs = InMemoryFS()
+    path = PathRef((name,))
+    await fs.write_stream(path, _gen(raw))
+    return await load_preview(fs, path, name=name, mime=mime)
+
+
+@pytest.mark.asyncio
+async def test_csv_complete_multiline_and_empty_cells():
+    from aws_tui.domain.preview import PreviewCellKind, PreviewFormat
+
+    raw = b'name,note\r\nAda,"line one\nline two"\r\nBob,""\r\n'
+    result = await _structured(raw, "rows.csv", "text/csv")
+    assert result.format is PreviewFormat.CSV
+    assert tuple(c.name for c in result.columns) == ("name", "note")
+    assert result.rows[0][1].text == "line one\\nline two"
+    assert result.rows[1][1].kind is PreviewCellKind.EMPTY
+    assert result.raw == raw
+
+
+@pytest.mark.asyncio
+async def test_structured_row_column_and_cell_caps():
+    from aws_tui.domain.preview import PreviewFormat
+
+    raw = (
+        ",".join(f"c{i}" for i in range(25))
+        + "\n"
+        + (",".join(["x" * 300] + ["a"] * 24) + "\n") * 51
+    ).encode()
+    result = await _structured(raw, "rows.csv")
+    assert result.format is PreviewFormat.CSV
+    assert len(result.columns) == 24
+    assert len(result.rows) == 50
+    assert len(result.rows[0][0].text) <= 256
+    assert result.rows[0][0].truncated
+    assert result.rows[0][0].text.endswith("… [truncated]")
+
+
+@pytest.mark.asyncio
+async def test_json_distinctions_and_visible_control_escape():
+    from aws_tui.domain.preview import PreviewCellKind, PreviewFormat
+
+    result = await _structured(
+        b'[{"a":null,"b":"","c":{"x":1},"d":"null","e":"\\u001b[red]"},{"b":2}]',
+        "data.json",
+    )
+    assert result.format is PreviewFormat.JSON
+    assert [c.kind for c in result.rows[0]] == [
+        PreviewCellKind.NULL,
+        PreviewCellKind.EMPTY,
+        PreviewCellKind.NESTED,
+        PreviewCellKind.SCALAR,
+        PreviewCellKind.SCALAR,
+    ]
+    assert result.rows[0][3].text == '"null"'
+    assert result.rows[0][4].text == r"\x1b[red]"
+    assert result.rows[1][0].kind is PreviewCellKind.MISSING
+    assert result.rows[1][0].text == "— (missing)"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("raw", "name"),
+    [
+        (b'{"a":', "a.json"),
+        (b'{"a":1}\nnope', "a.jsonl"),
+        (b"[" + b"[" * 17 + b"0" + b"]" * 18, "a.json"),
+        (b"[" + b"0," * 4096 + b"0]", "a.json"),
+        (b"hello world", "a.json"),
+        (b"hello world", "a.csv"),
+    ],
+)
+async def test_invalid_or_excessive_text_is_raw(raw, name):
+    from aws_tui.domain.preview import PreviewFormat
+
+    result = await _structured(raw, name)
+    assert result.format is PreviewFormat.RAW
+    assert result.raw == raw
+
+
+@pytest.mark.asyncio
+async def test_jsonl_requires_all_captured_records_and_untruncated_source():
+    from aws_tui.domain.preview import PreviewFormat
+
+    result = await _structured(b'{"a":1}\n{"b":2}\n', "a.jsonl")
+    assert result.format is PreviewFormat.JSONL
+    assert tuple(c.name for c in result.columns) == ("a", "b")
+    prefix = b'{"a":1}' + b" " * (65536 - 7)
+    result = await _structured(prefix + b" ", "a.json")
+    assert result.format is PreviewFormat.RAW
+    assert len(result.raw) == 65536
+
+
+@pytest.mark.asyncio
+async def test_hint_conflicts_use_valid_bounded_sniff():
+    from aws_tui.domain.preview import PreviewFormat
+
+    result = await _structured(b'[{"x":1}]', "wrong.csv", "text/csv")
+    assert result.format is PreviewFormat.JSON
+    result = await _structured(b"a,b\n1,2\n", "wrong.json", "application/json")
+    assert result.format is PreviewFormat.CSV
+
+
+@pytest.mark.asyncio
+async def test_legacy_exact_cap_closes_without_extra_pull():
+    from aws_tui.domain.preview import PreviewFormat, load_legacy_preview
+
+    pulled = 0
+    closed = False
+
+    async def source():
+        nonlocal pulled, closed
+        try:
+            pulled += 1
+            yield b'{"a":1}' + b" " * (65536 - 7)
+            pulled += 1
+            raise AssertionError("must not pull after cap")
+        finally:
+            closed = True
+
+    result = await load_legacy_preview(source(), name="a.json", mime="application/json")
+    assert result.format is PreviewFormat.RAW
+    assert len(result.raw) == 65536
+    assert pulled == 1
+    assert closed
+
+
+@pytest.mark.asyncio
+async def test_csv_cut_quoted_record_is_not_a_row():
+    from aws_tui.domain.preview import PreviewFormat
+
+    raw = b'a,b\n1,2\n3,"' + b"x" * 65536
+    result = await _structured(raw, "a.csv")
+    assert result.format is PreviewFormat.CSV
+    assert len(result.rows) == 1
+    assert result.rows[0][0].text == "1"
+
+
+@pytest.mark.asyncio
+async def test_jsonl_nonfinite_constants_are_malformed():
+    from aws_tui.domain.preview import PreviewFormat
+
+    result = await _structured(b'{"a":NaN}\n', "a.jsonl")
+    assert result.format is PreviewFormat.RAW
+
+
+@pytest.mark.asyncio
+async def test_invalid_jsonl_record_after_sample_cap_still_falls_back():
+    from aws_tui.domain.preview import PreviewFormat
+
+    result = await _structured(b'{"a":1}\n' * 51 + b'{"a":\n', "a.jsonl")
+    assert result.format is PreviewFormat.RAW
+
+
+@pytest.mark.asyncio
+async def test_compatibility_provider_open_consumes_shared_absolute_deadline(monkeypatch):
+    import asyncio
+    from time import monotonic
+
+    from aws_tui.domain import preview
+    from aws_tui.domain.filesystem import PathRef
+    from aws_tui.domain.preview_limits import PreviewBudget, PreviewLimitExceeded
+
+    cancelled = False
+
+    class LegacyProvider:
+        async def read_stream(self, path, *, chunk_size):
+            nonlocal cancelled
+            try:
+                await asyncio.sleep(600)
+            finally:
+                cancelled = True
+
+    monkeypatch.setattr(
+        preview.PreviewBudget, "start", lambda: PreviewBudget(monotonic() + 0.05, monotonic)
+    )
+    # The outer test guard makes a broken absolute-open timeout fail quickly.
+    with pytest.raises(PreviewLimitExceeded, match="Preview timed out"):
+        async with asyncio.timeout(0.5):
+            await preview.load_preview(LegacyProvider(), PathRef(("a",)), name="a", mime="")
+    assert cancelled

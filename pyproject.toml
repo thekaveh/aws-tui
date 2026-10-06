@@ -55,6 +55,7 @@ dependencies = [
   "keyring>=24,<26",
   "platformdirs>=4,<5",
   "sqlglot>=30.13.0,<31",
+  "pyarrow>=25.0.1,<26",
 ]
 dynamic = ["version"]
 
@@ -241,5 +242,13 @@ disallow_untyped_defs = false
 # the module may be entirely absent in an environment that never installed
 # it, e.g. the lint job's `uv sync --locked` with no `--extra`, and this
 # override must tolerate that too, not just missing stubs.
-module = ["aioboto3", "aioboto3.*", "botocore", "botocore.*", "duckdb"]
+module = [
+  "aioboto3",
+  "aioboto3.*",
+  "botocore",
+  "botocore.*",
+  "duckdb",
+  "pyarrow",
+  "pyarrow.*",
+]
 ignore_missing_imports = true
