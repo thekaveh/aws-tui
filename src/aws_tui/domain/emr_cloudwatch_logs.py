@@ -200,24 +200,24 @@ def classify_cloudwatch_stream(
     _, prefix = cloudwatch_location(configuration, application_id, job_run_id)
     if not name.startswith(prefix):
         return None
-    root = f"/applications/{application_id}/jobs/{job_run_id}/"
-    if configuration.log_stream_name_prefix is None:
-        suffix = name[len(root) :]
-        if root in suffix:
-            return None
-    else:
-        remaining = name[len(prefix) :]
-        positions = [match.start() for match in re.finditer(re.escape(root), remaining)]
-        if remaining.startswith(root[1:]):
-            positions.insert(0, -1)
-        if len(positions) != 1:
-            return None
-        suffix = remaining[positions[0] + len(root) :]
-        # A different app/run before the selected root is ambiguous ownership.
-        before = remaining[: max(0, positions[0])]
-        if "applications/" in before or "jobs/" in before:
-            return None
-    segments = suffix.split("/")
+    remaining = name if configuration.log_stream_name_prefix is None else name[len(prefix) :]
+    segments = remaining.split("/")
+    # Scan every complete root, including the worker suffix. Bare reserved
+    # words are harmless, but any second run identity makes ownership ambiguous.
+    roots = [
+        index
+        for index in range(len(segments) - 3)
+        if segments[index] == "applications"
+        and segments[index + 1]
+        and segments[index + 2] == "jobs"
+        and segments[index + 3]
+    ]
+    if len(roots) != 1:
+        return None
+    index = roots[0]
+    if segments[index + 1] != application_id or segments[index + 3] != job_run_id:
+        return None
+    segments = segments[index + 4 :]
     if not segments or any(not segment for segment in segments):
         return None
     attempt = None

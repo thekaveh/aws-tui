@@ -181,3 +181,39 @@ async def test_demo_invalid_bodies_have_sanitized_exception_context():
         )
     assert str(caught.value) == "CloudWatch log response invalid"
     assert caught.value.__context__ is None
+
+
+@pytest.mark.parametrize("prefix", [None, "literal/", "/applications/foreign/jobs/prefix/"])
+async def test_demo_rejects_ambiguous_run_roots_preserves_suffix_words(prefix):
+    fake = InMemoryEmr()
+    literal = prefix or ""
+    selected = "/applications/a/jobs/r/"
+    foreign = "/applications/b/jobs/other/"
+    valid = [
+        literal + selected + "SPARK_DRIVER/jobs/applications/worker/stdout",
+        literal + selected + "attempts/2/SPARK_EXECUTOR/applications/jobs/stdout",
+    ]
+    ambiguous = [
+        literal + selected + "SPARK_DRIVER" + foreign + "SPARK_DRIVER",
+        literal + selected + "SPARK_DRIVER" + foreign.rstrip("/"),
+        literal + selected + "SPARK_DRIVER" + selected + "SPARK_DRIVER",
+        literal + foreign + "SPARK_DRIVER" + selected + "SPARK_DRIVER",
+    ]
+    for name in valid + ambiguous:
+        fake.add_cloudwatch_stream(
+            application_id="a",
+            job_run_id="r",
+            log_group_name=GROUP,
+            stream=CloudWatchLogStream(name, "SPARK_DRIVER", None),
+            events=(),
+        )
+    streams = await fake.list_cloudwatch_streams(
+        configuration=CloudWatchLogConfiguration(True, GROUP, prefix),
+        application_id="a",
+        job_run_id="r",
+    )
+    assert [stream.name for stream in streams] == valid
+    assert [(stream.component, stream.attempt) for stream in streams] == [
+        ("SPARK_DRIVER", None),
+        ("SPARK_EXECUTOR", 2),
+    ]

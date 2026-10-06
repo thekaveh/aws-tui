@@ -488,3 +488,36 @@ async def test_discovery_deadline_covers_blocked_sdk_and_closes(cw, monkeypatch)
     with pytest.raises(ProviderUnreachableError):
         await discover(cw, stub)
     assert stub.closed
+
+
+@pytest.mark.parametrize("prefix", [None, "literal/", "/applications/foreign/jobs/prefix/"])
+async def test_discovery_rejects_ambiguous_run_roots_preserves_suffix_words(cw, prefix):
+    literal = prefix or ""
+    foreign = "/applications/b/jobs/other/"
+    valid = [
+        literal + ROOT + "SPARK_DRIVER/jobs/applications/worker/stdout",
+        literal + ROOT + "attempts/2/SPARK_EXECUTOR/applications/jobs/stdout",
+    ]
+    ambiguous = [
+        literal + STREAM + foreign + "SPARK_DRIVER",
+        literal + STREAM + foreign.rstrip("/"),
+        literal + STREAM + ROOT + "SPARK_DRIVER",
+        literal + foreign + "SPARK_DRIVER" + ROOT + "SPARK_DRIVER",
+        literal + ROOT + "attempts/2/SPARK_EXECUTOR" + foreign + "worker",
+    ]
+    stub = LogsStub(
+        listings=[{"logStreams": [{"logStreamName": name} for name in valid + ambiguous]}]
+    )
+    streams = await discover(cw, stub, prefix=prefix)
+    assert [stream.name for stream in streams] == valid
+    assert [(stream.component, stream.attempt) for stream in streams] == [
+        ("SPARK_DRIVER", None),
+        ("SPARK_EXECUTOR", 2),
+    ]
+    assert stub.describe_log_streams.await_count == 1
+
+
+async def test_custom_prefix_marker_alone_does_not_establish_run_ownership(cw):
+    prefix = "/applications/a/jobs/r/"
+    stub = LogsStub(listings=[{"logStreams": [{"logStreamName": prefix + "SPARK_DRIVER"}]}])
+    assert await discover(cw, stub, prefix=prefix) == ()
