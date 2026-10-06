@@ -257,7 +257,17 @@ def test_athena_result_controls_bind_canonical_parser_keys():
 
 def test_cloudwatch_source_and_follow_defaults_and_overlay():
     assert KeymapStore().resolve("emr.logs.source") == ("ctrl+s",)
-    assert KeymapStore().resolve("emr.logs.follow") == ("ctrl+l",)
+    assert KeymapStore().resolve("emr.logs.follow") == ("ctrl+alt+l",)
     rebound = KeymapStore(overlay={"emr.logs.source": "ctrl+e", "emr.logs.follow": "ctrl+y"})
     assert rebound.resolve("emr.logs.source") == ("ctrl+e",)
     assert rebound.resolve("emr.logs.follow") == ("ctrl+y",)
+
+
+def test_athena_control_l_overlay_preserved_without_global_collision_waiver():
+    from aws_tui.infra.keymap_store import KeybindingCollision
+
+    keymap = KeymapStore(overlay={"athena.load_more": "ctrl+l"})
+    assert keymap.resolve("athena.load_more") == ("ctrl+l",)
+    assert keymap.resolve("emr.logs.follow") == ("ctrl+alt+l",)
+    with pytest.raises(KeybindingCollision, match=r"athena\.load_more.*emr\.logs\.follow"):
+        KeymapStore(overlay={"athena.load_more": "ctrl+l", "emr.logs.follow": "ctrl+l"})

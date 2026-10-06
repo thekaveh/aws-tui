@@ -154,7 +154,7 @@ class KeymapStore:
         "emr.cancel": ("x",),
         "emr.logs.filter": ("f",),
         "emr.logs.source": ("ctrl+s",),
-        "emr.logs.follow": ("ctrl+l",),
+        "emr.logs.follow": ("ctrl+alt+l",),
         "glue.catalog": ("1",),
         "glue.jobs": ("2",),
         "glue.crawlers": ("3",),

@@ -87,7 +87,7 @@ closed with fixed guidance. The pane retains the newest 5,000 whole events /
 newlines. **buffer capped** identifies discarded loaded data. Existing S3
 limits remain 100 MiB compressed, 5,000 matched lines, and five cached reads.
 
-`Ctrl+L` or the pane's **Start follow** control explicitly starts follow for
+`Ctrl+Alt+L` or the pane's **Start follow** control explicitly starts follow for
 CloudWatch. **Stop follow** remains available during a pending read. Follow
 waits two seconds after each completed read, with no overlapping polls, and
 rereads a 60-second timestamp overlap. It deduplicates event IDs, retains

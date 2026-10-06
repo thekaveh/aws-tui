@@ -87,6 +87,7 @@ async def test_compact_real_demo_load_attempt_filter_follow_stop(tmp_path: Path,
             await wait_until(
                 lambda: not app.query("Toast"), what="startup demo toast to expire", timeout=8
             )
+            await pilot.pause()
             artifact_dir = os.environ.get("AWS_TUI_TASK2_VISUAL_DIR")
             if artifact_dir:
                 app.save_screenshot(filename="real-app-80x24-cw-ready.svg", path=artifact_dir)
@@ -118,7 +119,7 @@ async def test_compact_real_demo_load_attempt_filter_follow_stop(tmp_path: Path,
             assert len(fake.calls) == calls
             assert "filter: loaded data only" in str(pane.query_one("#logs-filter").render())
             await focus_and_settle(pane)
-            await pilot.press("ctrl+l")
+            await pilot.press("ctrl+alt+l")
             await wait_until(
                 lambda: logs.following and logs.state is LogsState.READY, what="follow initial read"
             )
@@ -159,7 +160,7 @@ async def test_compact_real_demo_load_attempt_filter_follow_stop(tmp_path: Path,
             )
             assert logs.lines.count("ERROR appended once") == 1
             assert logs.last_successful_read_at_ms == now[0]
-            await pilot.press("ctrl+l")
+            await pilot.press("ctrl+alt+l")
             await _drain(app)
             assert not logs.following
             assert not logs._operations.tasks
@@ -196,7 +197,7 @@ async def test_leaving_service_waits_for_blocked_follow_cleanup(tmp_path: Path, 
 
             blocked_client = BlockedClientRead()
             monkeypatch.setattr(fake, "read_cloudwatch_events", blocked_client)
-            await pilot.press("ctrl+l")
+            await pilot.press("ctrl+alt+l")
             await asyncio.wait_for(entered.wait(), 2)
             assert old_logs.following
             rows = {
@@ -271,14 +272,14 @@ async def test_log_commands_actual_keys_palette_hints_and_focus(tmp_path, monkey
             }
             assert rows["emr.logs.follow"].available
             assert rows["emr.logs.follow"].effective_keys == (
-                ("ctrl+h",) if rebound else ("ctrl+l",)
+                ("ctrl+h",) if rebound else ("ctrl+alt+l",)
             )
-            await pilot.press("ctrl+h" if rebound else "ctrl+l")
+            await pilot.press("ctrl+h" if rebound else "ctrl+alt+l")
             await wait_until(
                 lambda: logs.following and logs.state is LogsState.READY, what="bound follow key"
             )
             pane = app.query_one(JobRunLogsPane)
-            assert ("ctrl+h" if rebound else "ctrl+l") in str(
+            assert ("ctrl+h" if rebound else "ctrl+alt+l") in str(
                 pane.query_one("#logs-status").render()
             )
             # Stop through the real palette, restoring the captured logs focus.
@@ -300,7 +301,7 @@ async def test_log_commands_actual_keys_palette_hints_and_focus(tmp_path, monkey
             }
             assert rows["emr.logs.follow"].availability_reason == "focus_required"
             assert rows["emr.logs.source"].availability_reason == "focus_required"
-            await pilot.press("ctrl+h" if rebound else "ctrl+l")
+            await pilot.press("ctrl+h" if rebound else "ctrl+alt+l")
             assert not logs.following
             await focus_and_settle(pane)
             # Mouse control dispatches the same follow path.
@@ -323,12 +324,12 @@ async def test_log_commands_actual_keys_palette_hints_and_focus(tmp_path, monkey
             assert chips[0].action.enabled
             await pilot.click(chips[0])
             await wait_until(lambda: logs.following, what="Commands mouse hint starts follow")
-            await pilot.press("ctrl+h" if rebound else "ctrl+l")
+            await pilot.press("ctrl+h" if rebound else "ctrl+alt+l")
             await wait_until(lambda: not logs.following, what="bound key stops hint follow")
             await _drain(app)
             await pilot.click(next(r for r in app.query(NavRow) if r.descriptor_id == "s3"))
             await _drain(app)
-            await pilot.press("ctrl+h" if rebound else "ctrl+l")
+            await pilot.press("ctrl+h" if rebound else "ctrl+alt+l")
             assert not logs.following
     finally:
         await ctx.root_vm.content_host.shutdown()

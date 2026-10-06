@@ -249,6 +249,7 @@ def test_cloudwatch_ready_content(theme):
         "Stopped",
         "checked 00:01:40 UTC",
         "attempts/2/SPARK_DRIVER",
+        "ctrl+alt+l",
     ):
         assert expected in svg, expected
 
@@ -276,6 +277,7 @@ def test_cloudwatch_states_content(variant, expected):
     assert "CloudWatch:" in svg
     assert "filter: loaded data only" in svg
     assert "checked 00:01:40 UTC" in svg
+    assert "ctrl+alt+l" in svg
     if variant != "missing":
         assert "ERROR [literal] CloudWatch demo failure" in svg
 
@@ -299,5 +301,6 @@ def test_cloudwatch_compact_page_content(theme):
         "Stopped",
         "00:01:40 UTC",
         "attempts/2/SPARK_DRIVER",
+        "ctrl+alt+l",
     ):
         assert expected in svg, expected

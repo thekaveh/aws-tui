@@ -415,7 +415,10 @@ distinguish workers; keyboard left/right cycles exact identities. Horizontal
 overflow must not make a source/stream keyboard-inaccessible.
 
 Register `emr.logs.source` with default `ctrl+s` and `emr.logs.follow` with
-default `ctrl+l`, after checking the existing default keymap for conflicts.
+default `ctrl+alt+l`, preserving established overlays and global collision rules.
+The planned `ctrl+l` default collided with the established
+`athena.load_more = ctrl+l` overlay; this correction keeps that overlay supported
+without a collision waiver or context-routing change.
 Source cycles between selectable configured/retryable/error sources; follow
 explicitly toggles start/stop. Both routes are scoped to focused EMR logs,
 advertised in the command palette, and use resolved keys in pane hints. Start

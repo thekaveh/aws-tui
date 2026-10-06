@@ -533,9 +533,12 @@ complete buffer. A failed poll never advances `last_end` or freshness.
   choices. Hide optional pattern text before the loaded-data caption or controls.
   A follow poll keeps the body visible; failures render a fixed banner with the
   last complete buffer. Preserve existing S3 error/truncation copy and guards.
-- [ ] Register `emr.logs.source` (`ctrl+s`) and `emr.logs.follow` (`ctrl+l`) in
+- [ ] Register `emr.logs.source` (`ctrl+s`) and `emr.logs.follow` (`ctrl+alt+l`) in
   KeymapStore, app action registration/routing, catalog and hint labels. These
-  keys are unused in the baseline default map. Add focused page routes using
+  keys preserve the baseline map and established supported overlays. The planned
+  `ctrl+l` follow default collided with the existing `athena.load_more = ctrl+l`
+  overlay, so use `ctrl+alt+l` without changing the global collision policy or
+  adding an alias waiver. Add focused page routes using
   the same boolean handled convention as `open_focused_log_filter`:
 
 ```python
@@ -544,7 +547,7 @@ self._actions.register("emr.logs.source", self.action_cycle_emr_log_source)
 self._actions.register("emr.logs.follow", self.action_toggle_emr_log_follow)
 # Keymap entries:
 "emr.logs.source": ("ctrl+s",),
-"emr.logs.follow": ("ctrl+l",),
+"emr.logs.follow": ("ctrl+alt+l",),
 ```
 
 Implement the named app methods and matching focused page methods; gate the
