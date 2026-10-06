@@ -172,9 +172,14 @@ profile or S3 endpoint.
   [`docs/keybindings.md` customizing](docs/keybindings.md#2-customizing)
   and [action IDs](docs/keybindings.md#3-action-ids).
 - **Streaming Quick Look.** Press `Space` on a file to open the built-in
-  preview modal and stream its first 64 KB. Directories, the `..` row,
-  and empty panes are ignored. The full-file `$PAGER` shell-out remains
-  deferred.
+  preview modal. CSV, JSON and JSONL show bounded tables; Parquet shows schema
+  and up to 50 rows across at most 24 columns. Press `r` to toggle the cached
+  raw 64 KiB prefix, and use arrow keys to scroll vertically or horizontally.
+  Reads share a five-second budget of 32 requests and 8 MiB; malformed or
+  truncated JSON falls back to raw. Directories, the `..` row, and empty panes
+  are ignored. See the [preview recipe](docs/cookbook.md#9-preview-files-with-quick-look)
+  for Parquet limits and failure messages. The full-file `$PAGER` shell-out
+  remains deferred.
 - **Command palette.** Press `:` or `Ctrl+K` for the fuzzy-filterable
   curated command list, including **Open table location in S3** on
   Glue and **Open Athena result in S3** for a validated successful Athena

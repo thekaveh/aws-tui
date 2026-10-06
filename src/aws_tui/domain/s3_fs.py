@@ -25,6 +25,7 @@ from __future__ import annotations
 import asyncio
 import json
 from collections.abc import AsyncIterator
+from contextlib import AsyncExitStack
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
@@ -47,12 +48,15 @@ from aws_tui.domain.filesystem import (
     NotFoundError,
     PathRef,
     PermissionDeniedError,
+    PreviewSourceChangedError,
     ProgressCallback,
     ProviderError,
     ProviderUnreachableError,
+    ReadSnapshot,
     ThrottledError,
     TransferProgress,
 )
+from aws_tui.domain.preview_limits import PreviewBudget, PreviewLimitExceeded, PreviewRequestKind
 from aws_tui.domain.s3_object_details import S3ObjectDetails
 
 # Family of transport-layer failures that the user should see as
@@ -890,6 +894,38 @@ class S3FS:
     # Streaming I/O
     # ------------------------------------------------------------------
 
+    async def open_preview(self, path: PathRef, *, budget: PreviewBudget) -> _S3PreviewSession:
+        bucket, key = self._resolve_file(path)
+        budget.check()
+        config = self._config.merge(
+            BotoConfig(retries={"total_max_attempts": 1, "mode": "standard"})
+        )
+        kwargs: dict[str, Any] = {"config": config, "verify": self._verify_tls}
+        if self._endpoint_url is not None:
+            kwargs["endpoint_url"] = self._endpoint_url
+        stack = AsyncExitStack()
+        preview: _S3PreviewSession | None = None
+        try:
+            async with asyncio.timeout(budget.remaining_seconds()):
+                client = await stack.enter_async_context(self._session.client("s3", **kwargs))
+                preview = _S3PreviewSession(client, stack, bucket, key, budget)
+                response = await preview._head(PreviewRequestKind.OPEN)
+                budget.check()
+                preview._capture(response)
+                return preview
+        except TimeoutError as exc:
+            raise PreviewLimitExceeded("Preview timed out") from exc
+        except _AUTH_FAILURE_EXCEPTIONS as exc:
+            raise _auth_error(exc) from exc
+        except _TRANSPORT_FAILURE_EXCEPTIONS as exc:
+            raise ProviderUnreachableError(str(exc)) from exc
+        finally:
+            if preview is None or not preview._opened:
+                if preview is not None:
+                    await preview.aclose()
+                else:
+                    await stack.aclose()
+
     async def read_stream(
         self, path: PathRef, *, chunk_size: int = _DEFAULT_CHUNK_SIZE
     ) -> AsyncIterator[bytes]:
@@ -1117,6 +1153,182 @@ class _S3Revision:
     version_id: str | None = None
     modified: datetime | None = None
     size: int | None = None
+
+
+class _S3PreviewSession:
+    """A dedicated client whose actual sends share the parent preview budget."""
+
+    def __init__(
+        self, client: Any, stack: AsyncExitStack, bucket: str, key: str, budget: PreviewBudget
+    ) -> None:
+        self._client, self._stack, self._bucket, self._key = client, stack, bucket, key
+        self._budget = budget
+        self._kind = PreviewRequestKind.OPEN
+        self._length = 0
+        self._lock = asyncio.Lock()
+        self._closed = False
+        self._opened = False
+        self._closing: asyncio.Task[None] | None = None
+        self.snapshot = ReadSnapshot(0, "")
+        self._etag = ""
+        self._version: str | None = None
+        self._client.meta.events.register("before-send.s3", self._before_send)
+
+    def _before_send(self, *, event_name: str, **kwargs: Any) -> None:
+        # This hook runs for each physical attempt, including S3 region
+        # redirects and their auxiliary HEADs. No logical call is charged.
+        if event_name.endswith((".HeadObject", ".HeadBucket")):
+            kind = (
+                self._kind
+                if self._kind is not PreviewRequestKind.RANGE
+                else PreviewRequestKind.OPEN
+            )
+            self._budget.charge_request(kind=kind)
+        elif event_name.endswith(".GetObject"):
+            self._budget.charge_request(kind=PreviewRequestKind.RANGE, length=self._length)
+        else:
+            raise ProviderError("unexpected request in preview session")
+
+    @staticmethod
+    def _identity(response: dict[str, Any]) -> str:
+        etag, size = response.get("ETag"), response.get("ContentLength")
+        version = response.get("VersionId")
+        if (
+            not isinstance(etag, str)
+            or not etag
+            or not isinstance(size, int)
+            or size < 0
+            or (version is not None and not isinstance(version, str))
+        ):
+            raise ProviderError("invalid preview source identity")
+        modified = response.get("LastModified")
+        return json.dumps(
+            {
+                "etag": etag,
+                "size": size,
+                "version_id": version,
+                "modified": modified.isoformat() if modified is not None else None,
+            },
+            separators=(",", ":"),
+            sort_keys=True,
+        )
+
+    def _capture(self, response: dict[str, Any]) -> None:
+        revision = self._identity(response)
+        self.snapshot = ReadSnapshot(response["ContentLength"], revision)
+        self._etag = response["ETag"]
+        self._version = response.get("VersionId")
+        self._opened = True
+
+    def _check(self) -> None:
+        if self._closed:
+            raise ValueError("preview session is closed")
+        self._budget.check()
+
+    def _error(self, exc: ClientError) -> ProviderError:
+        if _error_code(exc) in {
+            "PreconditionFailed",
+            "412",
+            "NoSuchVersion",
+            "NoSuchKey",
+            "404",
+            "NotFound",
+        }:
+            return PreviewSourceChangedError("Preview cancelled: source changed")
+        return _map_client_error(exc, self._key)
+
+    async def _head(self, kind: PreviewRequestKind) -> dict[str, Any]:
+        self._kind, self._length = kind, 0
+        try:
+            response: dict[str, Any] = await self._client.head_object(
+                Bucket=self._bucket, Key=self._key
+            )
+            return response
+        except ClientError as exc:
+            if kind is PreviewRequestKind.OPEN:
+                raise _map_client_error(exc, self._key) from exc
+            raise self._error(exc) from exc
+
+    async def read_range(self, offset: int, length: int) -> bytes:
+        self._check()
+        if offset < 0 or length < 0 or offset + length > self.snapshot.size:
+            raise ValueError("preview range outside snapshot")
+        if length == 0:
+            return b""
+        async with self._lock:
+            self._check()
+            self._kind, self._length = PreviewRequestKind.RANGE, length
+            request = {
+                "Bucket": self._bucket,
+                "Key": self._key,
+                "Range": f"bytes={offset}-{offset + length - 1}",
+                "IfMatch": self._etag,
+            }
+            if self._version is not None:
+                request["VersionId"] = self._version
+            body = None
+            try:
+                async with asyncio.timeout(self._budget.remaining_seconds()):
+                    response = await self._client.get_object(**request)
+                    body = response["Body"]
+                    if (
+                        response.get("ResponseMetadata", {}).get("HTTPStatusCode") != 206
+                        or response.get("ContentRange")
+                        != f"bytes {offset}-{offset + length - 1}/{self.snapshot.size}"
+                        or response.get("ContentLength") != length
+                        or response.get("ETag") != self._etag
+                        or response.get("VersionId") != self._version
+                    ):
+                        raise PreviewSourceChangedError("Preview cancelled: source changed")
+                    data = bytearray()
+                    while len(data) < length:
+                        self._budget.check()
+                        remaining = length - len(data)
+                        chunk = await body.read(remaining)
+                        if not chunk or len(chunk) > remaining:
+                            raise PreviewSourceChangedError("Preview cancelled: source changed")
+                        data.extend(chunk)
+                    self._budget.check()
+                    return bytes(data)
+            except TimeoutError as exc:
+                raise PreviewLimitExceeded("Preview timed out") from exc
+            except ClientError as exc:
+                raise self._error(exc) from exc
+            except _AUTH_FAILURE_EXCEPTIONS as exc:
+                raise _auth_error(exc) from exc
+            except _TRANSPORT_FAILURE_EXCEPTIONS as exc:
+                raise ProviderUnreachableError(str(exc)) from exc
+            finally:
+                if body is not None:
+                    body.close()
+
+    async def validate(self) -> None:
+        async with self._lock:
+            self._check()
+            try:
+                async with asyncio.timeout(self._budget.remaining_seconds()):
+                    response = await self._head(PreviewRequestKind.VALIDATE)
+                    if self._identity(response) != self.snapshot.revision:
+                        raise PreviewSourceChangedError("Preview cancelled: source changed")
+                    self._budget.check()
+            except TimeoutError as exc:
+                raise PreviewLimitExceeded("Preview timed out") from exc
+            except _AUTH_FAILURE_EXCEPTIONS as exc:
+                raise _auth_error(exc) from exc
+            except _TRANSPORT_FAILURE_EXCEPTIONS as exc:
+                raise ProviderUnreachableError(str(exc)) from exc
+
+    async def aclose(self) -> None:
+        if self._closing is None:
+            self._closed = True
+
+            async def close() -> None:
+                async with self._lock:
+                    self._client.meta.events.unregister("before-send.s3", self._before_send)
+                    await self._stack.aclose()
+
+            self._closing = asyncio.create_task(close())
+        await asyncio.shield(self._closing)
 
 
 def _s3_revision_token(response: dict[str, Any]) -> str | None:

@@ -8,7 +8,7 @@ don't pull file-I/O concerns into the VM tier).
 
 from __future__ import annotations
 
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Awaitable, Callable
 from dataclasses import dataclass
 
 from vmx import (
@@ -22,6 +22,7 @@ from vmx import (
 from vmx.lifecycle.status import ConstructionStatus
 from vmx.services.dispatcher import Dispatcher
 
+from aws_tui.domain.preview import PreviewResult
 from aws_tui.vm._observable import send_value_free
 
 
@@ -38,6 +39,7 @@ class QuickLookContent:
     mime: str
     chunks: AsyncIterator[bytes] | None
     line_count_estimate: int | None
+    load_preview: Callable[[], Awaitable[PreviewResult]] | None = None
 
 
 class QuickLookVM:

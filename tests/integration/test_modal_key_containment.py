@@ -14,7 +14,7 @@ import asyncio
 from collections.abc import AsyncIterator
 
 import pytest
-from textual.containers import VerticalScroll
+from textual.containers import ScrollableContainer, VerticalScroll
 
 from aws_tui.app import AwsTuiApp
 from aws_tui.demo.in_memory_fs import InMemoryFS
@@ -214,7 +214,7 @@ async def test_quick_look_preview_scrolls_with_arrow_keys(app_context_factory) -
         await pilot.press("space")
         await _await_screen(app, pilot, QuickLook)
 
-        scroll = app.screen.query_one("#quicklook-body-scroll", VerticalScroll)
+        scroll = app.screen.query_one("#quicklook-body-scroll", ScrollableContainer)
         async with asyncio.timeout(10.0):
             while scroll.max_scroll_y <= 0:
                 await pilot.pause(0.01)
