@@ -1720,3 +1720,465 @@ async def test_draft_focus_callback_checks_current_attachment_and_target(
         vm.dispose()
         await drafts.shutdown()
         drafts.dispose()
+
+
+async def _loaded_result_controls_vm():
+    client = PageClient()
+    calls = []
+    columns = (
+        ResultColumn("duplicate", "varchar", "NULLABLE"),
+        ResultColumn("duplicate", "varchar", "NULLABLE"),
+        ResultColumn("third", "varchar", "NULLABLE"),
+    )
+    rows = ((None, "", "NULL"), ("10", "line one\n[bold]é[/bold]" * 30, "z"), ("2", "tail", "a"))
+
+    async def results(execution_id, *, start_token=None):
+        calls.append((execution_id, start_token))
+        assert execution_id == "controls"
+        if start_token is None:
+            return ResultPage(columns, rows, "explicit-next")
+        assert start_token == "explicit-next"
+        return ResultPage(columns, (("1", "tail more", "b"),), None)
+
+    async def forbidden_start(*args, **kwargs):
+        raise AssertionError("Local result controls must not start queries")
+
+    client.get_results_page = results
+    client.start_query_execution = forbidden_start
+    vm, _ = _build_vm(client)
+    await vm.setup()
+    await vm.results.load("controls")
+    await vm.select_view("results")
+    return vm, calls
+
+
+@pytest.mark.parametrize("size", [(80, 24), (120, 40)])
+async def test_result_cell_inspector_preserves_literal_full_value_and_original_coordinate(size):
+    vm, calls = await _loaded_result_controls_vm()
+    app = _AthenaApp(vm)
+    async with app.run_test(size=size) as pilot:
+        await pilot.pause()
+        table = app.query_one("#athena-results-table", DataTable)
+        assert table.cursor_type == "cell"
+        table.move_cursor(row=1, column=1)
+        await focus_and_settle(table)
+        assert vm.results.selection == (1, 1)
+        app.query_one(AthenaResultsView).action_inspect_cell()
+        await pilot.pause()
+        body = app.screen.query_one("#athena-cell-value", TextArea)
+        assert body.read_only
+        assert body.text == vm.results.rows[1][1]
+        assert "[bold]" in body.text
+        await pilot.press("enter")
+        assert body.text == vm.results.rows[1][1]
+        await pilot.press("escape")
+        await pilot.pause()
+        assert app.focused is table
+        assert (table.cursor_row, table.cursor_column) == (1, 1)
+        assert vm.results.selection == (1, 1)
+        assert calls == [("controls", None)]
+
+
+async def test_result_copy_uses_original_null_empty_literal_and_duplicate_indexed_columns():
+    vm, calls = await _loaded_result_controls_vm()
+    app = _AthenaApp(vm)
+    copies = []
+    app.copy_value = lambda value, label: copies.append((value, label))
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        view = app.query_one(AthenaResultsView)
+        for column in range(3):
+            assert vm.results.select_cell(0, column)
+            view.action_copy_cell()
+        view.action_copy_row()
+        assert [value for value, _ in copies] == ["null", '""', '"NULL"', '[null,"","NULL"]']
+        assert all(label in {"Athena cell", "Athena row"} for _, label in copies)
+        vm.results.set_filter("no matching cells")
+        await pilot.pause()
+        view.action_copy_cell()
+        view.action_copy_row()
+        view.action_inspect_cell()
+        assert len(copies) == 4
+        assert len(app.screen_stack) == 1
+        assert vm.results.selection is None
+        assert calls == [("controls", None)]
+
+
+async def test_local_result_filter_sort_reset_preserve_selection_and_explicit_paging():
+    vm, calls = await _loaded_result_controls_vm()
+    app = _AthenaApp(vm)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        view = app.query_one(AthenaResultsView)
+        vm.results.select_cell(2, 0)
+        view.action_sort_results()
+        await pilot.pause()
+        assert vm.results.visible_row_indices == (1, 2, 0)
+        assert vm.results.selection == (2, 0)
+        view.action_sort_results()
+        await pilot.pause()
+        assert vm.results.visible_row_indices == (2, 1, 0)
+        view.action_sort_results()
+        await pilot.pause()
+        assert vm.results.visible_row_indices == (0, 1, 2)
+        vm.results.set_filter("tail")
+        view.action_sort_results()
+        await pilot.pause()
+        assert vm.results.visible_row_indices == (2,)
+        await vm.results.load_more()
+        await pilot.pause()
+        assert vm.results.visible_row_indices == (3, 2)
+        assert vm.results.selection == (2, 0)
+        assert (app.query_one(DataTable).cursor_row, app.query_one(DataTable).cursor_column) == (
+            1,
+            0,
+        )
+        view.action_reset_results()
+        await pilot.pause()
+        assert vm.results.visible_row_indices == (0, 1, 2, 3)
+        assert vm.results.selection == (2, 0)
+        assert calls == [("controls", None), ("controls", "explicit-next")]
+
+
+async def test_result_footer_states_loaded_only_scope_for_zero_matches_and_limit():
+    vm, calls = await _loaded_result_controls_vm()
+    app = _AthenaApp(vm)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        vm.results.set_filter("no matching cells")
+        await pilot.pause()
+        footer = app.query_one("#athena-results-footer", Static)
+        assert footer.content == "0 visible / 3 loaded · local · more available"
+        vm.results._pager._limit_reached = True
+        app.query_one(AthenaResultsView)._refresh()
+        assert footer.content == "0 visible / 3 loaded · local · safety limit"
+        assert calls == [("controls", None)]
+
+
+@pytest.mark.parametrize("operation", ["cancel", "apply", "clear"])
+async def test_result_filter_modal_has_explicit_semantics_and_restores_table(operation):
+    from textual.widgets import Input
+
+    from aws_tui.ui.widgets.modal_button import ModalButton
+
+    vm, calls = await _loaded_result_controls_vm()
+    vm.results.set_filter("tail")
+    app = _AthenaApp(vm)
+    async with app.run_test(size=(80, 24)) as pilot:
+        await pilot.pause()
+        view = app.query_one(AthenaResultsView)
+        table = app.query_one(DataTable)
+        await focus_and_settle(table)
+        view.action_filter_results()
+        await pilot.pause()
+        field = app.screen.query_one(Input)
+        assert field.value == "tail"
+        field.value = "missing"
+        if operation == "cancel":
+            await pilot.press("escape")
+        elif operation == "apply":
+            await pilot.press("enter")
+        else:
+            button = next(b for b in app.screen.query(ModalButton) if b.button_id == "clear")
+            await focus_and_settle(button)
+            await pilot.press("enter")
+        await pilot.pause()
+        assert (
+            vm.results.filter_text == {"cancel": "tail", "apply": "missing", "clear": ""}[operation]
+        )
+        assert app.focused is table
+        assert calls == [("controls", None)]
+
+
+@pytest.mark.parametrize("overlay", ["inspect", "filter"])
+@pytest.mark.parametrize("retirement", ["clear", "dispose", "remove"])
+async def test_result_overlays_close_and_stale_callbacks_cannot_restore_retired_data(
+    overlay, retirement
+):
+    vm, _ = await _loaded_result_controls_vm()
+    app = _AthenaApp(vm)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        view = app.query_one(AthenaResultsView)
+        vm.results.select_cell(1, 1)
+        if overlay == "inspect":
+            view.action_inspect_cell()
+        else:
+            view.action_filter_results()
+        await pilot.pause()
+        assert len(app.screen_stack) == 2
+        if retirement == "remove":
+            await app.query_one(AthenaPage).remove()
+        elif retirement == "clear":
+            vm.results.clear()
+        else:
+            vm.results.dispose()
+        await pilot.pause()
+        assert len(app.screen_stack) == 1
+        assert vm.results.selection is None or retirement == "remove"
+        assert app.focused is None or not isinstance(app.focused, DataTable)
+
+
+async def test_result_refresh_surfaces_live_missing_control_and_tolerates_teardown():
+    vm, _ = await _loaded_result_controls_vm()
+    app = _AthenaApp(vm)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        view = app.query_one(AthenaResultsView)
+        query = view.query_one
+
+        def missing(selector, expect_type=None):
+            if selector == "#athena-results-footer":
+                raise NoMatches("Missing required footer")
+            return query(selector, expect_type) if expect_type else query(selector)
+
+        view.query_one = missing
+        with pytest.raises(NoMatches, match="Missing required footer"):
+            view._refresh()
+        view.query_one = query
+        await view.remove()
+        view._refresh()
+
+
+async def test_delayed_result_highlight_cannot_reselect_a_different_projection_or_restored_cell(
+    monkeypatch,
+):
+    vm, _ = await _loaded_result_controls_vm()
+    app = _AthenaApp(vm)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        view = app.query_one(AthenaResultsView)
+        table = app.query_one(DataTable)
+        assert table.cursor_type == "cell"
+        await focus_and_settle(table)
+        captured = []
+        post = table.post_message
+
+        def capture(message):
+            if isinstance(message, DataTable.CellHighlighted):
+                captured.append(message)
+                return True
+            return post(message)
+
+        monkeypatch.setattr(table, "post_message", capture)
+        table.move_cursor(row=1, column=1)
+        assert captured
+        stale = captured[-1]
+        monkeypatch.setattr(table, "post_message", post)
+        vm.results.select_cell(2, 2)
+        vm.results.set_sort(0)
+        await pilot.pause()
+        view.on_data_table_cell_highlighted(stale)
+        assert vm.results.selection == (2, 2)
+        assert (table.cursor_row, table.cursor_column) == (1, 2)
+        vm.results.set_filter("missing")
+        await pilot.pause()
+        vm.results.reset_projection()
+        await pilot.pause()
+        assert vm.results.selection is None
+        view.on_data_table_cell_highlighted(stale)
+        assert vm.results.selection is None
+
+
+async def test_results_refresh_when_activated_and_after_background_modal_changes():
+    from textual.screen import ModalScreen
+
+    vm, calls = await _loaded_result_controls_vm()
+    await vm.select_view("query")
+    app = _AthenaApp(vm)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await vm.select_view("results")
+        await pilot.pause()
+        table = app.query_one(DataTable)
+        assert table.row_count == 3
+        modal = ModalScreen()
+        app.push_screen(modal)
+        await pilot.pause()
+        vm.results.set_filter("tail")
+        await pilot.pause()
+        assert table.row_count == 3
+        modal.dismiss()
+        await pilot.pause()
+        assert table.row_count == 1
+        assert vm.results.selection is None
+        assert calls == [("controls", None)]
+
+
+@pytest.mark.parametrize("overlay", ["inspect", "filter"])
+async def test_result_overlay_closes_when_results_view_is_hidden(overlay):
+    vm, _ = await _loaded_result_controls_vm()
+    app = _AthenaApp(vm)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        vm.results.select_cell(1, 1)
+        view = app.query_one(AthenaResultsView)
+        if overlay == "inspect":
+            view.action_inspect_cell()
+        else:
+            view.action_filter_results()
+        await pilot.pause()
+        await vm.select_view("query")
+        await pilot.pause()
+        assert len(app.screen_stack) == 1
+        assert not view.display
+        assert app.focused is None or not isinstance(app.focused, DataTable)
+
+
+@pytest.mark.parametrize(
+    ("column", "status", "text"), [(0, "null", ""), (1, "empty string", ""), (2, "string", "NULL")]
+)
+async def test_result_inspector_distinguishes_null_empty_and_literal_null(column, status, text):
+    vm, _ = await _loaded_result_controls_vm()
+    app = _AthenaApp(vm)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        vm.results.select_cell(0, column)
+        app.query_one(AthenaResultsView).action_inspect_cell()
+        await pilot.pause()
+        assert app.screen.query_one("#athena-cell-value", TextArea).text == text
+        metadata = app.screen.query_one("#athena-cell-metadata", Static)
+        assert f"column {column + 1} · {status}" in str(metadata.content)
+        await pilot.press("escape")
+
+
+async def test_stale_result_filter_callback_and_inspector_restore_guard_changed_generation(
+    monkeypatch,
+):
+    vm, _ = await _loaded_result_controls_vm()
+    app = _AthenaApp(vm)
+    callbacks = []
+    push = app.push_screen
+
+    def capture(screen, callback=None, **kwargs):
+        callbacks.append(callback)
+        return push(screen, callback, **kwargs)
+
+    monkeypatch.setattr(app, "push_screen", capture)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        view = app.query_one(AthenaResultsView)
+        vm.results.select_cell(1, 1)
+        old_generation = vm.results.projection_generation
+        view.action_filter_results()
+        await pilot.pause()
+        stale_filter = callbacks[-1]
+        vm.results.clear()
+        await pilot.pause()
+        await vm.results.load("controls")
+        await pilot.pause()
+        vm.results.select_cell(2, 2)
+        stale_filter("retired filter")
+        view._restore_table(old_generation, (1, 1))
+        await pilot.pause()
+        assert vm.results.filter_text == ""
+        assert vm.results.selection == (2, 2)
+
+
+async def test_result_modal_invalidates_under_nested_overlay_before_resuming():
+    from textual.screen import ModalScreen
+
+    vm, _ = await _loaded_result_controls_vm()
+    app = _AthenaApp(vm)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        vm.results.select_cell(1, 1)
+        app.query_one(AthenaResultsView).action_inspect_cell()
+        await pilot.pause()
+        inspector = app.screen
+        next_modal = ModalScreen()
+        app.push_screen(next_modal)
+        await pilot.pause()
+        vm.results.clear()
+        await pilot.pause()
+        assert app.screen is next_modal
+        assert inspector.query_one(TextArea).text == ""
+        next_modal.dismiss()
+        await pilot.pause()
+        assert len(app.screen_stack) == 1
+        assert vm.results.selection is None
+
+
+async def test_result_table_cell_messages_do_not_expose_rendered_values_in_repr(monkeypatch):
+    vm, _ = await _loaded_result_controls_vm()
+    app = _AthenaApp(vm)
+    messages = []
+    post = DataTable.post_message
+
+    def capture(table, message):
+        if isinstance(message, (DataTable.CellHighlighted, DataTable.CellSelected)):
+            messages.append(message)
+        return post(table, message)
+
+    monkeypatch.setattr(DataTable, "post_message", capture)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        table = app.query_one(DataTable)
+        table.move_cursor(row=1, column=1)
+        table.action_select_cursor()
+        await pilot.pause()
+        assert any(isinstance(message, DataTable.CellSelected) for message in messages)
+        assert all(message.value is None for message in messages)
+        assert all("[bold]" not in repr(message) for message in messages)
+        assert vm.results.selected_cell == vm.results.rows[1][1]
+
+
+@pytest.mark.parametrize("overlay", ["inspect", "filter"])
+async def test_result_overlay_retirement_before_modal_mount_does_not_leave_stale_overlay(overlay):
+    vm, _ = await _loaded_result_controls_vm()
+    app = _AthenaApp(vm)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        vm.results.select_cell(1, 1)
+        view = app.query_one(AthenaResultsView)
+        if overlay == "inspect":
+            view.action_inspect_cell()
+        else:
+            view.action_filter_results()
+        vm.results.clear()
+        await pilot.pause()
+        assert len(app.screen_stack) == 1
+        assert vm.results.selection is None
+
+
+@pytest.mark.parametrize("control", ["#athena-results-table", "#athena-results-footer"])
+async def test_result_refresh_preflights_partial_control_unmount(control):
+    vm, _ = await _loaded_result_controls_vm()
+    app = _AthenaApp(vm)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        view = app.query_one(AthenaResultsView)
+        await view.query_one(control).remove()
+        assert view.is_attached
+        assert view.is_running
+        view._refresh()
+
+
+@pytest.mark.parametrize("control", ["#athena-results-table", "#athena-results-footer"])
+async def test_result_refresh_recovers_after_real_control_replacement(control):
+    vm, _ = await _loaded_result_controls_vm()
+    app = _AthenaApp(vm)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        vm.results.select_cell(1, 1)
+        await pilot.pause()
+        view = app.query_one(AthenaResultsView)
+        old = view.query_one(control)
+        parent = old.parent
+        await old.remove()
+        assert parent is not None
+        if isinstance(old, DataTable):
+            replacement = type(old)(id=old.id, cursor_type="cell")
+        else:
+            replacement = type(old)("", id=old.id)
+        await parent.mount(replacement)
+        await pilot.pause()
+        view._refresh()
+        table = view.query_one(DataTable)
+        assert table.row_count == 3
+        assert (table.cursor_row, table.cursor_column) == (1, 1)
+        assert vm.results.selection == (1, 1)
+        assert (
+            view.query_one("#athena-results-footer", Static).content
+            == "3 visible / 3 loaded · local · more available"
+        )

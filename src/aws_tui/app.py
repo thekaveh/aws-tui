@@ -64,6 +64,7 @@ from aws_tui.ui.paste_guard import guarded_driver_class
 from aws_tui.ui.terminal_protocol import prefer_sigwinch_resize
 from aws_tui.ui.widgets._worker import DeferredWorkerMixin
 from aws_tui.ui.widgets.athena.page import AthenaPage
+from aws_tui.ui.widgets.athena.results_view import AthenaResultsView
 from aws_tui.ui.widgets.brand_banner import BrandBanner
 from aws_tui.ui.widgets.command_palette import CommandPalette
 from aws_tui.ui.widgets.confirm_modal import TextualDialogService
@@ -401,6 +402,33 @@ _PALETTE_COMMANDS: tuple[PaletteEntry, ...] = (
     PaletteEntry("athena.cancel", "Cancel Athena query", "athena", service_ids=_ATHENA_SERVICE_IDS),
     PaletteEntry(
         "athena.load_more", "Load more Athena rows", "athena", service_ids=_ATHENA_SERVICE_IDS
+    ),
+    PaletteEntry(
+        "athena.inspect_cell", "Inspect Athena cell", "athena", service_ids=_ATHENA_SERVICE_IDS
+    ),
+    PaletteEntry(
+        "athena.copy_cell", "Copy Athena cell as JSON", "athena", service_ids=_ATHENA_SERVICE_IDS
+    ),
+    PaletteEntry(
+        "athena.copy_row", "Copy Athena row as JSON", "athena", service_ids=_ATHENA_SERVICE_IDS
+    ),
+    PaletteEntry(
+        "athena.filter_results",
+        "Filter loaded Athena results",
+        "athena",
+        service_ids=_ATHENA_SERVICE_IDS,
+    ),
+    PaletteEntry(
+        "athena.sort_results",
+        "Sort loaded Athena results",
+        "athena",
+        service_ids=_ATHENA_SERVICE_IDS,
+    ),
+    PaletteEntry(
+        "athena.reset_results",
+        "Reset loaded Athena results",
+        "athena",
+        service_ids=_ATHENA_SERVICE_IDS,
     ),
     PaletteEntry(
         "athena.open_result_location",
@@ -862,6 +890,15 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
         self._actions.register("athena.execute", self.action_execute_athena)
         self._actions.register("athena.cancel", self.action_cancel_athena)
         self._actions.register("athena.load_more", self.action_load_more_athena)
+        for action in (
+            "inspect_cell",
+            "copy_cell",
+            "copy_row",
+            "filter_results",
+            "sort_results",
+            "reset_results",
+        ):
+            self._actions.register(f"athena.{action}", partial(self._athena_result_control, action))
         self._actions.register(
             "athena.open_result_location",
             self.action_open_athena_result_location,
@@ -2463,7 +2500,18 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
                 else partial(self._schedule_palette_selection, entry.id)
                 if entry.id
                 in _PANE_SELECTION_ACTIONS
-                | {"pane.filter", "pane.fuzzy_find", "pane.sort", "pane.clear_filter"}
+                | {
+                    "pane.filter",
+                    "pane.fuzzy_find",
+                    "pane.sort",
+                    "pane.clear_filter",
+                    "athena.inspect_cell",
+                    "athena.copy_cell",
+                    "athena.copy_row",
+                    "athena.filter_results",
+                    "athena.sort_results",
+                    "athena.reset_results",
+                }
                 else partial(self._actions.invoke, entry.id),
             )
         self._command_palette_populated = True
@@ -4208,6 +4256,19 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
         page = self._athena_page()
         if page is not None:
             await page.action_load_more()
+
+    def _athena_result_control(self, action: str) -> None:
+        if (
+            len(self.screen_stack) > 1
+            or self._app_ctx.focus_coordinator.is_modal
+            or isinstance(self.focused, (Input, TextArea))
+        ):
+            return
+        page = self._athena_page()
+        if page is None or page.vm.active_view != "results":
+            return
+        self.record_action(f"athena.{action}")
+        getattr(page.query_one(AthenaResultsView), f"action_{action}")()
 
     async def action_open_athena_result_location(self) -> None:
         self.record_action("athena.open_result_location")

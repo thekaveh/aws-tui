@@ -432,3 +432,59 @@ async def test_copy_keystroke_does_not_wait_on_the_helper(
         )
 
         assert len(port.writes) == 1, "and the deferred write still lands"
+
+
+async def test_athena_result_json_copy_reaches_shared_clipboard_without_rendered_null_confusion(
+    app_context_factory,
+):
+    from textual.containers import Container
+
+    from aws_tui.domain.query import ResultColumn, ResultPage
+    from aws_tui.ui.widgets.athena.page import AthenaPage
+    from tests.unit.vm.athena.test_page_vm import PageClient, make_page_vm
+
+    port = InMemoryClipboard()
+    ctx = app_context_factory(clipboard=port)
+    client = PageClient()
+
+    async def results(execution_id, *, start_token=None):
+        assert execution_id == "clipboard-results"
+        assert start_token is None
+        return ResultPage(
+            (ResultColumn("dup", "varchar", "NULLABLE"),) * 2,
+            ((None, "é\n[bold]"),),
+            None,
+        )
+
+    client.get_results_page = results
+    vm = make_page_vm(client, hub=ctx.hub)
+    await vm.setup()
+    await vm.results.load("clipboard-results")
+    await vm.select_view("results")
+    app = AwsTuiApp(ctx)
+    try:
+        async with app.run_test() as pilot:
+            host = app.query_one("#content-host", Container)
+            await host.remove_children()
+            await host.mount(
+                AthenaPage(
+                    vm,
+                    hub=ctx.hub,
+                    focus_coordinator=ctx.focus_coordinator,
+                    id="content-athena-page",
+                )
+            )
+            await pilot.pause()
+            vm.results.select_cell(0, 0)
+            app.action_dispatch("athena.copy_cell")
+            await drain_workers(app)
+            app.action_dispatch("athena.copy_row")
+            await drain_workers(app)
+            assert port.writes == ["null", '[null,"é\\n[bold]"]']
+            assert client.start_calls == []
+            toasts = tuple(ctx.root_vm.chrome.toast_stack.toasts)
+            assert toasts
+            assert all("é" not in str(toast) and "[bold]" not in str(toast) for toast in toasts)
+    finally:
+        await vm.shutdown()
+        vm.dispose()

@@ -72,6 +72,12 @@ _ATHENA = {
     "Load more Athena rows",
     "Open Athena result in S3",
     "Open query table in Glue",
+    "Inspect Athena cell",
+    "Copy Athena cell as JSON",
+    "Copy Athena row as JSON",
+    "Filter loaded Athena results",
+    "Sort loaded Athena results",
+    "Reset loaded Athena results",
 }
 
 
@@ -522,3 +528,171 @@ async def test_direct_glue_page_disposal_disables_handoffs_without_advisory_toas
             assert len(ctx.root_vm.chrome.toast_stack.toasts) == toast_count
     finally:
         vm.dispose()
+
+
+async def test_athena_loaded_result_controls_have_registered_scoped_palette_actions(
+    app_context_factory,
+):
+    from aws_tui.infra.keymap_store import KeymapStore
+    from aws_tui.ui.widgets.help_modal import HelpModal
+
+    ctx = app_context_factory()
+    app = AwsTuiApp(ctx)
+    controls = {
+        "inspect_cell",
+        "copy_cell",
+        "copy_row",
+        "filter_results",
+        "sort_results",
+        "reset_results",
+    }
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        for action in controls:
+            assert app._actions.has("athena." + action)
+        app._populate_command_palette()
+        palette = ctx.command_palette_vm
+        palette.set_active_service("athena")
+        entries = {entry.id for entry in palette.filtered_entries}
+        assert {"athena." + action for action in controls} <= entries
+        palette.set_active_service("s3")
+        assert not {"athena." + action for action in controls} & {
+            entry.id for entry in palette.filtered_entries
+        }
+        overlay = HelpModal(keymap=KeymapStore(overlay={"athena.copy_cell": "ctrl+g"}))
+        app.push_screen(overlay)
+        await pilot.pause()
+        rows = " ".join(str(row.content) for row in overlay.query(".help-row"))
+        assert "Ctrl+g" in rows
+        assert "loaded Athena" in rows
+
+
+@pytest.mark.parametrize("size", [(80, 24), (120, 40)])
+async def test_athena_result_shortcuts_arrows_modal_containment_and_palette_dispatch(
+    app_context_factory,
+    monkeypatch,
+    size,
+):
+    from textual.widgets import DataTable, Input, TextArea
+
+    from aws_tui.domain.query import ResultColumn, ResultPage
+    from aws_tui.ui.widgets.athena.page import AthenaPage
+    from aws_tui.ui.widgets.athena.result_cell_modal import AthenaResultCellModal
+    from aws_tui.ui.widgets.athena.result_filter_modal import AthenaResultFilterModal
+    from tests.helpers import focus_and_settle
+    from tests.unit.vm.athena.test_page_vm import PageClient, make_page_vm
+
+    ctx = app_context_factory()
+    client = PageClient()
+    result_calls = []
+
+    async def results(execution_id, *, start_token=None):
+        result_calls.append((execution_id, start_token))
+        assert start_token is None
+        return ResultPage(
+            (
+                ResultColumn("dup", "varchar", "NULLABLE"),
+                ResultColumn("dup", "varchar", "NULLABLE"),
+            ),
+            ((None, ""), ("2", "literal\n[bold]é[/bold]")),
+            None,
+        )
+
+    client.get_results_page = results
+    vm = make_page_vm(client, hub=ctx.hub)
+    await vm.setup()
+    await vm.results.load("shortcuts")
+    await vm.select_view("results")
+    copies = []
+    app = AwsTuiApp(ctx)
+    monkeypatch.setattr(app, "copy_value", lambda value, label: copies.append((value, label)))
+    try:
+        async with app.run_test(size=size) as pilot:
+            host = app.query_one("#content-host", Container)
+            await host.remove_children()
+            await host.mount(
+                AthenaPage(
+                    vm,
+                    hub=ctx.hub,
+                    focus_coordinator=ctx.focus_coordinator,
+                    id="content-athena-page",
+                )
+            )
+            await pilot.pause()
+            table = app.query_one(DataTable)
+            await focus_and_settle(table)
+            await pilot.press("right", "down")
+            await pilot.pause()
+            assert vm.results.selection == (1, 1)
+            await pilot.press("alt+c", "alt+shift+c")
+            assert [value for value, _ in copies] == [
+                '"literal\\n[bold]é[/bold]"',
+                '["2","literal\\n[bold]é[/bold]"]',
+            ]
+            await pilot.press("left")
+            await pilot.pause()
+            assert vm.results.selection == (1, 0)
+            await pilot.press("alt+enter")
+            await pilot.pause()
+            assert isinstance(app.screen, AthenaResultCellModal)
+            body = app.screen.query_one(TextArea)
+            await pilot.press("enter", "alt+c", "alt+s", "ctrl+enter", "alt+f")
+            assert isinstance(app.screen, AthenaResultCellModal)
+            assert body.text == "2"
+            assert len(copies) == 2
+            assert vm.results.sort_column is None
+            await pilot.press("escape")
+            await pilot.pause()
+            await pilot.press("alt+f")
+            await pilot.pause()
+            assert isinstance(app.screen, AthenaResultFilterModal)
+            field = app.screen.query_one(Input)
+            field.value = "missing"
+            await pilot.press("alt+c", "alt+s", "ctrl+enter", "enter")
+            await pilot.pause()
+            assert vm.results.filter_text == "missing"
+            assert vm.results.selection is None
+            await pilot.press("alt+r")
+            await pilot.pause()
+            assert vm.results.filter_text == ""
+            assert vm.results.selection is None
+            vm.results.select_cell(1, 1)
+            await pilot.pause()
+            app._populate_command_palette()
+            ctx.command_palette_vm.set_active_service("athena")
+            await pilot.press("ctrl+k")
+            ctx.command_palette_vm.set_active_service("athena")
+            await pilot.press(*"Inspect Athena cell")
+            await pilot.press("enter")
+            await pilot.pause()
+            assert isinstance(app.screen, AthenaResultCellModal)
+            await pilot.press("escape")
+            await pilot.pause()
+            await vm.select_view("query")
+            await pilot.pause()
+            editor = app.query_one("#athena-editor", TextArea)
+            await focus_and_settle(editor)
+            await pilot.press("alt+c", "alt+shift+c", "alt+f", "alt+s", "alt+r", "alt+enter")
+            assert len(copies) == 2
+            assert len(app.screen_stack) == 1
+            assert client.start_calls == []
+            assert result_calls == [("shortcuts", None)]
+    finally:
+        await vm.shutdown()
+        vm.dispose()
+
+
+async def test_athena_result_control_configured_key_dispatch_replaces_default(app_context_factory):
+    from aws_tui.infra.keymap_store import KeymapStore
+
+    ctx = app_context_factory()
+    ctx.keymap_store = KeymapStore(overlay={"athena.copy_cell": "ctrl+g"})
+    app = AwsTuiApp(ctx)
+    calls = []
+    app._actions.register("athena.copy_cell", lambda: calls.append("copy"))
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await pilot.press("alt+c")
+        assert calls == []
+        await pilot.press("ctrl+g")
+        assert calls == ["copy"]

@@ -233,3 +233,23 @@ def test_emr_cancel_has_one_dedicated_printable_default() -> None:
         "emr.cancel"
     ]
     assert KeymapStore(overlay={"emr.cancel": "z"}).resolve("emr.cancel") == ("z",)
+
+
+def test_athena_result_controls_bind_canonical_parser_keys():
+    from textual._xterm_parser import XTermParser
+    from textual.events import Key
+
+    store = KeymapStore()
+    expected = {
+        "inspect_cell": "alt+enter",
+        "copy_cell": "alt+c",
+        "copy_row": "alt+shift+c",
+        "filter_results": "alt+f",
+        "sort_results": "alt+s",
+        "reset_results": "alt+r",
+    }
+    for action, key in expected.items():
+        assert store.resolve("athena." + action) == (key,)
+    parser = XTermParser()
+    events = list(parser.feed("\x1bC")) + list(parser.feed(""))
+    assert [event.key for event in events if isinstance(event, Key)] == ["alt+shift+c"]

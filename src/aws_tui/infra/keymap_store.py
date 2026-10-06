@@ -171,6 +171,12 @@ class KeymapStore:
         "athena.execute": ("ctrl+enter",),
         "athena.cancel": ("escape",),
         "athena.load_more": ("l",),
+        "athena.inspect_cell": ("alt+enter",),
+        "athena.copy_cell": ("alt+c",),
+        "athena.copy_row": ("alt+shift+c",),
+        "athena.filter_results": ("alt+f",),
+        "athena.sort_results": ("alt+s",),
+        "athena.reset_results": ("alt+r",),
     }
 
     def __init__(self, *, overlay: dict[str, str | list[str]] | None = None) -> None:
