@@ -217,3 +217,29 @@ def test_launch_selectors_document_values_precedence_and_session_contract() -> N
             "existing native directory",
         ):
             assert claim in text
+
+
+def test_quick_look_formats_controls_and_budgets_documented() -> None:
+    readme = (ROOT / "README.md").read_text()
+    keys = (ROOT / "docs/keybindings.md").read_text()
+    cookbook = (ROOT / "docs/cookbook.md").read_text()
+    for text in (readme, keys, cookbook):
+        for needle in ("CSV", "JSON", "JSONL", "Parquet", "`r`", "64 KiB"):
+            assert needle in text
+    for needle in (
+        "32 physical file requests",
+        "8 MiB",
+        "512 KiB",
+        "32 MiB",
+        "50 rows",
+        "24 columns",
+        "five-second",
+        "truncated",
+        "Left",
+        "Right",
+        "Preview timed out",
+        "Encrypted Parquet preview is not supported",
+    ):
+        assert needle in cookbook
+    assert "hard native-memory limit" in cookbook
+    assert "without another file read" in cookbook

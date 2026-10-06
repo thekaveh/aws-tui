@@ -11,6 +11,7 @@
 6. [Run Athena queries safely](#6-run-athena-queries-safely)
 7. [Inspect and query Glue tables through Athena](#7-inspect-and-query-glue-tables-through-athena)
 8. [Diagnose local setup and source access](#8-diagnose-local-setup-and-source-access)
+9. [Preview files with Quick Look](#9-preview-files-with-quick-look)
 
 ---
 
@@ -1263,3 +1264,46 @@ from the running app's log and crash path selection, including custom
 context paths and legacy/platform-native cache resolution. Diagnostic path
 text displays brackets literally and escapes control characters. Doctor
 also reports effective local paths without creating them.
+
+
+## 9. Preview files with Quick Look
+
+Select a local or S3 file in the file pane and press `Space`. For example,
+open `measurements.csv` to inspect its header and complete records,
+`events.json` or `events.jsonl` to inspect JSON values, or `sample.parquet`
+to inspect column names, types and a capped row sample. Filename and MIME
+hints are checked against the bounded content sniff. Other content displays
+as raw text.
+
+The mode line shows **Structured** or **Raw**. Press `r` to toggle between
+the structured result and its captured raw prefix without another file read.
+Use `Up` / `Down` and `Left` / `Right` to reach rows and wide columns. Press
+`Esc` or `Space` to close. Null (`null`), empty string (`""`), missing
+(`— (missing)`), nested JSON and shortened (`… [truncated]`) cells remain
+distinct. Brackets and escaped control characters display literally.
+
+Raw previews retain at most 64 KiB (65,536 bytes). Structured previews share
+a budget of 32 physical file requests and 8 MiB of requested bytes, with
+ranges of at most 1 MiB, at most 50 rows and 24 columns, and a five-second
+work deadline. Decoder cleanup has a separate one-second allowance. CSV
+shows complete records from the prefix, including quoted multiline values.
+JSON and JSONL require the captured document to be complete and valid;
+malformed or truncated documents fall back to raw, even when their prefix
+looks valid. This is a bounded preview, not full-file sampling.
+
+Parquet uses bounded footer and column-range reads. Its footer is capped at
+512 KiB and selected chunks at 32 MiB of declared uncompressed data. These
+declarations do not impose a hard native-memory limit; decoding runs in a
+process that can be terminated on cancellation or deadline. Nested columns
+are sampled only when all their physical leaves fit the column cap.
+Encrypted metadata and external column files are unsupported. Large valid
+samples may show schema with a budget note. Named failures include
+`Unsupported Parquet codec: <name>`,
+`Encrypted Parquet preview is not supported`, `Malformed Parquet footer`,
+`Parquet sample exceeds preview budget`, `Parquet preview unavailable` and
+`Preview timed out`.
+
+Closing or replacing a preview cancels its work and drains owned resources.
+Local and S3 previews validate source identity before displaying results; a
+changed source shows `Preview cancelled: source changed`. Preview reads are
+read-only and never download the whole object for decoding.

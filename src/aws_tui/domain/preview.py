@@ -6,6 +6,7 @@ import asyncio
 import csv
 import io
 import json
+import re
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
 from enum import StrEnum
@@ -250,6 +251,11 @@ def parse_text(
         return _raw(raw)
     sniff = raw[:PREVIEW_SNIFF_BYTES].decode("utf-8-sig", errors="ignore").lstrip()
     suffix = name.rsplit(".", 1)[-1].lower()
+    hinted = suffix == "csv" or "csv" in mime
+    # A closed, unquoted bracket label is a legal CSV header (e.g. [red]id).
+    # Admit it with a CSV hint after failed JSON parsing; JSON punctuation
+    # and quoted tokens retain the malformed-JSON fallback.
+    bracket_header = hinted and re.match(r'^\[[^\[\]"{},\r\n]+\][^,\r\n]*,', sniff) is not None
     jsonl_hint = suffix in {"jsonl", "ndjson"} or "ndjson" in mime or "jsonl" in mime
     json_hint = suffix == "json" or "json" in mime or sniff.startswith(("{", "["))
     if not truncated and (json_hint or jsonl_hint):
@@ -271,11 +277,15 @@ def parse_text(
             return _json_table(value, format_, raw)
         except (ValueError, RecursionError):
             # Never reinterpret malformed JSON-shaped documents as delimited records.
-            if sniff.startswith(("{", "[")):
+            if sniff.startswith(("{", "[")) and not bracket_header:
                 return _raw(raw, "Malformed or truncated JSON preview")
-    if truncated and (json_hint or jsonl_hint) and sniff.startswith(("{", "[")):
+    if (
+        truncated
+        and (json_hint or jsonl_hint)
+        and sniff.startswith(("{", "["))
+        and not bracket_header
+    ):
         return _raw(raw, "Malformed or truncated JSON preview")
-    hinted = suffix == "csv" or "csv" in mime
     try:
         result = _csv_table(text, raw, truncated, hinted)
     except ValueError:

@@ -151,3 +151,21 @@ def test_content_is_frozen() -> None:
     c = QuickLookContent(title="x", mime="text/plain", chunks=None, line_count_estimate=1)
     with pytest.raises(AttributeError):
         c.title = "y"  # type: ignore[misc]
+
+
+def test_content_four_positional_fields_and_lazy_loader_identity() -> None:
+    from aws_tui.domain.preview import PreviewFormat, PreviewResult
+
+    legacy = QuickLookContent("x", "text/plain", None, 1)
+    assert legacy.load_preview is None
+
+    async def loader():
+        return PreviewResult(PreviewFormat.RAW, b"x", (), ())
+
+    content = QuickLookContent("x", "text/plain", None, 1, loader)
+    assert content.load_preview is loader
+    vm = _build()
+    vm.open_command.execute(content)
+    assert vm.content is content
+    assert vm.content.load_preview is loader
+    vm.dispose()

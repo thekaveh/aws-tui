@@ -343,3 +343,92 @@ async def test_csv_render_budget_fallback_retains_raw_validates_and_closes():
     assert result.raw == raw
     assert result.notes == ("Structured output exceeds preview budget",)
     assert events == ["read", "validated", "closed"]
+
+
+@pytest.mark.asyncio
+async def test_first_bytes_exact_cap_does_not_pull_next_item() -> None:
+    closed = False
+
+    async def source():
+        nonlocal closed
+        try:
+            yield b"x" * 65536
+            raise AssertionError("read after exactly-full prefix")
+        finally:
+            closed = True
+
+    assert b"".join([c async for c in _first_bytes(source(), 65536)]) == b"x" * 65536
+    assert closed
+
+
+@pytest.mark.asyncio
+async def test_content_loader_is_lazy_and_closing_nested_prefix_closes_source() -> None:
+    opened = 0
+    closed = False
+
+    class Provider(_FakeProvider):
+        async def read_stream(self, path, *, chunk_size):
+            nonlocal opened
+            opened += 1
+
+            async def source():
+                nonlocal closed
+                try:
+                    yield b"first"
+                    yield b"second"
+                finally:
+                    closed = True
+
+            return source()
+
+    provider = Provider()
+    content = _build_quick_look_content(_file("a.txt"), provider, path="a.txt")
+    assert content.load_preview is not None
+    assert content.load_preview.func.__name__ == "load_preview"
+    assert content.load_preview.args == (provider, "a.txt")
+    assert opened == 0
+    assert await anext(content.chunks) == b"first"
+    await content.chunks.aclose()
+    assert opened == 1
+    assert closed
+
+
+@pytest.mark.asyncio
+async def test_bracket_leading_csv_header_is_literal_and_not_json() -> None:
+    from aws_tui.domain.preview import PreviewFormat
+
+    result = await _structured(
+        b"[red]sample_id,wide\nstructured-preview-row,ordinary\n", "sample.csv", "text/csv"
+    )
+    assert result.format is PreviewFormat.CSV
+    assert result.columns[0].name == "[red]sample_id"
+    assert result.rows[0][0].text == "structured-preview-row"
+
+
+@pytest.mark.parametrize("raw", [b"[1,2", b'{"a":1,', b'[{"a":1},\n{"b":2'])
+def test_malformed_json_with_csv_hint_is_still_raw(raw) -> None:
+    from aws_tui.domain.preview import PreviewFormat, parse_text
+    from aws_tui.domain.preview_limits import PreviewBudget
+
+    for truncated in (False, True):
+        result = parse_text(
+            raw,
+            name="wrong.csv",
+            mime="text/csv",
+            truncated=truncated,
+            budget=PreviewBudget.start(),
+        )
+        assert result.format is PreviewFormat.RAW
+        assert result.raw == raw
+
+
+@pytest.mark.asyncio
+async def test_bracket_leading_hinted_csv_retains_missing_cells() -> None:
+    from aws_tui.domain.preview import PreviewCellKind, PreviewFormat
+
+    result = await _structured(
+        b"[red]sample_id,wide\nstructured-preview-row\n", "sample.csv", "text/csv"
+    )
+    assert result.format is PreviewFormat.CSV
+    assert result.rows[0][1].kind is PreviewCellKind.MISSING
+    assert result.rows[0][1].text == "— (missing)"
