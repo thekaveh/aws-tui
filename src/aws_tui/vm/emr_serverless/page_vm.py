@@ -15,9 +15,11 @@ from typing import Any, Literal
 from vmx import ComponentVMOf, Message, MessageHub, PropertyChangedMessage
 from vmx.services.dispatcher import Dispatcher
 
+from aws_tui.domain.emr_cloudwatch_logs import cloudwatch_location
 from aws_tui.domain.emr_logs import EmrServerlessLogsClientProtocol, LogFilter
 from aws_tui.domain.emr_serverless import (
     CANCELLABLE_JOB_RUN_STATES,
+    CloudWatchLogConfiguration,
     EmrServerlessClientProtocol,
     JobRunState,
 )
@@ -34,7 +36,7 @@ from aws_tui.vm._observable import send_value_free
 from aws_tui.vm.chrome.confirm_vm import ConfirmPath, ConfirmRequest
 from aws_tui.vm.emr_serverless.applications_vm import ApplicationsVM
 from aws_tui.vm.emr_serverless.job_run_detail_vm import JobRunDetailVM
-from aws_tui.vm.emr_serverless.job_run_logs_vm import JobRunLogsVM
+from aws_tui.vm.emr_serverless.job_run_logs_vm import JobRunLogsVM, LogSource
 from aws_tui.vm.emr_serverless.job_runs_vm import JobRunsVM
 from aws_tui.vm.file_manager.pane_vm import PaneState
 from aws_tui.vm.operation_owner import OperationOwner, OperationSuperseded
@@ -52,6 +54,9 @@ class EmrCredentialRecoverySnapshot:
     run_state_filter: frozenset[JobRunState]
     log_file_key: str | None
     log_filter: LogFilter
+    log_source: LogSource | None = None
+    cloudwatch_stream_name: str | None = None
+    cloudwatch_configuration: CloudWatchLogConfiguration | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -413,6 +418,8 @@ class EmrServerlessPageVM:
         if self.applications.selected_id != app_id:
             return
         self._selection_store.set(self._selection_scope, "application_id", app_id)
+        if app_id != self.job_run_logs.application_id:
+            self.job_run_logs.set_target(app_id, None, None, metadata_known=False)
         self.job_runs.set_application(app_id)
         if not await self._run(self.job_runs.refresh):
             return
@@ -468,7 +475,7 @@ class EmrServerlessPageVM:
         self.job_run_detail.set_target(application_id, run_id)
         # Retarget immediately so a failed detail read cannot leave the
         # previously selected run's logs visible beside the new selection.
-        self.job_run_logs.set_target(application_id, run_id, None)
+        self.job_run_logs.set_target(application_id, run_id, None, metadata_known=False)
         target = (application_id, run_id)
         if not await self._run(self.job_run_detail.refresh):
             return
@@ -540,6 +547,11 @@ class EmrServerlessPageVM:
             run_state_filter=self.job_runs.state_filter,
             log_file_key=current_file.key if current_file is not None else None,
             log_filter=self.job_run_logs.filter,
+            log_source=self.job_run_logs.selected_source,
+            cloudwatch_stream_name=self.job_run_logs.current_stream.name
+            if self.job_run_logs.current_stream
+            else None,
+            cloudwatch_configuration=self.job_run_logs.cloudwatch_configuration,
         )
 
     async def restore_and_refresh_for_credential_recovery(
@@ -566,11 +578,44 @@ class EmrServerlessPageVM:
             if self.job_runs.selected_id != snapshot.job_run_id:
                 await self.select_job_run(snapshot.job_run_id)
         self.job_run_logs.set_filter(snapshot.log_filter)
+        if focus == "logs" and snapshot.log_source is not None:
+            if snapshot.log_source is LogSource.CLOUDWATCH:
+                current = self.job_run_logs.cloudwatch_configuration
+                original = snapshot.cloudwatch_configuration
+                if (
+                    current is None
+                    or original is None
+                    or snapshot.application_id is None
+                    or snapshot.job_run_id is None
+                ):
+                    return PaneState.ERROR
+                try:
+                    if cloudwatch_location(
+                        current, snapshot.application_id, snapshot.job_run_id
+                    ) != cloudwatch_location(
+                        original, snapshot.application_id, snapshot.job_run_id
+                    ):
+                        return PaneState.ERROR
+                except ValidationError:
+                    return PaneState.ERROR
+            self.job_run_logs.select_source(snapshot.log_source)
+            if self.job_run_logs.selected_source is not snapshot.log_source:
+                return PaneState.ERROR
         if focus == "logs":
             await self.job_run_logs.load(
                 use_cache=False,
                 preferred_file_key=snapshot.log_file_key,
+                preferred_cloudwatch_stream_name=snapshot.cloudwatch_stream_name,
             )
+            if (
+                snapshot.log_source is LogSource.CLOUDWATCH
+                and snapshot.cloudwatch_stream_name is not None
+                and (
+                    self.job_run_logs.current_stream is None
+                    or self.job_run_logs.current_stream.name != snapshot.cloudwatch_stream_name
+                )
+            ):
+                return PaneState.ERROR
             if snapshot.log_file_key is not None and (
                 self.job_run_logs.current_file is None
                 or self.job_run_logs.current_file.key != snapshot.log_file_key
@@ -601,6 +646,8 @@ class EmrServerlessPageVM:
             application_id,
             run_id,
             detail.s3_monitoring_log_uri,
+            cloudwatch=detail.cloudwatch_monitoring,
+            run_created_at_ms=int(detail.created_at.timestamp() * 1000),
         )
 
     async def _run(self, operation: Callable[[], Coroutine[Any, Any, None]]) -> bool:

@@ -57,6 +57,12 @@ class _PaneApp(App[None]):
         # Capture all posted messages for testing
         self._messages.append(message)
 
+    def on_job_run_logs_pane_cloud_watch_stream_selected(self, message):
+        self._messages.append(message)
+
+    def on_job_run_logs_pane_follow_requested(self, message):
+        self._messages.append(message)
+
     def on_job_run_logs_pane_log_file_selected(
         self,
         message: JobRunLogsPane.LogFileSelected,
@@ -251,3 +257,35 @@ async def test_left_and_right_select_exact_duplicate_kind_log_files() -> None:
             if isinstance(message, JobRunLogsPane.LogFileSelected)
         ]
         assert selected[-1].key == first.key
+
+
+async def test_cloudwatch_literal_caption_selectors_freshness_and_clicks(monkeypatch):
+    from textual.widgets import Static
+
+    from tests.unit.vm.emr_serverless.test_job_run_logs_vm import _cw_vm
+
+    vm, _fake, names = _cw_vm(monkeypatch)
+    await vm.load()
+    app = _PaneApp(vm, vm._hub)
+    async with app.run_test(size=(80, 24)) as pilot:
+        await pilot.pause()
+        pane = app.query_one(JobRunLogsPane)
+        assert "filter: loaded data only" in str(pane.query_one("#logs-filter", Static).render())
+        assert "CloudWatch: configured" in " ".join(
+            str(chip.render()) for chip in pane.query_one("#logs-sources").query(Static)
+        )
+        assert "Stopped" in str(pane.query_one("#logs-status", Static).render())
+        assert "Start follow" in str(pane.query_one("#logs-status", Static).render())
+        assert "ERROR CloudWatch 0" in str(pane.query_one("#logs-content", Static).render())
+        await focus_and_settle(pane)
+        await pilot.press("right")
+        await pilot.pause()
+        assert any(
+            isinstance(m, JobRunLogsPane.CloudWatchStreamSelected) and m.name == names[1]
+            for m in app._messages
+        )
+        await pilot.click("#logs-status")
+        await pilot.pause()
+        assert any(isinstance(m, JobRunLogsPane.FollowRequested) for m in app._messages)
+    await vm.shutdown()
+    vm.dispose()

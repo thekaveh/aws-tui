@@ -675,6 +675,8 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
         self._actions.register("emr.clone", self.action_clone_emr_run)
         self._actions.register("emr.cancel", self.action_cancel_emr_run)
         self._actions.register("emr.logs.filter", self.action_filter_emr_logs)
+        self._actions.register("emr.logs.source", self.action_cycle_emr_log_source)
+        self._actions.register("emr.logs.follow", self.action_toggle_emr_log_follow)
         self._actions.register(
             "glue.catalog",
             partial(self.action_select_glue_view, "catalog"),
@@ -2745,8 +2747,25 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
                 reasons["emr.clone"] = "selection_required"
             logs = emr.right_pane
             if logs is None or origin.focus is None or logs not in origin.focus.ancestors_with_self:
-                for action in ("emr.logs.filter", "pane.modal_left", "pane.modal_right"):
+                for action in (
+                    "emr.logs.filter",
+                    "emr.logs.source",
+                    "emr.logs.follow",
+                    "pane.modal_left",
+                    "pane.modal_right",
+                ):
                     reasons[action] = "focus_required"
+            else:
+                if not emr.vm.job_run_logs.can_follow:
+                    reasons["emr.logs.follow"] = "selection_required"
+                if (
+                    sum(
+                        emr.vm.job_run_logs.source_selectable(row.source)
+                        for row in emr.vm.job_run_logs.sources
+                    )
+                    < 2
+                ):
+                    reasons["emr.logs.source"] = "selection_required"
         if origin.service_id in {
             "athena",
             "glue",
@@ -4657,6 +4676,16 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
         if page is not None and page.open_focused_log_filter():
             self.record_action("emr.logs.filter")
 
+    def action_cycle_emr_log_source(self) -> None:
+        page = self._emr_page()
+        if page is not None and page.cycle_focused_log_source():
+            self.record_action("emr.logs.source")
+
+    def action_toggle_emr_log_follow(self) -> None:
+        page = self._emr_page()
+        if page is not None and page.toggle_focused_log_follow():
+            self.record_action("emr.logs.follow")
+
     async def action_select_glue_view(self, view: str) -> None:
         self.record_action(f"glue.{view}")
         page = self._glue_page()
@@ -6330,6 +6359,7 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
             emr_page.vm.applications,
             emr_page.vm.job_runs,
             emr_page.vm.job_run_detail,
+            emr_page.vm.job_run_logs,
         }:
             self._recompute_hint_disables()
             return

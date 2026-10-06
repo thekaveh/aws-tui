@@ -1,7 +1,7 @@
 # EMR Serverless
 
 The EMR Serverless service is an AWS-only operational view for applications,
-job runs, details, and S3-backed logs. It is read-mostly: browsing and log
+job runs, details, and S3 or CloudWatch logs. It is read-mostly: browsing and log
 inspection are read-only. Focused workflows clone an existing run or request
 cancellation of one selected active run.
 
@@ -37,6 +37,80 @@ marker cannot change a log's role; labels use the last retry/worker marker.
 Retry attempts and worker identity remain visible in the file choices. The pane
 updates one reusable text widget for the streamed body and updates progress
 separately, keeping mounted widget count bounded as logs grow.
+
+### 2.1. CloudWatch source and loaded data
+
+The logs pane shows separate S3 and CloudWatch destinations for the selected
+run. Each source is **configured**, **unavailable**, **unknown**, or **access
+denied**. Pending or failed detail reads remain unknown; they do not prove
+logging is absent. Enabled CloudWatch is selected when S3 is not configured; when
+both are configured S3 remains the default. `Ctrl+S` cycles configured log
+sources without changing the AWS connection. There is no automatic failover.
+
+Logging must already be configured on AWS. This read-only example describes a
+run's monitoring configuration; aws-tui does not enable or modify it:
+
+```json
+{
+  "monitoringConfiguration": {
+    "cloudWatchLoggingConfiguration": {
+      "enabled": true,
+      "logGroupName": "/example/emr",
+      "logStreamNamePrefix": "example"
+    }
+  }
+}
+```
+
+CloudWatch requires `enabled: true`. An omitted group uses
+`/aws/emr-serverless`. Default streams start with
+`/applications/{applicationId}/jobs/{jobRunId}/`; driver, worker suffixes and
+`attempts/{attempt}/` remain distinct choices. For a custom prefix, discovery
+conservatively accepts only names starting with that literal prefix followed
+by the same complete application/run path. It does not guess an undocumented
+AWS prefix join convention or search unrelated runs. Missing groups/streams
+show **not created yet** and can be retried. Left/Right selects an exact stream.
+
+`f` edits the regex filter and `Shift+F` restores its defaults. For CloudWatch,
+`filter: loaded data only` means edits immediately reproject retained events
+without an AWS request; they are not account-wide searches. Bodies, source
+names and regex text render literally, including Rich-style brackets.
+
+### 2.2. Read bounds, follow and credentials
+
+CloudWatch discovery permits 100 pages and 200 returned records, including
+rejected/duplicate names. One event read permits 100 pages, 10,000 returned
+events, 8 MiB of UTF-8 message bytes, and 1 MiB per event. Each discovery/read
+has a 30-second timeout. Continuing beyond a cap or repeating a token fails
+closed with fixed guidance. The pane retains the newest 5,000 whole events /
+4 MiB of message bytes, then at most 5,000 display lines / 4 MiB including
+newlines. **buffer capped** identifies discarded loaded data. Existing S3
+limits remain 100 MiB compressed, 5,000 matched lines, and five cached reads.
+
+`Ctrl+L` or the pane's **Start follow** control explicitly starts follow for
+CloudWatch. **Stop follow** remains available during a pending read. Follow
+waits two seconds after each completed read, with no overlapping polls, and
+rereads a 60-second timestamp overlap. It deduplicates event IDs, retains
+separate IDs with identical text, and stops if 20,000 overlap IDs would be
+exceeded. Events arriving with timestamps older than the overlap may be missed
+until an explicit reload. A fixed end bounds eligibility, but pagination does
+not provide an atomic AWS snapshot. The status shows Following/Stopped, last
+successful check time and latest event time; an empty successful poll advances
+the check time. Failures retain the last complete body and stop follow.
+
+Changing connection, application, run, source, stream or monitoring identity
+stops the old read/follow operation and drains it before replacement. Credential
+recovery restores the exact source/group/stream and filter with one fresh
+uncached read. Missing streams or changed monitoring identity reject the
+candidate; no default stream is substituted and following stays stopped.
+Authentication, denial, throttling and unavailable-service failures have fixed
+safe categories; no log body or original exception text enters diagnostics.
+
+The reader needs existing EMR read permissions plus `logs:DescribeLogStreams`
+and `logs:FilterLogEvents` on the configured group. It does not require
+`logs:GetLogEvents`, `logs:Unmask` or log creation/write permissions. The EMR
+job's writer permissions are separate; see
+[AWS CloudWatch logging configuration](https://docs.aws.amazon.com/emr/latest/EMR-Serverless-UserGuide/logging.html).
 
 ## 3. Clone workflow
 
@@ -122,7 +196,7 @@ truthful. Key repeats and polls never submit an automatic cancellation.
 `ApplicationsVM`, `JobRunsVM`, `JobRunDetailVM`, and `JobRunLogsVM`.
 `EmrServerlessClient` maps botocore responses into typed domain records.
 `EmrServerlessLogsClient` reads the selected run's monitoring objects through
-S3. VMx owns lifecycle, commands, observable state, paging, and modal results;
+S3 and CloudWatch. VMx owns lifecycle, commands, observable state, paging, and modal results;
 Textual owns focus and rendering.
 
 The exact AWS operations and pinned SDK model are recorded in the
@@ -132,7 +206,8 @@ surface is in [Keybindings](../keybindings.md).
 ## 6. Verification and demo
 
 Demo mode provides profile-isolated applications, terminal and active runs,
-clone transitions, and streamable success and failure logs without network
+clone transitions, CloudWatch-only and both-source runs with retry/worker
+streams, and streamable success and failure logs without network
 access. Demo cancellation changes only the selected backend run to `CANCELLED`,
 which existing reads then reveal. A cancelled clone stops its state walk and
 cannot resume or affect another run. Unit tests cover poller cadence, stale-target rejection, clone

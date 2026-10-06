@@ -141,15 +141,17 @@ focused editable widget can consume text first.
 | Clone selected job run | `c` | Opens the Spark clone form from the focused run. Edit arguments, Spark parameters and advanced settings as JSON, choose Review, inspect source identity and changes, then Submit. Enter in a single-line field opens review; Tab reaches the fixed footer. Unsupported drivers are refused. Escape closes the form; it does not cancel an AWS job already submitted. |
 | Cycle pane focus | `Tab` / `Shift+Tab` | 6-slot cycle: nav rail → source selector → application selector → runs pane → detail pane → logs pane → nav rail. |
 | Backspace | `Backspace` | No-op on EMR (symmetric to `Descend` having an EMR branch). |
-| Load logs (on-demand) | `Enter` | Loads logs from S3 into the RIGHT-logs pane (first press in the logs slot after Tab-focusing). File chips preserve exact retry attempt and Spark executor or Hive/Tez worker identity, including rotated stdout/stderr objects. |
-| Reload logs | `r` | Re-fetches logs from S3 even on cache hit. |
-| Open log filter modal | `f` | Edit regex patterns, toggle "Show all" or "Match case"; ``Apply`` re-fetches. |
+| Load logs (on-demand) | `Enter` | Loads the selected S3/CloudWatch source into the RIGHT-logs pane (first press in the logs slot after Tab-focusing). File chips preserve exact retry attempt and Spark executor or Hive/Tez worker identity, including rotated stdout/stderr objects. |
+| Reload logs | `r` | Re-fetches the exact selected log source/stream, even on an S3 cache hit. |
+| Cycle log destination | `Ctrl+S` | `emr.logs.source`: cycles configured S3/CloudWatch destinations with logs focus. |
+| Start/stop CloudWatch follow | `Ctrl+L` | `emr.logs.follow`: explicit follow; stop works during pending reads. |
+| Open log filter modal | `f` | Edit regex patterns, toggle "Show all" or "Match case"; ``Apply`` re-fetches S3; CloudWatch filters retained loaded data without a request. |
 | Reset log filter | `Shift+F` | Clears the logs filter and returns to the default log view. |
 | Scroll log lines up / down | `↑` `↓` (also `k` / `j`) | Navigate the loaded log line view (when RIGHT-logs pane is focused). |
 
 > **Right-pane refresh note:** `r` refreshes the currently focused
 > right-side surface: detail focus reloads the selected job-run detail;
-> logs focus re-fetches logs from S3.
+> logs focus re-fetches the selected S3/CloudWatch log source.
 
 ### 1.9. AWS Glue
 
@@ -330,6 +332,29 @@ falls back to the entire default keymap. Other custom bindings in the same
 overlay are also discarded. Choose a different unused key if your map already
 uses `z`.
 
+### 2.2. EMR log destination and follow bindings
+
+With the EMR logs pane focused, `Ctrl+S` (`emr.logs.source`) cycles configured
+S3/CloudWatch destinations, and `Ctrl+L` (`emr.logs.follow`) starts or stops
+CloudWatch follow. Stop remains available during a pending read. Both commands
+also use the Commands hints and command palette; outside logs they require
+logs focus. Follow requires enabled CloudWatch, while cycling requires two
+configured destinations. `f` edits the filter and `Shift+F` resets it; CloudWatch
+filter edits affect only loaded retained data and make no AWS request.
+
+Custom keybindings replace defaults, for example:
+
+```toml
+[keybindings]
+"emr.logs.source" = ["ctrl+g"]
+"emr.logs.follow" = ["ctrl+h"]
+```
+
+Choose keys unused by the rest of your overlay. Existing collision validation
+rejects conflicting overrides and falls back to the default map. Hints display
+the resolved keys. See [EMR Serverless logs](services/emr-serverless.md#21-cloudwatch-source-and-loaded-data)
+for source states, limits, late-arrival behavior and credential recovery.
+
 ## 3. Action IDs
 
 The `wired?` column marks whether `AwsTuiApp` currently registers a
@@ -378,6 +403,8 @@ unbound until a handler ships.
 | `emr.next_application` | `A` (`shift+a`) | yes | Cycle to the next EMR application |
 | `emr.cancel` | `x` (when EMR page mounted) | yes | Confirm the exact selected active run before requesting cancellation; never retries automatically. |
 | `emr.clone` | `c` (when EMR page mounted) | yes | Open the EMR clone-job-run modal pre-filled from the focused run. |
+| `emr.logs.source` | `ctrl+s` (when EMR logs pane focused) | yes | Cycle configured S3/CloudWatch log destinations |
+| `emr.logs.follow` | `ctrl+l` (when EMR logs pane focused) | yes | Start/stop following the selected CloudWatch stream |
 | `emr.logs.filter` | `f` (when EMR logs pane focused) | yes | Open the EMR logs filter modal |
 | `glue.catalog` | `1` | yes | Select the Glue Catalog view |
 | `glue.jobs` | `2` | yes | Select the Glue Jobs view |

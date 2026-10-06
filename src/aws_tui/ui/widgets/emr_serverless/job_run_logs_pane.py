@@ -18,6 +18,7 @@ selector shows the currently-loaded LogFile and dispatches a
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from typing import ClassVar
 
 from reactivex.abc import DisposableBase
@@ -31,7 +32,7 @@ from textual.widgets import Static
 
 from aws_tui.domain.emr_logs import LogFile, LogFileKind
 from aws_tui.infra.keymap_store import KeymapStore
-from aws_tui.vm.emr_serverless.job_run_logs_vm import JobRunLogsVM, LogsState
+from aws_tui.vm.emr_serverless.job_run_logs_vm import JobRunLogsVM, LogSource, LogsState
 
 
 class _LogFileChip(Static):
@@ -39,7 +40,7 @@ class _LogFileChip(Static):
     so the pane's on_click can map a clicked chip to the file kind."""
 
     def __init__(self, content: str, *, key: str, classes: str | None = None) -> None:
-        super().__init__(content, classes=classes)
+        super().__init__(content, classes=classes, markup=False)
         self.key = key
 
 
@@ -65,14 +66,15 @@ class JobRunLogsPane(Widget, can_focus=True):
         height: 1fr;
         layout: vertical;
     }
-    JobRunLogsPane > .logs-chip-row {
+    JobRunLogsPane > .logs-chip-row, JobRunLogsPane > .logs-source-row {
         height: 1;
         layout: horizontal;
         padding: 0 1;
         overflow-x: auto;
         overflow-y: hidden;
+        scrollbar-size-horizontal: 0;
     }
-    JobRunLogsPane > .logs-chip-row > .logs-chip {
+    JobRunLogsPane > .logs-chip-row > .logs-chip, JobRunLogsPane > .logs-source-row > .logs-chip {
         width: auto;
         height: 1;
         padding: 0 1;
@@ -142,6 +144,19 @@ class JobRunLogsPane(Widget, can_focus=True):
 
         pass
 
+    class SourceSelected(TextualMessage):
+        def __init__(self, source: LogSource) -> None:
+            super().__init__()
+            self.source = source
+
+    class CloudWatchStreamSelected(TextualMessage):
+        def __init__(self, name: str) -> None:
+            super().__init__()
+            self.name = name
+
+    class FollowRequested(TextualMessage):
+        pass
+
     class LogFileSelected(TextualMessage):
         """User selected a different log file from the chip strip."""
 
@@ -163,6 +178,7 @@ class JobRunLogsPane(Widget, can_focus=True):
         self._sub: DisposableBase | None = None
 
     def compose(self) -> ComposeResult:
+        yield Horizontal(classes="logs-source-row", id="logs-sources")
         with Horizontal(classes="logs-chip-row"):
             pass  # Chips are added dynamically in _refresh_chips
         # ``markup=False`` on the filter row — its content is
@@ -179,6 +195,7 @@ class JobRunLogsPane(Widget, can_focus=True):
 
     def on_mount(self) -> None:
         self.border_title = "logs"
+        self._refresh_sources()
         self._refresh_chips()
         self._refresh_filter_row()
         self._refresh_body()
@@ -251,7 +268,14 @@ class JobRunLogsPane(Widget, can_focus=True):
                 break
             target = getattr(target, "parent", None)
         if key is not None:
-            self.post_message(self.LogFileSelected(key))
+            if key.startswith("source:"):
+                self.post_message(self.SourceSelected(LogSource(key.removeprefix("source:"))))
+            elif key.startswith("stream:"):
+                self.post_message(self.CloudWatchStreamSelected(key.removeprefix("stream:")))
+            else:
+                self.post_message(self.LogFileSelected(key))
+        elif event.widget is not None and event.widget.id == "logs-status" and self._vm.can_follow:
+            self.post_message(self.FollowRequested())
 
     # ── Internal ────────────────────────────────────────────────────────────
 
@@ -260,7 +284,19 @@ class JobRunLogsPane(Widget, can_focus=True):
         cross-VM `state` collisions PR #103 hub-filter was guarding
         against can't reach here because this Subject is scoped to
         JobRunLogsVM only."""
-        if prop in {"available_files", "current_file"}:
+        if prop in {"sources", "selected_source"}:
+            self.call_after_refresh(self._refresh_filter_row)
+            self.call_after_refresh(self._refresh_sources)
+            self.call_after_refresh(self._refresh_chips)
+            self.call_after_refresh(self._refresh_status)
+        elif prop in {
+            "following",
+            "last_successful_read_at_ms",
+            "last_event_at_ms",
+            "buffer_capped",
+        }:
+            self.call_after_refresh(self._refresh_status)
+        elif prop in {"available_files", "current_file", "available_streams", "current_stream"}:
             self.call_after_refresh(self._refresh_chips)
         elif prop == "filter":
             self.call_after_refresh(self._refresh_filter_row)
@@ -292,10 +328,26 @@ class JobRunLogsPane(Widget, can_focus=True):
             patterns_text = " · ".join(f.patterns)
         keys = self._keymap.resolve("emr.logs.filter")
         edit_hint = f" · {keys[0]} edit" if keys else ""
-        hint = f"{edit_hint} · shift+f reset"
-        row.update(f"filter: {patterns_text}{hint}")
+        reset_hint = "shift+f" if self.size.width >= 75 else "F"
+        hint = f"{edit_hint} · {reset_hint} reset"
+        suffix = f" · {patterns_text}" if self.size.width >= 75 else ""
+        row.update(f"filter: loaded data only{hint}{suffix}")
+
+    def on_resize(self) -> None:
+        self._refresh_filter_row()
+        self._refresh_status()
 
     def _select_adjacent_file(self, delta: int) -> None:
+        if self._vm.selected_source is LogSource.CLOUDWATCH:
+            streams = self._vm.available_streams
+            if len(streams) < 2:
+                return
+            current_stream = self._vm.current_stream
+            index = streams.index(current_stream) if current_stream in streams else 0
+            self.post_message(
+                self.CloudWatchStreamSelected(streams[(index + delta) % len(streams)].name)
+            )
+            return
         files = self._vm.available_files
         if len(files) < 2:
             return
@@ -308,6 +360,29 @@ class JobRunLogsPane(Widget, can_focus=True):
         if selected != current:
             self.post_message(self.LogFileSelected(selected.key))
 
+    def _refresh_sources(self) -> None:
+        try:
+            row = self.query_one("#logs-sources", Horizontal)
+        except Exception:
+            return
+        row.display = bool(self._vm.sources)
+        row.remove_children()
+        for source in sorted(
+            self._vm.sources, key=lambda row: row.source is not self._vm.selected_source
+        ):
+            name = "S3" if source.source is LogSource.S3 else "CloudWatch"
+            detail = f" · {source.detail}" if source.detail else ""
+            classes = (
+                "logs-chip -active" if source.source is self._vm.selected_source else "logs-chip"
+            )
+            row.mount(
+                _LogFileChip(
+                    f"{name}: {source.state.value}{detail}",
+                    key=f"source:{source.source.value}",
+                    classes=classes,
+                )
+            )
+
     def _refresh_chips(self) -> None:
         """Render file-selector chip strip."""
         try:
@@ -315,6 +390,15 @@ class JobRunLogsPane(Widget, can_focus=True):
         except Exception:
             return
         chip_row.remove_children()
+        if self._vm.selected_source is LogSource.CLOUDWATCH:
+            for stream in self._vm.available_streams:
+                suffix = stream.name.rsplit("/jobs/", 1)[-1].split("/", 1)[-1]
+                classes = "logs-chip -active" if stream == self._vm.current_stream else "logs-chip"
+                chip = _LogFileChip(suffix, key=f"stream:{stream.name}", classes=classes)
+                chip_row.mount(chip)
+                if stream == self._vm.current_stream:
+                    self.call_after_refresh(lambda chip=chip: chip.scroll_visible(animate=False))
+            return
         current = self._vm.current_file
         for f in self._vm.available_files:
             label = _format_log_file_label(f)
@@ -331,6 +415,16 @@ class JobRunLogsPane(Widget, can_focus=True):
         except Exception:
             return
         state = self._vm.state
+        if (
+            self._vm.selected_source is LogSource.CLOUDWATCH
+            and self._vm.lines
+            and state in (LogsState.READY, LogsState.LOADING, LogsState.ERROR, LogsState.NO_FILES)
+        ):
+            text = "\n".join(self._vm.lines)
+            if state in (LogsState.ERROR, LogsState.NO_FILES):
+                text = (self._vm.error_text or "CloudWatch logs not created yet") + "\n" + text
+            self._update_body(body, text, classes="logs-line -match")
+            return
 
         if state is LogsState.EMPTY_TARGET:
             self._update_body(body, "(no run selected)", classes="logs-placeholder")
@@ -413,6 +507,34 @@ class JobRunLogsPane(Widget, can_focus=True):
         except Exception:
             return
         state = self._vm.state
+        if self._vm.selected_source is LogSource.CLOUDWATCH:
+            action = "Stop follow" if self._vm.following else "Start follow"
+            mode = "Following" if self._vm.following else "Stopped"
+            stamp = self._vm.last_successful_read_at_ms
+            checked = (
+                datetime.fromtimestamp(stamp / 1000, tz=UTC).strftime("%H:%M:%S UTC")
+                if stamp is not None
+                else "never"
+            )
+            capped = " · buffer capped" if self._vm.buffer_capped else ""
+            latest = self._vm.last_event_at_ms
+            event = (
+                f" · event {datetime.fromtimestamp(latest / 1000, tz=UTC).strftime('%H:%M:%S UTC')}"
+                if latest is not None
+                else ""
+            )
+            keys = self._keymap.resolve("emr.logs.follow")
+            key = f" ({keys[0]})" if keys else ""
+            status.tooltip = f"{mode} · checked {checked}{event}{capped}"
+            if self.size.width < 75:
+                status.styles.height = 2
+                status.update(f"{mode} · checked {checked}\n{action}{key}{capped}")
+            else:
+                status.styles.height = 1
+                status.update(f"{action}{key} · {mode} · checked {checked}{event}{capped}")
+            return
+        status.styles.height = 1
+        status.tooltip = None
         if state is LogsState.READY:
             text = f"READY · {self._vm.bytes_read / 1024 / 1024:.1f} MB · {_match_label(self._vm)}"
             status.update(text)

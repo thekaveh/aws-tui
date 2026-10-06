@@ -926,3 +926,777 @@ async def test_set_target_with_unchanged_ids_keeps_the_loaded_log_buffer(
 
     assert vm.available_files == loaded_files, "a no-op target sync cleared the pane"
     assert vm.state is loaded_state
+
+
+def _cw_vm(monkeypatch, *, config=None, uri=None, empty=False):
+    from aws_tui.demo.in_memory_emr import InMemoryEmr
+    from aws_tui.domain.emr_cloudwatch_logs import CloudWatchLogEvent, CloudWatchLogStream
+    from aws_tui.domain.emr_serverless import CloudWatchLogConfiguration
+    from aws_tui.vm.emr_serverless import job_run_logs_vm as module
+
+    monkeypatch.setattr(module, "_now_ms", lambda: 100_000)
+    fake = InMemoryEmr()
+    cfg = config or CloudWatchLogConfiguration(True)
+    group = cfg.log_group_name or "/aws/emr-serverless"
+    root = (cfg.log_stream_name_prefix or "") + "/applications/a/jobs/r/"
+    names = [
+        root + suffix
+        for suffix in (
+            "SPARK_DRIVER",
+            "attempts/1/SPARK_DRIVER",
+            "attempts/2/SPARK_DRIVER",
+            "SPARK_EXECUTOR/1",
+            "SPARK_EXECUTOR/2",
+        )
+    ]
+    if not empty:
+        for i, name in enumerate(names):
+            fake.add_cloudwatch_stream(
+                application_id="a",
+                job_run_id="r",
+                log_group_name=group,
+                stream=CloudWatchLogStream(
+                    name, "SPARK_DRIVER" if i < 3 else "SPARK_EXECUTOR", i if 0 < i < 3 else None
+                ),
+                events=(CloudWatchLogEvent(str(i), 1000, 1001, f"ERROR CloudWatch {i}"),),
+            )
+    vm = JobRunLogsVM(client=fake, hub=_hub(), dispatcher=NULL_DISPATCHER)
+    vm.construct()
+    vm.set_target("a", "r", uri, cloudwatch=cfg, run_created_at_ms=1000)
+    return vm, fake, names
+
+
+async def test_cloudwatch_only_load_and_exact_stream_selection(monkeypatch):
+    from aws_tui.vm.emr_serverless.job_run_logs_vm import LogSource, LogSourceState
+
+    vm, _fake, names = _cw_vm(monkeypatch)
+    assert vm.state is LogsState.IDLE
+    assert vm.selected_source is LogSource.CLOUDWATCH
+    assert [s.state for s in vm.sources] == [LogSourceState.UNAVAILABLE, LogSourceState.CONFIGURED]
+    await vm.load()
+    assert vm.state is LogsState.READY
+    assert vm.lines == ("ERROR CloudWatch 0",)
+    assert vm.current_stream.name == names[0]
+    for name in names[1:]:
+        vm.select_cloudwatch_stream(name)
+        await vm.load()
+        assert vm.current_stream.name == name
+    assert vm.last_successful_read_at_ms == 100_000
+    assert vm.last_event_at_ms == 1000
+    await vm.shutdown()
+    vm.dispose()
+
+
+async def test_source_matrix_pending_disabled_both_and_missing_retry(monkeypatch):
+    from aws_tui.domain.emr_cloudwatch_logs import CloudWatchLogEvent, CloudWatchLogStream
+    from aws_tui.domain.emr_serverless import CloudWatchLogConfiguration
+    from aws_tui.vm.emr_serverless.job_run_logs_vm import LogSource, LogSourceState
+
+    vm, fake, names = _cw_vm(
+        monkeypatch, uri="s3://b/logs/", config=CloudWatchLogConfiguration(False)
+    )
+    assert vm.selected_source is LogSource.S3
+    vm.select_source(LogSource.CLOUDWATCH)
+    await vm.load()
+    assert not any("cloudwatch" in call[0] for call in fake.calls)
+    vm.set_target("a", "r", None, metadata_known=False)
+    assert all(s.state is LogSourceState.UNKNOWN for s in vm.sources)
+    assert vm.state is LogsState.IDLE
+    vm.set_target("a", "r", "s3://b/logs/", cloudwatch=CloudWatchLogConfiguration(True))
+    assert vm.selected_source is LogSource.S3
+    vm.select_source(LogSource.CLOUDWATCH)
+    fake._cloudwatch_events.clear()
+    await vm.load()
+    assert vm.state is LogsState.NO_FILES
+    assert vm.sources[1].state is LogSourceState.UNAVAILABLE
+    fake.add_cloudwatch_stream(
+        application_id="a",
+        job_run_id="r",
+        log_group_name="/aws/emr-serverless",
+        stream=CloudWatchLogStream(names[0], "SPARK_DRIVER", None),
+        events=(CloudWatchLogEvent("new", 1000, 1000, "ERROR appeared"),),
+    )
+    await vm.load()
+    assert vm.lines == ("ERROR appeared",)
+    assert vm.sources[1].state is LogSourceState.CONFIGURED
+    await vm.shutdown()
+    vm.dispose()
+
+
+async def test_cloudwatch_filters_reproject_without_network_and_retain_literal_multiline(
+    monkeypatch,
+):
+    from aws_tui.domain.emr_cloudwatch_logs import CloudWatchLogEvent
+    from aws_tui.domain.emr_logs import FilterMode, LogFilter
+
+    vm, fake, names = _cw_vm(monkeypatch)
+    fake._cloudwatch_events[("/aws/emr-serverless", names[0])] = (
+        CloudWatchLogEvent("x", 1000, 1000, "[arbitrary] ERROR\nwarn low\n\ninfo"),
+    )
+    await vm.load()
+    calls = len(fake.calls)
+    assert vm.lines == ("[arbitrary] ERROR",)
+    vm.set_filter(LogFilter(patterns=("ERROR", "WARN"), case_insensitive=True))
+    assert vm.lines == ("[arbitrary] ERROR", "warn low")
+    vm.set_filter(LogFilter(patterns=(), mode=FilterMode.PASSTHROUGH))
+    assert vm.lines == ("[arbitrary] ERROR", "warn low", "", "info")
+    assert len(fake.calls) == calls
+    await vm.shutdown()
+    vm.dispose()
+
+
+async def test_cloudwatch_recovery_preference_never_substitutes_missing_stream(monkeypatch):
+    vm, fake, names = _cw_vm(monkeypatch)
+    await vm.load(preferred_cloudwatch_stream_name=names[2])
+    assert vm.current_stream.name == names[2]
+    reads = sum(call[0] == "read_cloudwatch_events" for call in fake.calls)
+    del fake._cloudwatch_events[("/aws/emr-serverless", names[2])]
+    await vm.load(preferred_cloudwatch_stream_name=names[2])
+    assert vm.state is LogsState.NO_FILES
+    assert sum(call[0] == "read_cloudwatch_events" for call in fake.calls) == reads
+    await vm.shutdown()
+    vm.dispose()
+
+
+async def test_follow_owned_dedup_freshness_stop_and_overlap(monkeypatch):
+    from aws_tui.domain.emr_cloudwatch_logs import CloudWatchLogEvent
+    from aws_tui.vm.emr_serverless import job_run_logs_vm as module
+    from tests.helpers import wait_until
+
+    vm, fake, names = _cw_vm(monkeypatch)
+    ticks = asyncio.Queue()
+    waiting = asyncio.Event()
+    clock = [100_000]
+    monkeypatch.setattr(module, "_now_ms", lambda: clock[0])
+
+    async def sleep(seconds):
+        assert seconds == 2.0
+        waiting.set()
+        await ticks.get()
+
+    monkeypatch.setattr(module, "_sleep", sleep)
+    task = asyncio.create_task(vm.follow())
+    await waiting.wait()
+    assert vm.following
+    initial = vm.lines
+    fake.append_cloudwatch_event(
+        log_group_name="/aws/emr-serverless",
+        stream_name=names[0],
+        event=CloudWatchLogEvent("boundary", 100_000, 100_001, "ERROR end"),
+    )
+    fake.append_cloudwatch_event(
+        log_group_name="/aws/emr-serverless",
+        stream_name=names[0],
+        event=CloudWatchLogEvent("distinct", 100_000, 100_002, "ERROR end"),
+    )
+    clock[0] = 102_000
+    ticks.put_nowait(None)
+    await wait_until(lambda: vm.last_successful_read_at_ms == 102_000, what="first follow poll")
+    assert vm.lines == (*initial, "ERROR end", "ERROR end")
+    clock[0] = 101_000  # rollback never shrinks last successful interval
+    ticks.put_nowait(None)
+    await wait_until(
+        lambda: sum(c[0] == "read_cloudwatch_events" for c in fake.calls) == 3, what="rollback poll"
+    )
+    assert vm.lines == (*initial, "ERROR end", "ERROR end")
+    assert vm.last_successful_read_at_ms == 102_000
+    vm.stop_follow()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert not vm.following
+    assert not vm._operations.tasks
+    await vm.shutdown()
+    vm.dispose()
+
+
+@pytest.mark.parametrize(
+    "kind", ["auth", "denied", "throttle", "unreachable", "missing", "invalid", "unexpected"]
+)
+async def test_cloudwatch_errors_are_typed_and_payload_free(monkeypatch, caplog, kind):
+    import traceback
+
+    from aws_tui.domain.filesystem import (
+        AuthRequiredError,
+        NotFoundError,
+        PermissionDeniedError,
+        ProviderUnreachableError,
+        ThrottledError,
+        ValidationError,
+    )
+    from aws_tui.vm.emr_serverless.job_run_logs_vm import LogSource
+    from aws_tui.vm.messages import ServiceOperationFailedMessage
+
+    vm, fake, _ = _cw_vm(monkeypatch, uri="s3://b/logs")
+    vm.select_source(LogSource.CLOUDWATCH)
+    await vm.load()
+    old = vm.lines
+    classes = {
+        "auth": AuthRequiredError,
+        "denied": PermissionDeniedError,
+        "throttle": ThrottledError,
+        "unreachable": ProviderUnreachableError,
+        "missing": NotFoundError,
+        "invalid": ValidationError,
+        "unexpected": RuntimeError,
+    }
+    messages = []
+    subscription = vm._hub.messages.subscribe(messages.append)
+
+    async def fail(**kwargs):
+        try:
+            raise ValueError("body-only-261-sentinel")
+        except ValueError as error:
+            raise classes[kind]("body-only-261-sentinel") from error
+
+    monkeypatch.setattr(fake, "list_cloudwatch_streams", fail)
+    await vm.load(use_cache=False)
+    assert vm.lines == old
+    assert (
+        vm.failure_kind
+        == {
+            "auth": "auth_required",
+            "denied": "access_denied",
+            "throttle": "throttled",
+            "unreachable": "unreachable",
+            "missing": "not_found",
+            "invalid": "invalid",
+            "unexpected": "unexpected",
+        }[kind]
+    )
+    assert vm.state is (LogsState.NO_FILES if kind == "missing" else LogsState.ERROR)
+    diagnostics = [m for m in messages if isinstance(m, ServiceOperationFailedMessage)]
+    assert len(diagnostics) == (1 if kind == "unexpected" else 0)
+    for diagnostic in diagnostics:
+        assert "body-only-261-sentinel" not in repr(diagnostic)
+        from dataclasses import fields
+
+        for value in (getattr(diagnostic, field.name) for field in fields(diagnostic)):
+            assert "body-only-261-sentinel" not in repr(value)
+            if isinstance(value, BaseException):
+                assert value.__cause__ is None
+                assert value.__context__ is None
+                assert value.__traceback__ is None
+                assert "body-only-261-sentinel" not in "".join(traceback.format_exception(value))
+    assert "body-only-261-sentinel" not in vm.error_text
+    assert "body-only-261-sentinel" not in caplog.text
+    assert vm.source_selectable(LogSource.S3)
+    subscription.dispose()
+    await vm.shutdown()
+    vm.dispose()
+
+
+async def test_cloudwatch_event_and_display_retention_exact_limits(monkeypatch):
+    from aws_tui.domain.emr_cloudwatch_logs import CloudWatchLogEvent, CloudWatchLogSnapshot
+    from aws_tui.domain.emr_logs import FilterMode, LogFilter
+
+    vm, fake, _ = _cw_vm(monkeypatch)
+    snapshots = [
+        CloudWatchLogSnapshot(
+            tuple(
+                CloudWatchLogEvent(str(i), 1000 + i, 1000 + i, "ERROR " + str(i))
+                for i in range(5_001)
+            ),
+            1,
+            100_000,
+        )
+    ]
+
+    async def read(**kwargs):
+        return snapshots[0]
+
+    monkeypatch.setattr(fake, "read_cloudwatch_events", read)
+    await vm.load()
+    assert len(vm._raw_events) == 5_000
+    assert vm.lines[0] == "ERROR 1"
+    assert vm.buffer_capped
+    vm.set_filter(LogFilter(patterns=(), mode=FilterMode.PASSTHROUGH))
+    snapshots[0] = CloudWatchLogSnapshot(
+        tuple(CloudWatchLogEvent(str(i), 1000 + i, 1000 + i, "é" * (512 * 1024)) for i in range(4)),
+        4 * 1024 * 1024,
+        100_000,
+    )
+    await vm.load()
+    assert vm.bytes_read == 4 * 1024 * 1024
+    assert len(vm._raw_events) == 4
+    assert sum(len(s.encode()) for s in vm.lines) + max(0, len(vm.lines) - 1) <= 4 * 1024 * 1024
+    assert vm.buffer_capped  # separators require dropping one display line
+    snapshots[0] = CloudWatchLogSnapshot(
+        (CloudWatchLogEvent("newlines", 1000, 1000, "\n" * (1024 * 1024)),), 1024 * 1024, 100_000
+    )
+    await vm.load()
+    assert vm.matched_count == 1024 * 1024
+    assert len(vm.lines) == 5_000
+    assert vm.buffer_capped
+    await vm.shutdown()
+    vm.dispose()
+
+
+@pytest.mark.parametrize("transition", ["run", "source", "stream", "config"])
+async def test_cloudwatch_aba_never_publishes_late_read_or_error(monkeypatch, transition):
+    from aws_tui.domain.emr_cloudwatch_logs import CloudWatchLogEvent, CloudWatchLogSnapshot
+    from aws_tui.domain.emr_serverless import CloudWatchLogConfiguration
+    from aws_tui.vm.emr_serverless.job_run_logs_vm import LogSource
+
+    vm, fake, names = _cw_vm(monkeypatch, uri="s3://b/logs")
+    vm.select_source(LogSource.CLOUDWATCH)
+    entered, release, cleaned = asyncio.Event(), asyncio.Event(), asyncio.Event()
+    original = fake.read_cloudwatch_events
+    calls = 0
+
+    async def read(**kwargs):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            entered.set()
+            try:
+                await release.wait()
+            except asyncio.CancelledError:
+                await release.wait()
+            cleaned.set()
+            return CloudWatchLogSnapshot(
+                (CloudWatchLogEvent("old", 1000, 1000, "ERROR old-run-sentinel"),), 1, 100_000
+            )
+        return await original(**kwargs)
+
+    monkeypatch.setattr(fake, "read_cloudwatch_events", read)
+    task = asyncio.create_task(vm.load())
+    await entered.wait()
+    if transition == "run":
+        vm.set_target("a", "other", None, cloudwatch=CloudWatchLogConfiguration(True))
+        vm.set_target(
+            "a", "r", None, cloudwatch=CloudWatchLogConfiguration(True), run_created_at_ms=1000
+        )
+    elif transition == "source":
+        vm.select_source(LogSource.S3)
+        vm.select_source(LogSource.CLOUDWATCH)
+    elif transition == "stream":
+        vm.select_cloudwatch_stream(names[1])
+        vm.select_cloudwatch_stream(names[0])
+    else:
+        vm.set_target("a", "r", None, cloudwatch=CloudWatchLogConfiguration(True, "/other"))
+        vm.set_target(
+            "a", "r", None, cloudwatch=CloudWatchLogConfiguration(True), run_created_at_ms=1000
+        )
+    await vm.load()
+    state, lines, stamp = vm.state, vm.lines, vm.last_successful_read_at_ms
+    release.set()
+    await task
+    assert cleaned.is_set()
+    assert vm.state == state
+    assert vm.lines == lines
+    assert vm.last_successful_read_at_ms == stamp
+    assert not any("old-run-sentinel" in line for line in vm.lines)
+    assert not vm._operations.tasks
+    await vm.shutdown()
+    vm.dispose()
+
+
+async def test_follow_exact_duplicate_id_limit_and_overflow_preserves_data(monkeypatch):
+    from aws_tui.domain.emr_cloudwatch_logs import CloudWatchLogEvent, CloudWatchLogSnapshot
+    from aws_tui.vm.emr_serverless import job_run_logs_vm as module
+    from tests.helpers import wait_until
+
+    vm, fake, _ = _cw_vm(monkeypatch)
+    ticks = asyncio.Queue()
+    entered = asyncio.Event()
+    calls = 0
+
+    async def sleep(seconds):
+        entered.set()
+        await ticks.get()
+
+    async def read(**kwargs):
+        nonlocal calls
+        calls += 1
+        offset = (calls - 1) * 10_000
+        size = 1 if calls == 3 else 10_000
+        return CloudWatchLogSnapshot(
+            tuple(
+                CloudWatchLogEvent(str(i), 50_000, 50_000, f"ERROR {i}")
+                for i in range(offset, offset + size)
+            ),
+            size,
+            100_000,
+        )
+
+    monkeypatch.setattr(module, "_sleep", sleep)
+    monkeypatch.setattr(fake, "read_cloudwatch_events", read)
+    task = asyncio.create_task(vm.follow())
+    await entered.wait()
+    ticks.put_nowait(None)
+    await wait_until(lambda: vm.lines[-1] == "ERROR 9999" and calls == 2, what="20k ids commit")
+    assert vm.following
+    complete = vm.lines
+    ticks.put_nowait(None)
+    await task
+    assert not vm.following
+    assert vm.failure_kind == "limit"
+    assert vm.error_text == "CloudWatch follow duplicate-id limit exceeded"
+    assert vm.lines == complete
+    assert vm.last_successful_read_at_ms == 100_000
+    await vm.shutdown()
+    vm.dispose()
+
+
+async def test_s3_uri_change_same_run_key_size_cannot_reuse_other_bucket(monkeypatch):
+    reads = []
+
+    async def files(**_kwargs):
+        return [_STDERR_FILE]
+
+    async def stream(**kwargs):
+        reads.append(kwargs["bucket"])
+        yield LogChunk((f"ERROR {kwargs['bucket']}",), 50, 1, 1, False)
+
+    monkeypatch.setattr("aws_tui.domain.emr_logs.list_log_files", files)
+    monkeypatch.setattr("aws_tui.domain.emr_logs.stream_log", stream)
+    vm = _make()
+    vm.set_target("app1", "run1", "s3://bucket-a/logs/")
+    await vm.load()
+    await vm.load()
+    assert reads == ["bucket-a"]
+    vm.set_target("app1", "run1", "s3://bucket-b/logs/")
+    await vm.load()
+    assert reads == ["bucket-a", "bucket-b"]
+    assert vm.lines == ("ERROR bucket-b",)
+    await vm.shutdown()
+    vm.dispose()
+
+
+@pytest.mark.parametrize(
+    ("failure", "expected"),
+    [
+        (PermissionDeniedError("denied"), "access denied"),
+        (AuthRequiredError("auth"), "unknown"),
+        (ProviderUnreachableError("offline"), "unknown"),
+        (None, "unavailable"),
+    ],
+)
+async def test_s3_source_status_failure_then_successful_retry_and_cache(
+    monkeypatch, failure, expected
+):
+    from aws_tui.domain.emr_serverless import CloudWatchLogConfiguration
+    from aws_tui.vm.emr_serverless.job_run_logs_vm import LogSource, LogSourceState
+
+    failed = [True]
+
+    async def files(**_kwargs):
+        if failed[0]:
+            if failure is not None:
+                raise failure
+            return []
+        return [_STDERR_FILE]
+
+    async def stream(**_kwargs):
+        yield _ONE_CHUNK
+
+    monkeypatch.setattr("aws_tui.domain.emr_logs.list_log_files", files)
+    monkeypatch.setattr("aws_tui.domain.emr_logs.stream_log", stream)
+    vm = _make()
+    vm.set_target("app1", "run1", _LOG_URI, cloudwatch=CloudWatchLogConfiguration(True))
+    await vm.load()
+    assert vm.sources[0].state.value == expected
+    assert vm.source_selectable(LogSource.CLOUDWATCH)
+    assert vm.sources[1].state is LogSourceState.CONFIGURED
+    failed[0] = False
+    await vm.load()
+    assert vm.sources[0].state is LogSourceState.CONFIGURED
+    await vm.load()
+    assert vm.sources[0].state is LogSourceState.CONFIGURED
+    assert vm.lines == _ONE_CHUNK.lines
+    await vm.shutdown()
+    vm.dispose()
+
+
+async def test_follow_missing_appears_double_start_then_disappears_and_restart(monkeypatch):
+    from aws_tui.domain.emr_cloudwatch_logs import CloudWatchLogEvent, CloudWatchLogStream
+    from tests.helpers import wait_until
+
+    ticks = asyncio.Queue()
+
+    async def sleep(_delay):
+        await ticks.get()
+
+    monkeypatch.setattr("aws_tui.vm.emr_serverless.job_run_logs_vm._sleep", sleep)
+    vm, fake, names = _cw_vm(monkeypatch, empty=True)
+    follow = asyncio.create_task(vm.follow())
+    await wait_until(lambda: vm.state is LogsState.NO_FILES, what="missing initial stream")
+    assert vm.following
+    await vm.follow()  # idempotent: no overlapping owner/read
+    assert len(vm._operations.tasks) == 1
+    fake.add_cloudwatch_stream(
+        application_id="a",
+        job_run_id="r",
+        log_group_name="/aws/emr-serverless",
+        stream=CloudWatchLogStream(names[0], "SPARK_DRIVER", None),
+        events=(CloudWatchLogEvent("new", 1000, 1000, "ERROR appeared"),),
+    )
+    ticks.put_nowait(None)
+    await wait_until(lambda: vm.state is LogsState.READY, what="discovery retry appeared")
+    assert vm.lines == ("ERROR appeared",)
+    stamp = vm.last_successful_read_at_ms
+    fake._cloudwatch_events.clear()
+    ticks.put_nowait(None)
+    await follow
+    assert not vm.following
+    assert vm.state is LogsState.NO_FILES
+    assert vm.lines == ("ERROR appeared",)
+    assert vm.last_successful_read_at_ms == stamp
+    fake.add_cloudwatch_stream(
+        application_id="a",
+        job_run_id="r",
+        log_group_name="/aws/emr-serverless",
+        stream=CloudWatchLogStream(names[0], "SPARK_DRIVER", None),
+        events=(CloudWatchLogEvent("again", 1000, 1000, "ERROR restarted"),),
+    )
+    restarted = asyncio.create_task(vm.follow())
+    await wait_until(lambda: vm.lines == ("ERROR restarted",), what="explicit follow restart")
+    vm.stop_follow()
+    with pytest.raises(asyncio.CancelledError):
+        await restarted
+    assert not vm._operations.tasks
+    await vm.shutdown()
+    vm.dispose()
+
+
+async def test_follow_prunes_only_before_overlap_preserves_empty_freshness_and_late_events(
+    monkeypatch,
+):
+    from aws_tui.domain.emr_cloudwatch_logs import CloudWatchLogEvent
+    from tests.helpers import wait_until
+
+    vm, fake, names = _cw_vm(monkeypatch)
+    clock = [100_000]
+    monkeypatch.setattr("aws_tui.vm.emr_serverless.job_run_logs_vm._now_ms", lambda: clock[0])
+    ticks = asyncio.Queue()
+
+    async def sleep(_delay):
+        await ticks.get()
+
+    monkeypatch.setattr("aws_tui.vm.emr_serverless.job_run_logs_vm._sleep", sleep)
+    fake._cloudwatch_events[("/aws/emr-serverless", names[0])] = (
+        CloudWatchLogEvent("start", 40_000, 40_000, "ERROR boundary"),
+    )
+    task = asyncio.create_task(vm.follow())
+    await wait_until(lambda: vm.state is LogsState.READY, what="initial boundary event")
+    # A late event inside the overlap appears; a timestamp before it is excluded.
+    for event in (
+        CloudWatchLogEvent("late", 40_001, 110_000, "ERROR late"),
+        CloudWatchLogEvent("too-old", 39_999, 110_000, "ERROR outside overlap"),
+    ):
+        fake.append_cloudwatch_event(
+            log_group_name="/aws/emr-serverless", stream_name=names[0], event=event
+        )
+    clock[0] = 110_000
+    ticks.put_nowait(None)
+    await wait_until(lambda: vm.last_successful_read_at_ms == 110_000, what="late poll")
+    assert vm.lines == ("ERROR boundary", "ERROR late")
+    assert vm.last_event_at_ms == 40_001
+    # Same IDs remain suppressed at the inclusive overlap boundary.
+    clock[0] = 120_000
+    ticks.put_nowait(None)
+    await wait_until(
+        lambda: vm.last_successful_read_at_ms == 120_000, what="empty successful poll freshness"
+    )
+    assert vm.lines == ("ERROR boundary", "ERROR late")
+    vm.stop_follow()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    await vm.shutdown()
+    vm.dispose()
+
+
+async def test_stale_cloudwatch_failure_has_no_diagnostics_or_finally_writes(monkeypatch, caplog):
+    from aws_tui.domain.emr_serverless import CloudWatchLogConfiguration
+    from aws_tui.vm.messages import ServiceOperationFailedMessage
+
+    vm, fake, _ = _cw_vm(monkeypatch)
+    entered, release = asyncio.Event(), asyncio.Event()
+    messages = []
+    sub = vm._hub.messages.subscribe(messages.append)
+
+    async def read(**_kwargs):
+        entered.set()
+        try:
+            await release.wait()
+        except asyncio.CancelledError:
+            await release.wait()
+        raise RuntimeError("BODY-SENTINEL-stale")
+
+    monkeypatch.setattr(fake, "read_cloudwatch_events", read)
+    task = asyncio.create_task(vm.follow())
+    await entered.wait()
+    vm.set_target("a", "other", None, cloudwatch=CloudWatchLogConfiguration(True))
+    vm.set_target(
+        "a", "r", None, cloudwatch=CloudWatchLogConfiguration(True), run_created_at_ms=1000
+    )
+    release.set()
+    await task
+    assert vm.state is LogsState.IDLE
+    assert not vm.following
+    assert vm.lines == ()
+    assert vm.last_successful_read_at_ms is None
+    assert vm.error_text is None
+    assert not any(isinstance(m, ServiceOperationFailedMessage) for m in messages)
+    assert "BODY-SENTINEL-stale" not in caplog.text
+    sub.dispose()
+    await vm.shutdown()
+    vm.dispose()
+
+
+async def test_s3_pending_detail_other_run_then_return_keeps_same_source_lru(monkeypatch):
+    reads = []
+
+    async def files(**_kwargs):
+        return [_STDERR_FILE]
+
+    async def stream(**kwargs):
+        reads.append(kwargs["bucket"])
+        yield _ONE_CHUNK
+
+    monkeypatch.setattr("aws_tui.domain.emr_logs.list_log_files", files)
+    monkeypatch.setattr("aws_tui.domain.emr_logs.stream_log", stream)
+    vm = _make()
+    vm.set_target("app1", "run1", _LOG_URI)
+    await vm.load()
+    vm.set_target("app1", "run2", None, metadata_known=False)
+    vm.set_target("app1", "run1", None, metadata_known=False)
+    vm.set_target("app1", "run1", _LOG_URI)
+    await vm.load()
+    assert reads == ["my-bucket"]
+    assert vm.lines == _ONE_CHUNK.lines
+    await vm.shutdown()
+    vm.dispose()
+
+
+async def test_stop_cloudwatch_follow_read_drains_awaited_cleanup(monkeypatch):
+    vm, fake, _ = _cw_vm(monkeypatch)
+    entered, cleanup, release, closed = (asyncio.Event() for _ in range(4))
+    original = fake.read_cloudwatch_events
+
+    async def read(**kwargs):
+        entered.set()
+        try:
+            await asyncio.Event().wait()
+        finally:
+            cleanup.set()
+            await release.wait()
+            closed.set()
+        return await original(**kwargs)
+
+    monkeypatch.setattr(fake, "read_cloudwatch_events", read)
+    task = asyncio.create_task(vm.follow())
+    await entered.wait()
+    vm.stop_follow()
+    assert not vm.following
+    await cleanup.wait()
+    assert not closed.is_set()
+    release.set()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert closed.is_set()
+    assert not vm._operations.tasks
+    assert vm.state is LogsState.IDLE
+    await vm.shutdown()
+    vm.dispose()
+
+
+async def test_cloudwatch_cleanup_failure_actual_root_logger_fields_are_body_free(
+    tmp_path, monkeypatch
+):
+    import logging
+    import traceback
+
+    from aws_tui.composition import build_app_context
+    from aws_tui.domain.emr_serverless import CloudWatchLogConfiguration
+    from aws_tui.vm.messages import ServiceOperationFailedMessage
+
+    unused, fake, _names = _cw_vm(monkeypatch)
+    await unused.shutdown()
+    unused.dispose()
+    ctx = build_app_context(config_dir=tmp_path / "config", cache_dir=tmp_path / "cache", demo=True)
+    ctx.root_vm.construct()
+    vm = JobRunLogsVM(client=fake, hub=ctx.hub, dispatcher=ctx.dispatcher)
+    vm.construct()
+    vm.set_target(
+        "a", "r", None, cloudwatch=CloudWatchLogConfiguration(True), run_created_at_ms=1000
+    )
+    records = []
+    messages = []
+    errors = []
+    from aws_tui.vm.emr_serverless import job_run_logs_vm as module
+
+    original_report = module.report_unexpected_service_error
+
+    def capture_error(hub, *, error, **kwargs):
+        errors.append(error)
+        original_report(hub, error=error, **kwargs)
+
+    monkeypatch.setattr(module, "report_unexpected_service_error", capture_error)
+
+    class Capture(logging.Handler):
+        def emit(self, record):
+            records.append(record)
+
+    handler = Capture()
+    ctx.log_sink._logger.addHandler(handler)
+    subscription = ctx.hub.messages.subscribe(messages.append)
+
+    async def cleanup_failed(**_kwargs):
+        try:
+            raise ValueError("BODY-ONLY-CLEANUP-SENTINEL")
+        finally:
+            raise RuntimeError("BODY-ONLY-CLEANUP-SENTINEL")
+
+    monkeypatch.setattr(fake, "read_cloudwatch_events", cleanup_failed)
+    try:
+        await vm.load()
+        assert vm.failure_kind == "unexpected"
+        diagnostics = [m for m in messages if isinstance(m, ServiceOperationFailedMessage)]
+        assert len(diagnostics) == 1
+        assert diagnostics[0].safe_error == "CloudWatch log read failed"
+        assert diagnostics[0].error_type == "ProviderError"
+        assert len(errors) == 1
+        from aws_tui.domain.filesystem import ProviderError
+
+        assert type(errors[0]) is ProviderError
+        assert errors[0].__traceback__ is None
+        assert errors[0].__context__ is None
+        assert errors[0].__cause__ is None
+        assert "BODY-ONLY-CLEANUP-SENTINEL" not in "".join(traceback.format_exception(errors[0]))
+        assert records
+        assert any(r.json_fields.get("operation") == "load_cloudwatch_logs" for r in records)
+        for record in records:
+            assert "BODY-ONLY-CLEANUP-SENTINEL" not in repr(record.__dict__)
+            if record.exc_info:
+                assert "BODY-ONLY-CLEANUP-SENTINEL" not in "".join(
+                    traceback.format_exception(*record.exc_info)
+                )
+        assert "BODY-ONLY-CLEANUP-SENTINEL" not in ctx.log_sink.path.read_text()
+        assert "BODY-ONLY-CLEANUP-SENTINEL" not in repr(diagnostics)
+    finally:
+        subscription.dispose()
+        ctx.log_sink._logger.removeHandler(handler)
+        await vm.shutdown()
+        vm.dispose()
+        await ctx.root_vm.content_host.shutdown()
+        ctx.root_vm.dispose()
+        ctx.log_sink.close()
+
+
+@pytest.mark.parametrize("prefix", ["custom", "SPARK_EXECUTOR/7/attempts/99/jobs/fake"])
+async def test_cloudwatch_custom_prefix_keeps_exact_attempt_worker_identity(monkeypatch, prefix):
+    from aws_tui.domain.emr_serverless import CloudWatchLogConfiguration
+
+    vm, _fake, names = _cw_vm(
+        monkeypatch, config=CloudWatchLogConfiguration(True, "/group", prefix)
+    )
+    await vm.load()
+    assert tuple(s.name for s in vm.available_streams) == tuple(names)
+    for index in (2, 3, 4):
+        vm.select_cloudwatch_stream(names[index])
+        await vm.load()
+        assert vm.current_stream.name == names[index]
+        assert vm.lines == (f"ERROR CloudWatch {index}",)
+    await vm.shutdown()
+    vm.dispose()

@@ -253,3 +253,11 @@ def test_athena_result_controls_bind_canonical_parser_keys():
     parser = XTermParser()
     events = list(parser.feed("\x1bC")) + list(parser.feed(""))
     assert [event.key for event in events if isinstance(event, Key)] == ["alt+shift+c"]
+
+
+def test_cloudwatch_source_and_follow_defaults_and_overlay():
+    assert KeymapStore().resolve("emr.logs.source") == ("ctrl+s",)
+    assert KeymapStore().resolve("emr.logs.follow") == ("ctrl+l",)
+    rebound = KeymapStore(overlay={"emr.logs.source": "ctrl+e", "emr.logs.follow": "ctrl+y"})
+    assert rebound.resolve("emr.logs.source") == ("ctrl+e",)
+    assert rebound.resolve("emr.logs.follow") == ("ctrl+y",)

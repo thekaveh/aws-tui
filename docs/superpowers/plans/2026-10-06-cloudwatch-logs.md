@@ -12,12 +12,12 @@
 
 ## 1. Global constraints
 
-- Preserve existing S3 discovery, streaming, filtering, response caching, clone configuration fidelity, credential recovery, pane layout, and focus navigation.
+- Preserve existing S3 discovery, streaming, filtering, response caching, clone configuration fidelity, credential recovery, pane layout, and focus navigation. The existing S3 cache key gains the parsed bucket alongside app/run/file/size/filter to prevent same-key cross-bucket reuse; app clearing and the five-entry LRU remain unchanged, including temporary unknown metadata and return to the same source.
 - No new dependencies. Python remains `>=3.11,<3.14`, Textual `==8.2.8`, and VMx `>=3.23.0,<4.0.0`.
 - All applicable checks run locally. Do not invoke hosted CI or Actions, weaken assertions/snapshot guards, lower the 70% coverage floor, or relax architecture gates.
 - No AWS mutations, releases, or logging-configuration changes belong to this feature.
 - Logs Insights, account-wide search, Spark/Tez dashboards (#262), and enabling logging are outside scope.
-- Preserve all existing assertions, snapshot content guards and unrelated recovery schemas. Expand only the EMR credential-recovery snapshot, with exact-target tests; the five existing Athena snapshot classes are unchanged.
+- Preserve all existing assertions, snapshot content guards and unrelated recovery schemas, with one expected-behavior correction: `test_failed_detail_refresh_retargets_logs_away_from_previous_run` must assert IDLE and UNKNOWN for both sources after failed detail metadata, retaining and strengthening its stale-run/data guards. A failed GetJobRun cannot prove no logging is configured. Expand only the EMR credential-recovery snapshot, with exact-target tests; the five existing Athena snapshot classes are unchanged.
 - Every domain request uses the selected connection's region and credentials. Bodies, response reprs, and original exception text/chains never reach CloudWatch diagnostics.
 - Work on `codex/issue-261-cloudwatch-logs` from base `13b7475fed83528f2395149d8b0fa277b07e2de1`. Inspect current changes before editing; retain other authorized work.
 - Two sequential implementation tasks are the reviewable units. Tests, demo, and documentation are part of their corresponding deliverables, not independent cleanup tasks.
