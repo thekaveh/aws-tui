@@ -223,6 +223,17 @@ ACTION_SPECS: tuple[ActionSpec, ...] = (
         service_ids=frozenset(("athena",)),
         key_source="unbound",
     ),
+    ActionSpec("service.open.s3", "Go to S3", "Services", keywords=("go", "open", "s3")),
+    ActionSpec(
+        "service.open.athena", "Go to Athena", "Services", keywords=("go", "open", "athena")
+    ),
+    ActionSpec("service.open.glue", "Go to Glue", "Services", keywords=("go", "open", "glue")),
+    ActionSpec(
+        "service.open.emr-serverless",
+        "Go to EMR Serverless",
+        "Services",
+        keywords=("go", "open", "emr", "serverless"),
+    ),
     ActionSpec("app.open_settings", "Settings", "Services", keywords=("go", "open", "settings")),
     ActionSpec("app.help", "Help", "App"),
     ActionSpec("app.quit", "Quit", "App"),

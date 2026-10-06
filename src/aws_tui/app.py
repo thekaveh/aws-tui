@@ -108,7 +108,9 @@ from aws_tui.vm.athena.page_vm import AthenaPageSnapshot, AthenaPageVM
 from aws_tui.vm.chrome.action_catalog import (
     ACTION_SPECS,
     ActionPresentation,
+    ActionSpec,
     project_actions,
+    scope_label,
 )
 from aws_tui.vm.chrome.confirm_vm import ConfirmPath, ConfirmRequest
 from aws_tui.vm.chrome.crash_vm import CrashChoice, CrashReport, CrashVM
@@ -283,6 +285,14 @@ class _DiscoveryOrigin:
     focused_ids: frozenset[str]
     object_details: tuple[PaneVM, object, object, object, int, EntryRow] | None
     result_generation: int | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class _DiscoverySourceTarget:
+    service_id: str
+    connection_kind: str
+    connection_name: str
+    region: str
 
 
 async def _first_bytes(source: AsyncIterator[bytes], limit: int) -> AsyncIterator[bytes]:
@@ -652,6 +662,10 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
         self._actions.register("app.transfer_history", self.action_transfer_history)
         self._actions.register("app.cycle_theme", self.action_cycle_theme)
         self._actions.register("app.open_settings", self.action_open_settings)
+        for service_id in ("s3", "athena", "glue", "emr-serverless"):
+            self._actions.register(
+                f"service.open.{service_id}", partial(self._select_discovery_service, service_id)
+            )
         self._actions.register("pane.copy", self.action_copy)
         self._actions.register("pane.copy_entry_path", self.action_copy_entry_path)
         self._actions.register("pane.copy_path", self.action_copy_path)
@@ -786,6 +800,9 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
         self._command_palette_populated: bool = False
         self._discovery_origin: _DiscoveryOrigin | None = None
         self._discovery_palette_ids: set[str] = set()
+        self._discovery_source_ids: dict[_DiscoverySourceTarget, str] = {}
+        self._discovery_source_targets: dict[str, _DiscoverySourceTarget] = {}
+        self._discovery_source_counter = 0
         self._refreshing_discovery = False
         self._object_details_focus_restoration: Callable[[], None] | None = None
         self._pane_state_sub: DisposableBase | None = None
@@ -2456,14 +2473,30 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
             )
         return False
 
+    def _discovery_service_supported(self, service_id: str) -> bool:
+        ctx = self._app_ctx
+        connection = ctx.root_vm.active_connection
+        return (
+            not self._service_navigation_closed
+            and self._shutdown_task is None
+            and connection is not None
+            and service_id in ctx.registry
+            and ctx.registry.get(service_id).supports(connection)
+        )
+
+    def _select_discovery_service(self, service_id: str) -> None:
+        if self._discovery_service_supported(service_id):
+            self._app_ctx.root_vm.services_menu.switch_service_command.execute(service_id)
+
     def _discovery_unavailability(self, origin: _DiscoveryOrigin) -> dict[str, str]:
         reasons = {
             action: "selection_required" for action in self._readiness_disabled(origin.focused_ids)
         }
+        discovery_ids = {spec.id for spec in ACTION_SPECS} | self._discovery_source_targets.keys()
         if not self._discovery_origin_owned(origin):
-            return {spec.id: "page_unavailable" for spec in ACTION_SPECS}
+            return dict.fromkeys(discovery_ids, "page_unavailable")
         if origin.focus is not None and not origin.focus.is_attached:
-            return {spec.id: "focus_required" for spec in ACTION_SPECS}
+            return dict.fromkeys(discovery_ids, "focus_required")
         dual = self._dual_pane()
         if dual is not None:
             pane = (
@@ -2601,13 +2634,166 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
             reasons["pane.descend"] = "focus_required"
         if self._app_ctx.root_vm.active_connection is None:
             reasons["auth.authenticate"] = "source_missing"
+        for service_id in ("s3", "athena", "glue", "emr-serverless"):
+            if not self._discovery_service_supported(service_id):
+                reasons[f"service.open.{service_id}"] = "source_unsupported"
+        if origin.service_id == "s3" and origin.slot not in {FocusSlot.S3_LEFT, FocusSlot.S3_RIGHT}:
+            reasons.update(dict.fromkeys(self._discovery_source_targets, "focus_required"))
         return reasons
+
+    def _discovery_source_candidates(self, service_id: str | None) -> tuple[Connection, ...]:
+        ctx = self._app_ctx
+        if (
+            service_id not in {"s3", "athena", "glue", "emr-serverless"}
+            or service_id not in ctx.registry
+        ):
+            return ()
+        service = ctx.registry.get(service_id)
+        return tuple(
+            connection
+            for connection in _live_connections(ctx)
+            if service.supports(connection)
+            and (
+                (connection.kind, connection.name) not in ctx.unreachable_connections
+                if service_id == "s3"
+                else connection.kind == "aws"
+            )
+        )
+
+    def _reconcile_discovery_sources(self, origin: _DiscoveryOrigin) -> tuple[ActionSpec, ...]:
+        service_id = origin.service_id
+        candidates = self._discovery_source_candidates(service_id)
+        targets = tuple(
+            dict.fromkeys(
+                _DiscoverySourceTarget(
+                    service_id, connection.kind, connection.name, connection.region
+                )
+                for connection in candidates
+                if service_id is not None
+            )
+        )
+        present = set(targets)
+        for removed in self._discovery_source_ids.keys() - present:
+            removed_id = self._discovery_source_ids.pop(removed)
+            self._discovery_source_targets.pop(removed_id)
+            self._actions.unregister(removed_id)
+            self._app_ctx.command_palette_vm.unregister_entry(removed_id)
+        specs = []
+        for target in targets:
+            entry_id = self._discovery_source_ids.get(target)
+            if entry_id is None:
+                self._discovery_source_counter += 1
+                entry_id = f"source.choice.{self._discovery_source_counter}"
+                self._discovery_source_ids[target] = entry_id
+            self._discovery_source_targets[entry_id] = target
+            self._actions.register(
+                entry_id, partial(self._select_discovery_source, entry_id, origin)
+            )
+            name = target.connection_name
+            if (
+                sum(
+                    (other.connection_name, other.region) == (name, target.region)
+                    for other in targets
+                )
+                > 1
+            ):
+                name += f" ({target.connection_kind})"
+            label = f"Use {name} · {target.region or '(default region)'} for {scope_label(frozenset({target.service_id}), target.service_id)}"
+            specs.append(
+                ActionSpec(
+                    entry_id,
+                    label,
+                    "Source",
+                    (
+                        target.connection_name,
+                        target.region,
+                        target.connection_kind,
+                        target.service_id,
+                        "source",
+                        "switch",
+                        "connection",
+                    ),
+                    frozenset({target.service_id}),
+                    "unbound",
+                )
+            )
+        return tuple(specs)
+
+    async def _select_discovery_source(self, entry_id: str, origin: _DiscoveryOrigin) -> None:
+        target = self._discovery_source_targets.get(entry_id)
+        if target is None or not self._discovery_origin_owned(origin):
+            return
+        generation = self._supersede_table_navigation()
+        # PaletteVM still owns the coroutine; the existing navigation task set
+        # also makes it cancellable by newer navigation and shutdown.
+        task = asyncio.current_task()
+        if task is not None:
+            self._table_navigation_tasks.add(task)
+        try:
+            async with self._service_navigation_lock:
+                if (
+                    self._service_navigation_closed
+                    or self._shutdown_task is not None
+                    or not self._service_navigation_is_owned_by("external", generation)
+                    or not self._discovery_origin_owned(origin)
+                    or self._discovery_source_targets.get(entry_id) != target
+                ):
+                    return
+                if not any(
+                    (connection.kind, connection.name, connection.region)
+                    == (target.connection_kind, target.connection_name, target.region)
+                    for connection in self._discovery_source_candidates(target.service_id)
+                ):
+                    return
+                if target.service_id == "s3":
+                    dual = self._dual_pane()
+                    pane = (
+                        dual.left
+                        if dual is not None and origin.slot is FocusSlot.S3_LEFT
+                        else dual.right
+                        if dual is not None and origin.slot is FocusSlot.S3_RIGHT
+                        else None
+                    )
+                    if (
+                        pane is None
+                        or dual is None
+                        or dual is not origin.vm
+                        or dual.focused_pane is not pane
+                    ):
+                        return
+                accepted = await self._switch_single_context_source_to(
+                    target.service_id,
+                    target.connection_name,
+                    target.region,
+                    connection_kind=target.connection_kind,
+                )
+                host = self._app_ctx.root_vm.content_host
+                if (
+                    not accepted
+                    and not self._service_navigation_closed
+                    and self._service_navigation_is_owned_by("external", generation)
+                    and host.current_id == target.service_id
+                ):
+                    for header in self.query(ServiceSourceHeader):
+                        if (
+                            header.is_attached
+                            and header.display
+                            and header.can_focus
+                            and any(
+                                getattr(node, "vm", None) is host.current
+                                for node in header.ancestors
+                            )
+                        ):
+                            header.restore_source()
+        finally:
+            if task is not None:
+                self._table_navigation_tasks.discard(task)
 
     def _project_discovery_actions(
         self, origin: _DiscoveryOrigin
     ) -> tuple[ActionPresentation, ...]:
         return project_actions(
-            ACTION_SPECS,
+            (*ACTION_SPECS, *self._reconcile_discovery_sources(origin)),
             registered_ids=frozenset(self._actions.known_actions()),
             bindings=self._app_ctx.keymap_store.all(),
             active_service_id=origin.service_id,
@@ -4599,14 +4785,26 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
         service_id: str,
         connection_name: str,
         region: str,
+        *,
+        connection_kind: str | None = None,
     ) -> bool:
-        """Rebuild a non-S3 service under one explicit supported source."""
+        """Rebuild an AWS service, or delegate S3 to the focused pane's source swap.
+
+        Discovery callers hold the navigation lock and validate captured pane ownership.
+        Legacy source-header callers omit kind and retain AWS-only resolution.
+        """
         ctx = self._app_ctx
+        candidates = (
+            self._discovery_source_candidates(service_id)
+            if service_id == "s3"
+            else _service_source_candidates(ctx, service_id)
+        )
         target = next(
             (
                 connection
-                for connection in _service_source_candidates(ctx, service_id)
+                for connection in candidates
                 if (connection.name, connection.region) == (connection_name, region)
+                and (connection_kind is None or connection.kind == connection_kind)
             ),
             None,
         )
@@ -4617,8 +4815,32 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
                 message="selected AWS profile is no longer available",
             )
             return False
+        if service_id == "s3":
+            dual = self._dual_pane()
+            if dual is None:
+                return False
+            pane = dual.focused_pane
+            if pane.transfer_connection == connection_history_identity(target, pane.provider):
+                return True
+            try:
+                await self._rebind_pane_to_connection(pane, target)
+            except Exception as exc:
+                ctx.log_sink.warning(
+                    "discovery.source.failed",
+                    service_id="s3",
+                    error_type=type(exc).__name__,
+                )
+                notifications.advise(
+                    ctx.root_vm.chrome.toast_stack,
+                    subject="Source",
+                    message="could not switch source — keeping current source",
+                    toast_id="swap-source-auth-required",
+                )
+                return False
+            return True
         active = ctx.root_vm.active_connection
-        if active is not None and (active.name, active.region) == (
+        if active is not None and (active.kind, active.name, active.region) == (
+            target.kind,
             target.name,
             target.region,
         ):
@@ -4710,11 +4932,19 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
         auth_state: TokenState,
     ) -> bool:
         try:
-            await self._app_ctx.root_vm.switch_connection_and_service(
-                connection,
-                auth_state,
-                service_id,
-            )
+            # Rollback is part of the current source transaction. Its menu
+            # update must not supersede a newer navigation waiting on the lock.
+            suppression = (asyncio.current_task(), service_id)
+            self._service_navigation_suppressed_selection = suppression
+            try:
+                await self._app_ctx.root_vm.switch_connection_and_service(
+                    connection,
+                    auth_state,
+                    service_id,
+                )
+            finally:
+                if self._service_navigation_suppressed_selection is suppression:
+                    self._service_navigation_suppressed_selection = None
             return await self._mount_service_view(
                 service_id,
                 required_connection=connection,
@@ -6813,6 +7043,10 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
             lambda: self.workers.cancel_group(self, "content-mount"),
         )
 
+        palette_shutdown = getattr(ctx.command_palette_vm, "shutdown", None)
+        if callable(palette_shutdown):
+            await await_cleanup("command_palette.shutdown", palette_shutdown)
+
         navigation_lock = getattr(self, "_service_navigation_lock", None)
         if navigation_lock is not None:
 
@@ -6827,9 +7061,6 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
             "transfer_workers.cancel",
             self._cancel_transfer_workers_before_content_swap,
         )
-        palette_shutdown = getattr(ctx.command_palette_vm, "shutdown", None)
-        if callable(palette_shutdown):
-            await await_cleanup("command_palette.shutdown", palette_shutdown)
 
         async def shutdown_hosted_content() -> None:
             host_shutdown = asyncio.create_task(ctx.root_vm.content_host.shutdown())
