@@ -10,6 +10,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import contextlib
+import inspect
 import mimetypes
 import os
 import sys
@@ -37,7 +38,7 @@ from textual.css.errors import StylesheetError
 from textual.css.tokenizer import TokenError
 from textual.driver import Driver
 from textual.widget import Widget
-from textual.widgets import Input, Static, TextArea
+from textual.widgets import Button, DataTable, Input, OptionList, Static, TextArea
 
 from aws_tui.composition import AppContext, build_app_context
 from aws_tui.domain.data_catalog import TableRef
@@ -47,6 +48,7 @@ from aws_tui.domain.filesystem import (
     PermissionDeniedError,
     ProviderUnreachableError,
 )
+from aws_tui.domain.query import QueryState
 from aws_tui.domain.s3_object_details import S3ObjectDetailsProvider
 from aws_tui.domain.s3_uri import parse_s3_uri
 from aws_tui.infra.aws_session import TokenState
@@ -89,6 +91,7 @@ from aws_tui.ui.widgets.pane_listing_controls import FilterPaneModal, FindPaneMo
 from aws_tui.ui.widgets.quick_look import QuickLook
 from aws_tui.ui.widgets.s3_object_details import S3ObjectDetailsModal
 from aws_tui.ui.widgets.service_source_header import ServiceSourceHeader
+from aws_tui.ui.widgets.service_tab_strip import ServiceTabStrip
 from aws_tui.ui.widgets.service_view_factory import build_service_view
 from aws_tui.ui.widgets.settings.connection_form import (
     ConnectionFormInline,
@@ -100,8 +103,13 @@ from aws_tui.ui.widgets.toast import ToastStack
 from aws_tui.ui.widgets.transfer_history_modal import TransferHistoryModal
 from aws_tui.ui.widgets.transfers_overlay import TransfersOverlay
 from aws_tui.version import __version__
+from aws_tui.vm.athena.history_vm import _execution_identity_belongs_to
 from aws_tui.vm.athena.page_vm import AthenaPageSnapshot, AthenaPageVM
-from aws_tui.vm.chrome.command_palette_vm import PaletteEntry
+from aws_tui.vm.chrome.action_catalog import (
+    ACTION_SPECS,
+    ActionPresentation,
+    project_actions,
+)
 from aws_tui.vm.chrome.confirm_vm import ConfirmPath, ConfirmRequest
 from aws_tui.vm.chrome.crash_vm import CrashChoice, CrashReport, CrashVM
 from aws_tui.vm.chrome.focus_coordinator_vm import FocusSlot
@@ -199,8 +207,6 @@ class _ThemeApplyFailure:
 
 
 _SOURCE_SERVICE_IDS = frozenset({"s3", "emr-serverless", "glue", "athena"})
-_GLUE_SERVICE_IDS = frozenset({"glue"})
-_ATHENA_SERVICE_IDS = frozenset({"athena"})
 _ATHENA_RESULT_ACTIONS = frozenset(
     {
         "athena.inspect_cell",
@@ -211,13 +217,6 @@ _ATHENA_RESULT_ACTIONS = frozenset(
         "athena.reset_results",
     }
 )
-# The dual-pane file manager, and therefore every ``pane.*`` action that
-# resolves through ``_focused_file_pane()``. Only ``S3Service`` builds a
-# ``DualPaneVM`` (``services/s3/service.py``); EMR, Glue and Athena host page
-# view models, so ``_dual_pane()`` returns None there and the pane copy
-# actions would be inert palette rows under any wider scope.
-_PANE_SERVICE_IDS = frozenset({"s3"})
-
 # Copy and delete run in SEPARATE exclusive groups. Sharing one group meant
 # ``exclusive=True`` made a confirmed delete cancel an in-flight copy: the copy
 # worker awaits the whole byte-streaming batch, so it died mid-transfer leaving
@@ -227,7 +226,6 @@ _PANE_SERVICE_IDS = frozenset({"s3"})
 _TRANSFER_COPY_GROUP = "transfer-copy"
 _TRANSFER_DELETE_GROUP = "transfer-delete"
 _TRANSFER_WORKER_GROUPS = (_TRANSFER_COPY_GROUP, _TRANSFER_DELETE_GROUP)
-_EMR_SERVICE_IDS = frozenset({"emr-serverless"})
 
 # Action ids that :meth:`AwsTuiApp.action_dispatch` still honours while a
 # screen sits on the stack (or the coordinator reports modal precedence).
@@ -275,187 +273,16 @@ _PANE_SELECTION_ACTIONS = frozenset(
     }
 )
 
-_PALETTE_COMMANDS: tuple[PaletteEntry, ...] = (
-    PaletteEntry("pane.object_details", "S3 object details", "pane", service_ids=_PANE_SERVICE_IDS),
-    PaletteEntry(
-        "pane.enter_multiselect", "Enter multi-select mode", "pane", service_ids=_PANE_SERVICE_IDS
-    ),
-    PaletteEntry(
-        "pane.toggle_select", "Toggle cursor selection", "pane", service_ids=_PANE_SERVICE_IDS
-    ),
-    PaletteEntry(
-        "pane.select_all", "Select all visible entries", "pane", service_ids=_PANE_SERVICE_IDS
-    ),
-    PaletteEntry("pane.filter", "Filter loaded entries", "pane", service_ids=_PANE_SERVICE_IDS),
-    PaletteEntry("pane.fuzzy_find", "Find loaded entry", "pane", service_ids=_PANE_SERVICE_IDS),
-    PaletteEntry("pane.sort", "Sort loaded entries", "pane", service_ids=_PANE_SERVICE_IDS),
-    PaletteEntry("pane.clear_filter", "Clear pane filter", "pane", service_ids=_PANE_SERVICE_IDS),
-    PaletteEntry("pane.clear_selection", "Clear selection", "pane", service_ids=_PANE_SERVICE_IDS),
-    PaletteEntry(
-        "pane.exit_multiselect", "Exit multi-select mode", "pane", service_ids=_PANE_SERVICE_IDS
-    ),
-    PaletteEntry("app.themes", "Theme picker", "app"),
-    PaletteEntry("app.transfer_history", "Transfer history and recovery", "app"),
-    PaletteEntry("app.cycle_theme", "Cycle theme", "app"),
-    PaletteEntry(
-        "app.swap_source",
-        "Switch source",
-        "source",
-        service_ids=_SOURCE_SERVICE_IDS,
-    ),
-    PaletteEntry(
-        "auth.authenticate",
-        "Retry active source credentials",
-        "source",
-        service_ids=_SOURCE_SERVICE_IDS,
-    ),
-    # The two path copies are keyed (``p`` / ``P``), footer-labelled and in
-    # the help overlay, but they were reachable only by already knowing the
-    # key -- the border glyph that used to hint at them is gone and the
-    # Commands legend has no room (adding chips would take s3 from six to
-    # eight and change ``_fit_actions`` eviction at 120 cols). The palette is
-    # the discoverability surface that costs no chrome.
-    PaletteEntry(
-        "pane.copy_entry_path",
-        "Copy cursor entry path",
-        "pane",
-        service_ids=_PANE_SERVICE_IDS,
-    ),
-    PaletteEntry(
-        "pane.copy_path",
-        "Copy pane path",
-        "pane",
-        service_ids=_PANE_SERVICE_IDS,
-    ),
-    PaletteEntry(
-        "emr.next_application",
-        "Next EMR application",
-        "emr",
-        service_ids=_EMR_SERVICE_IDS,
-    ),
-    PaletteEntry("glue.catalog", "Glue catalog", "glue", service_ids=_GLUE_SERVICE_IDS),
-    PaletteEntry("glue.jobs", "Glue jobs", "glue", service_ids=_GLUE_SERVICE_IDS),
-    PaletteEntry("glue.crawlers", "Glue crawlers", "glue", service_ids=_GLUE_SERVICE_IDS),
-    PaletteEntry(
-        "glue.choose_run_state",
-        "Choose Glue run state",
-        "glue",
-        service_ids=_GLUE_SERVICE_IDS,
-    ),
-    PaletteEntry(
-        "glue.choose_crawler_state",
-        "Choose Glue crawler state",
-        "glue",
-        service_ids=_GLUE_SERVICE_IDS,
-    ),
-    PaletteEntry(
-        "glue.copy_table_ref",
-        "Copy Glue table reference",
-        "glue",
-        service_ids=_GLUE_SERVICE_IDS,
-    ),
-    PaletteEntry(
-        "glue.open_s3_location",
-        "Open table location in S3",
-        "glue",
-        service_ids=_GLUE_SERVICE_IDS,
-    ),
-    PaletteEntry(
-        "glue.query_in_athena",
-        "Query table in Athena",
-        "glue",
-        service_ids=_GLUE_SERVICE_IDS,
-    ),
-    PaletteEntry(
-        "glue.load_more",
-        "Load more Glue rows",
-        "glue",
-        service_ids=_GLUE_SERVICE_IDS,
-    ),
-    PaletteEntry(
-        "glue.time_travel_in_athena",
-        "Query Iceberg snapshot in Athena",
-        "glue",
-        service_ids=_GLUE_SERVICE_IDS,
-    ),
-    PaletteEntry("athena.query", "Athena query", "athena", service_ids=_ATHENA_SERVICE_IDS),
-    PaletteEntry("athena.history", "Athena history", "athena", service_ids=_ATHENA_SERVICE_IDS),
-    PaletteEntry("athena.results", "Athena results", "athena", service_ids=_ATHENA_SERVICE_IDS),
-    PaletteEntry("athena.saved", "Athena saved queries", "athena", service_ids=_ATHENA_SERVICE_IDS),
-    PaletteEntry(
-        "athena.choose_workgroup",
-        "Choose Athena workgroup",
-        "athena",
-        service_ids=_ATHENA_SERVICE_IDS,
-    ),
-    PaletteEntry(
-        "athena.choose_catalog",
-        "Choose Athena catalog",
-        "athena",
-        service_ids=_ATHENA_SERVICE_IDS,
-    ),
-    PaletteEntry(
-        "athena.choose_database",
-        "Choose Athena database",
-        "athena",
-        service_ids=_ATHENA_SERVICE_IDS,
-    ),
-    PaletteEntry(
-        "athena.insert_table_ref",
-        "Insert copied table reference",
-        "athena",
-        service_ids=_ATHENA_SERVICE_IDS,
-    ),
-    PaletteEntry(
-        "athena.execute", "Execute Athena query", "athena", service_ids=_ATHENA_SERVICE_IDS
-    ),
-    PaletteEntry("athena.cancel", "Cancel Athena query", "athena", service_ids=_ATHENA_SERVICE_IDS),
-    PaletteEntry(
-        "athena.load_more", "Load more Athena rows", "athena", service_ids=_ATHENA_SERVICE_IDS
-    ),
-    PaletteEntry(
-        "athena.inspect_cell", "Inspect Athena cell", "athena", service_ids=_ATHENA_SERVICE_IDS
-    ),
-    PaletteEntry(
-        "athena.copy_cell", "Copy Athena cell as JSON", "athena", service_ids=_ATHENA_SERVICE_IDS
-    ),
-    PaletteEntry(
-        "athena.copy_row", "Copy Athena row as JSON", "athena", service_ids=_ATHENA_SERVICE_IDS
-    ),
-    PaletteEntry(
-        "athena.filter_results",
-        "Filter loaded Athena results",
-        "athena",
-        service_ids=_ATHENA_SERVICE_IDS,
-    ),
-    PaletteEntry(
-        "athena.sort_results",
-        "Sort loaded Athena results",
-        "athena",
-        service_ids=_ATHENA_SERVICE_IDS,
-    ),
-    PaletteEntry(
-        "athena.reset_results",
-        "Reset loaded Athena results",
-        "athena",
-        service_ids=_ATHENA_SERVICE_IDS,
-    ),
-    PaletteEntry(
-        "athena.open_result_location",
-        "Open Athena result in S3",
-        "athena",
-        service_ids=_ATHENA_SERVICE_IDS,
-    ),
-    PaletteEntry(
-        "athena.open_in_glue",
-        "Open query table in Glue",
-        "athena",
-        service_ids=_ATHENA_SERVICE_IDS,
-    ),
-    PaletteEntry("app.open_settings", "Settings", "app"),
-    PaletteEntry("app.help", "Help", "app"),
-    PaletteEntry("app.quit", "Quit", "app"),
-)
+
+@dataclass(frozen=True, slots=True)
+class _DiscoveryOrigin:
+    service_id: str | None
+    vm: object
+    focus: Widget | None
+    slot: FocusSlot
+    focused_ids: frozenset[str]
+    object_details: tuple[PaneVM, object, object, object, int, EntryRow] | None
+    result_generation: int | None = None
 
 
 async def _first_bytes(source: AsyncIterator[bytes], limit: int) -> AsyncIterator[bytes]:
@@ -957,8 +784,10 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
         self._shutdown_complete = False
         self._shutdown_errors: tuple[tuple[str, str], ...] = ()
         self._command_palette_populated: bool = False
+        self._discovery_origin: _DiscoveryOrigin | None = None
+        self._discovery_palette_ids: set[str] = set()
+        self._refreshing_discovery = False
         self._object_details_focus_restoration: Callable[[], None] | None = None
-        self._emr_cancel_available = False
         self._pane_state_sub: DisposableBase | None = None
         self._connection_state_sub: DisposableBase | None = None
         self._connection_list_sub: DisposableBase | None = None
@@ -2498,44 +2327,361 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
         self._app_ctx.quick_look_vm.open_command.execute(content)
         self.push_screen(QuickLook(self._app_ctx.quick_look_vm, hub=self._app_ctx.hub))
 
-    def _populate_command_palette(self) -> None:
-        """Register the curated app commands into the palette (idempotent).
+    def _capture_discovery_origin(self) -> _DiscoveryOrigin:
+        host = self._app_ctx.root_vm.content_host
+        focused = self.focused
+        ids = (
+            frozenset(node.id for node in focused.ancestors_with_self if node.id)
+            if focused
+            else frozenset()
+        )
+        page = self._athena_page()
+        return _DiscoveryOrigin(
+            host.current_id,
+            host.current,
+            focused,
+            self._app_ctx.focus_coordinator.focused_slot,
+            ids,
+            self._object_details_origin(),
+            page.vm.results.projection_generation if page and page.vm is host.current else None,
+        )
 
-        Each entry invokes its named ActionRegistry command; physical shared
-        keys choose context at dispatch. ``register_entry`` replaces
-        by id, so re-running is a no-op; the flag just avoids redundant work.
-        """
-        if self._command_palette_populated:
-            return
-        vm = self._app_ctx.command_palette_vm
-        for entry in _PALETTE_COMMANDS:
-            if entry.id in _ATHENA_RESULT_ACTIONS:
-                keys = " / ".join(self._app_ctx.keymap_store.resolve(entry.id))
-                entry = replace(entry, label=f"{entry.label} ({keys})")
-            vm.register_entry(
-                entry,
-                # PaletteVM invokes before CommandPalette dismisses its screen.
-                # Defer synchronous pane actions so strict modal guards and
-                # focused-pane restoration still apply at invocation time.
-                partial(self._schedule_palette_object_details)
-                if entry.id == "pane.object_details"
-                else partial(self._schedule_palette_selection, entry.id)
-                if entry.id
-                in _PANE_SELECTION_ACTIONS
-                | _ATHENA_RESULT_ACTIONS
-                | {
-                    "pane.filter",
-                    "pane.fuzzy_find",
-                    "pane.sort",
-                    "pane.clear_filter",
-                }
-                else partial(self._actions.invoke, entry.id),
+    def _discovery_origin_owned(self, origin: _DiscoveryOrigin) -> bool:
+        host = self._app_ctx.root_vm.content_host
+        if host.current_id != origin.service_id or host.current is not origin.vm:
+            return False
+        page = {
+            "athena": self._athena_page,
+            "glue": self._glue_page,
+            "emr-serverless": self._emr_page,
+        }.get(origin.service_id or "")
+        if page is not None:
+            mounted = page()
+            return mounted is not None and mounted.is_attached and mounted.vm is origin.vm
+        if origin.service_id == "s3":
+            return any(view.is_attached and view.vm is origin.vm for view in self.query(DualPane))
+        if origin.service_id == SETTINGS_NAV_ID:
+            return any(
+                view.is_attached and view.vm is origin.vm for view in self.query(SettingsView)
             )
-        self._command_palette_populated = True
-        self._recompute_hint_disables()
+        return True
 
-    def _schedule_palette_object_details(self) -> None:
-        self.call_after_refresh(self._finish_palette_object_details)
+    def _readiness_disabled(self, focused_ids: frozenset[str] | None = None) -> frozenset[str]:
+        """Existing footer predicates, with an optional underlying focus snapshot."""
+        emr = self._emr_page()
+        if emr is not None:
+            return frozenset() if emr.vm.can_cancel_selected_run() else frozenset({"emr.cancel"})
+        athena = self._athena_page()
+        if athena is not None:
+            disabled = set()
+            if not athena.vm.query.execute_command.can_execute():
+                disabled.add("athena.execute")
+            if not athena.vm.query.cancel_command.can_execute():
+                disabled.add("athena.cancel")
+            if not athena.can_load_more(focused_ids=focused_ids):
+                disabled.add("athena.load_more")
+            copied = self._app_ctx.table_clipboard_vm.copied_table
+            if copied is None or (copied.table_ref.connection_name, copied.table_ref.region) != (
+                athena.vm.context.connection_name,
+                athena.vm.context.region,
+            ):
+                disabled.add("athena.insert_table_ref")
+            return frozenset(disabled)
+        glue = self._glue_page()
+        if glue is not None:
+            disabled = set()
+            for action, ready in (
+                ("glue.copy_table_ref", glue.vm.can_copy_table_reference),
+                ("glue.query_in_athena", glue.vm.can_query_in_athena),
+                ("glue.time_travel_in_athena", glue.vm.can_time_travel_in_athena),
+                ("glue.load_more", glue.can_load_more(focused_ids=focused_ids)),
+            ):
+                if not ready:
+                    disabled.add(action)
+            return frozenset(disabled)
+        dual = self._dual_pane()
+        pane = getattr(dual, "focused_pane", None)
+        if pane is None:
+            return frozenset()
+        entries = pane.filtered_entries or pane.entries
+        target = entries[pane.cursor_index] if 0 <= pane.cursor_index < len(entries) else None
+        return (
+            frozenset({"pane.copy", "pane.delete"})
+            if getattr(target, "name", None) == ".."
+            or getattr(getattr(target, "entry", None), "name", None) == ".."
+            else frozenset()
+        )
+
+    def _discovery_can_descend(self, origin: _DiscoveryOrigin) -> bool:
+        """Mirror non-modal activation targets, excluding text-editing effects."""
+        focused = origin.focus
+        if isinstance(focused, (Input, TextArea)):
+            return False
+        if isinstance(focused, (NavMenu, ServiceSourceHeader, ContextPicker, ServiceTabStrip)):
+            return True
+        if isinstance(focused, (Button, ModalButton)):
+            return not focused.disabled
+        if isinstance(focused, OptionList):
+            return focused.highlighted is not None
+        if isinstance(focused, DataTable):
+            return focused.row_count > 0
+        if focused is not None and callable(getattr(focused, "action_toggle_collapsible", None)):
+            return True
+        dual = self._dual_pane()
+        if dual is not None:
+            pane = (
+                dual.left
+                if origin.slot is FocusSlot.S3_LEFT
+                else dual.right
+                if origin.slot is FocusSlot.S3_RIGHT
+                else None
+            )
+            if focused is not None:
+                owner = next(
+                    (node for node in focused.ancestors_with_self if isinstance(node, Pane)), None
+                )
+                pane = owner.vm if owner is not None else None
+            entry = pane.selected_entry if pane is not None else None
+            return (
+                pane is not None
+                and pane.state is PaneState.IDLE
+                and entry is not None
+                and entry.kind is EntryKind.DIRECTORY
+                and (not entry.is_parent_link or not pane.path.is_root)
+            )
+        return False
+
+    def _discovery_unavailability(self, origin: _DiscoveryOrigin) -> dict[str, str]:
+        reasons = {
+            action: "selection_required" for action in self._readiness_disabled(origin.focused_ids)
+        }
+        if not self._discovery_origin_owned(origin):
+            return {spec.id: "page_unavailable" for spec in ACTION_SPECS}
+        if origin.focus is not None and not origin.focus.is_attached:
+            return {spec.id: "focus_required" for spec in ACTION_SPECS}
+        dual = self._dual_pane()
+        if dual is not None:
+            pane = (
+                dual.left
+                if origin.slot is FocusSlot.S3_LEFT
+                else dual.right
+                if origin.slot is FocusSlot.S3_RIGHT
+                else None
+            )
+            if origin.focus is not None:
+                owner = next(
+                    (node for node in origin.focus.ancestors_with_self if isinstance(node, Pane)),
+                    None,
+                )
+                pane = owner.vm if owner is not None else None
+            for spec in ACTION_SPECS:
+                if spec.service_ids == frozenset({"s3"}) and (
+                    pane is None or pane.state not in {PaneState.IDLE, PaneState.EMPTY}
+                ):
+                    reasons[spec.id] = "focus_required" if pane is None else "busy"
+            if pane is not None:
+                selected = pane.selected_entry
+                for action in (
+                    "pane.copy",
+                    "pane.delete",
+                    "pane.copy_entry_path",
+                    "pane.mark_up",
+                    "pane.mark_down",
+                ):
+                    if selected is None or selected.is_parent_link:
+                        reasons[action] = "selection_required"
+                if selected is None or selected.kind is not EntryKind.FILE:
+                    reasons["pane.quick_look"] = "selection_required"
+                if pane.path.is_root or isinstance(origin.focus, (Input, TextArea)):
+                    reasons["pane.ascend"] = "selection_required"
+                    reasons["pane.modal_left"] = "selection_required"
+                if selected is None or selected.kind is not EntryKind.DIRECTORY:
+                    reasons["pane.descend"] = "selection_required"
+                for action in _PANE_SELECTION_ACTIONS:
+                    command = getattr(pane, action.split(".")[1] + "_command")
+                    if not command.can_execute():
+                        reasons[action] = "selection_required"
+            else:
+                reasons["pane.descend"] = "focus_required"
+                reasons["pane.modal_left"] = "focus_required"
+                reasons["app.swap_source"] = "focus_required"
+            if origin.object_details is None:
+                reasons["pane.object_details"] = "selection_required"
+            if len(_build_swap_candidates(self._app_ctx)[0]) <= 1:
+                reasons["app.swap_source"] = "source_missing"
+        athena = self._athena_page()
+        if athena is not None:
+            results = athena.vm.results
+            controls = tuple(athena.query(AthenaResultsView))
+            live_results = (
+                bool(controls)
+                and controls[0].is_running
+                and controls[0].is_attached
+                and controls[0]._controls_are_live()
+                and athena.vm._is_alive()
+            )
+            for action in _ATHENA_RESULT_ACTIONS:
+                if (
+                    athena.vm.active_view != "results"
+                    or not live_results
+                    or isinstance(origin.focus, (Input, TextArea))
+                    or origin.result_generation != results.projection_generation
+                ):
+                    reasons[action] = "focus_required"
+                elif (
+                    action
+                    in {
+                        "athena.inspect_cell",
+                        "athena.copy_cell",
+                        "athena.copy_row",
+                        "athena.sort_results",
+                    }
+                    and results.selection is None
+                ):
+                    reasons[action] = "selection_required"
+            if (
+                athena.vm.active_view != "query"
+                or not athena.vm._is_alive()
+                or len(athena.vm._policy.table_refs(athena.vm.query.sql, athena.vm.context)) != 1
+            ):
+                reasons["athena.open_in_glue"] = "selection_required"
+            detail = athena.vm.history.detail if athena.vm.active_view == "history" else None
+            result_location = (
+                athena.vm.active_view == "results"
+                and athena.vm._is_alive()
+                and results.execution_id is not None
+            )
+            history_location = (
+                detail is not None
+                and athena.vm._is_alive()
+                and detail.summary.state is QueryState.SUCCEEDED
+                and detail.summary.ref.execution_id == athena.vm.history.selected_execution_id
+                and _execution_identity_belongs_to(detail, athena.vm.context)
+                and parse_s3_uri(detail.output_location) is not None
+            )
+            if not (result_location or history_location):
+                reasons["athena.open_result_location"] = "selection_required"
+        glue = self._glue_page()
+        if glue is not None:
+            glue_detail = glue.vm.catalog.table_detail
+            if (
+                not glue.vm.actions_available
+                or glue_detail is None
+                or parse_s3_uri(glue_detail.storage.location) is None
+            ):
+                reasons["glue.open_s3_location"] = "selection_required"
+        emr = self._emr_page()
+        if emr is not None:
+            emr_detail = emr.vm.job_run_detail.detail
+            if emr_detail is None or not emr.vm.can_clone_source(
+                emr_detail.application_id, emr_detail.job_run_id
+            ):
+                reasons["emr.clone"] = "selection_required"
+            logs = emr.right_pane
+            if logs is None or origin.focus is None or logs not in origin.focus.ancestors_with_self:
+                for action in ("emr.logs.filter", "pane.modal_left", "pane.modal_right"):
+                    reasons[action] = "focus_required"
+        if origin.service_id in {
+            "athena",
+            "glue",
+            "emr-serverless",
+        } and (
+            origin.service_id not in self._app_ctx.registry
+            or not _service_source_candidates(self._app_ctx, origin.service_id)
+        ):
+            reasons["app.swap_source"] = "source_missing"
+        if self._discovery_can_descend(origin):
+            reasons.pop("pane.descend", None)
+        else:
+            reasons["pane.descend"] = "focus_required"
+        if self._app_ctx.root_vm.active_connection is None:
+            reasons["auth.authenticate"] = "source_missing"
+        return reasons
+
+    def _project_discovery_actions(
+        self, origin: _DiscoveryOrigin
+    ) -> tuple[ActionPresentation, ...]:
+        return project_actions(
+            ACTION_SPECS,
+            registered_ids=frozenset(self._actions.known_actions()),
+            bindings=self._app_ctx.keymap_store.all(),
+            active_service_id=origin.service_id,
+            unavailable_reasons=self._discovery_unavailability(origin),
+        )
+
+    def _refresh_discovery_surfaces(self) -> None:
+        if self._refreshing_discovery or self._shutdown_task is not None:
+            return
+        if len(self.screen_stack) == 1 and self._command_palette_populated:
+            self._discovery_origin = self._capture_discovery_origin()
+        origin = self._discovery_origin
+        if origin is None:
+            return
+        self._refreshing_discovery = True
+        try:
+            rows = self._project_discovery_actions(origin)
+            vm = self._app_ctx.command_palette_vm
+            selected = vm.filtered_entries[vm.selected_index].id if vm.filtered_entries else None
+            current_ids = {row.id for row in rows if row.available}
+            for removed in self._discovery_palette_ids - current_ids:
+                vm.unregister_entry(removed)
+            for row in rows:
+                if row.available:
+                    vm.register_entry(row, partial(self._invoke_discovery_action, row.id, origin))
+            self._discovery_palette_ids = current_ids
+            vm.set_active_service(origin.service_id)
+            if vm.is_open and selected is not None:
+                target = next(
+                    (i for i, row in enumerate(vm.filtered_entries) if row.id == selected), None
+                )
+                if target is not None:
+                    vm.move_selection_command.execute(target - vm.selected_index)
+            for screen in self.screen_stack:
+                if isinstance(screen, HelpModal):
+                    self.call_after_refresh(screen.update_actions, rows)
+        finally:
+            self._refreshing_discovery = False
+
+    def _populate_command_palette(self) -> None:
+        if len(self.screen_stack) == 1 or self._discovery_origin is None:
+            self._discovery_origin = self._capture_discovery_origin()
+        self._command_palette_populated = True
+        self._refresh_discovery_surfaces()
+
+    async def _invoke_discovery_action(self, action_id: str, origin: _DiscoveryOrigin) -> None:
+        ready: asyncio.Future[None] = asyncio.get_running_loop().create_future()
+
+        def after_dismissal() -> None:
+            if not ready.done():
+                ready.set_result(None)
+
+        self.call_after_refresh(after_dismissal)
+        await ready
+        if (
+            self._shutdown_task is not None
+            or len(self.screen_stack) != 1
+            or self._app_ctx.focus_coordinator.is_modal
+            or not self._discovery_origin_owned(origin)
+            or not self._actions.has(action_id)
+        ):
+            return
+        row = next(
+            (row for row in self._project_discovery_actions(origin) if row.id == action_id), None
+        )
+        if row is None or not row.available:
+            return
+        if action_id == "pane.object_details":
+            self._palette_object_details_origin = origin.object_details
+            self._palette_object_details_focus = origin.focus
+            self._palette_object_details_slot = origin.slot
+            self._finish_palette_object_details()
+            return
+        if origin.focus is None or origin.focus.is_attached:
+            self._app_ctx.focus_coordinator.set_focused_slot(origin.slot)
+            self.set_focus(origin.focus)
+        result = self._actions.invoke(action_id)
+        if inspect.isawaitable(result):
+            await result
 
     def _finish_palette_object_details(self) -> None:
         origin = self._palette_object_details_origin
@@ -2557,9 +2703,6 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
                 self.set_focus(self._palette_object_details_focus)
         self._open_object_details(origin)
 
-    def _schedule_palette_selection(self, action_id: str) -> None:
-        self.call_after_refresh(self._actions.invoke, action_id)
-
     def action_command_palette(self) -> None:
         """Open the fuzzy command palette (bound to ``:`` / ``Ctrl+K``)."""
         self.record_action("app.command_palette")
@@ -2568,9 +2711,7 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
                 with contextlib.suppress(Exception):
                     screen.query_one("#palette-input", Input).focus()
                 return
-        self._palette_object_details_origin = self._object_details_origin()
-        self._palette_object_details_slot = self._app_ctx.focus_coordinator.focused_slot
-        self._palette_object_details_focus = self.focused
+        self._discovery_origin = self._capture_discovery_origin()
         self._populate_command_palette()
         vm = self._app_ctx.command_palette_vm
         vm.set_active_service(self._app_ctx.root_vm.content_host.current_id)
@@ -3707,8 +3848,11 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
     async def action_help(self) -> None:
         """Show the help overlay with the active configurable keymap."""
         self.record_action("app.help")
+        self._discovery_origin = self._capture_discovery_origin()
         await self.push_screen(
             HelpModal(
+                actions=self._project_discovery_actions(self._discovery_origin),
+                active_service_id=self._discovery_origin.service_id,
                 keymap=self._app_ctx.keymap_store,
                 log_path=self._app_ctx.log_sink.path,
                 crash_path=self._app_ctx.log_sink.path.parent.parent / "crash",
@@ -5850,91 +5994,8 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
         self._recompute_hint_disables()
 
     def _recompute_hint_disables(self) -> None:
-        """Push a fresh disabled-action set to the HintLegendVM based
-        on the focused pane's current cursor target. Safe to call at
-        any time; EMR cancellation uses the page VM eligibility predicate.
-        """
-        emr_page = self._emr_page()
-        can_cancel = emr_page is not None and emr_page.vm.can_cancel_selected_run()
-        palette = self._app_ctx.command_palette_vm
-        if can_cancel and not self._emr_cancel_available:
-            palette.register_entry(
-                PaletteEntry(
-                    "emr.cancel",
-                    "Cancel selected EMR job run",
-                    "emr",
-                    ("cancel", "job", "run"),
-                    service_ids=_EMR_SERVICE_IDS,
-                ),
-                partial(self._schedule_palette_selection, "emr.cancel"),
-            )
-        elif not can_cancel:
-            palette.unregister_entry("emr.cancel")
-        self._emr_cancel_available = can_cancel
-        if emr_page is not None:
-            self._app_ctx.root_vm.chrome.hint_legend.set_disabled_actions(
-                frozenset() if can_cancel else frozenset({"emr.cancel"})
-            )
-            return
-        athena_page = self._athena_page()
-        if athena_page is not None:
-            disabled: set[str] = set()
-            query = athena_page.vm.query
-            if not query.execute_command.can_execute():
-                disabled.add("athena.execute")
-            if not query.cancel_command.can_execute():
-                disabled.add("athena.cancel")
-            if not athena_page.can_load_more():
-                disabled.add("athena.load_more")
-            copied = self._app_ctx.table_clipboard_vm.copied_table
-            active_source = (
-                athena_page.vm.context.connection_name,
-                athena_page.vm.context.region,
-            )
-            if (
-                copied is None
-                or (
-                    copied.table_ref.connection_name,
-                    copied.table_ref.region,
-                )
-                != active_source
-            ):
-                disabled.add("athena.insert_table_ref")
-            self._app_ctx.root_vm.chrome.hint_legend.set_disabled_actions(frozenset(disabled))
-            return
-        glue_page = self._glue_page()
-        if glue_page is not None:
-            glue_disabled: set[str] = set()
-            if not glue_page.vm.can_copy_table_reference:
-                glue_disabled.add("glue.copy_table_ref")
-            if not glue_page.vm.can_query_in_athena:
-                glue_disabled.add("glue.query_in_athena")
-            if not glue_page.vm.can_time_travel_in_athena:
-                glue_disabled.add("glue.time_travel_in_athena")
-            if not glue_page.can_load_more():
-                glue_disabled.add("glue.load_more")
-            self._app_ctx.root_vm.chrome.hint_legend.set_disabled_actions(frozenset(glue_disabled))
-            return
-        dual = self._dual_pane()
-        if dual is None:
-            # No file-pane context — leave whatever the EMR / Settings
-            # service set is the source of truth. Don't add disables.
-            self._app_ctx.root_vm.chrome.hint_legend.set_disabled_actions(frozenset())
-            return
-        pane = getattr(dual, "focused_pane", None)
-        if pane is None:
-            self._app_ctx.root_vm.chrome.hint_legend.set_disabled_actions(frozenset())
-            return
-        cursor_idx = getattr(pane, "cursor_index", 0)
-        entries = getattr(pane, "filtered_entries", ()) or getattr(pane, "entries", ())
-        target = entries[cursor_idx] if 0 <= cursor_idx < len(entries) else None
-        target_name = getattr(getattr(target, "entry", target), "name", None)
-        if target_name == "..":
-            self._app_ctx.root_vm.chrome.hint_legend.set_disabled_actions(
-                frozenset({"pane.copy", "pane.delete"})
-            )
-        else:
-            self._app_ctx.root_vm.chrome.hint_legend.set_disabled_actions(frozenset())
+        self._app_ctx.root_vm.chrome.hint_legend.set_disabled_actions(self._readiness_disabled())
+        self._refresh_discovery_surfaces()
 
     def on_mouse_down(self, event: events.MouseDown) -> None:
         ContextPicker.close_open_for_outside_mouse_down(

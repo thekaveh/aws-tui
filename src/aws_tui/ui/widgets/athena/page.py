@@ -447,8 +447,9 @@ class AthenaPage(DeferredWorkerMixin, HubSubscriberMixin, Widget):
             elif self._vm.has_more_workgroups:
                 await self._vm.load_more_workgroups()
 
-    def can_load_more(self) -> bool:
-        focused_ids = self._focused_ids()
+    def can_load_more(self, *, focused_ids: frozenset[str] | None = None) -> bool:
+        if focused_ids is None:
+            focused_ids = frozenset(self._focused_ids())
         if focused_ids & {"athena-workgroup", "athena-more-workgroups"}:
             return self._vm.has_more_workgroups and not self._vm.is_loading_more_workgroups
         if focused_ids & {"athena-catalog", "athena-more-catalogs"}:

@@ -9,9 +9,11 @@ from textual.containers import Container
 from vmx import NULL_DISPATCHER
 
 from aws_tui.app import AwsTuiApp
+from aws_tui.composition import build_app_context
 from aws_tui.domain.data_catalog import TableFormat
 from aws_tui.infra.clipboard import InMemoryClipboard
 from aws_tui.infra.connection_resolver import Connection
+from aws_tui.ui.widgets.athena.page import AthenaPage
 from aws_tui.ui.widgets.command_palette import CommandPalette
 from aws_tui.ui.widgets.glue.page import GluePage
 from aws_tui.vm.glue.page_vm import GluePageVM
@@ -19,92 +21,64 @@ from tests.helpers import drain_workers, wait_until
 from tests.unit.vm.glue._fake_glue import seeded_glue
 from tests.unit.vm.glue.test_iceberg_vm import RecordingInspector
 
-_GLOBAL = {
-    "Theme picker",
-    "Cycle theme",
-    "Settings",
-    "Help",
-    "Quit",
-    "Transfer history and recovery",
-}
-_SOURCE = {"Switch source", "Retry active source credentials"}
-# Scoped to the file manager: ``pane.copy_entry_path`` / ``pane.copy_path``
-# resolve through ``_focused_file_pane()``, and only the S3 service hosts a
-# ``DualPaneVM``, so they are inert on every other page.
-_PANE = {
-    "S3 object details",
-    "Filter loaded entries",
-    "Find loaded entry",
-    "Sort loaded entries",
-    "Clear pane filter",
-    "Copy cursor entry path",
-    "Copy pane path",
-    "Enter multi-select mode",
-    "Toggle cursor selection",
-    "Select all visible entries",
-    "Clear selection",
-    "Exit multi-select mode",
-}
-_GLUE = {
-    "Glue catalog",
-    "Glue jobs",
-    "Glue crawlers",
-    "Choose Glue run state",
-    "Choose Glue crawler state",
-    "Copy Glue table reference",
-    "Open table location in S3",
-    "Query table in Athena",
-    "Load more Glue rows",
-    "Query Iceberg snapshot in Athena",
-}
-_EMR = {"Next EMR application"}
-_ATHENA = {
-    "Athena query",
-    "Athena history",
-    "Athena results",
-    "Athena saved queries",
-    "Choose Athena workgroup",
-    "Choose Athena catalog",
-    "Choose Athena database",
-    "Insert copied table reference",
-    "Execute Athena query",
-    "Cancel Athena query",
-    "Load more Athena rows",
-    "Open Athena result in S3",
-    "Open query table in Glue",
-    "Inspect Athena cell (alt+enter)",
-    "Copy Athena cell as JSON (alt+c)",
-    "Copy Athena row as JSON (alt+shift+c)",
-    "Filter loaded Athena results (alt+f)",
-    "Sort loaded Athena results (alt+s)",
-    "Reset loaded Athena results (alt+r)",
-}
+
+async def _host_demo_service(app, ctx, service_id):
+    ctx.root_vm.services_menu.switch_service_command.execute(service_id)
+    from aws_tui.ui.widgets.dual_pane import DualPane
+    from aws_tui.ui.widgets.emr_serverless.page import EmrServerlessPage
+    from aws_tui.ui.widgets.settings_view import SettingsView
+
+    page_types = {
+        "athena": AthenaPage,
+        "glue": GluePage,
+        "s3": DualPane,
+        "emr-serverless": EmrServerlessPage,
+        "settings": SettingsView,
+    }
+    await wait_until(
+        lambda: (
+            ctx.root_vm.content_host.current_id == service_id
+            and (
+                service_id not in page_types
+                or (
+                    bool(app.query(page_types[service_id]))
+                    and app.query_one(page_types[service_id]).vm is ctx.root_vm.content_host.current
+                )
+            )
+        ),
+        what=f"hosted {service_id}",
+    )
+    await drain_workers(app)
 
 
 @pytest.mark.asyncio
-async def test_palette_projects_only_global_and_active_service_commands(
-    app_context_factory,  # type: ignore[no-untyped-def]
-) -> None:
-    app = AwsTuiApp(app_context_factory())
-    async with app.run_test(size=(120, 40)) as pilot:
-        await pilot.pause()
-        app._populate_command_palette()
-        vm = app._app_ctx.command_palette_vm
-
-        vm.set_active_service("glue")
-        assert {entry.label for entry in vm.filtered_entries} == _GLOBAL | _SOURCE | _GLUE
-
-        vm.set_active_service("athena")
-        assert {entry.label for entry in vm.filtered_entries} == _GLOBAL | _SOURCE | _ATHENA
-
-        vm.set_active_service("s3")
-        assert {entry.label for entry in vm.filtered_entries} == _GLOBAL | _SOURCE | _PANE
-
-        vm.set_active_service("emr-serverless")
-        assert {entry.label for entry in vm.filtered_entries} == _GLOBAL | _SOURCE | _EMR
-
-        vm.set_active_service("settings")
-        assert {entry.label for entry in vm.filtered_entries} == _GLOBAL
+async def test_palette_projects_only_global_and_active_service_commands(tmp_path) -> None:
+    ctx = build_app_context(config_dir=tmp_path, cache_dir=tmp_path, demo=True)
+    app = AwsTuiApp(ctx)
+    try:
+        async with app.run_test(size=(120, 40)) as pilot:
+            await pilot.pause()
+            for service in ("glue", "athena", "s3", "emr-serverless", "settings"):
+                await _host_demo_service(app, ctx, service)
+                app._populate_command_palette()
+                origin = app._capture_discovery_origin()
+                expected = tuple(
+                    row for row in app._project_discovery_actions(origin) if row.available
+                )
+                assert {row.id: row for row in ctx.command_palette_vm.filtered_entries} == {
+                    row.id: row for row in expected
+                }
+                assert all(app._actions.has(row.id) for row in expected)
+                if service == "athena":
+                    ids = {row.id for row in expected}
+                    assert "glue.jobs" not in ids
+                    assert "athena.cancel" not in ids
+                    assert "athena.load_more" not in ids
+                if service == "settings":
+                    assert all(not row.service_ids for row in expected)
+    finally:
+        ctx.root_vm.dispose()
+        ctx.log_sink.close()
 
 
 @pytest.mark.asyncio
@@ -119,7 +93,9 @@ async def test_colon_opens_command_palette(app_context_factory) -> None:  # type
         )
         assert isinstance(app.screen, CommandPalette)
         labels = {entry.label for entry in app._app_ctx.command_palette_vm.filtered_entries}
-        assert labels == _GLOBAL | _SOURCE | _PANE
+        assert "Cycle theme" in labels
+        assert "Glue jobs" not in labels
+        assert "Athena query" not in labels
         assert app._crash_report is None  # type: ignore[attr-defined]
 
 
@@ -190,7 +166,7 @@ async def test_palette_entry_action_dispatches(app_context_factory) -> None:  # 
         app._populate_command_palette()
         calls: list[str] = []
         app._actions.register("app.cycle_theme", lambda: calls.append("cycle"))
-        app._app_ctx.command_palette_vm._actions["app.cycle_theme"]()
+        await app._app_ctx.command_palette_vm._actions["app.cycle_theme"]()
         assert calls == ["cycle"]
 
 
@@ -302,6 +278,8 @@ async def test_glue_handoff_disabled_state_tracks_table_and_snapshot_selection(
     app = AwsTuiApp(ctx)
     try:
         async with app.run_test(size=(120, 40)) as _pilot:
+            await _pilot.pause()
+            await ctx.root_vm.content_host.set_content(vm, service_id="glue", already_prepared=True)
             host = app.query_one("#content-host", Container)
             await host.remove_children()
             await host.mount(
@@ -477,6 +455,8 @@ async def test_direct_glue_page_disposal_disables_handoffs_without_advisory_toas
     app = AwsTuiApp(ctx)
     try:
         async with app.run_test(size=(120, 40)) as _pilot:
+            await _pilot.pause()
+            await ctx.root_vm.content_host.set_content(vm, service_id="glue", already_prepared=True)
             host = app.query_one("#content-host", Container)
             await host.remove_children()
             await host.mount(
@@ -530,13 +510,8 @@ async def test_direct_glue_page_disposal_disables_handoffs_without_advisory_toas
         vm.dispose()
 
 
-async def test_athena_loaded_result_controls_have_registered_scoped_palette_actions(
-    app_context_factory,
-):
-    from aws_tui.infra.keymap_store import KeymapStore
-    from aws_tui.ui.widgets.help_modal import HelpModal
-
-    ctx = app_context_factory()
+async def test_athena_loaded_result_controls_have_registered_scoped_palette_actions(tmp_path):
+    ctx = build_app_context(config_dir=tmp_path, cache_dir=tmp_path, demo=True)
     app = AwsTuiApp(ctx)
     controls = {
         "inspect_cell",
@@ -546,30 +521,32 @@ async def test_athena_loaded_result_controls_have_registered_scoped_palette_acti
         "sort_results",
         "reset_results",
     }
-    async with app.run_test() as pilot:
-        await pilot.pause()
-        for action in controls:
-            assert app._actions.has("athena." + action)
-        app._populate_command_palette()
-        palette = ctx.command_palette_vm
-        palette.set_active_service("athena")
-        entries = {entry.id for entry in palette.filtered_entries}
-        assert {"athena." + action for action in controls} <= entries
-        palette.set_active_service("s3")
-        assert not {"athena." + action for action in controls} & {
-            entry.id for entry in palette.filtered_entries
-        }
-        overlay = HelpModal(keymap=KeymapStore(overlay={"athena.copy_cell": "ctrl+g"}))
-        app.push_screen(overlay)
-        await pilot.pause()
-        rows = " ".join(str(row.content) for row in overlay.query(".help-row"))
-        assert "Ctrl+g" in rows
-        assert "loaded Athena" in rows
+    try:
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            await _host_demo_service(app, ctx, "athena")
+            for action in controls:
+                assert app._actions.has("athena." + action)
+            vm = ctx.root_vm.content_host.current
+            await vm.select_view("results")
+            await pilot.pause()
+            app._populate_command_palette()
+            entries = {entry.id for entry in ctx.command_palette_vm.filtered_entries}
+            assert {"athena.filter_results", "athena.reset_results"} <= entries
+            assert "athena.copy_cell" not in entries
+            await _host_demo_service(app, ctx, "s3")
+            app._populate_command_palette()
+            assert not {"athena." + action for action in controls} & {
+                entry.id for entry in ctx.command_palette_vm.filtered_entries
+            }
+    finally:
+        ctx.root_vm.dispose()
+        ctx.log_sink.close()
 
 
 @pytest.mark.parametrize("size", [(80, 24), (120, 40)])
 async def test_athena_result_shortcuts_arrows_modal_containment_and_palette_dispatch(
-    app_context_factory,
+    tmp_path,
     monkeypatch,
     size,
 ):
@@ -582,7 +559,9 @@ async def test_athena_result_shortcuts_arrows_modal_containment_and_palette_disp
     from tests.helpers import focus_and_settle
     from tests.unit.vm.athena.test_page_vm import PageClient, make_page_vm
 
-    ctx = app_context_factory()
+    ctx = build_app_context(
+        config_dir=tmp_path, cache_dir=tmp_path, demo=True, clipboard=InMemoryClipboard()
+    )
     client = PageClient()
     result_calls = []
 
@@ -608,6 +587,10 @@ async def test_athena_result_shortcuts_arrows_modal_containment_and_palette_disp
     monkeypatch.setattr(app, "copy_value", lambda value, label: copies.append((value, label)))
     try:
         async with app.run_test(size=size) as pilot:
+            await pilot.pause()
+            await ctx.root_vm.content_host.set_content(
+                vm, service_id="athena", already_prepared=True
+            )
             host = app.query_one("#content-host", Container)
             await host.remove_children()
             await host.mount(
@@ -700,9 +683,11 @@ async def test_athena_result_control_configured_key_dispatch_replaces_default(ap
 
 @pytest.mark.parametrize("remapped", [False, True])
 async def test_athena_result_palette_labels_show_actual_configured_keys(
-    app_context_factory, remapped
+    tmp_path, remapped, monkeypatch
 ):
+    from aws_tui.domain.query import ResultColumn, ResultPage
     from aws_tui.infra.keymap_store import KeymapStore
+    from aws_tui.vm.chrome.action_catalog import format_effective_keys
 
     labels = {
         "athena.inspect_cell": "Inspect Athena cell",
@@ -712,7 +697,7 @@ async def test_athena_result_palette_labels_show_actual_configured_keys(
         "athena.sort_results": "Sort loaded Athena results",
         "athena.reset_results": "Reset loaded Athena results",
     }
-    ctx = app_context_factory()
+    ctx = build_app_context(config_dir=tmp_path, cache_dir=tmp_path, demo=True)
     if remapped:
         ctx.keymap_store = KeymapStore(
             overlay={
@@ -725,15 +710,328 @@ async def test_athena_result_palette_labels_show_actual_configured_keys(
             }
         )
     app = AwsTuiApp(ctx)
-    async with app.run_test() as pilot:
+    try:
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            await _host_demo_service(app, ctx, "athena")
+            vm = ctx.root_vm.content_host.current
+
+            async def result_page(_execution_id, *, start_token=None):
+                return ResultPage(
+                    (ResultColumn("col", "varchar", "NULLABLE"),), (("value",),), None
+                )
+
+            monkeypatch.setattr(vm.results._client, "get_results_page", result_page)
+            await vm.results.load("configured-key-result")
+            assert vm.results.select_cell(0, 0)
+            await vm.select_view("results")
+            await pilot.pause()
+            await pilot.press("colon")
+            await pilot.pause()
+            actual = {row.action_id: row for row in app.screen.query(".palette-item")}
+            for action, label in labels.items():
+                assert actual[action].presentation.label == label
+                assert actual[action].presentation.effective_keys == ctx.keymap_store.resolve(
+                    action
+                )
+                assert label in str(actual[action].content)
+                assert format_effective_keys(ctx.keymap_store.resolve(action)) in str(
+                    actual[action].content
+                )
+            assert actual["athena.query"].presentation.label == "Athena query"
+            await pilot.press("escape")
+            await _host_demo_service(app, ctx, "s3")
+            app._populate_command_palette()
+            assert not set(labels) & {entry.id for entry in ctx.command_palette_vm.filtered_entries}
+    finally:
+        ctx.root_vm.dispose()
+        ctx.log_sink.close()
+
+
+async def test_help_projects_hosted_athena(tmp_path):
+    from aws_tui.composition import build_app_context
+    from aws_tui.ui.widgets.athena.page import AthenaPage
+    from aws_tui.ui.widgets.help_modal import HelpModal
+
+    ctx = build_app_context(config_dir=tmp_path, cache_dir=tmp_path, demo=True)
+    app = AwsTuiApp(ctx)
+    try:
+        async with app.run_test(size=(120, 40)) as pilot:
+            await pilot.pause()
+            ctx.root_vm.services_menu.switch_service_command.execute("athena")
+            await wait_until(
+                lambda: (
+                    ctx.root_vm.content_host.current_id == "athena"
+                    and bool(app.query(AthenaPage))
+                    and app.query_one(AthenaPage).vm is ctx.root_vm.content_host.current
+                ),
+                what="hosted Athena page",
+            )
+            await pilot.press("question_mark")
+            await wait_until(lambda: isinstance(app.screen, HelpModal), what="Help opened")
+            sections = [str(row.content) for row in app.screen.query(".help-section")]
+            assert any("Athena" in text and "Loaded Athena" not in text for text in sections)
+            assert any("Global" in text for text in sections)
+    finally:
+        ctx.root_vm.dispose()
+        ctx.log_sink.close()
+
+
+async def test_palette_renders_effective_key(app_context_factory):
+    from aws_tui.infra.keymap_store import KeymapStore
+
+    ctx = app_context_factory()
+    ctx.keymap_store = KeymapStore(overlay={"app.cycle_theme": "ctrl+g"})
+    app = AwsTuiApp(ctx)
+    async with app.run_test(size=(120, 40)) as pilot:
         await pilot.pause()
-        app._populate_command_palette()
-        palette = ctx.command_palette_vm
-        palette.set_active_service("athena")
-        actual = {entry.id: entry.label for entry in palette.filtered_entries}
-        for action, label in labels.items():
-            keys = " / ".join(ctx.keymap_store.resolve(action))
-            assert actual[action] == f"{label} ({keys})"
-        assert actual["athena.query"] == "Athena query"
-        palette.set_active_service("s3")
-        assert not set(labels) & {entry.id for entry in palette.filtered_entries}
+        await pilot.press("colon")
+        await wait_until(lambda: isinstance(app.screen, CommandPalette), what="palette opened")
+        row = next(
+            row for row in app.screen.query(".palette-item") if "Cycle theme" in str(row.content)
+        )
+        assert "Ctrl+g" in str(row.content)
+
+
+@pytest.mark.parametrize("keys", [["ctrl+g", "alt+g"], []])
+async def test_two_openings_share_row_label_keys_and_literal_text(app_context_factory, keys):
+    from aws_tui.infra.keymap_store import KeymapStore
+    from aws_tui.ui.widgets.help_modal import HelpActionRow, HelpModal
+    from aws_tui.vm.chrome.action_catalog import format_effective_keys
+
+    ctx = app_context_factory()
+    app = AwsTuiApp(ctx)
+    async with app.run_test(size=(120, 40)) as pilot:
+        await pilot.pause()
+        for overlay in ({"app.cycle_theme": "ctrl+y"}, {"app.cycle_theme": keys}):
+            ctx.keymap_store = KeymapStore(overlay=overlay)
+            await pilot.press("question_mark")
+            await wait_until(lambda: isinstance(app.screen, HelpModal), what="Help opening")
+            help_row = next(
+                row for row in app.screen.query(HelpActionRow) if row.action_id == "app.cycle_theme"
+            )
+            help_presentation = help_row.presentation
+            assert help_presentation.label == "Cycle theme"
+            assert help_presentation.effective_keys == ctx.keymap_store.resolve("app.cycle_theme")
+            assert format_effective_keys(help_presentation.effective_keys) in str(help_row.content)
+            assert "Cycle theme" in str(help_row.content)
+            await pilot.press("escape")
+            await pilot.press("colon")
+            await wait_until(lambda: isinstance(app.screen, CommandPalette), what="palette opening")
+            palette_row = next(
+                row
+                for row in app.screen.query(".palette-item")
+                if row.action_id == "app.cycle_theme"
+            )
+            assert palette_row.presentation.label == help_presentation.label
+            assert palette_row.presentation.effective_keys == help_presentation.effective_keys
+            assert format_effective_keys(help_presentation.effective_keys) in str(
+                palette_row.content
+            )
+            assert "Cycle theme" in str(palette_row.content)
+            await pilot.press("escape")
+
+
+async def test_missing_handler_omitted_and_unregister_after_open_never_dispatches(
+    app_context_factory,
+    monkeypatch,
+):
+    from aws_tui.ui.widgets.help_modal import HelpActionRow, HelpModal
+
+    ctx = app_context_factory()
+    app = AwsTuiApp(ctx)
+    calls = []
+    invoke = app._actions.invoke
+
+    def spy(action_id):
+        calls.append(action_id)
+        return invoke(action_id)
+
+    monkeypatch.setattr(app._actions, "invoke", spy)
+    async with app.run_test(size=(120, 40)) as pilot:
+        await pilot.pause()
+        app._actions.unregister("app.cycle_theme")
+        await pilot.press("question_mark")
+        await wait_until(lambda: isinstance(app.screen, HelpModal), what="Help opened")
+        assert "app.cycle_theme" not in {row.action_id for row in app.screen.query(HelpActionRow)}
+        await pilot.press("escape")
+        await pilot.press("colon")
+        await pilot.pause()
+        assert "app.cycle_theme" not in {row.action_id for row in app.screen.query(".palette-item")}
+        await pilot.press("escape")
+        app._actions.register("app.cycle_theme", lambda: None)
+        await pilot.press("colon")
+        await pilot.press(*"Cycle theme")
+        await pilot.pause()
+        assert [row.id for row in ctx.command_palette_vm.filtered_entries] == ["app.cycle_theme"]
+        app._actions.unregister("app.cycle_theme")
+        calls.clear()
+        pane = app._focused_file_pane()
+        before = (pane.path, pane.listing_revision, pane.cursor_index)
+        await pilot.press("enter")
+        await pilot.pause()
+        assert not isinstance(app.screen, CommandPalette)
+        # Production Enter routes through pane.descend to the active modal.
+        assert calls == ["pane.descend"]
+        assert calls.count("app.cycle_theme") == 0
+        assert (pane.path, pane.listing_revision, pane.cursor_index) == before
+        assert ctx.command_palette_vm._pending_tasks == {}
+
+
+async def test_refresh_preserves_search_selection_and_standalone_entries(app_context_factory):
+    from aws_tui.vm.chrome.command_palette_vm import PaletteEntry
+
+    ctx = app_context_factory()
+    app = AwsTuiApp(ctx)
+    async with app.run_test(size=(120, 40)) as pilot:
+        await pilot.pause()
+        vm = ctx.command_palette_vm
+        vm.register_entry(PaletteEntry("standalone", "Standalone", "Test"), lambda: None)
+        await pilot.press("colon")
+        await pilot.press(*"theme")
+        await pilot.pause()
+        vm.move_selection_command.execute(1)
+        selected = vm.filtered_entries[vm.selected_index].id
+        app._refresh_discovery_surfaces()
+        await pilot.pause()
+        assert vm.filter_text == "theme"
+        assert vm.filtered_entries[vm.selected_index].id == selected
+        await pilot.press("escape")
+        await pilot.press("colon")
+        await pilot.pause()
+        assert "standalone" in {row.id for row in vm.filtered_entries}
+
+
+async def test_detached_hosted_s3_blocks_retained_callback(app_context_factory):
+    ctx = app_context_factory()
+    app = AwsTuiApp(ctx)
+    calls = []
+    async with app.run_test(size=(120, 40)) as pilot:
+        await pilot.pause()
+        app._actions.register("app.cycle_theme", lambda: calls.append("cycle"))
+        origin = app._capture_discovery_origin()
+        await app.query_one("#content-host", Container).remove_children()
+        await app._invoke_discovery_action("app.cycle_theme", origin)
+        assert calls == []
+
+
+async def test_captured_load_more_focus_survives_palette_input(tmp_path, monkeypatch):
+    from textual.widgets import Input
+
+    from aws_tui.ui.widgets.context_picker import ContextPicker
+
+    ctx = build_app_context(config_dir=tmp_path, cache_dir=tmp_path, demo=True)
+    app = AwsTuiApp(ctx)
+    try:
+        async with app.run_test(size=(120, 40)) as pilot:
+            await pilot.pause()
+            await _host_demo_service(app, ctx, "athena")
+            page = app.query_one(AthenaPage)
+            # The public pager predicate reads its VM-owned worker.
+            monkeypatch.setattr(type(page.vm), "has_more_workgroups", property(lambda _self: True))
+            monkeypatch.setattr(
+                type(page.vm), "is_loading_more_workgroups", property(lambda _self: False)
+            )
+            picker = page.query_one("#athena-workgroup", ContextPicker)
+            picker.focus()
+            await pilot.pause()
+            origin = app._capture_discovery_origin()
+            assert "athena-workgroup" in origin.focused_ids
+            assert page.can_load_more(focused_ids=origin.focused_ids)
+            await pilot.press("colon")
+            await pilot.pause()
+            assert isinstance(app.focused, Input)
+            assert page.can_load_more(focused_ids=origin.focused_ids)
+            assert "athena.load_more" in {
+                row.action_id for row in app.screen.query(".palette-item")
+            }
+    finally:
+        ctx.root_vm.dispose()
+        ctx.log_sink.close()
+
+
+async def test_navigation_discovery_requires_an_actionable_focused_target(tmp_path):
+    from textual.widgets import TextArea
+
+    from aws_tui.ui.widgets.nav_menu import NavMenu
+
+    ctx = build_app_context(config_dir=tmp_path, cache_dir=tmp_path, demo=True)
+    app = AwsTuiApp(ctx)
+    try:
+        async with app.run_test(size=(120, 40)) as pilot:
+            await pilot.pause()
+            await _host_demo_service(app, ctx, "athena")
+            app.query_one("#athena-editor", TextArea).focus()
+            await pilot.pause()
+            await pilot.press("ctrl+k")
+            await pilot.pause()
+            assert isinstance(app.screen, CommandPalette)
+            assert "pane.descend" not in {
+                row.action_id for row in app.screen.query(".palette-item")
+            }
+            await pilot.press("escape")
+            await _host_demo_service(app, ctx, "s3")
+            app.query_one(NavMenu).focus()
+            await pilot.pause()
+            await pilot.press("ctrl+k")
+            await pilot.pause()
+            assert isinstance(app.screen, CommandPalette)
+            assert "pane.descend" in {row.action_id for row in app.screen.query(".palette-item")}
+    finally:
+        ctx.root_vm.dispose()
+        ctx.log_sink.close()
+
+
+async def test_help_projects_s3_and_settings_hosted_contexts(tmp_path):
+    from aws_tui.ui.widgets.help_modal import HelpActionRow, HelpModal
+
+    ctx = build_app_context(config_dir=tmp_path, cache_dir=tmp_path, demo=True)
+    app = AwsTuiApp(ctx)
+    try:
+        async with app.run_test(size=(120, 40)) as pilot:
+            await pilot.pause()
+            for service in ("s3", "settings"):
+                await _host_demo_service(app, ctx, service)
+                origin = app._capture_discovery_origin()
+                expected = {
+                    row.id: row for row in app._project_discovery_actions(origin) if row.available
+                }
+                await pilot.press("question_mark")
+                await wait_until(lambda: isinstance(app.screen, HelpModal), what="contextual Help")
+                actual = {
+                    row.action_id: row.presentation for row in app.screen.query(HelpActionRow)
+                }
+                assert actual == expected
+                headings = [str(row.content) for row in app.screen.query(".help-section")]
+                assert any("Global —" in heading for heading in headings)
+                assert any("S3 —" in heading for heading in headings) is (service == "s3")
+                assert "athena.query" not in actual
+                assert "glue.jobs" not in actual
+                assert "emr.next_application" not in actual
+                assert all(app._actions.has(action) for action in actual)
+                await pilot.press("escape")
+    finally:
+        ctx.root_vm.dispose()
+        ctx.log_sink.close()
+
+
+async def test_switch_source_omitted_when_fresh_s3_candidates_have_only_local(
+    app_context_factory,
+    monkeypatch,
+):
+    from aws_tui.ui.widgets.help_modal import HelpActionRow, HelpModal
+
+    ctx = app_context_factory()
+    app = AwsTuiApp(ctx)
+    async with app.run_test(size=(120, 40)) as pilot:
+        await pilot.pause()
+        monkeypatch.setattr(ctx.connection_resolver, "list", lambda: ())
+        await pilot.press("colon")
+        await pilot.pause()
+        assert isinstance(app.screen, CommandPalette)
+        assert "app.swap_source" not in {row.action_id for row in app.screen.query(".palette-item")}
+        await pilot.press("escape")
+        await pilot.press("question_mark")
+        await pilot.pause()
+        assert isinstance(app.screen, HelpModal)
+        assert "app.swap_source" not in {row.action_id for row in app.screen.query(HelpActionRow)}
