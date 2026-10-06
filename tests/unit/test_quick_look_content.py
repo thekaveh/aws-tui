@@ -267,3 +267,79 @@ async def test_compatibility_provider_open_consumes_shared_absolute_deadline(mon
         async with asyncio.timeout(0.5):
             await preview.load_preview(LegacyProvider(), PathRef(("a",)), name="a", mime="")
     assert cancelled
+
+
+@pytest.mark.parametrize("control", [b"\x0b", b"\x0c", b"\x1c", b"\x85"])
+@pytest.mark.parametrize("newline", [b"\n", b"\r", b"\r\n"])
+@pytest.mark.parametrize("multiline", [False, True])
+def test_csv_controls_do_not_make_cut_final_record_complete(control, newline, multiline):
+    from aws_tui.domain.preview import PreviewFormat, parse_text
+    from aws_tui.domain.preview_limits import PreviewBudget
+
+    # C1 must be UTF-8, while the other controls are single-byte UTF-8.
+    control = control.decode("latin1").encode()
+    complete = b'1,"line' + control + (newline + b'two"' if multiline else b'"')
+    raw = b"a,b" + newline + complete + newline + b'2,"cut' + newline + b'partial"'
+    result = parse_text(
+        raw, name="a.csv", mime="text/csv", truncated=True, budget=PreviewBudget.start()
+    )
+    assert result.format is PreviewFormat.CSV
+    assert len(result.rows) == 1
+    assert result.rows[0][0].text == "1"
+    assert result.raw == raw
+
+
+def test_csv_control_does_not_publish_unquoted_partial_field():
+    from aws_tui.domain.preview import PreviewFormat, parse_text
+    from aws_tui.domain.preview_limits import PreviewBudget
+
+    raw = b"a,b\n1,\x0b\n2,partial"
+    result = parse_text(
+        raw, name="a.csv", mime="text/csv", truncated=True, budget=PreviewBudget.start()
+    )
+    assert result.format is PreviewFormat.CSV
+    assert len(result.rows) == 1
+    assert result.rows[0][1].text == r"\x0b"
+    assert result.raw == raw
+
+
+@pytest.mark.asyncio
+async def test_csv_render_budget_fallback_retains_raw_validates_and_closes():
+    from aws_tui.demo.in_memory_fs import InMemoryFS
+    from aws_tui.domain.filesystem import PathRef
+    from aws_tui.domain.preview import PreviewFormat, load_preview
+
+    raw = b",".join([b"c"] * 24) + b"\n" + (b",".join([b"[" + b"\x1b" * 43] * 24) + b"\n") * 50
+    assert len(raw) == 54048
+    fs = InMemoryFS()
+    path = PathRef(("a.csv",))
+    await fs.write_stream(path, _gen(raw))
+    real_open = fs.open_preview
+    events = []
+
+    class TrackingSession:
+        def __init__(self, session):
+            self.session = session
+            self.snapshot = session.snapshot
+
+        async def read_range(self, offset, length):
+            events.append("read")
+            return await self.session.read_range(offset, length)
+
+        async def validate(self):
+            await self.session.validate()
+            events.append("validated")
+
+        async def aclose(self):
+            await self.session.aclose()
+            events.append("closed")
+
+    async def open_preview(path, *, budget):
+        return TrackingSession(await real_open(path, budget=budget))
+
+    fs.open_preview = open_preview
+    result = await load_preview(fs, path, name="a.csv", mime="text/csv")
+    assert result.format is PreviewFormat.RAW
+    assert result.raw == raw
+    assert result.notes == ("Structured output exceeds preview budget",)
+    assert events == ["read", "validated", "closed"]

@@ -212,13 +212,13 @@ def _bounded_result(
 
 
 def _csv_table(text: str, raw: bytes, truncated: bool, hinted: bool) -> PreviewResult | None:
-    reader = csv.reader(io.StringIO(text, newline=""), strict=True)
+    source = io.StringIO(text, newline="")
+    reader = csv.reader(source, strict=True)
     records: list[list[str]] = []
-    lines = len(text.splitlines())
     try:
         for row in reader:
             # A prefix ending inside a physical line cannot prove its final record complete.
-            if truncated and reader.line_num == lines and not text.endswith(("\n", "\r")):
+            if truncated and source.tell() == len(text) and not text.endswith(("\n", "\r")):
                 break
             records.append(row)
             if len(records) > PREVIEW_MAX_ROWS:
@@ -276,7 +276,10 @@ def parse_text(
     if truncated and (json_hint or jsonl_hint) and sniff.startswith(("{", "[")):
         return _raw(raw, "Malformed or truncated JSON preview")
     hinted = suffix == "csv" or "csv" in mime
-    result = _csv_table(text, raw, truncated, hinted)
+    try:
+        result = _csv_table(text, raw, truncated, hinted)
+    except ValueError:
+        return _raw(raw, "Structured output exceeds preview budget")
     return result if result is not None else _raw(raw)
 
 

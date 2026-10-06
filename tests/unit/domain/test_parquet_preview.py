@@ -499,3 +499,142 @@ def test_empty_projection_closes_sparse_reader():
     source = _SparseFile(100, [(0, b"PAR1")])
     assert _decode(None, {"names": []}, source) == []
     assert source.closed
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("phase", ["startup", "cleanup"])
+@pytest.mark.parametrize("deadline_overlap", [False, True])
+async def test_repeated_cancellation_retains_child_and_session_until_reaped(
+    monkeypatch, phase, deadline_overlap
+):
+    from aws_tui.domain import _parquet_preview_worker as worker
+    from aws_tui.domain import preview
+
+    real_spawn = asyncio.create_subprocess_exec
+    real_reap = worker._reap
+    real_timeout = asyncio.timeout
+    blocked = asyncio.Event()
+    release = asyncio.Event()
+    deadline_fired = asyncio.Event()
+    children = []
+    background = []
+    engine = None
+    fs = RecordingProvider(fixture_bytes())
+    budget = PreviewBudget.start()
+    monkeypatch.setattr(preview.PreviewBudget, "start", lambda: budget)
+    engine_deadlines = []
+
+    def controlled_timeout(delay):
+        deadline = real_timeout(delay)
+        engine_deadlines.append(deadline)
+        return deadline
+
+    async def controlled_spawn(*args, **kwargs):
+        background.append(asyncio.current_task())
+        proc = await real_spawn(sys.executable, "-c", "import time; time.sleep(600)", **kwargs)
+        children.append(proc)
+        if phase == "startup":
+            blocked.set()
+            await release.wait()
+        return proc
+
+    async def controlled_reap(proc):
+        background.append(asyncio.current_task())
+        if phase == "cleanup":
+            blocked.set()
+            await release.wait()
+        await real_reap(proc)
+
+    monkeypatch.setattr(worker.asyncio, "create_subprocess_exec", controlled_spawn)
+    monkeypatch.setattr(worker, "_reap", controlled_reap)
+    monkeypatch.setattr(worker.asyncio, "timeout", controlled_timeout)
+    try:
+        engine = asyncio.create_task(load_preview(fs, PathRef(("a",)), name="a", mime=""))
+        if phase == "cleanup":
+            while not children:
+                await asyncio.sleep(0)
+            engine.cancel()
+        await blocked.wait()
+        engine.cancel()
+        await asyncio.sleep(0)
+        if deadline_overlap:
+            # Expire load_preview's actual work deadline while the owned wait is blocked.
+            engine_deadlines[0].reschedule(asyncio.get_running_loop().time())
+            asyncio.get_running_loop().call_soon(deadline_fired.set)
+            await deadline_fired.wait()
+        for _ in range(4):
+            engine.cancel()
+            await asyncio.sleep(0)
+        assert not engine.done(), "engine released its child before handle/reap drain"
+        assert not fs.session.closed, "session closed while decoder remained owned"
+        assert children[0].returncode is None
+        release.set()
+        with pytest.raises(asyncio.CancelledError):
+            await engine
+        assert children[0].returncode is not None
+        assert children[0].stdin.is_closing()
+        assert children[0].stdout.at_eof()
+        assert fs.session.closed
+    finally:
+        # RED also drains delayed startup/cleanup tasks and any leaked actual child.
+        release.set()
+        if engine is not None and not engine.done():
+            engine.cancel()
+        if engine is not None:
+            await asyncio.gather(engine, return_exceptions=True)
+        await asyncio.gather(*background, return_exceptions=True)
+        for child in children:
+            if child.returncode is None:
+                child.kill()
+            await real_reap(child)
+
+
+@pytest.mark.asyncio
+async def test_parquet_node_allowance_is_shared_across_row_group_layouts():
+    table = pa.table({"nested": [[0] * 100 for _ in range(50)]})
+    results = []
+    for group_size in (50, 20, 10):
+        fs = RecordingProvider(fixture_bytes(table, row_group_size=group_size))
+        result = await load_preview(fs, PathRef(("a",)), name="a", mime="")
+        assert result.format is PreviewFormat.PARQUET
+        assert len(result.rows) == 50
+        assert not result.rows[39][0].truncated
+        assert result.rows[40][0].truncated
+        assert result.rows[-1][0].truncated
+        assert fs.session.validated
+        assert fs.session.closed
+        results.append(result.rows)
+    assert results[0] == results[1] == results[2]
+
+
+@pytest.mark.asyncio
+async def test_cancelled_startup_failure_cannot_publish_raw_fallback(monkeypatch):
+    from aws_tui.domain import _parquet_preview_worker as worker
+
+    started = asyncio.Event()
+    release = asyncio.Event()
+    startup_tasks = []
+
+    async def failing_spawn(*args, **kwargs):
+        startup_tasks.append(asyncio.current_task())
+        started.set()
+        await release.wait()
+        raise OSError("controlled spawn failure")
+
+    monkeypatch.setattr(worker.asyncio, "create_subprocess_exec", failing_spawn)
+    fs = RecordingProvider(fixture_bytes())
+    engine = asyncio.create_task(load_preview(fs, PathRef(("a",)), name="a", mime=""))
+    try:
+        await started.wait()
+        for _ in range(3):
+            engine.cancel()
+            await asyncio.sleep(0)
+        assert not engine.done()
+        release.set()
+        with pytest.raises(asyncio.CancelledError):
+            await engine
+        assert not fs.session.validated
+        assert fs.session.closed
+    finally:
+        release.set()
+        await asyncio.gather(engine, *startup_tasks, return_exceptions=True)

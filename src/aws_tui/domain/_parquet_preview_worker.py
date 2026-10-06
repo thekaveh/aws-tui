@@ -11,7 +11,7 @@ import struct
 import sys
 from collections.abc import Mapping
 from contextlib import suppress
-from typing import Any, BinaryIO
+from typing import Any, BinaryIO, TypeVar
 
 from aws_tui.domain.filesystem import PreviewReadSession
 from aws_tui.domain.preview import (
@@ -45,6 +45,7 @@ _BUDGET_MESSAGE = "Parquet sample exceeds preview budget"
 _FOOTER_MESSAGE = "Malformed Parquet footer"
 _UNAVAILABLE_MESSAGE = "Parquet preview unavailable"
 _ENCRYPTED_MESSAGE = "Encrypted Parquet preview is not supported"
+_T = TypeVar("_T")
 
 
 class _ParquetFailure(Exception):
@@ -297,9 +298,9 @@ def _arrow_value(scalar: Any, *, depth: int, state: list[int]) -> tuple[Any, boo
     """Convert bounded scalar pieces, never a table/column or unbounded nested as_py."""
     import pyarrow as pa
 
-    state[0] += 1
-    if state[0] > PREVIEW_MAX_NODES or depth > PREVIEW_MAX_NESTING or state[1] <= 0:
+    if state[0] >= PREVIEW_MAX_NODES or depth > PREVIEW_MAX_NESTING or state[1] <= 0:
         return "… [truncated]", True
+    state[0] += 1
     if not scalar.is_valid:
         return None, False
     type_ = scalar.type
@@ -354,16 +355,18 @@ def _arrow_value(scalar: Any, *, depth: int, state: list[int]) -> tuple[Any, boo
     return value, False
 
 
-def append_bounded_cells(batch: Any, remaining: int) -> list[list[dict[str, Any]]]:
+def append_bounded_cells(
+    batch: Any, remaining: int, *, state: list[int] | None = None
+) -> list[list[dict[str, Any]]]:
     rows = []
-    nodes = 0
+    if state is None:
+        state = [0, PREVIEW_MAX_CELL_CHARS]
     characters = 0
     for row_index in range(min(batch.num_rows, remaining)):
         row = []
         for column in batch.columns[:PREVIEW_MAX_COLUMNS]:
-            state = [nodes, PREVIEW_MAX_CELL_CHARS]
+            state[1] = PREVIEW_MAX_CELL_CHARS
             value, cut = _arrow_value(column[row_index], depth=0, state=state)
-            nodes = state[0]
             cell = normalize_cell(value)
             if cut and not cell.truncated:
                 text = cell.text[: PREVIEW_MAX_CELL_CHARS - len("… [truncated]")] + "… [truncated]"
@@ -391,6 +394,7 @@ def _decode(metadata: Any, plan: dict[str, Any], source: _SparseFile) -> list[li
         ):
             raise _ParquetFailure(_UNAVAILABLE_MESSAGE)
         remaining = PREVIEW_MAX_ROWS
+        state = [0, PREVIEW_MAX_CELL_CHARS]
         characters = sum(len(name) + len(type_) for name, type_ in plan["columns"])
         characters += sum(len(note) for note in plan["notes"])
         for group in plan["groups"]:
@@ -402,7 +406,7 @@ def _decode(metadata: Any, plan: dict[str, Any], source: _SparseFile) -> list[li
                 use_pandas_metadata=False,
             )
             for batch in batches:
-                sample = append_bounded_cells(batch, remaining)
+                sample = append_bounded_cells(batch, remaining, state=state)
                 characters += sum(len(cell["text"]) for row in sample for cell in row)
                 if characters > PREVIEW_MAX_RENDER_CHARS:
                     raise _ParquetFailure(_BUDGET_MESSAGE)
@@ -622,6 +626,22 @@ async def _reap(process: asyncio.subprocess.Process) -> None:
         await process.stdout.read()
 
 
+async def _await_owned(task: asyncio.Task[_T]) -> tuple[_T, bool]:
+    """Drain an owned task despite repeated cancellation, recording propagation."""
+    cancelled = False
+    while True:
+        try:
+            return await asyncio.shield(task), cancelled
+        except asyncio.CancelledError:
+            if task.cancelled():
+                raise
+            cancelled = True
+        except Exception:
+            if cancelled:
+                raise asyncio.CancelledError from None
+            raise
+
+
 async def preview_parquet(
     session: PreviewReadSession, raw: bytes, *, budget: PreviewBudget
 ) -> PreviewResult:
@@ -657,12 +677,11 @@ async def preview_parquet(
                     limit=_MAX_FRAME_BYTES + 4,
                 )
             )
-            try:
-                process = await asyncio.shield(startup)
-            except asyncio.CancelledError:
-                # Cancellation cannot lose a child between OS spawn and handle publication.
-                process = await asyncio.shield(startup)
-                raise
+            # Keep the handle even when close/replacement and deadline cancellations overlap.
+            spawned_process, cancelled = await _await_owned(startup)
+            process = spawned_process
+            if cancelled:
+                raise asyncio.CancelledError
             assert process.stdin is not None
             assert process.stdout is not None
             process.stdin.write(
@@ -710,11 +729,9 @@ async def preview_parquet(
     finally:
         if process is not None:
             cleanup = asyncio.create_task(_reap(process))
-            try:
-                await asyncio.shield(cleanup)
-            except asyncio.CancelledError:
-                await asyncio.shield(cleanup)
-                raise
+            _, cancelled = await _await_owned(cleanup)
+            if cancelled:
+                raise asyncio.CancelledError
 
 
 if __name__ == "__main__":
