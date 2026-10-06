@@ -129,3 +129,30 @@ def test_settings_view_form_open_renders_input_labels(theme: str) -> None:
     assert "Endpoint URL" in svg, f"form label 'Endpoint URL' missing for theme {theme!r}"
     assert "Access key ID" in svg, f"form label 'Access key ID' missing for theme {theme!r}"
     assert "Session token" in svg, f"form label 'Session token' missing for theme {theme!r}"
+
+
+@pytest.mark.parametrize("theme", THEMES)
+@pytest.mark.parametrize("fixture", ["empty", "populated"])
+def test_settings_drafts_section_content_guard(theme, fixture):
+    from xml.etree import ElementTree
+
+    p = (
+        Path(__file__).parent
+        / "__snapshots__"
+        / "test_settings_view"
+        / f"test_settings_view_{fixture}[{theme}].raw"
+    )
+    root = ElementTree.fromstring(p.read_text())
+    spans = [
+        "".join(node.itertext()).strip()
+        for node in root.iter()
+        if node.tag.endswith("}text") and node.get("clip-path")
+    ]
+    # The terminal wraps fixed copy; join painted spans, excluding border-only spans.
+    text = " ".join(span for span in spans if any(character.isalnum() for character in span))
+    svg = " ".join(text.split())
+    assert "Athena SQL drafts" in svg
+    assert "/fixture/config/athena-drafts" in svg
+    assert "Enable local SQL drafts" in svg
+    assert "SQL is stored as plaintext" in svg
+    assert "results and credentials are not retained." in svg

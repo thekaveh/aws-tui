@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import shutil
 import tempfile
 from pathlib import Path
 
@@ -9,11 +10,13 @@ from textual.app import App, ComposeResult
 from vmx import NULL_DISPATCHER, MessageHub
 from vmx.messages.protocols import Message
 
+from aws_tui.infra.athena_draft_store import AthenaDraftStore
 from aws_tui.infra.config_store import ConfigStore, ConnectionEntry
 from aws_tui.infra.connection_resolver import ConnectionResolver
 from aws_tui.infra.theme_store import ThemeStore
 from aws_tui.ui.widgets.settings.connection_form import ConnectionFormInline
 from aws_tui.ui.widgets.settings_view import SettingsView
+from aws_tui.vm.athena.drafts_vm import AthenaDraftsVM
 from aws_tui.vm.settings.s3_connections_vm import S3ConnectionsVM
 from aws_tui.vm.settings.settings_vm import SettingsVM
 
@@ -52,12 +55,30 @@ def _build(
         dispatcher=NULL_DISPATCHER,
     )
     s3.construct()
-    vm = SettingsVM(s3=s3, hub=hub, dispatcher=NULL_DISPATCHER)
+    drafts = AthenaDraftsVM(
+        store=AthenaDraftStore(config=store, directory=tmp / "athena-drafts"),
+        enabled=False,
+        read_only=False,
+        directory=Path("/fixture/config/athena-drafts"),
+        hub=hub,
+        dispatcher=NULL_DISPATCHER,
+    )
+    vm = SettingsVM(s3=s3, athena_drafts=drafts, hub=hub, dispatcher=NULL_DISPATCHER)
     vm.construct()
     return vm, s3, tmp
 
 
-class SettingsViewEmptyApp(App[None]):
+class _SettingsSnapshotApp(App[None]):
+    async def on_unmount(self) -> None:
+        if self._vm.athena_drafts is not None:
+            await self._vm.athena_drafts.shutdown()
+            self._vm.athena_drafts.dispose()
+        self._vm.dispose()
+        self._s3.dispose()
+        shutil.rmtree(self._tmp)
+
+
+class SettingsViewEmptyApp(_SettingsSnapshotApp):
     def __init__(self, *, theme: str = "carbon") -> None:
         super().__init__()
         self.CSS = _load_css(theme)
@@ -67,7 +88,7 @@ class SettingsViewEmptyApp(App[None]):
         yield SettingsView(vm=self._vm, hub=MessageHub())
 
 
-class SettingsViewPopulatedApp(App[None]):
+class SettingsViewPopulatedApp(_SettingsSnapshotApp):
     def __init__(self, *, theme: str = "carbon") -> None:
         super().__init__()
         self.CSS = _load_css(theme)
@@ -77,7 +98,7 @@ class SettingsViewPopulatedApp(App[None]):
         yield SettingsView(vm=self._vm, hub=MessageHub())
 
 
-class SettingsViewFormOpenApp(App[None]):
+class SettingsViewFormOpenApp(_SettingsSnapshotApp):
     def __init__(self, *, theme: str = "carbon") -> None:
         super().__init__()
         self.CSS = _load_css(theme)

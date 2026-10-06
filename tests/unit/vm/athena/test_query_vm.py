@@ -1798,3 +1798,72 @@ async def test_a_mid_flight_poll_tick_does_not_erase_a_failed_stop_error() -> No
     assert vm.error_text is None
 
     vm.dispose()
+
+
+async def test_draft_query_hooks_are_off_by_default_without_storage(tmp_path):
+    from tests.athena_drafts_helpers import runtime_at
+
+    runtime, _ = runtime_at(tmp_path, enabled=False)
+    client = InMemoryAthena(executions=[[_detail("query-1", QueryState.SUCCEEDED)]])
+    session = runtime.open_session()
+
+    async def must_not_validate(context):
+        pytest.fail("off-state draft validation must be a no-op")
+
+    vm = AthenaQueryVM(
+        client=client,
+        policy=ReadOnlySqlPolicy(),
+        context=_CONTEXT,
+        hub=MessageHub(),
+        dispatcher=NULL_DISPATCHER,
+        draft_session=session,
+        validate_draft_execution=must_not_validate,
+        drafts_enabled=lambda: runtime.enabled,
+    )
+    vm.construct()
+    vm.set_sql("SELECT 1")
+    assert vm.draft_state == "off"
+    assert vm.draft_error_text is None
+    assert not vm.draft_execution_blocked
+    await vm.execute()
+    assert len(client.start_calls) == 1
+    await vm.shutdown()
+    vm.dispose()
+    await runtime.shutdown()
+    assert not runtime.directory.exists()
+
+
+async def test_enabled_query_requires_validation_callback_and_notifies_value_free_changes(tmp_path):
+    from tests.athena_drafts_helpers import runtime_at
+
+    runtime, _ = runtime_at(tmp_path)
+    session = runtime.open_session()
+    client = InMemoryAthena()
+    vm = AthenaQueryVM(
+        client=client,
+        policy=ReadOnlySqlPolicy(),
+        context=_CONTEXT,
+        hub=MessageHub(),
+        dispatcher=NULL_DISPATCHER,
+        draft_session=session,
+        drafts_enabled=lambda: runtime.enabled,
+    )
+    vm.construct()
+    seen = []
+    subscription = vm.on_property_changed.subscribe(seen.append)
+    vm.set_sql("SELECT 'DRAFT_SQL_SENTINEL'")
+    assert vm.draft_state == "pending"
+    assert session._capture is not None
+    assert "DRAFT_SQL_SENTINEL" not in repr(session._capture)
+    assert "DRAFT_SQL_SENTINEL" not in str(session)
+    assert "DRAFT_SQL_SENTINEL" not in repr(vm.export_snapshot())
+    assert {"draft_state", "draft_error_text", "draft_execution_blocked"} <= set(seen)
+    assert all("DRAFT_SQL_SENTINEL" not in item for item in seen)
+    await vm.execute_command.execute_async()
+    assert client.start_calls == []
+    assert vm.validation_error == "Draft context is unavailable or changed."
+    subscription.dispose()
+    await runtime.shutdown()
+    await vm.shutdown()
+    vm.dispose()
+    runtime.dispose()

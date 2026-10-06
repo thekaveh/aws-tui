@@ -1548,3 +1548,175 @@ async def test_context_and_aws_text_are_rendered_without_markup() -> None:
             "#athena-tab-saved",
         ):
             assert not app.query_one(selector, Static)._render_markup  # type: ignore[attr-defined]
+
+
+async def test_drafts_off_preserves_editor_and_focus_targets() -> None:
+    vm, _ = _build_vm()
+    await vm.setup()
+    async with _AthenaApp(vm).run_test() as pilot:
+        await pilot.pause()
+        page = pilot.app.query_one(AthenaPage)
+        assert not page.query_one("#athena-drafts", Button).display
+        assert "athena-drafts" not in _athena_target_ids(page)
+        assert page.query_one("#athena-editor", TextArea).border_title == "query editor"
+        assert page.query_one("#athena-query-status", Static).content == "Enter a read-only query"
+    vm.dispose()
+
+
+async def test_enabled_drafts_native_and_manual_focus(tmp_path) -> None:
+    from tests.athena_drafts_helpers import runtime_at
+
+    drafts, _ = runtime_at(tmp_path)
+    vm = make_page_vm(PageClient(), drafts=drafts)
+    await vm.setup()
+    app = _AthenaApp(vm)
+    try:
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            page = app.query_one(AthenaPage)
+            button = page.query_one("#athena-drafts", Button)
+            assert button.display
+            assert (FocusSlot.ATHENA_DRAFTS, button) in page._focus_targets()
+            await focus_and_settle(page.query_one("#athena-editor", TextArea))
+            page.query_one(AthenaQueryView).action_focus_next()
+            await pilot.pause()
+            assert app.focused is button
+            assert app.focus_coordinator.focused_slot is FocusSlot.ATHENA_DRAFTS
+            button.disabled = True
+            assert "athena-drafts" not in _athena_target_ids(page)
+    finally:
+        await vm.shutdown()
+        vm.dispose()
+        await drafts.shutdown()
+        drafts.dispose()
+
+
+async def test_drafts_button_label_is_fully_rendered_at_80_columns(tmp_path):
+    from tests.athena_drafts_helpers import runtime_at
+
+    drafts, _ = runtime_at(tmp_path)
+    vm = make_page_vm(PageClient(), drafts=drafts)
+    await vm.setup()
+    app = _AthenaApp(vm)
+    try:
+        async with app.run_test(size=(80, 24)) as pilot:
+            await pilot.pause()
+            button = app.query_one("#athena-drafts", Button)
+            strips = app.screen._compositor.render_strips()
+            painted = "".join(
+                strip.crop(button.content_region.x, button.content_region.right).text
+                for strip in strips[button.content_region.y : button.content_region.bottom]
+            )
+            assert "Drafts" in painted
+    finally:
+        await vm.shutdown()
+        vm.dispose()
+        await drafts.shutdown()
+        drafts.dispose()
+
+
+@pytest.mark.parametrize("dismissal", ["escape", "close", "default"])
+async def test_manager_close_result_restores_drafts_and_native_slot(
+    tmp_path, monkeypatch, dismissal
+):
+    from aws_tui.ui.widgets.athena.drafts_modal import AthenaDraftsModal
+    from tests.athena_drafts_helpers import runtime_at
+    from tests.helpers import drain_workers
+
+    drafts, _ = runtime_at(tmp_path)
+    vm = make_page_vm(PageClient(), drafts=drafts)
+    await vm.setup()
+    app = _AthenaApp(vm)
+    results = []
+    push = app.push_screen
+
+    def capture(screen, callback=None, **kwargs):
+        def record_result(result):
+            results.append(result)
+            if callback is not None:
+                callback(result)
+
+        return push(screen, record_result, **kwargs)
+
+    monkeypatch.setattr(app, "push_screen", capture)
+    try:
+        async with app.run_test() as pilot:
+            button = app.query_one("#athena-drafts", Button)
+            await focus_and_settle(button)
+            await pilot.press("enter")
+            await wait_until(
+                lambda: isinstance(app.screen, AthenaDraftsModal), what="draft manager"
+            )
+            await drain_workers(app)
+            await pilot.pause()
+            if dismissal == "escape":
+                await pilot.press("escape")
+            elif dismissal == "default":
+                app.screen.dismiss()
+            else:
+                await focus_and_settle(app.screen.query_one("#athena-drafts-close", Button))
+                await pilot.press("enter")
+            await pilot.pause()
+            assert results == [None if dismissal == "default" else "closed"]
+            assert app.focused is button
+            assert app.focus_coordinator.focused_slot is FocusSlot.ATHENA_DRAFTS
+    finally:
+        await vm.shutdown()
+        vm.dispose()
+        await drafts.shutdown()
+        drafts.dispose()
+
+
+@pytest.mark.parametrize("unavailable", ["disabled", "hidden", "detached", "another-modal"])
+async def test_draft_focus_callback_checks_current_attachment_and_target(
+    tmp_path, monkeypatch, unavailable
+):
+    from textual.screen import ModalScreen
+
+    from aws_tui.ui.widgets.athena.drafts_modal import AthenaDraftsModal
+    from tests.athena_drafts_helpers import runtime_at
+    from tests.helpers import drain_workers
+
+    drafts, _ = runtime_at(tmp_path)
+    vm = make_page_vm(PageClient(), drafts=drafts)
+    await vm.setup()
+    app = _AthenaApp(vm)
+    try:
+        async with app.run_test() as pilot:
+            page = app.query_one(AthenaPage)
+            button = page.query_one("#athena-drafts", Button)
+            await focus_and_settle(button)
+            await pilot.press("enter")
+            await wait_until(
+                lambda: isinstance(app.screen, AthenaDraftsModal), what="draft manager"
+            )
+            await drain_workers(app)
+            await pilot.pause()
+            if unavailable == "disabled":
+                button.disabled = True
+            elif unavailable == "hidden":
+                button.display = False
+            elif unavailable == "detached":
+                await page.remove()
+            else:
+                # The result callback will defer to a refresh; another modal owns that refresh.
+                app.screen.dismiss("closed")
+                next_modal = ModalScreen()
+                app.push_screen(next_modal)
+                await pilot.pause()
+                assert app.screen is next_modal
+                assert app.focused is None or page not in app.focused.ancestors_with_self
+                return
+            await pilot.press("escape")
+            await pilot.pause()
+            if unavailable == "detached":
+                assert not page.is_attached
+                assert app.focused is None or page not in app.focused.ancestors_with_self
+            else:
+                assert app.focused is page.query_one("#athena-editor", TextArea)
+                assert app.focus_coordinator.focused_slot is FocusSlot.ATHENA_PRIMARY
+    finally:
+        await vm.shutdown()
+        vm.dispose()
+        await drafts.shutdown()
+        drafts.dispose()

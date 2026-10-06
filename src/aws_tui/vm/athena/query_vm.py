@@ -35,6 +35,7 @@ from aws_tui.domain.query import (
     QueryStatistics,
 )
 from aws_tui.domain.sql_policy import QueryRejectedError, ReadOnlySqlPolicy
+from aws_tui.infra.athena_draft_store import SqlDraft
 from aws_tui.vm._observable import ObserverSafeSubject, send_value_free
 from aws_tui.vm.athena._domain_validation import (
     optional_exact_string,
@@ -44,6 +45,11 @@ from aws_tui.vm.athena._domain_validation import (
     valid_query_statistics,
 )
 from aws_tui.vm.athena._errors import map_provider_error, map_unexpected_error
+from aws_tui.vm.athena.drafts_vm import (
+    SHUTDOWN_SECONDS,
+    AthenaDraftSession,
+    DraftState,
+)
 from aws_tui.vm.athena.results_vm import AthenaResultsSnapshot, AthenaResultsVM
 from aws_tui.vm.file_manager.pane_vm import PaneState
 from aws_tui.vm.service_diagnostics import report_unexpected_service_error
@@ -105,7 +111,15 @@ class AthenaQueryVM:
         hub: MessageHub[Message],
         dispatcher: Dispatcher,
         sleep: Sleep = anyio.sleep,
+        draft_session: AthenaDraftSession | None = None,
+        validate_draft_execution: Callable[[QueryContext], Awaitable[bool]] | None = None,
+        drafts_enabled: Callable[[], bool] | None = None,
     ) -> None:
+        self._draft_session = draft_session
+        self._draft_recovery_guard = False
+        self._draft_recovery_guard_revision = 0
+        self._validate_draft_execution = validate_draft_execution
+        self._drafts_enabled = drafts_enabled or (lambda: False)
         self._client = client
         self._runner = runner or AthenaQueryRunner(
             client,
@@ -168,6 +182,58 @@ class AthenaQueryVM:
             .task(self._cancel_active)
             .build()
         )
+
+        self._draft_subscription = (
+            draft_session.on_property_changed.subscribe(self._draft_changed)
+            if draft_session is not None
+            else None
+        )
+
+    def _draft_changed(self, _property_name: str) -> None:
+        for name in ("draft_state", "draft_error_text", "draft_execution_blocked"):
+            self._notify(name)
+
+    @property
+    def draft_state(self) -> DraftState:
+        return self._draft_session.state if self._draft_session is not None else "off"
+
+    @property
+    def draft_error_text(self) -> str | None:
+        return self._draft_session.error_text if self._draft_session is not None else None
+
+    @property
+    def draft_recovery_guard(self) -> bool:
+        return self._draft_recovery_guard
+
+    def set_draft_recovery_guard(self, blocked: bool) -> None:
+        self._draft_recovery_guard = blocked
+        self._draft_recovery_guard_revision += 1
+        self._notify("draft_execution_blocked")
+
+    @property
+    def draft_execution_blocked(self) -> bool:
+        session = self._draft_session
+        if not self._drafts_enabled():
+            return False
+        return self._draft_recovery_guard or (
+            session is not None
+            and bool(self._sql.strip())
+            and (
+                session.state == "context_required"
+                or (session.bound_context is not None and session.bound_context != self._context)
+            )
+        )
+
+    def install_draft_sql(self, record: SqlDraft) -> None:
+        # Caller owns the lifecycle guard; recovery acknowledges SQL without an edit/save.
+        if self._draft_session is None or record.context != self._context.cache_key:
+            raise ValueError("Draft context is unavailable")
+        self._sql = record.sql
+        self._validation_error = None
+        self._draft_session.recovered(record)
+        self._notify("sql")
+        self._notify("validation_error")
+        self._notify("draft_state")
 
     @property
     def context(self) -> QueryContext:
@@ -266,6 +332,8 @@ class AthenaQueryVM:
             return
         self._sql = sql
         self._validation_error = None
+        if self._draft_session is not None:
+            self._draft_session.edited(sql, self._context)
         self._notify("sql")
         self._notify("validation_error")
 
@@ -481,6 +549,8 @@ class AthenaQueryVM:
                 self._retain_cleanup(self._execution_ref)
             self._owns_active_query = False
             self._context = context
+            if self._draft_session is not None:
+                self._draft_session.context_changed(context)
             self._results.set_context(context)
             self._reset_execution_state()
             self._notify("context")
@@ -541,6 +611,10 @@ class AthenaQueryVM:
             await self._stop_pending_cleanup(report_error=True)
             await self._results.shutdown()
             self._is_submitting = False
+            if self._draft_session is not None:
+                await self._draft_session.flush(
+                    deadline=asyncio.get_running_loop().time() + SHUTDOWN_SECONDS
+                )
             self._shutdown_complete = True
             self._notify("is_executing")
             self._notify("is_submitting")
@@ -550,12 +624,43 @@ class AthenaQueryVM:
             return
         self._disposed = True
         self._generation += 1
+        if self._draft_subscription is not None:
+            self._draft_subscription.dispose()
+        if self._draft_session is not None:
+            self._draft_session.detach()
         self._cancel_command.dispose()
         self._execute_command.dispose()
         self._results.dispose()
         self._on_property_changed.on_completed()
         self._on_property_changed.dispose()
         self._inner.dispose()
+
+    async def _draft_preflight(self, generation: int) -> bool:
+        if not self._drafts_enabled():
+            return True
+        session = self._draft_session
+        if (
+            session is None
+            or self.draft_execution_blocked
+            or self._validate_draft_execution is None
+        ):
+            return False
+        captured_context = self._context
+        captured_editor_revision = session.editor_revision
+        try:
+            allowed = await self._validate_draft_execution(captured_context)
+        except Exception:
+            return False
+        return (
+            allowed
+            and self._drafts_enabled()
+            and generation == self._generation
+            and not self._disposed
+            and not self._shutdown_started
+            and captured_context == self._context
+            and captured_editor_revision == session.editor_revision
+            and not self.draft_execution_blocked
+        )
 
     async def _run_execution(self) -> None:
         task = asyncio.current_task()
@@ -566,6 +671,11 @@ class AthenaQueryVM:
         generation = self._generation + 1
         self._generation = generation
         try:
+            if not await self._draft_preflight(generation):
+                if generation == self._generation:
+                    self._validation_error = "Draft context is unavailable or changed."
+                    self._notify("validation_error")
+                return
             try:
                 normalized_sql = self._validate()
             except QueryRejectedError as exc:
@@ -948,6 +1058,7 @@ class AthenaQueryVM:
             or self._is_context_resolving
             or not self._sql.strip()
             or self._busy
+            or self.draft_execution_blocked
         ):
             return False
         try:

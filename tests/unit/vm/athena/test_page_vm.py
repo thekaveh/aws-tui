@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import traceback
+from collections.abc import Awaitable, Callable
 from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
@@ -40,6 +41,7 @@ from aws_tui.domain.sql_policy import ReadOnlySqlPolicy
 from aws_tui.infra.connection_resolver import Connection
 from aws_tui.infra.crash_dump import CrashDump
 from aws_tui.vm.athena._pager_compat import SnapshotTokenPager, seed_token_pager
+from aws_tui.vm.athena.drafts_vm import AthenaDraftsVM
 from aws_tui.vm.athena.page_vm import AthenaPageVM
 from aws_tui.vm.athena.saved_vm import SavedQueryKind
 from aws_tui.vm.file_manager.pane_vm import PaneState
@@ -368,6 +370,9 @@ def make_page_vm(
     connection_name: str | None = None,
     region: str | None = None,
     hub: MessageHub[Message] | None = None,
+    drafts: AthenaDraftsVM | None = None,
+    drafts_active: bool = True,
+    source_is_current: Callable[[], Awaitable[bool]] | None = None,
 ) -> AthenaPageVM:
     connection = Connection(
         name=connection_name or client.connection_name,
@@ -384,6 +389,9 @@ def make_page_vm(
         hub=resolved_hub,
         dispatcher=NULL_DISPATCHER,
         selection_store=selection_store,
+        drafts=drafts,
+        drafts_active=drafts_active,
+        source_is_current=source_is_current,
     )
     page.construct()
     return page

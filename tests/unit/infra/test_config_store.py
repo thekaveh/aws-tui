@@ -6,6 +6,7 @@ import os
 import subprocess
 import sys
 import threading
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -704,6 +705,7 @@ def test_transaction_lock_excludes_an_independent_process(tmp_path: Path) -> Non
     store = ConfigStore(path=path)
     script = """
 import sys
+from dataclasses import replace
 from pathlib import Path
 from aws_tui.infra.config_store import ConfigError, ConfigStore
 
@@ -812,3 +814,72 @@ def test_concurrent_store_instances_preserve_both_mutations(tmp_path: Path) -> N
     assert not thread.is_alive()
     assert not contender.is_alive()
     assert set(first.load().connections) == {"first", "second"}
+
+
+@pytest.mark.parametrize("operation", ["add", "update", "default", "remove", "theme", "keys"])
+def test_sql_drafts_survives_mutations(tmp_path: Path, operation: str) -> None:
+    store = ConfigStore(path=tmp_path / "config.toml")
+    assert store.load().athena_sql_drafts is False
+    store.set_athena_sql_drafts(True)
+    store.add_connection(ConnectionEntry(name="a", kind="aws", region="us-west-2"))
+    if operation == "add":
+        store.add_connection(ConnectionEntry(name="b", kind="aws"))
+    elif operation == "update":
+        store.update_connection("a", ConnectionEntry(name="a", kind="aws", region="us-east-1"))
+    elif operation == "default":
+        store.set_default_connection("a")
+    elif operation == "remove":
+        store.remove_connection("a")
+    else:
+        with store.transaction():
+            config = store.load()
+            store.save(
+                replace(config, defaults=replace(config.defaults, theme="github-light"))
+                if operation == "theme"
+                else replace(config, keybindings=Keybindings({"pane.copy": "y"}))
+            )
+    assert ConfigStore(path=store.path).load().athena_sql_drafts is True
+    assert "[athena]" in store.path.read_text()
+    store.set_athena_sql_drafts(False)
+    assert store.load().athena_sql_drafts is False
+    assert "sql_drafts" not in store.path.read_text()
+
+
+@pytest.mark.parametrize("value", ['"yes"', "1", "[]", "{}"])
+def test_sql_drafts_rejects_non_bool(tmp_path: Path, value: str) -> None:
+    path = tmp_path / "config.toml"
+    path.write_text(f"[athena]\nsql_drafts = {value}\n")
+    with pytest.raises(ConfigError) as caught:
+        ConfigStore(path=path).load()
+    assert str(caught.value) == "[athena].sql_drafts must be a boolean"
+    assert caught.value.__cause__ is None
+    assert caught.value.__context__ is None
+
+
+@pytest.mark.parametrize("value", ['"yes"', "1", "[]"])
+def test_sql_drafts_rejects_non_table(tmp_path: Path, value: str) -> None:
+    path = tmp_path / "config.toml"
+    path.write_text(f"athena = {value}\n")
+    with pytest.raises(ConfigError, match=r"^\[athena\] must be a table$"):
+        ConfigStore(path=path).load()
+
+
+@pytest.mark.parametrize("value", [1, "yes", [], {}])
+def test_sql_drafts_setter_rejects_non_bool(tmp_path: Path, value: object) -> None:
+    store = ConfigStore(path=tmp_path / "config.toml")
+    with pytest.raises(ConfigError) as caught:
+        store.set_athena_sql_drafts(value)  # type: ignore[arg-type]
+    assert str(caught.value) == "[athena].sql_drafts must be a boolean"
+    assert not store.path.exists()
+
+
+def test_sql_drafts_read_only_setter_does_not_write(tmp_path: Path) -> None:
+    path = tmp_path / "config.toml"
+    path.write_text("[athena]\nsql_drafts = true\n")
+    previous = path.read_bytes()
+    store = ConfigStore(path=path, read_only=True)
+    assert store.read_only is True
+    store.set_athena_sql_drafts(False)
+    assert store.load().athena_sql_drafts is True
+    assert path.read_bytes() == previous
+    assert not path.with_name(".config.toml.lock").exists()

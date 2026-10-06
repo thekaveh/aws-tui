@@ -199,7 +199,7 @@ def test_cli_demo_flag_reaches_app_context(monkeypatch: pytest.MonkeyPatch) -> N
 
     def fake_build_app_context(*, demo: bool) -> object:
         demos.append(demo)
-        return object()
+        return SimpleNamespace(athena_drafts_shutdown_warning=None)
 
     class FakeApp:
         crash_report = None
@@ -228,7 +228,7 @@ def test_cli_env_demo_reaches_app_context(monkeypatch: pytest.MonkeyPatch) -> No
 
     def fake_build_app_context(*, demo: bool) -> object:
         demos.append(demo)
-        return object()
+        return SimpleNamespace(athena_drafts_shutdown_warning=None)
 
     class FakeApp:
         crash_report = None
@@ -270,7 +270,11 @@ def test_cli_returns_failure_when_textual_swallows_fatal_exception(
             return None
 
     monkeypatch.setattr(sys, "argv", ["aws-tui"])
-    monkeypatch.setattr(app_module, "build_app_context", lambda *, demo: object())
+    monkeypatch.setattr(
+        app_module,
+        "build_app_context",
+        lambda *, demo: SimpleNamespace(athena_drafts_shutdown_warning=None),
+    )
     monkeypatch.setattr(app_module, "AwsTuiApp", FakeApp)
 
     with pytest.raises(SystemExit) as exc_info:
@@ -379,6 +383,23 @@ async def test_content_swap_waits_for_every_cancelled_transfer_worker() -> None:
     assert slow_worker_drained.is_set()
 
 
+class _DraftOwner:
+    def __init__(self, events, *, fail=False):
+        self.events = events
+        self.fail = fail
+
+    async def shutdown(self):
+        from aws_tui.vm.athena.drafts_vm import DraftFlushReport
+
+        self.events.append("drafts.shutdown")
+        if self.fail:
+            raise RuntimeError("draft cleanup failed")
+        return DraftFlushReport(0, False)
+
+    def dispose(self):
+        self.events.append("drafts.dispose")
+
+
 @pytest.mark.asyncio
 async def test_app_shutdown_awaits_hosted_vm_shutdown_before_root_dispose() -> None:
     from aws_tui import app as app_module
@@ -419,6 +440,8 @@ async def test_app_shutdown_awaits_hosted_vm_shutdown_before_root_dispose() -> N
         transfers_vm=SimpleNamespace(
             cancel_all_command=SimpleNamespace(execute=lambda: None), dispose=lambda: None
         ),
+        athena_drafts_vm=_DraftOwner(events),
+        athena_drafts_shutdown_warning=None,
         transfer_history_vm=_HistoryVM(),
         aws_session=SimpleNamespace(aclose_all_clients=close_clients),
         log_sink=SimpleNamespace(
@@ -440,8 +463,10 @@ async def test_app_shutdown_awaits_hosted_vm_shutdown_before_root_dispose() -> N
 
     assert events == [
         "history.shutdown",
+        "drafts.shutdown",
         "content.shutdown",
         "clients.close",
+        "drafts.dispose",
         "history.dispose",
         "clipboard.dispose",
         "os-clipboard.dispose",
@@ -506,6 +531,8 @@ async def test_app_shutdown_records_failures_continues_and_closes_logging_last()
             cancel_all_command=SimpleNamespace(execute=lambda: None),
             dispose=lambda: events.append("transfers.dispose"),
         ),
+        athena_drafts_vm=_DraftOwner(events, fail=True),
+        athena_drafts_shutdown_warning=None,
         transfer_history_vm=_HistoryVM("history"),
         aws_session=SimpleNamespace(aclose_all_clients=close_clients),
         log_sink=_Log(),
@@ -525,7 +552,13 @@ async def test_app_shutdown_records_failures_continues_and_closes_logging_last()
 
     await app._aws_tui_shutdown()
 
-    assert events.index("history.shutdown") < events.index("content.shutdown")
+    assert (
+        events.index("history.shutdown")
+        < events.index("drafts.shutdown")
+        < events.index("content.shutdown")
+    )
+    assert events.index("drafts.dispose") < events.index("logs.flush")
+    assert "log.error:app.shutdown.cleanup_failed:athena_drafts.shutdown" in events
     assert events.index("history.dispose") < events.index("root.dispose")
     assert events.index("root.dispose") < events.index("logs.flush")
     assert events.index("focus.dispose") < events.index("logs.flush")
@@ -534,6 +567,7 @@ async def test_app_shutdown_records_failures_continues_and_closes_logging_last()
     assert "log.error:app.shutdown.cleanup_failed:s3_connections_vm.dispose" in events
     assert events[-1] == "logs.close"
     assert app._shutdown_errors == (  # type: ignore[attr-defined]
+        ("athena_drafts.shutdown", "RuntimeError"),
         ("aws_session.aclose_all_clients", "RuntimeError"),
         ("s3_connections_vm.dispose", "RuntimeError"),
     )
@@ -581,6 +615,8 @@ async def test_app_shutdown_waits_for_host_after_cancellation() -> None:
         transfers_vm=SimpleNamespace(
             cancel_all_command=SimpleNamespace(execute=lambda: None), dispose=lambda: None
         ),
+        athena_drafts_vm=_DraftOwner(events),
+        athena_drafts_shutdown_warning=None,
         transfer_history_vm=_HistoryVM(),
         aws_session=SimpleNamespace(aclose_all_clients=lambda: _complete()),
         log_sink=SimpleNamespace(flush=lambda: None, close=lambda: None),
@@ -600,7 +636,7 @@ async def test_app_shutdown_waits_for_host_after_cancellation() -> None:
     shutdown_task.cancel()
     await asyncio.sleep(0)
 
-    assert events == ["history.shutdown", "content.shutdown.started"]
+    assert events == ["history.shutdown", "drafts.shutdown", "content.shutdown.started"]
     assert not shutdown_task.done()
 
     finish_shutdown.set()
@@ -608,8 +644,10 @@ async def test_app_shutdown_waits_for_host_after_cancellation() -> None:
 
     assert events == [
         "history.shutdown",
+        "drafts.shutdown",
         "content.shutdown.started",
         "content.shutdown.finished",
+        "drafts.dispose",
         "history.dispose",
         "root.dispose",
     ]
@@ -1041,3 +1079,122 @@ def test_app_uses_public_service_page_operations() -> None:
     assert "page._project_focus_slot" not in app_source
     assert "emr_page._project_focus_slot" not in app_source
     assert "emr_page._picker" not in app_source
+
+
+async def test_shared_draft_shutdown_budget_warning_and_late_completion(tmp_path, monkeypatch):
+    import threading
+    import time
+
+    from aws_tui import app as app_module
+    from tests.athena_drafts_helpers import runtime_at
+    from tests.helpers import wait_until
+    from tests.unit.vm.athena.test_page_vm import PageClient, make_page_vm
+
+    owner, store = runtime_at(tmp_path)
+    entered, release = threading.Event(), threading.Event()
+    original = store.save
+
+    def stalled(record, *, permit):
+        entered.set()
+        release.wait()
+        return original(record, permit=permit)
+
+    monkeypatch.setattr(store, "save", stalled)
+
+    async def current():
+        return True
+
+    pages = [
+        make_page_vm(PageClient(), drafts=owner, source_is_current=current),
+        make_page_vm(PageClient(connection_name="other"), drafts=owner, source_is_current=current),
+    ]
+    for page in pages:
+        await page.setup()
+        page.query.set_sql("SELECT 1")
+    states = []
+    for page in pages:
+        page._draft_session.on_property_changed.subscribe(lambda name: states.append(name))
+    events, warnings = [], []
+
+    async def hosted_shutdown():
+        events.append("host.shutdown")
+        assert owner._terminal is not None
+        for page in pages:
+            await page.shutdown()
+
+    disposable = SimpleNamespace(dispose=lambda: None)
+    app = object.__new__(app_module.AwsTuiApp)
+    app._workers = SimpleNamespace(cancel_group=lambda *_args: None)
+    app._app_ctx = SimpleNamespace(
+        athena_drafts_vm=owner,
+        athena_drafts_shutdown_warning=None,
+        transfer_history_vm=SimpleNamespace(shutdown=_complete, dispose=lambda: None),
+        transfers_vm=SimpleNamespace(
+            cancel_all_command=SimpleNamespace(execute=lambda: None), dispose=lambda: None
+        ),
+        root_vm=SimpleNamespace(
+            content_host=SimpleNamespace(shutdown=hosted_shutdown), dispose=lambda: None
+        ),
+        aws_session=SimpleNamespace(aclose_all_clients=_complete),
+        command_palette_vm=disposable,
+        s3_connections_vm=disposable,
+        quick_look_vm=disposable,
+        confirm_vm=disposable,
+        table_clipboard_vm=disposable,
+        clipboard_vm=disposable,
+        focus_coordinator=disposable,
+        demo_emrs={},
+        log_sink=SimpleNamespace(
+            warning=lambda event, **fields: warnings.append((event, fields)),
+            error=lambda *a, **kw: None,
+            flush=lambda: None,
+            close=lambda: events.append("log.close"),
+        ),
+    )
+    start = time.monotonic()
+    try:
+        await asyncio.gather(app._aws_tui_shutdown(), app._aws_tui_shutdown())
+        assert entered.is_set()
+        assert time.monotonic() - start < 2.5
+        assert owner._terminal.unpersisted == 2
+        assert owner._terminal.timed_out
+        assert warnings == [("athena.drafts.unpersisted", {"count": 2, "timed_out": True})]
+        assert (
+            app._app_ctx.athena_drafts_shutdown_warning
+            == "Some Athena SQL edits were not confirmed saved before exit."
+        )
+        assert events == ["host.shutdown", "log.close"]
+        before = len(states)
+    finally:
+        release.set()
+    await wait_until(lambda: owner._worker.pending_count == 0, what="late draft worker drained")
+    await asyncio.sleep(0)
+    assert len(states) == before
+    assert all(page.query.draft_state != "saved" for page in pages)
+    assert not owner._coordinator.futures
+
+
+def test_main_prints_retained_draft_warning_once_after_terminal_returns(monkeypatch, capsys):
+    from aws_tui import app as app_module
+
+    events = []
+    context = SimpleNamespace(
+        athena_drafts_shutdown_warning="Some Athena SQL edits were not confirmed saved before exit."
+    )
+
+    class App:
+        crash_report = None
+
+        def __init__(self, **kwargs):
+            assert kwargs["context"] is context
+
+        def run(self):
+            events.append("terminal returned")
+
+    monkeypatch.setattr(app_module, "build_app_context", lambda **kwargs: context)
+    monkeypatch.setattr(app_module, "AwsTuiApp", App)
+    monkeypatch.setattr(app_module, "prefer_sigwinch_resize", lambda: None)
+    monkeypatch.setattr("sys.argv", ["aws-tui"])
+    app_module.main()
+    assert events == ["terminal returned"]
+    assert capsys.readouterr().err.count(context.athena_drafts_shutdown_warning) == 1

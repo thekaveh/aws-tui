@@ -123,3 +123,26 @@ RetryConflictModal .modal-footer > ModalButton {
 }
 RetryConflictModal .modal-footer > ModalButton.-primary { min-width: 20; }
 RetryConflictModal .modal-footer > ModalButton.-danger { min-width: 13; }
+
+/* Local Athena SQL drafts use the shared modal and Settings palette. */
+AthenaDraftsModal { background: $bg 60%; }
+AthenaDraftsModal > .modal-frame {
+    background: $bg-elev; color: $text; border: round $rule-dim;
+}
+AthenaDraftsModal .modal-title { color: $accent; }
+AthenaDraftsModal OptionList {
+    background: $bg; color: $text; border: solid $rule-dim;
+}
+AthenaDraftsModal OptionList:focus { border: solid $accent; }
+AthenaDraftsModal .option-list--option-highlighted {
+    background: $bg-sel; color: $accent;
+}
+AthenaDraftsModal #athena-drafts-detail-scroll { background: $bg-elev; color: $text; }
+AthenaDraftsModal Button, AthenaDraftsPanel Button {
+    background: $bg; color: $text; border: solid $rule-dim;
+}
+AthenaDraftsModal Button:focus, AthenaDraftsModal Button:hover,
+AthenaDraftsPanel Button:focus, AthenaDraftsPanel Button:hover {
+    background: $bg-sel; color: $accent; border: solid $accent;
+}
+AthenaDraftsPanel #athena-drafts-setting-status { color: $warning; }

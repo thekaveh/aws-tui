@@ -12,6 +12,7 @@ from vmx import ComponentVM, Message, MessageHub
 from vmx.lifecycle.status import ConstructionStatus
 from vmx.services.dispatcher import Dispatcher
 
+from aws_tui.vm.athena.drafts_vm import AthenaDraftsVM
 from aws_tui.vm.settings.s3_connections_vm import S3ConnectionsVM
 
 
@@ -29,10 +30,12 @@ class SettingsVM:
         self,
         *,
         s3: S3ConnectionsVM,
+        athena_drafts: AthenaDraftsVM | None = None,
         hub: MessageHub[Message],
         dispatcher: Dispatcher,
     ) -> None:
         self._s3: S3ConnectionsVM = s3
+        self._athena_drafts = athena_drafts
         self._inner: ComponentVM = (
             ComponentVM.builder().name("settings").services(hub, dispatcher).build()
         )
@@ -42,6 +45,10 @@ class SettingsVM:
     @property
     def s3(self) -> S3ConnectionsVM:
         return self._s3
+
+    @property
+    def athena_drafts(self) -> AthenaDraftsVM | None:
+        return self._athena_drafts
 
     @property
     def status(self) -> ConstructionStatus:
