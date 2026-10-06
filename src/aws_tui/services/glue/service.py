@@ -45,6 +45,7 @@ from aws_tui.infra.connection_resolver import Connection
 from aws_tui.infra.duckdb import DuckDbPort
 from aws_tui.services.glue.comparison import GlueComparisonRouter
 from aws_tui.vm.glue.comparison_ports import ComparisonCatalogClient
+from aws_tui.vm.glue.comparison_vm import GlueComparisonVM
 from aws_tui.vm.glue.iceberg_vm import IcebergInspectionUnavailableError
 from aws_tui.vm.glue.page_vm import GluePageVM
 from aws_tui.vm.service_source_vm import SelectionScope, ServiceSelectionStore
@@ -268,6 +269,19 @@ class GlueService:
             else lambda connection: GlueClient(aws_session=self._aws_session, connection=connection)
         )
         return GlueComparisonRouter(connections=connections, client_factory=factory)
+
+    def build_comparison_vm(
+        self,
+        *,
+        connections: Callable[[], Sequence[Connection]],
+        clock: Callable[[], datetime] | None = None,
+    ) -> GlueComparisonVM:
+        return GlueComparisonVM(
+            router=self.build_comparison_router(connections=connections),
+            hub=self._hub,
+            dispatcher=self._dispatcher,
+            clock=clock,
+        )
 
     def build_vm(self, connection: Connection) -> GluePageVM:
         return self._build_vm(connection, self._selections)
