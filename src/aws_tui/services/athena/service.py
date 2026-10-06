@@ -124,7 +124,8 @@ class AthenaService:
         self._policy_factory = sql_policy_factory or ReadOnlySqlPolicy
         self._selections = selection_store or ServiceSelectionStore()
 
-    def supports(self, connection: Connection) -> bool:
+    @staticmethod
+    def supports(connection: Connection) -> bool:
         return connection.kind == "aws"
 
     def build_vm(self, connection: Connection) -> AthenaPageVM:

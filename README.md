@@ -245,6 +245,42 @@ To verify: `aws-tui --version` reports `(demo: enabled)` or `(demo: disabled)`.
 aws-tui                       # launches with the default connection
 ```
 
+Open a known source, service, or file directory directly for this session only:
+
+```bash
+aws-tui --connection dev --region eu-west-1 --service athena
+aws-tui --profile analytics --location 's3://reports-bucket/daily/'
+aws-tui --location './downloads'
+```
+
+`--connection NAME` selects an exact known connection, including AWS aliases
+and S3-compatible sources. `--profile NAME` selects an exact locally discoverable
+AWS profile even if another configured source has that name; the two flags are
+mutually exclusive. Explicit identity flags override `[defaults].connection`,
+`AWS_DEFAULT_PROFILE`, and `AWS_PROFILE`. Without an identity flag, the ordinary
+default precedence below still selects the source; that choice is then pinned
+for the explicit launch. `--region REGION` overrides its session region using
+lowercase letters/digits separated by hyphens and ending in digits, such as
+`eu-west-1` or `ap-southeast-2`.
+
+`--service ID` accepts the registered IDs `s3`, `athena`, `glue`, and
+`emr-serverless`; S3-compatible sources support `s3` only. The default is `s3`.
+`--location LOCATION` also implies `s3` and cannot accompany another service.
+It accepts `s3://BUCKET[/PREFIX]` or an existing native directory. S3 locations
+open and focus the left pane before its first listing, preserving literal key
+characters and prefixes. Local paths resolve relative to the current directory,
+expand `~`, and open and focus the right pane. With no remote sources, a local
+location opens local-only panes. Launch browsing only reads/lists data and
+no configuration is saved; it does not submit queries or jobs.
+
+All five selectors conflict with `--demo`, effective `AWS_TUI_DEMO`, and
+`doctor`. Unknown sources, unsupported service/source pairs, malformed regions,
+missing directories, file paths, missing S3 buckets, control characters, and
+unsupported URI/ARN forms exit nonzero before the UI with a one-line message.
+Parser errors retain argparse's usage output. A selected source that fails at
+startup exits nonzero without retrying another account or mounting local fallback.
+Help and version exit before source discovery, client creation, or UI startup.
+
 For SSO-backed profiles, if you've run `aws sso login --profile <name>`
 recently, aws-tui picks up the cached token silently (no network
 round-trip just to render the UI). Otherwise the picker shows the

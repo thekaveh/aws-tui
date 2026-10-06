@@ -187,3 +187,33 @@ def test_current_contract_ledger_discloses_exact_pinned_private_adapters() -> No
         "`_xterm_parser.XTermParser`",
     ):
         assert private_name in ledger
+
+
+def test_launch_selectors_document_values_precedence_and_session_contract() -> None:
+    for path in ("README.md", "docs/cookbook.md"):
+        text = _text(path)
+        for flag in ("--connection", "--profile", "--region", "--service", "--location"):
+            assert flag in text
+        for command in (
+            "aws-tui --connection dev --region eu-west-1 --service athena",
+            "aws-tui --profile analytics --location 's3://reports-bucket/daily/'",
+            "aws-tui --location './downloads'",
+        ):
+            assert command in text
+        for claim in (
+            "mutually exclusive",
+            "[defaults].connection",
+            "AWS_PROFILE",
+            "session only",
+            "left pane",
+            "right pane",
+            "local-only",
+            "no configuration is saved",
+            "one-line",
+            "doctor",
+            "AWS_TUI_DEMO",
+            "emr-serverless",
+            "literal",
+            "existing native directory",
+        ):
+            assert claim in text
