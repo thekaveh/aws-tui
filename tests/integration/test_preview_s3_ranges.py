@@ -13,9 +13,7 @@ from aws_tui.domain.preview_limits import PreviewBudget, PreviewLimitExceeded, P
 from aws_tui.domain.s3_fs import S3FS
 from tests.unit.domain.conftest import moto_server, s3_endpoint  # noqa: F401
 
-# The integration tier reuses the established localhost moto fixture implementation.
-
-pytestmark = pytest.mark.integration
+# These local moto HTTP tests run with the default local test selection.
 
 
 def session():
