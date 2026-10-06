@@ -101,6 +101,7 @@ athena.saved
 glue.catalog
 glue.choose_crawler_state
 glue.choose_run_state
+glue.compare_tables
 glue.copy_table_ref
 glue.crawlers
 glue.jobs

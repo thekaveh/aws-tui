@@ -7245,7 +7245,7 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
             subscription.dispose()
             setattr(self, attribute, None)
 
-        for screen in tuple(self.screen_stack):
+        for screen in tuple(getattr(self, "screen_stack", ())):
             if isinstance(screen, GlueComparisonModal):
                 run_cleanup("glue_comparison.close", screen.close)
                 await await_cleanup("glue_comparison.shutdown", screen.shutdown)

@@ -456,7 +456,11 @@ async def test_glue_handoff_disabled_state_tracks_table_and_snapshot_selection(
             monkeypatch.setattr(legend, "set_disabled_actions", record_projection)
 
             def disabled_actions() -> set[str]:
-                return {hint.action_id for hint in legend.actions if not hint.enabled}
+                return {
+                    hint.action_id
+                    for hint in legend.actions
+                    if not hint.enabled and hint.action_id != "glue.compare_tables"
+                }
 
             await vm.select_view("jobs")
             await wait_until(
@@ -477,6 +481,9 @@ async def test_glue_handoff_disabled_state_tracks_table_and_snapshot_selection(
                 "glue.time_travel_in_athena",
                 "glue.load_more",
             }
+            assert next(
+                hint for hint in legend.actions if hint.action_id == "glue.compare_tables"
+            ).enabled
 
             await vm.select_view("catalog")
             await wait_until(
@@ -484,6 +491,9 @@ async def test_glue_handoff_disabled_state_tracks_table_and_snapshot_selection(
                 what="Glue catalog to restore available table handoffs",
             )
             assert disabled_actions() == {"glue.time_travel_in_athena", "glue.load_more"}
+            assert next(
+                hint for hint in legend.actions if hint.action_id == "glue.compare_tables"
+            ).enabled
 
             fake.add_database("empty")
             await vm.catalog.refresh_databases()
@@ -506,6 +516,9 @@ async def test_glue_handoff_disabled_state_tracks_table_and_snapshot_selection(
                 "glue.time_travel_in_athena",
                 "glue.load_more",
             }
+            assert next(
+                hint for hint in legend.actions if hint.action_id == "glue.compare_tables"
+            ).enabled
 
             # `select_database` clears the table selection and calls
             # `iceberg.clear_table()`, so there are no snapshots to select until a
@@ -527,6 +540,9 @@ async def test_glue_handoff_disabled_state_tracks_table_and_snapshot_selection(
                 what="selected Iceberg snapshot to enable time travel",
             )
             assert disabled_actions() == {"glue.load_more"}
+            assert next(
+                hint for hint in legend.actions if hint.action_id == "glue.compare_tables"
+            ).enabled
 
             projections.clear()
             assert await vm.catalog.iceberg.load_more()
@@ -539,6 +555,9 @@ async def test_glue_handoff_disabled_state_tracks_table_and_snapshot_selection(
             )
             assert frozenset({"glue.load_more"}) in projections
             assert disabled_actions() == {"glue.load_more"}
+            assert next(
+                hint for hint in legend.actions if hint.action_id == "glue.compare_tables"
+            ).enabled
 
             assert await vm.catalog.iceberg.select_view("history")
             await wait_until(
@@ -546,6 +565,9 @@ async def test_glue_handoff_disabled_state_tracks_table_and_snapshot_selection(
                 what="Iceberg history to disable snapshot time travel",
             )
             assert disabled_actions() == {"glue.time_travel_in_athena", "glue.load_more"}
+            assert next(
+                hint for hint in legend.actions if hint.action_id == "glue.compare_tables"
+            ).enabled
 
             projections.clear()
             await vm.shutdown()
@@ -571,6 +593,9 @@ async def test_glue_handoff_disabled_state_tracks_table_and_snapshot_selection(
                 "glue.time_travel_in_athena",
                 "glue.load_more",
             }
+            assert not next(
+                hint for hint in legend.actions if hint.action_id == "glue.compare_tables"
+            ).enabled
 
             toast_count = len(ctx.root_vm.chrome.toast_stack.toasts)
             await app.action_query_glue_table_in_athena()
@@ -625,7 +650,11 @@ async def test_direct_glue_page_disposal_disables_handoffs_without_advisory_toas
             legend.set_current_service("glue")
 
             def disabled_actions() -> set[str]:
-                return {hint.action_id for hint in legend.actions if not hint.enabled}
+                return {
+                    hint.action_id
+                    for hint in legend.actions
+                    if not hint.enabled and hint.action_id != "glue.compare_tables"
+                }
 
             assert await vm.catalog.iceberg.select_view("snapshots")
             assert vm.catalog.iceberg.select_snapshot(43)
@@ -634,6 +663,9 @@ async def test_direct_glue_page_disposal_disables_handoffs_without_advisory_toas
                 what="selected snapshot to enable handoffs before disposal",
             )
             assert disabled_actions() == {"glue.load_more"}
+            assert next(
+                hint for hint in legend.actions if hint.action_id == "glue.compare_tables"
+            ).enabled
 
             vm.dispose()
             await wait_until(
@@ -654,6 +686,9 @@ async def test_direct_glue_page_disposal_disables_handoffs_without_advisory_toas
                 "glue.time_travel_in_athena",
                 "glue.load_more",
             }
+            assert not next(
+                hint for hint in legend.actions if hint.action_id == "glue.compare_tables"
+            ).enabled
 
             toast_count = len(ctx.root_vm.chrome.toast_stack.toasts)
             app.action_copy_glue_table_reference()
@@ -823,7 +858,9 @@ async def test_athena_result_control_configured_key_dispatch_replaces_default(ap
     from aws_tui.infra.keymap_store import KeymapStore
 
     ctx = app_context_factory()
-    ctx.keymap_store = KeymapStore(overlay={"athena.copy_cell": "ctrl+g"})
+    ctx.keymap_store = KeymapStore(
+        overlay={"glue.compare_tables": [], "athena.copy_cell": "ctrl+g"}
+    )
     app = AwsTuiApp(ctx)
     calls = []
     app._actions.register("athena.copy_cell", lambda: calls.append("copy"))
@@ -855,6 +892,7 @@ async def test_athena_result_palette_labels_show_actual_configured_keys(
     if remapped:
         ctx.keymap_store = KeymapStore(
             overlay={
+                "glue.compare_tables": [],
                 "athena.inspect_cell": "ctrl+shift+i",
                 "athena.copy_cell": ["ctrl+g", "alt+g"],
                 "athena.copy_row": "alt+shift+x",
@@ -938,7 +976,7 @@ async def test_palette_renders_effective_key(app_context_factory):
     from aws_tui.infra.keymap_store import KeymapStore
 
     ctx = app_context_factory()
-    ctx.keymap_store = KeymapStore(overlay={"app.cycle_theme": "ctrl+g"})
+    ctx.keymap_store = KeymapStore(overlay={"glue.compare_tables": [], "app.cycle_theme": "ctrl+g"})
     app = AwsTuiApp(ctx)
     async with app.run_test(size=(120, 40)) as pilot:
         await pilot.pause()
@@ -1031,7 +1069,10 @@ async def test_two_openings_share_row_label_keys_and_literal_text(app_context_fa
     app = AwsTuiApp(ctx)
     async with app.run_test(size=(120, 40)) as pilot:
         await pilot.pause()
-        for overlay in ({"app.cycle_theme": "ctrl+y"}, {"app.cycle_theme": keys}):
+        for overlay in (
+            {"app.cycle_theme": "ctrl+y"},
+            {"glue.compare_tables": [], "app.cycle_theme": keys},
+        ):
             ctx.keymap_store = KeymapStore(overlay=overlay)
             await pilot.press("question_mark")
             await wait_until(lambda: isinstance(app.screen, HelpModal), what="Help opening")

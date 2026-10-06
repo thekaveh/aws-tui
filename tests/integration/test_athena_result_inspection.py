@@ -256,6 +256,7 @@ async def test_actual_app_retirement_drops_late_page_and_inspector(size, retirem
 @pytest.mark.parametrize("size", [(80, 24), (120, 40)])
 async def test_actual_app_remapped_results_help_and_palette(size, monkeypatch):
     overlay = {
+        "glue.compare_tables": [],
         "athena.inspect_cell": "ctrl+shift+i",
         "athena.copy_cell": "ctrl+g",
         "athena.copy_row": "alt+shift+x",
