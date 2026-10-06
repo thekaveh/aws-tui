@@ -223,3 +223,22 @@ async def test_failed_emr_client_cancellation_preserves_original_typed_error(err
             await client.cancel_job_run("a1", "r1")
         errors.append(caught.value)
     assert errors[0] is not errors[1]
+
+
+async def test_failed_logs_facade_cloudwatch_methods_preserve_kind_without_original_text():
+    from aws_tui.domain.emr_serverless import CloudWatchLogConfiguration
+    from aws_tui.services.emr_serverless.service import _FailedEmrLogsClient
+
+    facade = _FailedEmrLogsClient(AuthRequiredError("arbitrary-log-body-sentinel"))
+    for operation in (
+        facade.list_cloudwatch_streams(
+            configuration=CloudWatchLogConfiguration(True), application_id="a", job_run_id="r"
+        ),
+        facade.read_cloudwatch_events(
+            log_group_name="group", stream_name="stream", start_time_ms=0, end_time_ms=1000
+        ),
+    ):
+        with pytest.raises(AuthRequiredError) as caught:
+            await operation
+        assert str(caught.value) == "CloudWatch authentication required"
+        assert caught.value.__context__ is None

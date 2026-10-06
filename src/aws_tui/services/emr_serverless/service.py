@@ -20,10 +20,22 @@ import aioboto3
 from vmx import Message, MessageHub
 from vmx.services.dispatcher import Dispatcher
 
-from aws_tui.domain.emr_logs import EmrServerlessLogsClient, LogChunk, LogFile, LogFilter
+from aws_tui.domain.emr_cloudwatch_logs import (
+    CloudWatchLogSnapshot,
+    CloudWatchLogStream,
+    safe_cloudwatch_error,
+)
+from aws_tui.domain.emr_logs import (
+    EmrServerlessLogsClient,
+    EmrServerlessLogsClientProtocol,
+    LogChunk,
+    LogFile,
+    LogFilter,
+)
 from aws_tui.domain.emr_serverless import (
     EMR_BOTO_CONFIG,
     ApplicationSummary,
+    CloudWatchLogConfiguration,
     EmrServerlessClient,
     EmrServerlessClientProtocol,
     JobRunDetail,
@@ -40,7 +52,7 @@ from aws_tui.vm.services_protocol import RecoveryServiceVM, ServiceDescriptor
 #: Test hook — when provided, replaces real ``EmrServerlessClient`` construction
 #: with whatever the factory returns (typically ``_InMemoryEmr``).
 EmrClientFactory = Callable[[Connection], EmrServerlessClientProtocol]
-EmrLogsClientFactory = Callable[[Connection], EmrServerlessLogsClient]
+EmrLogsClientFactory = Callable[[Connection], EmrServerlessLogsClientProtocol]
 
 
 def _map_session_construction_error(exc: BaseException) -> ProviderError:
@@ -57,6 +69,25 @@ class _FailedEmrLogsClient:
 
     def _fresh_error(self) -> ProviderError:
         return self._error_type(*self._error_args)
+
+    async def list_cloudwatch_streams(
+        self,
+        *,
+        configuration: CloudWatchLogConfiguration,
+        application_id: str,
+        job_run_id: str,
+    ) -> tuple[CloudWatchLogStream, ...]:
+        raise safe_cloudwatch_error(self._fresh_error())
+
+    async def read_cloudwatch_events(
+        self,
+        *,
+        log_group_name: str,
+        stream_name: str,
+        start_time_ms: int,
+        end_time_ms: int,
+    ) -> CloudWatchLogSnapshot:
+        raise safe_cloudwatch_error(self._fresh_error())
 
     async def list_files(self, *, bucket: str, run_prefix: str) -> list[LogFile]:
         raise self._fresh_error()
@@ -228,22 +259,19 @@ class EmrServerlessService:
         connection: Connection,
         *,
         client: EmrServerlessClientProtocol | None = None,
-    ) -> EmrServerlessLogsClient:
+    ) -> EmrServerlessLogsClientProtocol:
         if self._logs_client_factory is not None:
             return self._logs_client_factory(connection)
         make_logs_client = getattr(client, "make_logs_client", None)
         if callable(make_logs_client):
-            return cast("EmrServerlessLogsClient", make_logs_client())
+            return cast("EmrServerlessLogsClientProtocol", make_logs_client())
         try:
             session = aioboto3.Session(
                 profile_name=connection.profile,
                 region_name=connection.region,
             )
         except Exception as exc:
-            return cast(
-                "EmrServerlessLogsClient",
-                _FailedEmrLogsClient(_map_session_construction_error(exc)),
-            )
+            return _FailedEmrLogsClient(_map_session_construction_error(exc))
         return EmrServerlessLogsClient(
             session=session,
             region_name=connection.region,

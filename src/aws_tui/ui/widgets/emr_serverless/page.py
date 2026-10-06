@@ -39,6 +39,7 @@ from aws_tui.ui.widgets.emr_serverless.job_runs_pane import JobRunsPane
 from aws_tui.ui.widgets.overlay_option_list import PickerOpenIntent
 from aws_tui.ui.widgets.service_source_header import ServiceSourceHeader
 from aws_tui.vm.emr_serverless.clone_vm import JobRunCloneVM
+from aws_tui.vm.emr_serverless.job_run_logs_vm import LogSource
 from aws_tui.vm.emr_serverless.page_vm import EmrServerlessPageVM
 from aws_tui.vm.service_source_vm import ServiceSourceContext
 
@@ -219,6 +220,7 @@ class EmrServerlessPage(DeferredWorkerMixin, Widget):
             self.call_after_refresh(self._maybe_focus_left)
 
     def on_unmount(self) -> None:
+        self._vm.job_run_logs.stop_follow()
         self._clone_active = False
         self._picker_open_intent.cancel()
         if self._source_header is not None:
@@ -582,6 +584,63 @@ class EmrServerlessPage(DeferredWorkerMixin, Widget):
         self._right_logs.action_open_filter()
         return True
 
+    def cycle_focused_log_source(self) -> bool:
+        if (
+            self.app.focused is None
+            or self._right_logs is None
+            or not self._is_within(self.app.focused, self._right_logs)
+        ):
+            return False
+        choices = [
+            row.source
+            for row in self._vm.job_run_logs.sources
+            if self._vm.job_run_logs.source_selectable(row.source)
+        ]
+        if len(choices) < 2:
+            return False
+        current = self._vm.job_run_logs.selected_source
+        index = choices.index(current) if current in choices else -1
+        self._select_log_source(choices[(index + 1) % len(choices)])
+        return True
+
+    def toggle_focused_log_follow(self) -> bool:
+        if (
+            self.app.focused is None
+            or self._right_logs is None
+            or not self._is_within(self.app.focused, self._right_logs)
+        ):
+            return False
+        return self._toggle_log_follow()
+
+    def _toggle_log_follow(self) -> bool:
+        logs = self._vm.job_run_logs
+        if not logs.can_follow:
+            return False
+        if logs.following:
+            logs.stop_follow()
+            self.workers.cancel_group(self, "emr-logs")
+        else:
+            logs.stop_follow()
+            self._run_lifecycle_worker(logs.follow, group="emr-logs")
+        return True
+
+    def _select_log_source(self, source: LogSource) -> None:
+        self._vm.job_run_logs.select_source(source)
+        self._run_lifecycle_worker(self._vm.job_run_logs.load, group="emr-logs")
+
+    def on_job_run_logs_pane_source_selected(self, event: JobRunLogsPane.SourceSelected) -> None:
+        if self._vm.job_run_logs.source_selectable(event.source):
+            self._select_log_source(event.source)
+
+    def on_job_run_logs_pane_cloud_watch_stream_selected(
+        self, event: JobRunLogsPane.CloudWatchStreamSelected
+    ) -> None:
+        self._vm.job_run_logs.select_cloudwatch_stream(event.name)
+        self._run_lifecycle_worker(self._vm.job_run_logs.load, group="emr-logs")
+
+    def on_job_run_logs_pane_follow_requested(self, event: JobRunLogsPane.FollowRequested) -> None:
+        self._toggle_log_follow()
+
     def select_adjacent_log_file(self, delta: int) -> bool:
         focused = self.app.focused
         if (
@@ -804,12 +863,14 @@ class EmrServerlessPage(DeferredWorkerMixin, Widget):
 
     def on_job_run_logs_pane_load_requested(self, _event: JobRunLogsPane.LoadRequested) -> None:
         """User pressed Enter to load logs."""
+        self._vm.job_run_logs.stop_follow()
         self._run_lifecycle_worker(self._vm.job_run_logs.load, group="emr-logs")
 
     def on_job_run_logs_pane_refresh_requested(
         self, _event: JobRunLogsPane.RefreshRequested
     ) -> None:
         """User pressed r to refresh/reload logs."""
+        self._vm.job_run_logs.stop_follow()
         self._run_lifecycle_worker(
             partial(self._vm.job_run_logs.load, use_cache=False), group="emr-logs"
         )
@@ -819,24 +880,35 @@ class EmrServerlessPage(DeferredWorkerMixin, Widget):
         self._vm.job_run_logs.select_log_file_key(event.key)
         self._run_lifecycle_worker(self._vm.job_run_logs.load, group="emr-logs")
 
-    async def on_job_run_logs_pane_open_filter_requested(
+    def on_job_run_logs_pane_open_filter_requested(
         self, _event: JobRunLogsPane.OpenFilterRequested
     ) -> None:
         """User pressed f to open the filter modal."""
+        self._run_lifecycle_worker(self._edit_log_filter, group="emr-log-filter")
+
+    async def _edit_log_filter(self) -> None:
         from aws_tui.ui.widgets.emr_serverless.log_filter_modal import LogFilterModal
 
-        current_filter = self._vm.job_run_logs.filter
+        logs = self._vm.job_run_logs
+        generation = logs._generation
+        current_filter = logs.filter
         modal = LogFilterModal(current_filter)
         try:
             new_filter = await self.app.push_screen_wait(modal)
+            if not self.is_attached or not logs._current(generation):
+                return
             if new_filter is not None and new_filter != current_filter:
                 self._vm.job_run_logs.set_filter(new_filter)
-                self._run_lifecycle_worker(self._vm.job_run_logs.load, group="emr-logs")
+                if self._vm.job_run_logs.selected_source is not LogSource.CLOUDWATCH:
+                    self._run_lifecycle_worker(self._vm.job_run_logs.load, group="emr-logs")
         except Exception as exc:
             # Modal raised mid-flight (rare — usually a test-harness
             # teardown race). Surface an advisory toast so the user
             # learns the filter didn't apply.
             self._post_advisory_toast("Settings", f"filter aborted ({exc})")
+        finally:
+            if modal.is_attached and modal.is_active:
+                modal.action_cancel()
 
     def on_job_run_logs_pane_reset_filter_requested(
         self, _event: JobRunLogsPane.ResetFilterRequested
@@ -848,7 +920,8 @@ class EmrServerlessPage(DeferredWorkerMixin, Widget):
         if self._vm.job_run_logs.filter == DEFAULT_LOG_FILTER:
             return
         self._vm.job_run_logs.set_filter(DEFAULT_LOG_FILTER)
-        self._run_lifecycle_worker(self._vm.job_run_logs.load, group="emr-logs")
+        if self._vm.job_run_logs.selected_source is not LogSource.CLOUDWATCH:
+            self._run_lifecycle_worker(self._vm.job_run_logs.load, group="emr-logs")
 
 
 __all__ = ["EmrServerlessPage"]

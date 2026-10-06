@@ -60,6 +60,8 @@ _EXPECTED: set[tuple[str, str, bool, bool]] = {
     ("c", "dispatch('emr.clone')", False, False),
     ("x", "dispatch('emr.cancel')", False, False),
     ("f", "dispatch('emr.logs.filter')", False, False),
+    ("ctrl+s", "dispatch('emr.logs.source')", False, True),
+    ("ctrl+alt+l", "dispatch('emr.logs.follow')", False, True),
     ("1", "dispatch('glue.catalog')", False, False),
     ("2", "dispatch('glue.jobs')", False, False),
     ("3", "dispatch('glue.crawlers')", False, False),

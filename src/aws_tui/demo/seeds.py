@@ -20,9 +20,11 @@ from aws_tui.demo.in_memory_emr import InMemoryEmr
 from aws_tui.demo.in_memory_fs import InMemoryFS
 from aws_tui.demo.in_memory_glue import InMemoryGlue
 from aws_tui.domain.data_catalog import Column
+from aws_tui.domain.emr_cloudwatch_logs import CloudWatchLogEvent, CloudWatchLogStream
 from aws_tui.domain.emr_logs import LogFileKind
 from aws_tui.domain.emr_serverless import (
     ApplicationState,
+    CloudWatchLogConfiguration,
     JobRunState,
 )
 from aws_tui.domain.filesystem import (
@@ -343,6 +345,54 @@ def seed_emr_data(emr: InMemoryEmr, *, profile: str = "demo-dev") -> None:
         job_run_id=pending_id,
         entry_point=f"s3://{data_bucket}/etl/scripts/adhoc.py",
     )
+
+    # Older showcase runs preserve the existing first S3/default selection.
+    for both in (False, True):
+        run_id = f"r-{run_scope}{'both-logs' if both else 'cloudwatch-only'}"
+        created = _NOW - timedelta(days=4, seconds=int(both))
+        emr.add_job_run(
+            application_id=etl_app_id,
+            job_run_id=run_id,
+            name="CloudWatch + S3" if both else "CloudWatch only",
+            state=JobRunState.FAILED if both else JobRunState.SUCCESS,
+            created_at=created,
+        )
+        group = f"/demo/{profile}/emr"
+        emr.add_job_run_detail(
+            application_id=etl_app_id,
+            job_run_id=run_id,
+            s3_monitoring_log_uri=f"s3://{log_bucket}/logs" if both else None,
+            cloudwatch_monitoring=CloudWatchLogConfiguration(True, group),
+        )
+        if both:
+            emr.add_log_file(
+                application_id=etl_app_id,
+                job_run_id=run_id,
+                kind=LogFileKind.DRIVER_STDERR,
+                lines=("ERROR S3 both-source demo",),
+            )
+        for suffix, component, attempt in (
+            ("SPARK_DRIVER", "SPARK_DRIVER", None),
+            ("attempts/1/SPARK_DRIVER", "SPARK_DRIVER", 1),
+            ("attempts/2/SPARK_DRIVER", "SPARK_DRIVER", 2),
+            ("SPARK_EXECUTOR/1", "SPARK_EXECUTOR", None),
+        ):
+            name = f"/applications/{etl_app_id}/jobs/{run_id}/{suffix}"
+            stamp = int(created.timestamp() * 1000) + 1000
+            emr.add_cloudwatch_stream(
+                application_id=etl_app_id,
+                job_run_id=run_id,
+                log_group_name=group,
+                stream=CloudWatchLogStream(name, component, attempt),
+                events=(
+                    CloudWatchLogEvent(
+                        f"{profile}-{run_id}-{suffix}",
+                        stamp,
+                        stamp,
+                        "ERROR CloudWatch demo failure",
+                    ),
+                ),
+            )
 
 
 def seeded_demo_emr(profile: str = "demo-dev") -> InMemoryEmr:

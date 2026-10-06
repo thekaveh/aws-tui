@@ -8,6 +8,7 @@ the viewmodels; generic submission remains deferred."""
 
 from __future__ import annotations
 
+import re
 from copy import deepcopy
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -128,6 +129,46 @@ class JobRunSummary:
 
 
 @dataclass(frozen=True, slots=True)
+class CloudWatchLogConfiguration:
+    """Reported monitoring configuration; unknown enablement never enables reads."""
+
+    enabled: bool | None
+    log_group_name: str | None = None
+    log_stream_name_prefix: str | None = None
+
+
+def parse_cloudwatch_monitoring(
+    overrides: dict[str, Any] | None,
+) -> CloudWatchLogConfiguration | None:
+    if overrides is None:
+        return None
+    monitoring = overrides.get("monitoringConfiguration", {})
+    if not isinstance(monitoring, dict):
+        return CloudWatchLogConfiguration(None)
+    if "cloudWatchLoggingConfiguration" not in monitoring:
+        return None
+    config = monitoring["cloudWatchLoggingConfiguration"]
+    if not isinstance(config, dict):
+        return CloudWatchLogConfiguration(None)
+    enabled = config.get("enabled")
+    enabled = enabled if isinstance(enabled, bool) else None
+    group = config.get("logGroupName")
+    prefix = config.get("logStreamNamePrefix")
+    for value, pattern in ((group, r"[.\-_/#A-Za-z0-9]+"), (prefix, r"[^:*]+")):
+        if value is None:
+            continue
+        if not isinstance(value, str) or not 1 <= len(value) <= 512:
+            return CloudWatchLogConfiguration(None)
+        if re.fullmatch(pattern, value) is None:
+            return CloudWatchLogConfiguration(None)
+        try:
+            value.encode("utf-8")
+        except UnicodeError:
+            return CloudWatchLogConfiguration(None)
+    return CloudWatchLogConfiguration(enabled, group, prefix)
+
+
+@dataclass(frozen=True, slots=True)
 class JobRunDetail:
     """Full job-run view shown in the RIGHT pane.
 
@@ -162,6 +203,7 @@ class JobRunDetail:
     execution_iam_policy: dict[str, Any] | None = field(default=None, repr=False)
     tags: dict[str, str] | None = field(default=None, repr=False)
     source_application_settings: dict[str, Any] = field(default_factory=dict, repr=False)
+    cloudwatch_monitoring: CloudWatchLogConfiguration | None = None
 
     def __post_init__(self) -> None:
         # A source response or fixture must not retain mutable aliases into
@@ -223,12 +265,14 @@ __all__ = [
     "EMR_CANCEL_BOTO_CONFIG",
     "ApplicationState",
     "ApplicationSummary",
+    "CloudWatchLogConfiguration",
     "EmrServerlessClient",
     "EmrServerlessClientProtocol",
     "JobRunDetail",
     "JobRunState",
     "JobRunSummary",
     "map_boto_error",
+    "parse_cloudwatch_monitoring",
 ]
 
 
@@ -239,6 +283,8 @@ _CLIENT_ERROR_CODE_MAP: dict[str, type[ProviderError]] = {
     "ThrottlingException": ThrottledError,
     "ResourceNotFoundException": NotFoundError,
     "ValidationException": ValidationError,
+    "InvalidParameterException": ValidationError,
+    "ServiceUnavailableException": ProviderUnreachableError,
 }
 _TRANSPORT_FAILURE_EXCEPTIONS = AWS_TRANSPORT_EXCEPTIONS
 _MAX_EMR_LISTING_PAGES = 100
@@ -503,6 +549,9 @@ class EmrServerlessClient:
                     execution_role_arn=r.get("executionRole", ""),
                     duration_ms=(duration_seconds * 1000) if duration_seconds is not None else None,
                     s3_monitoring_log_uri=log_uri,
+                    cloudwatch_monitoring=parse_cloudwatch_monitoring(
+                        r.get("configurationOverrides")
+                    ),
                     job_driver=r.get("jobDriver"),
                     configuration_overrides=r.get("configurationOverrides"),
                     execution_timeout_minutes=r.get("executionTimeoutMinutes"),

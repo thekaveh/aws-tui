@@ -27,10 +27,16 @@ from collections.abc import AsyncGenerator
 from contextlib import aclosing, suppress
 from dataclasses import dataclass
 from enum import StrEnum
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Protocol
 from urllib.parse import urlparse
 
-from aws_tui.domain.emr_serverless import map_boto_error
+from aws_tui.domain.emr_cloudwatch_logs import (
+    CloudWatchLogSnapshot,
+    CloudWatchLogStream,
+    list_cloudwatch_streams,
+    read_cloudwatch_events,
+)
+from aws_tui.domain.emr_serverless import CloudWatchLogConfiguration, map_boto_error
 from aws_tui.domain.filesystem import ProviderError, ValidationError
 
 if TYPE_CHECKING:
@@ -421,6 +427,40 @@ class EmrServerlessLogsClient:
     region_name: str | None
     boto_config: BotoConfig | None = None  # optional; may be used by callers
 
+    async def list_cloudwatch_streams(
+        self,
+        *,
+        configuration: CloudWatchLogConfiguration,
+        application_id: str,
+        job_run_id: str,
+    ) -> tuple[CloudWatchLogStream, ...]:
+        return await list_cloudwatch_streams(
+            session=self.session,
+            region_name=self.region_name,
+            boto_config=self.boto_config,
+            configuration=configuration,
+            application_id=application_id,
+            job_run_id=job_run_id,
+        )
+
+    async def read_cloudwatch_events(
+        self,
+        *,
+        log_group_name: str,
+        stream_name: str,
+        start_time_ms: int,
+        end_time_ms: int,
+    ) -> CloudWatchLogSnapshot:
+        return await read_cloudwatch_events(
+            session=self.session,
+            region_name=self.region_name,
+            boto_config=self.boto_config,
+            log_group_name=log_group_name,
+            stream_name=stream_name,
+            start_time_ms=start_time_ms,
+            end_time_ms=end_time_ms,
+        )
+
     async def list_files(self, *, bucket: str, run_prefix: str) -> list[LogFile]:
         """List log files under the run's S3 prefix."""
         return await list_log_files(
@@ -462,9 +502,42 @@ class EmrServerlessLogsClient:
                 yield chunk
 
 
+class EmrServerlessLogsClientProtocol(Protocol):
+    """Connection-owned S3 and CloudWatch read facade consumed by the logs VM."""
+
+    async def list_files(self, *, bucket: str, run_prefix: str) -> list[LogFile]: ...
+
+    def stream(
+        self,
+        *,
+        log_file: LogFile,
+        bucket: str,
+        max_bytes: int,
+        filter_: LogFilter,
+    ) -> AsyncGenerator[LogChunk, None]: ...
+
+    async def list_cloudwatch_streams(
+        self,
+        *,
+        configuration: CloudWatchLogConfiguration,
+        application_id: str,
+        job_run_id: str,
+    ) -> tuple[CloudWatchLogStream, ...]: ...
+
+    async def read_cloudwatch_events(
+        self,
+        *,
+        log_group_name: str,
+        stream_name: str,
+        start_time_ms: int,
+        end_time_ms: int,
+    ) -> CloudWatchLogSnapshot: ...
+
+
 __all__ = [
     "DEFAULT_LOG_FILTER",
     "EmrServerlessLogsClient",
+    "EmrServerlessLogsClientProtocol",
     "FilterMode",
     "LogChunk",
     "LogFile",

@@ -20,24 +20,35 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from collections.abc import AsyncIterator
+from collections.abc import AsyncGenerator
 from dataclasses import replace
 from datetime import datetime, timedelta
 from typing import Any
 
 from aws_tui.demo._bounded_log import BoundedCallLog
 from aws_tui.demo.clock import DEMO_NOW
+from aws_tui.domain.emr_cloudwatch_logs import (
+    CloudWatchLogEvent,
+    CloudWatchLogSnapshot,
+    CloudWatchLogStream,
+    cloudwatch_event_snapshot,
+    cloudwatch_location,
+    cloudwatch_stream_listing,
+    safe_cloudwatch_error,
+)
 from aws_tui.domain.emr_job_request import build_start_job_run_request
 from aws_tui.domain.emr_logs import LogChunk, LogFile, LogFileKind, LogFilter
 from aws_tui.domain.emr_serverless import (
     EMR_BOTO_CONFIG,
     ApplicationState,
     ApplicationSummary,
+    CloudWatchLogConfiguration,
     JobRunDetail,
     JobRunState,
     JobRunSummary,
+    parse_cloudwatch_monitoring,
 )
-from aws_tui.domain.filesystem import NotFoundError
+from aws_tui.domain.filesystem import NotFoundError, ProviderError
 
 # Mirrors aws_tui.demo.in_memory_fs._DEMO_LATENCY_SEC. Surfaces the
 # UI's loading… placeholders during demo runs.
@@ -82,6 +93,7 @@ class InMemoryEmr:
         # pending" warnings).
         self._state_tasks: set[asyncio.Task[None]] = set()
         self._log_files: dict[str, tuple[LogFile, tuple[str, ...]]] = {}
+        self._cloudwatch_events: dict[tuple[str, str], tuple[CloudWatchLogEvent, ...]] = {}
 
     def _observe_timestamp(self, timestamp: datetime) -> None:
         if timestamp > self._clock:
@@ -122,6 +134,113 @@ class InMemoryEmr:
         self._log_files[key] = (log_file, lines)
         return log_file
 
+    def add_cloudwatch_stream(
+        self,
+        *,
+        application_id: str,
+        job_run_id: str,
+        log_group_name: str,
+        stream: CloudWatchLogStream,
+        events: tuple[CloudWatchLogEvent, ...],
+    ) -> None:
+        """Seed an exact discovered stream; bodies never enter call observations."""
+        root = f"/applications/{application_id}/jobs/{job_run_id}/"
+        if root not in stream.name:
+            raise ValueError("demo CloudWatch stream does not belong to the run")
+        self._cloudwatch_events[(log_group_name, stream.name)] = tuple(events)
+
+    def append_cloudwatch_event(
+        self,
+        *,
+        log_group_name: str,
+        stream_name: str,
+        event: CloudWatchLogEvent,
+    ) -> None:
+        key = (log_group_name, stream_name)
+        if key not in self._cloudwatch_events:
+            raise NotFoundError("CloudWatch logs not created yet")
+        self._cloudwatch_events[key] += (event,)
+
+    async def list_cloudwatch_streams(
+        self,
+        *,
+        configuration: CloudWatchLogConfiguration,
+        application_id: str,
+        job_run_id: str,
+    ) -> tuple[CloudWatchLogStream, ...]:
+        await asyncio.sleep(_DEMO_LATENCY_SEC)
+        self.calls.append(("list_cloudwatch_streams", (configuration, application_id, job_run_id)))
+        failure: ProviderError
+        try:
+            group, prefix = cloudwatch_location(configuration, application_id, job_run_id)
+            if not any(key[0] == group for key in self._cloudwatch_events):
+                raise NotFoundError("CloudWatch logs not created yet")
+            return cloudwatch_stream_listing(
+                (
+                    name
+                    for stored_group, name in self._cloudwatch_events
+                    if stored_group == group and name.startswith(prefix)
+                ),
+                configuration=configuration,
+                application_id=application_id,
+                job_run_id=job_run_id,
+            )
+        except Exception as error:
+            failure = safe_cloudwatch_error(error)
+        raise failure from None
+
+    async def read_cloudwatch_events(
+        self,
+        *,
+        log_group_name: str,
+        stream_name: str,
+        start_time_ms: int,
+        end_time_ms: int,
+    ) -> CloudWatchLogSnapshot:
+        await asyncio.sleep(_DEMO_LATENCY_SEC)
+        self.calls.append(
+            (
+                "read_cloudwatch_events",
+                (
+                    log_group_name,
+                    stream_name,
+                    start_time_ms,
+                    end_time_ms,
+                ),
+            )
+        )
+        failure: ProviderError
+        try:
+            key = (log_group_name, stream_name)
+            if key not in self._cloudwatch_events:
+                raise NotFoundError("CloudWatch logs not created yet")
+            events = (
+                event
+                for event in self._cloudwatch_events[key]
+                if start_time_ms <= event.timestamp_ms <= end_time_ms
+            )
+            snapshot = cloudwatch_event_snapshot(
+                events,
+                start_time_ms=start_time_ms,
+                end_time_ms=end_time_ms,
+            )
+            return replace(
+                snapshot,
+                events=tuple(
+                    sorted(
+                        snapshot.events,
+                        key=lambda event: (
+                            event.timestamp_ms,
+                            event.ingestion_time_ms,
+                            event.event_id,
+                        ),
+                    )
+                ),
+            )
+        except Exception as error:
+            failure = safe_cloudwatch_error(error)
+        raise failure from None
+
     async def list_files(self, *, bucket: str, run_prefix: str) -> list[LogFile]:
         await asyncio.sleep(_DEMO_LATENCY_SEC)
         _ = bucket
@@ -135,7 +254,7 @@ class InMemoryEmr:
         bucket: str,
         max_bytes: int,
         filter_: LogFilter,
-    ) -> AsyncIterator[LogChunk]:
+    ) -> AsyncGenerator[LogChunk, None]:
         await asyncio.sleep(_DEMO_LATENCY_SEC)
         _ = bucket
         _file, lines = self._log_files[log_file.key]
@@ -214,6 +333,7 @@ class InMemoryEmr:
         execution_role_arn: str = "arn:aws:iam::123456789012:role/EmrJobRole",
         duration_ms: int | None = None,
         s3_monitoring_log_uri: str | None = None,
+        cloudwatch_monitoring: CloudWatchLogConfiguration | None = None,
     ) -> JobRunDetail:
         summary = self._runs.get(application_id, {}).get(job_run_id)
         if summary is None:
@@ -234,6 +354,15 @@ class InMemoryEmr:
             if s3_monitoring_log_uri is not None
             else None
         )
+        if cloudwatch_monitoring is not None:
+            if overrides is None:
+                overrides = {"monitoringConfiguration": {}}
+            cloudwatch: dict[str, Any] = {"enabled": cloudwatch_monitoring.enabled}
+            if cloudwatch_monitoring.log_group_name is not None:
+                cloudwatch["logGroupName"] = cloudwatch_monitoring.log_group_name
+            if cloudwatch_monitoring.log_stream_name_prefix is not None:
+                cloudwatch["logStreamNamePrefix"] = cloudwatch_monitoring.log_stream_name_prefix
+            overrides["monitoringConfiguration"]["cloudWatchLoggingConfiguration"] = cloudwatch
         d = JobRunDetail(
             application_id=application_id,
             job_run_id=job_run_id,
@@ -249,6 +378,7 @@ class InMemoryEmr:
             s3_monitoring_log_uri=s3_monitoring_log_uri,
             job_driver={"sparkSubmit": spark},
             configuration_overrides=overrides,
+            cloudwatch_monitoring=parse_cloudwatch_monitoring(overrides),
         )
         self._details[(application_id, job_run_id)] = d
         self._observe_timestamp(d.updated_at)
@@ -424,6 +554,9 @@ class InMemoryEmr:
             ),
             job_driver=request["jobDriver"],
             configuration_overrides=request.get("configurationOverrides"),
+            cloudwatch_monitoring=parse_cloudwatch_monitoring(
+                request.get("configurationOverrides")
+            ),
             execution_timeout_minutes=request.get("executionTimeoutMinutes"),
             retry_policy=request.get("retryPolicy"),
             mode=request.get("mode"),
