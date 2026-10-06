@@ -31,7 +31,7 @@ as the universal escape hatch.
 | Action | Default | Notes |
 |---|---|---|
 | Enter multi-select mode | `v` | Enters the focused file pane's mode without marking a row |
-| Toggle row selection | `Space` | In multi-select, toggles the cursor row; in normal mode, opens Quick Look |
+| Toggle row selection | `Space` | In multi-select, toggles the cursor row; in normal mode, opens Quick Look (CSV/JSON/JSONL/Parquet); `r` toggles cached raw/structured and arrows scroll both axes |
 | Extend selection one row | `Shift+↑` / `Shift+↓` | Marks the row the cursor is leaving + moves cursor |
 | Modifier+click on row | `Shift+Click`, `Cmd+Click`, `Ctrl+Click` | Toggles mark on the clicked row; on macOS terminals reserve `Shift+Click`, so `Cmd+Click` is the reliable path there |
 | Select all | `a` | Adds marks to filtered real rows in a ready file pane; credential/error contexts retry the active source |
@@ -66,7 +66,7 @@ explicit meaning.
 |---|---|---|
 | Transfer history and recovery | `Ctrl+T` | `app.transfer_history`; also available from the Transfers overlay and palette, including empty history |
 | S3 object details | `Ctrl+O` | Read-only current S3 object properties; Copy / Ctrl+C copies the full selected field |
-| Quick Look | `Space` | In normal file-pane mode, streams the first 64 KB of the cursor file; multi-select toggles its mark |
+| Quick Look | `Space` | In normal file-pane mode, previews CSV/JSON/JSONL tables and Parquet schema/sample; `r` toggles the cached raw 64 KiB prefix, `Up`/`Down` and `Left`/`Right` scroll, and `Esc`/`Space` close; multi-select toggles its mark |
 | Fuzzy find | `Ctrl+P` | Find and select a loaded entry |
 | Filter pane | `/` | Edit the loaded name filter live |
 | Command palette | `:` / `Ctrl+K` | Opens the fuzzy app-command palette |

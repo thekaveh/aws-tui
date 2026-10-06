@@ -10,6 +10,7 @@ from pathlib import Path
 
 import pytest
 
+from tests.helpers import wait_until
 from tests.snapshot.apps.modals import (
     CommandPaletteApp,
     ConfirmModalApp,
@@ -35,9 +36,27 @@ def test_confirm_modal_copy_paths(theme: str, snap_compare) -> None:
     assert snap_compare(CopyConfirmModalApp(theme=theme), terminal_size=TERMINAL_SIZE)
 
 
+async def _loaded_quick_look(pilot) -> None:
+    await wait_until(
+        lambda: pilot.app.screen._result is not None, what="snapshot preview body loaded"
+    )
+    await pilot.pause()
+
+
 @pytest.mark.parametrize("theme", THEMES)
 def test_quick_look(theme: str, snap_compare) -> None:
-    assert snap_compare(QuickLookApp(theme=theme), terminal_size=TERMINAL_SIZE)
+    assert snap_compare(
+        QuickLookApp(theme=theme), terminal_size=TERMINAL_SIZE, run_before=_loaded_quick_look
+    )
+
+
+@pytest.mark.parametrize("theme", THEMES)
+def test_quick_look_structured(theme: str, snap_compare) -> None:
+    assert snap_compare(
+        QuickLookApp(theme=theme, structured=True),
+        terminal_size=TERMINAL_SIZE,
+        run_before=_loaded_quick_look,
+    )
 
 
 @pytest.mark.parametrize("theme", THEMES)
@@ -60,6 +79,7 @@ _MODAL_GUARDS: list[tuple[str, list[str]]] = [
     ("test_confirm_modal_danger", ["Delete", "Cancel"]),
     ("test_confirm_modal_copy_paths", ["Copy", "Cancel"]),
     ("test_quick_look", ["voidline"]),  # the seeded preview text lists theme names
+    ("test_quick_look_structured", ["sample_id", "structured-preview-row", "Structured"]),
     ("test_crash_modal", ["Traceback", "continue", "quit"]),
 ]
 

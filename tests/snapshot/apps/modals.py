@@ -15,6 +15,13 @@ from textual.app import App, ComposeResult
 from textual.widgets import Static
 from vmx import MessageHub, RxDispatcher
 
+from aws_tui.domain.preview import (
+    PreviewCell,
+    PreviewCellKind,
+    PreviewColumn,
+    PreviewFormat,
+    PreviewResult,
+)
 from aws_tui.infra.theme_store import ThemeStore
 from aws_tui.ui.widgets.command_palette import CommandPalette
 from aws_tui.ui.widgets.confirm_modal import ConfirmModal
@@ -125,8 +132,9 @@ async def _bytes_iter(data: bytes) -> AsyncIterator[bytes]:
 
 
 class QuickLookApp(App[None]):
-    def __init__(self, *, theme: str = "carbon") -> None:
+    def __init__(self, *, theme: str = "carbon", structured: bool = False) -> None:
         super().__init__()
+        self._structured = structured
         self.CSS = _load_css(theme)
         self._hub: MessageHub = MessageHub()
         self._dispatcher = RxDispatcher.immediate()
@@ -146,6 +154,30 @@ class QuickLookApp(App[None]):
             ),
             line_count_estimate=9,
         )
+        if self._structured:
+
+            async def load_fixture() -> PreviewResult:
+                return PreviewResult(
+                    PreviewFormat.JSON,
+                    b'[{"sample_id":"structured-preview-row","null":null,"empty":"","nested":{"x":1}}]',
+                    tuple(
+                        PreviewColumn(name)
+                        for name in ("sample_id", "null", "empty", "nested", "shortened")
+                    ),
+                    (
+                        (
+                            PreviewCell("structured-preview-row", PreviewCellKind.SCALAR),
+                            PreviewCell("null", PreviewCellKind.NULL),
+                            PreviewCell('""', PreviewCellKind.EMPTY),
+                            PreviewCell('{"x":1}', PreviewCellKind.NESTED),
+                            PreviewCell("… [truncated]", PreviewCellKind.SCALAR, truncated=True),
+                        ),
+                    ),
+                )
+
+            content = QuickLookContent(
+                "sample.json", "application/json", _bytes_iter(b"unused"), 1, load_fixture
+            )
         self._vm.open_command.execute(content)
         await self.push_screen(QuickLook(self._vm, hub=self._hub))
 

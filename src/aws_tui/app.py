@@ -16,7 +16,7 @@ import os
 import sys
 import weakref
 from collections import deque
-from collections.abc import AsyncIterator, Awaitable, Callable
+from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Callable
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 from functools import partial
@@ -48,6 +48,8 @@ from aws_tui.domain.filesystem import (
     PermissionDeniedError,
     ProviderUnreachableError,
 )
+from aws_tui.domain.preview import load_preview
+from aws_tui.domain.preview_limits import RAW_PREVIEW_BYTES
 from aws_tui.domain.query import QueryState
 from aws_tui.domain.s3_object_details import S3ObjectDetailsProvider
 from aws_tui.domain.s3_uri import parse_s3_uri
@@ -148,7 +150,7 @@ from aws_tui.vm.service_diagnostics import (
 from aws_tui.vm.service_source_vm import ServiceSourceContext
 
 _ACTION_RING_SIZE = 100
-_QUICK_LOOK_PREVIEW_BYTES = 64 * 1024
+_QUICK_LOOK_PREVIEW_BYTES = RAW_PREVIEW_BYTES
 _BOOT_CHAIN_BUDGET_SECONDS = 90.0
 
 
@@ -295,7 +297,7 @@ class _DiscoverySourceTarget:
     region: str
 
 
-async def _first_bytes(source: AsyncIterator[bytes], limit: int) -> AsyncIterator[bytes]:
+async def _first_bytes(source: AsyncIterator[bytes], limit: int) -> AsyncGenerator[bytes, None]:
     """Yield chunks from ``source`` until ``limit`` bytes have been emitted.
 
     Bounds a Quick Look preview to the first ``limit`` bytes regardless of the
@@ -311,6 +313,8 @@ async def _first_bytes(source: AsyncIterator[bytes], limit: int) -> AsyncIterato
                 break
             yield chunk
             remaining -= len(chunk)
+            if remaining <= 0:
+                break
     finally:
         aclose = getattr(source, "aclose", None)
         if aclose is not None:
@@ -327,8 +331,12 @@ async def _stream_preview(
     view starts consuming the preview.
     """
     source = await provider.read_stream(path, chunk_size=limit)
-    async for chunk in _first_bytes(source, limit):
-        yield chunk
+    bounded = _first_bytes(source, limit)
+    try:
+        async for chunk in bounded:
+            yield chunk
+    finally:
+        await bounded.aclose()
 
 
 def _build_quick_look_content(
@@ -345,6 +353,9 @@ def _build_quick_look_content(
         mime=mime or "application/octet-stream",
         chunks=_stream_preview(provider, path, _QUICK_LOOK_PREVIEW_BYTES),
         line_count_estimate=None,
+        load_preview=partial(
+            load_preview, provider, path, name=entry.name, mime=mime or "application/octet-stream"
+        ),
     )
 
 

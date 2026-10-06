@@ -39,12 +39,15 @@ from aws_tui.domain.filesystem import (
     NotFoundError,
     PathRef,
     PermissionDeniedError,
+    PreviewSourceChangedError,
     ProgressCallback,
     ProviderError,
+    ReadSnapshot,
     StageManifestEntry,
     TransferProgress,
     UnsupportedSourceError,
 )
+from aws_tui.domain.preview_limits import PreviewBudget, PreviewRequestKind
 
 # Default streaming chunk size. 8 MiB matches S3 multipart minimum-friendly
 # blocks and keeps memory bounded on slow disks.
@@ -648,6 +651,56 @@ class LocalFS:
     # ------------------------------------------------------------------
     # Streaming I/O
     # ------------------------------------------------------------------
+
+    async def open_preview(self, path: PathRef, *, budget: PreviewBudget) -> _LocalPreviewSession:
+        host = self._resolve_leaf(path)
+        budget.charge_request(kind=PreviewRequestKind.OPEN)
+        claim = _FdClaim()
+        try:
+            if _WINDOWS:
+                opener = partial(_windows_open, self._root, path, os.O_RDONLY)
+
+                def current() -> os.stat_result:
+                    return _windows_lstat(self._root, path)[0]
+            elif self._root is not None:
+                # Regular files ignore O_NONBLOCK. A FIFO must not strand an
+                # uncancellable opener before the regular-file check can run.
+                opener = partial(_rooted_open, self._root, path, os.O_RDONLY | os.O_NONBLOCK)
+                current = partial(_rooted_lstat, self._root, path)
+            else:
+                opener = partial(_open_nofollow, host.as_posix(), os.O_RDONLY | os.O_NONBLOCK)
+                current = partial(os.lstat, host.as_posix())
+
+            snapshots: list[ReadSnapshot] = []
+
+            def open_snapshot() -> int:
+                # Deposit into _FdClaim only after all descriptor work ends;
+                # cancellation may abandon a deposited descriptor immediately.
+                fd = opener()
+                try:
+                    observed = os.fstat(fd)
+                    if not stat.S_ISREG(observed.st_mode):
+                        raise UnsupportedSourceError(f"not a regular file: {host.as_posix()}")
+                    snapshots.append(ReadSnapshot(observed.st_size, _local_etag(observed)))
+                    return fd
+                except BaseException:
+                    os.close(fd)
+                    raise
+
+            fd = await anyio.to_thread.run_sync(claim.open_with, open_snapshot)
+            snapshot = snapshots[0]
+            budget.check()
+            session = _LocalPreviewSession(fd, snapshot, budget, current, host.as_posix())
+            claim.release()
+            return session
+        except OSError as exc:
+            if exc.errno == errno.EISDIR:
+                raise UnsupportedSourceError(f"not a regular file: {host.as_posix()}") from exc
+            if exc.errno == errno.ELOOP:
+                raise UnsupportedSourceError(f"refusing symlink: {host.as_posix()}") from exc
+            raise _map_os_error(exc, host.as_posix()) from exc
+        finally:
+            claim.abandon()
 
     async def read_stream(
         self, path: PathRef, *, chunk_size: int = _DEFAULT_CHUNK_SIZE
@@ -1779,6 +1832,99 @@ def _validate_publish_source(
 def _local_stable_identity(value: os.stat_result) -> tuple[int, int, int, int]:
     """Fields that remain stable when the same entry is renamed."""
     return (value.st_dev, value.st_ino, value.st_size, value.st_mtime_ns)
+
+
+class _LocalPreviewSession:
+    """Own a descriptor until serialized worker I/O and close have drained."""
+
+    def __init__(
+        self,
+        fd: int,
+        snapshot: ReadSnapshot,
+        budget: PreviewBudget,
+        current: Callable[[], os.stat_result],
+        filename: str,
+    ) -> None:
+        self.snapshot = snapshot
+        self._fd, self._budget, self._current, self._filename = fd, budget, current, filename
+        self._lock = asyncio.Lock()
+        self._pending: set[asyncio.Task[Any]] = set()
+        self._closed = False
+        self._closing: asyncio.Task[None] | None = None
+
+    def _check(self) -> None:
+        if self._closed:
+            raise ValueError("preview session is closed")
+        self._budget.check()
+
+    async def _run(self, kind: PreviewRequestKind, length: int, work: Callable[[], Any]) -> Any:
+        self._check()
+
+        async def owned() -> Any:
+            async with self._lock:
+                self._check()
+                self._budget.charge_request(kind=kind, length=length)
+                try:
+                    result = await anyio.to_thread.run_sync(work)
+                except OSError as exc:
+                    raise _map_os_error(exc, self._filename) from exc
+                self._budget.check()
+                return result
+
+        task = asyncio.create_task(owned())
+        self._pending.add(task)
+
+        def drained(done: asyncio.Task[Any]) -> None:
+            self._pending.discard(done)
+            if not done.cancelled():
+                done.exception()
+
+        task.add_done_callback(drained)
+        return await asyncio.shield(task)
+
+    async def read_range(self, offset: int, length: int) -> bytes:
+        self._check()
+        if offset < 0 or length < 0 or offset + length > self.snapshot.size:
+            raise ValueError("preview range outside snapshot")
+        if length == 0:
+            return b""
+
+        def read() -> bytes:
+            if _local_etag(os.fstat(self._fd)) != self.snapshot.revision:
+                raise PreviewSourceChangedError("Preview cancelled: source changed")
+            os.lseek(self._fd, offset, os.SEEK_SET)
+            data = os.read(self._fd, length)
+            if _local_etag(os.fstat(self._fd)) != self.snapshot.revision or len(data) != length:
+                raise PreviewSourceChangedError("Preview cancelled: source changed")
+            return data
+
+        return cast(bytes, await self._run(PreviewRequestKind.RANGE, length, read))
+
+    async def validate(self) -> None:
+        def validate() -> None:
+            try:
+                current = self._current()
+            except FileNotFoundError as exc:
+                raise PreviewSourceChangedError("Preview cancelled: source changed") from exc
+            if (
+                _local_etag(os.fstat(self._fd)) != self.snapshot.revision
+                or _local_etag(current) != self.snapshot.revision
+            ):
+                raise PreviewSourceChangedError("Preview cancelled: source changed")
+
+        await self._run(PreviewRequestKind.VALIDATE, 0, validate)
+
+    async def aclose(self) -> None:
+        if self._closing is None:
+            self._closed = True
+
+            async def close() -> None:
+                if self._pending:
+                    await asyncio.gather(*self._pending, return_exceptions=True)
+                await anyio.to_thread.run_sync(os.close, self._fd)
+
+            self._closing = asyncio.create_task(close())
+        await asyncio.shield(self._closing)
 
 
 class _FdClaim:
