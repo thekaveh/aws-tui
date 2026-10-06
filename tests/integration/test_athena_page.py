@@ -603,6 +603,7 @@ async def test_recovered_context_pager_clears_error_styling_tooltip_and_hint(
 async def test_configured_athena_rebindings_replace_defaults(tmp_path: Path) -> None:
     keymap = KeymapStore(
         overlay={
+            "glue.compare_tables": [],
             "athena.query": "7",
             "athena.history": "8",
             "athena.results": "9",

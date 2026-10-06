@@ -879,7 +879,10 @@ async def test_discovery_overlays_wrap_scroll_and_contain_keyboard(tmp_path, mon
     name = "[bold] literal 雪 " + "configured-source-" * 7 + "END-SOURCE [/]"
     ctx = build_app_context(config_dir=tmp_path, demo=True, cache_dir=tmp_path / "cache")
     ctx.keymap_store = KeymapStore(
-        overlay={"app.cycle_theme": ["ctrl+g", "alt+g", "ctrl+shift+g", "alt+shift+g", "f12"]}
+        overlay={
+            "glue.compare_tables": [],
+            "app.cycle_theme": ["ctrl+g", "alt+g", "ctrl+shift+g", "alt+shift+g", "f12"],
+        }
     )
     monkeypatch.setattr(ctx.connection_resolver, "list", lambda: [_connection(name, "us-west-2")])
     app = AwsTuiApp(ctx)

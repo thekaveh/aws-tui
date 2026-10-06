@@ -92,6 +92,7 @@ _EXPECTED: set[tuple[str, str, bool, bool]] = {
     ("shift+down", "dispatch('pane.mark_down')", False, True),
     ("space", "dispatch('pane.quick_look', 'space')", False, False),
     ("ctrl+o", "dispatch('pane.object_details')", False, True),
+    ("ctrl+g", "dispatch('glue.compare_tables')", False, True),
     ("v", "dispatch('pane.enter_multiselect')", False, False),
     ("space", "dispatch('pane.toggle_select', 'space')", False, False),
     ("a", "dispatch('pane.select_all', 'a')", False, False),
@@ -367,6 +368,7 @@ def test_config_overlay_reaches_live_textual_bindings(tmp_path: Path) -> None:
         '"pane.copy" = "ctrl+y"\n'
         '"pane.delete" = []\n'
         '"emr.clone" = "ctrl+g"\n'
+        '"glue.compare_tables" = []\n'
         '"emr.logs.filter" = "ctrl+f"\n',
         encoding="utf-8",
     )
@@ -434,3 +436,16 @@ async def test_priority_tab_binding_fires_at_runtime(app_context_factory) -> Non
         # messages before checking that it ran exactly once after teardown.
         await pilot.pause()
     assert calls == ["tab"]
+
+
+def test_ctrl_g_overlay_requires_explicitly_freeing_comparison_key() -> None:
+    from aws_tui.infra.keymap_store import KeybindingCollision, KeymapStore
+
+    with pytest.raises(KeybindingCollision, match=r"emr\.clone.*glue\.compare_tables"):
+        KeymapStore(overlay={"emr.clone": "ctrl+g"})
+    disabled = KeymapStore(overlay={"emr.clone": "ctrl+g", "glue.compare_tables": []})
+    assert disabled.resolve("emr.clone") == ("ctrl+g",)
+    assert disabled.resolve("glue.compare_tables") == ()
+    remapped = KeymapStore(overlay={"emr.clone": "ctrl+g", "glue.compare_tables": "alt+g"})
+    assert remapped.resolve("emr.clone") == ("ctrl+g",)
+    assert remapped.resolve("glue.compare_tables") == ("alt+g",)
