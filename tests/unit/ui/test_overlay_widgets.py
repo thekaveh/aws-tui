@@ -17,6 +17,7 @@ from aws_tui.ui.widgets.command_palette import CommandPalette, CommandPaletteIte
 from aws_tui.ui.widgets.confirm_modal import ConfirmModal, TextualDialogService
 from aws_tui.ui.widgets.help_modal import HelpModal
 from aws_tui.ui.widgets.quick_look import QuickLook
+from aws_tui.vm.chrome.action_catalog import ActionSpec, project_actions
 from aws_tui.vm.chrome.command_palette_vm import (
     CommandPaletteVM,
     PaletteEntry,
@@ -216,22 +217,37 @@ async def test_help_modal_renders_active_keymap() -> None:
             yield from ()
 
         async def on_mount(self) -> None:
-            await self.push_screen(HelpModal(keymap=keymap))
+            specs = (
+                ActionSpec("app.help", "Help", "App"),
+                ActionSpec("app.command_palette", "Command palette", "App"),
+                ActionSpec("app.open_settings", "Settings", "App"),
+                ActionSpec("pane.delete", "Delete selected entries", "File operations"),
+                ActionSpec("app.swap_source", "Switch source", "Source"),
+                ActionSpec("pane.mark_up", "Extend selection up", "Selection"),
+            )
+            actions = project_actions(
+                specs,
+                registered_ids=frozenset(spec.id for spec in specs),
+                bindings=keymap.all(),
+                active_service_id="s3",
+                unavailable_reasons={},
+            )
+            await self.push_screen(HelpModal(actions=actions, keymap=keymap))
 
     app = _App()
     async with app.run_test(size=(100, 36)) as pilot:
         await pilot.pause()
-        rows = [str(row.render()) for row in app.screen.query(".help-row")]
+        rows = [str(row.content) for row in app.screen.query(".help-row")]
         rendered = "\n".join(rows)
 
-    assert "open Settings" in rendered
-    assert "delete selected entry" in rendered
-    assert "cycle the focused pane source" in rendered
-    assert "extend selection" in rendered
+    assert "Settings" in rendered
+    assert "Delete selected entries" in rendered
+    assert "Switch source" in rendered
+    assert "Extend selection" in rendered
     # Assert the configured key lands on the row for ITS action, not merely
     # somewhere in the overlay.
-    help_row = next(row for row in rows if "open this help overlay" in row)
-    palette_row = next(row for row in rows if "open the command palette" in row)
+    help_row = next(row for row in rows if "Help" in row)
+    palette_row = next(row for row in rows if "Command palette" in row)
     assert "f9" in help_row
     assert "f10" in palette_row
     assert "?  or  :" not in rendered
@@ -309,3 +325,56 @@ async def test_quick_look_streams_content() -> None:
     finally:
         vm.dispose()
         hub.dispose()
+
+
+async def test_discovery_rows_render_literal_values_and_help_refresh_preserves_body():
+    from textual.containers import VerticalScroll
+    from textual.widgets import Static
+
+    from aws_tui.ui.widgets.help_modal import HelpActionRow
+    from aws_tui.vm.chrome.action_catalog import ActionPresentation
+
+    presentation = ActionPresentation(
+        "opaque", "[bold]é[/bold]\nvalue", "App", effective_keys=("ctrl+g",)
+    )
+    item = CommandPaletteItem(presentation)
+    assert item.action_id == "opaque"
+    assert str(item.content) == r"Ctrl+g  [bold]é[/bold]\nvalue  Global"
+    rows = tuple(ActionPresentation(str(i), f"Action {i}", "App") for i in range(40))
+
+    class _App(App):
+        async def on_mount(self):
+            await self.push_screen(HelpModal(actions=rows))
+
+    app = _App()
+    async with app.run_test(size=(100, 24)) as pilot:
+        await pilot.pause()
+        modal = app.screen
+        body = modal.query_one(VerticalScroll)
+        body.scroll_to(y=10, animate=False)
+        await pilot.pause()
+        offset = body.scroll_offset
+        footer = modal.query_one("#help-footer", Static)
+        diagnostics = next(row for row in modal.query(".help-dim") if "doctor" in str(row.content))
+        modal.update_actions((*rows, presentation))
+        await pilot.pause()
+        row = next(row for row in modal.query(HelpActionRow) if row.action_id == "opaque")
+        assert str(row.content) == r"Ctrl+g  [bold]é[/bold]\nvalue"
+        assert row.presentation is presentation
+        assert body.scroll_offset == offset
+        assert modal.query_one("#help-footer", Static) is footer
+        assert diagnostics.is_attached
+
+
+async def test_empty_standalone_help_never_invents_action_rows():
+    from aws_tui.ui.widgets.help_modal import HelpActionRow
+
+    class _App(App):
+        async def on_mount(self):
+            await self.push_screen(HelpModal())
+
+    app = _App()
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        assert not app.screen.query(HelpActionRow)
+        assert any("doctor" in str(row.content) for row in app.screen.query(".help-dim"))

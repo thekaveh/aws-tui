@@ -244,13 +244,24 @@ class GlueIcebergView(DeferredWorkerMixin, Widget):
             if widget.display and not widget.disabled and widget.can_focus
         )
 
-    def activate_focused(self, focused: Widget) -> bool:
-        """Activate a supported focused control through its public action."""
+    def _activation_target(self, focused: Widget) -> Widget | None:
         ancestors = set(focused.ancestors_with_self)
-        target = next(
-            (candidate for candidate in self.focus_targets() if candidate in ancestors),
+        return next(
+            (
+                candidate
+                for candidate in self.focus_targets()
+                if candidate in ancestors and isinstance(candidate, (_IcebergTab, Button))
+            ),
             None,
         )
+
+    def can_activate_focused(self, focused: Widget) -> bool:
+        """Rows are focusable for inspection; only tabs and buttons activate."""
+        return self._activation_target(focused) is not None
+
+    def activate_focused(self, focused: Widget) -> bool:
+        """Activate a supported focused control through its public action."""
+        target = self._activation_target(focused)
         if isinstance(target, _IcebergTab):
             target.action_select()
             return True

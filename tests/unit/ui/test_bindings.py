@@ -49,7 +49,7 @@ def test_glue_query_handoff_has_a_dedicated_binding_description() -> None:
     by_key = {binding.key: binding for binding in resolver.to_textual_bindings()}
 
     assert by_key["Q"].action == "dispatch('glue.query_in_athena')"
-    assert by_key["Q"].description == "Open selected Glue table in Athena"
+    assert by_key["Q"].description == "Query table in Athena"
 
 
 def test_priority_true_except_quit() -> None:
@@ -161,7 +161,7 @@ def test_all_selection_ids_emit_individually_and_exit_yields_to_editor() -> None
         )
         assert bindings[action].key == key
     assert bindings["dispatch('pane.clear_selection')"].description == "Clear selection"
-    assert bindings["dispatch('pane.exit_multiselect')"].description == "Exit multi-select"
+    assert bindings["dispatch('pane.exit_multiselect')"].description == "Exit multi-select mode"
     assert not bindings["dispatch('pane.exit_multiselect')"].priority
     assert (
         bindings["dispatch('pane.toggle_select', 'space')"].key

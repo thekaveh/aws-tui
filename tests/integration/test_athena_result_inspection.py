@@ -14,7 +14,8 @@ from aws_tui.infra.keymap_store import KeymapStore
 from aws_tui.ui.widgets.athena.page import AthenaPage
 from aws_tui.ui.widgets.athena.result_cell_modal import AthenaResultCellModal
 from aws_tui.ui.widgets.athena.result_filter_modal import AthenaResultFilterModal
-from aws_tui.ui.widgets.help_modal import HelpModal
+from aws_tui.ui.widgets.command_palette import CommandPaletteItem
+from aws_tui.ui.widgets.help_modal import HelpActionRow, HelpModal
 from tests.helpers import drain_workers, focus_and_settle, wait_until
 from tests.snapshot.apps.demo_mode import DemoModeApp
 from tests.snapshot.test_demo_mode import _dismiss_demo_startup_advisory
@@ -262,6 +263,14 @@ async def test_actual_app_remapped_results_help_and_palette(size, monkeypatch):
         "athena.sort_results": "alt+n",
         "athena.reset_results": "alt+z",
     }
+    expected_rows = {
+        "athena.inspect_cell": ("Inspect Athena cell", "Ctrl+Shift+i"),
+        "athena.copy_cell": ("Copy Athena cell as JSON", "Ctrl+g"),
+        "athena.copy_row": ("Copy Athena row as JSON", "Alt+Shift+x"),
+        "athena.filter_results": ("Filter loaded Athena results", "Alt+d"),
+        "athena.sort_results": ("Sort loaded Athena results", "Alt+n"),
+        "athena.reset_results": ("Reset loaded Athena results", "Alt+z"),
+    }
     app = DemoModeApp(theme="carbon", keymap=KeymapStore(overlay=overlay))
     copies = []
     monkeypatch.setattr(app, "copy_value", lambda value, label: copies.append(value))
@@ -287,15 +296,31 @@ async def test_actual_app_remapped_results_help_and_palette(size, monkeypatch):
             assert page.vm.results.sort_column is None
             await pilot.press("?")
             await wait_until(lambda: isinstance(app.screen, HelpModal), what="actual app help")
-            rows = " ".join(str(row.content) for row in app.screen.query(".help-row"))
-            for key in ("Ctrl+Shift+i", "Ctrl+g", "Alt+Shift+x", "Alt+d", "Alt+n", "Alt+z"):
-                assert key in rows
+            help_rows = {row.action_id: row for row in app.screen.query(HelpActionRow)}
+            for action, (label, display_key) in expected_rows.items():
+                row = help_rows[action]
+                assert row.presentation.label == label
+                assert row.presentation.effective_keys == (overlay[action],)
+                assert row.presentation.available
+                assert str(row.content) == f"{display_key}  {label}"
             await pilot.press("escape", "ctrl+k")
             await wait_until(lambda: len(app.screen_stack) == 2, what="actual Athena palette")
             palette = app.app_ctx.command_palette_vm
-            labels = {entry.id: entry.label for entry in palette.filtered_entries}
-            for action, key in overlay.items():
-                assert f"({key})" in labels[action]
+            entries = {entry.id: entry for entry in palette.filtered_entries}
+            await wait_until(
+                lambda: (
+                    set(expected_rows)
+                    <= {row.action_id for row in app.screen.query(CommandPaletteItem)}
+                ),
+                what="all remapped result commands rendered in palette",
+            )
+            palette_rows = {row.action_id: row for row in app.screen.query(CommandPaletteItem)}
+            for action, (label, display_key) in expected_rows.items():
+                row = palette_rows[action]
+                assert entries[action].label == label
+                assert entries[action].effective_keys == (overlay[action],)
+                assert row.presentation == entries[action] == help_rows[action].presentation
+                assert str(row.content) == f"{display_key}  {label}  Athena"
             await pilot.press(*"Inspect Athena cell", "enter")
             await wait_until(
                 lambda: isinstance(app.screen, AthenaResultCellModal),

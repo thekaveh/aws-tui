@@ -19,7 +19,6 @@ from __future__ import annotations
 import asyncio
 import inspect
 from collections.abc import Awaitable, Callable
-from dataclasses import dataclass, field
 
 from vmx import (
     ComponentVM,
@@ -36,37 +35,14 @@ from vmx.lifecycle.status import ConstructionStatus
 from vmx.services.dispatcher import Dispatcher
 
 from aws_tui.vm._observable import send_value_free
+from aws_tui.vm.chrome.action_catalog import ActionPresentation
 from aws_tui.vm.messages import PaletteActionFailedMessage
 
 #: User-supplied callable for a palette entry — sync or async (returns an awaitable).
 PaletteAction = Callable[[], Awaitable[None] | None]
 
 
-@dataclass(frozen=True, slots=True)
-class PaletteEntry:
-    """Immutable description of a single palette entry.
-
-    Parameters
-    ----------
-    id:
-        Stable identifier (e.g. ``"connection.switch.minio-local"``); used by
-        ``unregister_entry``.
-    label:
-        Human-visible text.
-    category:
-        Coarse grouping tag (e.g. ``"connection"``, ``"theme"``). Surfaced by
-        the view layer as a chip.
-    keywords:
-        Additional search tokens that match even if the label doesn't.
-    service_ids:
-        Eligible content-host service IDs. An empty set means the entry is global.
-    """
-
-    id: str
-    label: str
-    category: str
-    keywords: tuple[str, ...] = ()
-    service_ids: frozenset[str] = field(default_factory=frozenset)
+PaletteEntry = ActionPresentation
 
 
 def _subsequence_span(text: str, query: str) -> int | None:
@@ -98,6 +74,8 @@ def _score(entry: PaletteEntry, query: str) -> int | None:
     Strategy: exact-prefix > substring > tight subsequence > keyword
     substring > keyword subsequence.
     """
+    if not entry.available:
+        return None
     if not query:
         return 0
     q = query.casefold()
@@ -343,6 +321,9 @@ class CommandPaletteVM:
         # Replace path: drop the old inner from the composite first so
         # auto_construct + composite ordering stays sane.
         existing = self._items.get(entry.id)
+        if existing is not None and existing.entry == entry:
+            self._actions[entry.id] = action
+            return
         if existing is not None:
             if existing.inner in self._inner_registry:
                 self._inner_registry.remove(existing.inner)

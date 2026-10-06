@@ -15,10 +15,11 @@ import pytest
 from vmx import NULL_DISPATCHER, MessageHub
 from vmx.messages.protocols import Message
 
-from aws_tui.app import _MODAL_ROUTED_ACTIONS, _PALETTE_COMMANDS, AwsTuiApp
+from aws_tui.app import _MODAL_ROUTED_ACTIONS, AwsTuiApp
 from aws_tui.composition import build_app_context
 from aws_tui.domain.data_catalog import TableFormat
 from aws_tui.ui.widgets.help_modal import HelpModal
+from aws_tui.vm.chrome.action_catalog import ACTION_SPECS
 from aws_tui.vm.glue.iceberg_vm import GlueIcebergVM
 from aws_tui.vm.messages import OpenAthenaTableRequest
 from tests.helpers import wait_until
@@ -129,7 +130,7 @@ def test_auth_recovery_has_durable_key_and_palette_entry(app_context_factory) ->
     assert ("a", "dispatch('auth.authenticate', 'a')", False, False) in _installed(app)
     assert any(
         entry.id == "auth.authenticate" and entry.label == "Retry active source credentials"
-        for entry in _PALETTE_COMMANDS
+        for entry in ACTION_SPECS
     )
 
 

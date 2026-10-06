@@ -71,7 +71,9 @@ def test_keybindings_describes_shipped_palette_and_runtime_resolver() -> None:
     assert "live `AwsTuiApp.BINDINGS`" not in text
     assert "wired directly in `AwsTuiApp.BINDINGS`" not in text
     assert "the palette open binding is deferred" not in text
-    assert "The command palette opens today" in text
+    assert "Help (`?`) and the command palette (`:` / `Ctrl+K`)" in text
+    assert "Use &lt;name&gt; · &lt;region&gt; for &lt;service&gt;" in text
+    assert "Dynamic `connection switch <name>` palette entries are not registered" not in text
     assert "All live App-level bindings are installed through `BindingResolver`" in text
 
 

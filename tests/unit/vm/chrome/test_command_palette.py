@@ -355,3 +355,39 @@ def test_dispose_releases_commands() -> None:
     vm.dispose()
     assert not vm.open_command.can_execute()
     vm.open_command.execute()  # must not raise
+
+
+def test_equal_registration_preserves_child_and_refreshes_callback():
+    vm = _build()
+    calls = []
+    try:
+        entry = _entry("same", "Same")
+        vm.register_entry(entry, lambda: calls.append("old"))
+        child = vm._items["same"]
+        vm.register_entry(entry, lambda: calls.append("fresh"))
+        assert vm._items["same"] is child
+        assert child.is_constructed
+        vm.open_command.execute()
+        vm.execute_selected_command.execute()
+        assert calls == ["fresh"]
+        vm.register_entry(_entry("same", "Changed"), lambda: None)
+        assert vm._items["same"] is not child
+        assert not child.is_constructed
+    finally:
+        vm.dispose()
+
+
+def test_unavailable_entries_are_excluded_before_fuzzy_scoring():
+    from dataclasses import replace
+
+    vm = _build()
+    try:
+        vm.register_entry(
+            replace(_entry("busy", "Query"), availability_reason="busy"), lambda: None
+        )
+        vm.register_entry(_entry("ready", "Query"), lambda: None)
+        assert [row.id for row in vm.filtered_entries] == ["ready"]
+        vm.filter_text = "qry"
+        assert [row.id for row in vm.filtered_entries] == ["ready"]
+    finally:
+        vm.dispose()
