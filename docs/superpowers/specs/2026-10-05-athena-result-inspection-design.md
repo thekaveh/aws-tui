@@ -28,7 +28,7 @@ Use a pure index projection owned by AthenaResultsVM, with cell selection anchor
 ## Components and interfaces
 
 `vm/athena/result_projection.py`: pure projection and JSON serializers; imports no UI/infra/provider.
-`AthenaResultsVM`: transient filter/sort/selection and generation; original rows/token/Snapshot untouched.
+`AthenaResultsVM`: transient filter/sort/selection and generation; original rows/token/Snapshot fields untouched. Internal QueryVM-to-ResultsVM snapshot installation passes prepared context atomically, without public context-reset publication; coherent snapshot notification adds only visible_rows and selection, retaining the original bounded message contract.
 `AthenaResultsView`: indexed cell cursor, projected rendering, guarded highlights, modal actions and footer.
 `result_cell_modal.py` and `result_filter_modal.py`: small read-only/explicit-apply overlays; existing modal/focus/lifecycle patterns.
 `App`, KeymapStore and HelpModal: scoped registered commands, configured keys, common clipboard worker/reporting.
