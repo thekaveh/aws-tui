@@ -14,7 +14,7 @@ definitions and are checked against the real registry.
 **Tech stack:** Existing argparse, dataclasses, pathlib, ConfigStore,
 ConnectionResolver, ServiceRegistry, VMx/Textual and pytest; no dependency.
 
-## Global constraints
+## 1. Global constraints
 
 - Preserve all nine #264 acceptance criteria; no new limitation waiver.
 - Support Python >=3.11 and existing layer boundaries; add no dependency.
@@ -36,7 +36,7 @@ ConnectionResolver, ServiceRegistry, VMx/Textual and pytest; no dependency.
   credential flags, ARN routing, releases or remote publication.
 - Preserve unrelated branches, PRs, worktrees, evidence and shared caches.
 
-## Ownership and review
+## 2. Ownership and review
 
 Primary branch: `codex/issue-264-launch-selectors`, base
 `2bf47d17b3d7acf86a6ce0d82ea556934d4fdf28`.
@@ -53,7 +53,7 @@ specify testable contracts, not an extra literal implementation inventory.
 Choose narrow internal helper names after reading the current source; record
 routine choices in the report rather than asking the owner again.
 
-### Task 1: Complete launch selectors and read-only explicit startup
+### 2.1. Task 1: Complete launch selectors and read-only explicit startup
 
 **Files:**
 
@@ -288,7 +288,7 @@ All new evidence, scripts, cache/basetemp files belong under the owned workspace
 pre-existing shared UV/pre-commit caches remain unowned. Return only status,
 commit(s), one-line test summary, report path and material concerns.
 
-## Controller gates after the task
+## 3. Controller gates after the task
 
 The controller verifies the committed/tested bytes and report, generates a
 unique full base-to-head review package and dispatches a fresh combined task

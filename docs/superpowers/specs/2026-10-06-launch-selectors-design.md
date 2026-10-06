@@ -1,6 +1,6 @@
 # Session-scoped launch selectors — issue #264
 
-## Goal and authority
+## 1. Goal and authority
 
 Open a known connection/profile, region, registered service or file location
 directly from the CLI. Explicit arguments override startup defaults for this
@@ -16,7 +16,7 @@ is develop `2bf47d17b3d7acf86a6ce0d82ea556934d4fdf28` on
 `codex/issue-264-launch-selectors`. The primary checkout is clean and is the
 sole worktree; unrelated dependency PRs remain untouched.
 
-## Current behavior and alternatives
+## 2. Current behavior and alternatives
 
 `main()` already supports the doctor command in addition to demo, help and
 version; the ticket's historical line numbers predate doctor. Context creation
@@ -34,7 +34,7 @@ validation harder to test. Resolving selectors only after mounting would
 delay deterministic CLI errors and make preserving early-exit and account
 boundaries harder. Neither alternative is needed.
 
-## Global constraints
+## 3. Global constraints
 
 - Preserve all nine #264 acceptance criteria; no new limitation waiver.
 - Support Python >=3.11 and existing layer boundaries; add no dependency.
@@ -56,7 +56,7 @@ boundaries harder. Neither alternative is needed.
   credential flags, ARN routing, releases or remote publication.
 - Preserve unrelated branches, PRs, worktrees, evidence and shared caches.
 
-## Argument semantics
+## 4. Argument semantics
 
 `--connection NAME` selects one exact known connection name, including an
 explicit AWS alias or an S3-compatible connection. `--profile NAME` selects
@@ -109,7 +109,7 @@ exclusion/usage-error behavior (status 2). Help still exits through argparse
 before local discovery. Version exits without composition or discovery;
 syntactic/demo/doctor conflicts are handled before that early exit.
 
-## Data flow, validation and lifecycle
+## 5. Data flow, validation and lifecycle
 
 1. Parse flags using a mutually exclusive connection/profile group and
    choices from the service definitions. Reject incompatible demo/doctor
@@ -142,7 +142,7 @@ be exposed safely for preflight without constructing service clients.
 Exact implementation helper names are an internal choice; these observable
 contracts and the real-registry correspondence are binding.
 
-## Acceptance-to-evidence map
+## 6. Acceptance-to-evidence map
 
 | AC | Required evidence |
 | --- | --- |
@@ -162,7 +162,7 @@ source edits after resolution, location/service mismatch, cancellation and
 startup worker failure. All tests use isolated local inputs and fake/demo
 providers; no live AWS mutation or network evidence is inferred.
 
-## Verification and delivery
+## 7. Verification and delivery
 
 The feature is one coherent implementation task: parsing, preflight and
 startup wiring cannot independently satisfy the account/early-exit contracts.
