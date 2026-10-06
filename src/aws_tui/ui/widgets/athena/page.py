@@ -744,6 +744,19 @@ class AthenaPage(DeferredWorkerMixin, HubSubscriberMixin, Widget):
             else:
                 focused.action_scroll_down()
 
+    def can_activate_focused(self, focused: Widget | None) -> bool:
+        """Check Enter readiness without treating editor or inert detail as actions."""
+        if focused is None or focused.disabled or not self._contains_focus(focused):
+            return False
+        if isinstance(focused, OptionList):
+            return (
+                focused.highlighted is not None
+                and not focused.get_option_at_index(focused.highlighted).disabled
+            )
+        if isinstance(focused, DataTable):
+            return focused.row_count > 0
+        return isinstance(focused, (ServiceTabStrip, ServiceSourceHeader, ContextPicker, Button))
+
     def activate_focused(self) -> bool:
         focused = self.app.focused
         if not self._contains_focus(focused):

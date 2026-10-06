@@ -2417,7 +2417,12 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
         focused = origin.focus
         if isinstance(focused, (Input, TextArea)):
             return False
-        if isinstance(focused, (NavMenu, ServiceSourceHeader, ContextPicker, ServiceTabStrip)):
+        if isinstance(focused, NavMenu):
+            return True
+        for page in (self._glue_page(), self._athena_page(), self._emr_page()):
+            if page is not None:
+                return page.can_activate_focused(focused)
+        if isinstance(focused, (ServiceSourceHeader, ContextPicker, ServiceTabStrip)):
             return True
         if isinstance(focused, (Button, ModalButton)):
             return not focused.disabled

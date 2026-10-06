@@ -562,6 +562,35 @@ async def test_glue_page_does_not_swallow_unhandled_iceberg_descendants() -> Non
 
 
 @pytest.mark.asyncio
+async def test_page_activation_readiness_uses_enabled_iceberg_targets_without_dispatch(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    vm, _inspector = _build_vm()
+    await vm.setup()
+    async with _GlueIcebergApp(vm).run_test(size=(100, 30)) as pilot:
+        await pilot.click("#glue-iceberg-tab-snapshots")
+        await pilot.pause()
+        page = pilot.app.query_one(GluePage)
+        iceberg = page.query_one(GlueIcebergView)
+        tab = iceberg.query_one("#glue-iceberg-tab-history")
+        button = iceberg.query_one("#glue-iceberg-time-travel", Button)
+        table = iceberg.query_one("#glue-iceberg-table", DataTable)
+        calls = []
+        monkeypatch.setattr(tab, "action_select", lambda: calls.append("tab"))
+        monkeypatch.setattr(button, "press", lambda: calls.append("button"))
+        assert page.can_activate_focused(tab)
+        button.disabled = False
+        assert page.can_activate_focused(button)
+        button.disabled = True
+        assert not page.can_activate_focused(button)
+        assert table.row_count > 0
+        assert not page.can_activate_focused(table)
+        assert not page.can_activate_focused(Static())
+        assert not page.can_activate_focused(None)
+        assert calls == []
+
+
+@pytest.mark.asyncio
 async def test_switching_from_snapshots_disables_time_travel_control() -> None:
     vm, _inspector = _build_vm()
     await vm.setup()

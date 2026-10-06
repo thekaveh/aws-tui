@@ -561,6 +561,19 @@ class GluePage(DeferredWorkerMixin, HubSubscriberMixin, Widget):
         if action is not None:
             action()
 
+    def can_activate_focused(self, focused: Widget | None) -> bool:
+        """Check the existing page and Iceberg Enter routes without dispatch."""
+        if focused is None or focused.disabled or not self._contains_focus(focused):
+            return False
+        if self.query_one(GlueIcebergView).can_activate_focused(focused):
+            return True
+        if isinstance(focused, OptionList):
+            return (
+                focused.highlighted is not None
+                and not focused.get_option_at_index(focused.highlighted).disabled
+            )
+        return isinstance(focused, (ServiceTabStrip, ServiceSourceHeader, ContextPicker))
+
     def activate_focused(self, *, space: bool) -> bool:
         focused = self.app.focused
         if focused is None or not self._contains_focus(focused):

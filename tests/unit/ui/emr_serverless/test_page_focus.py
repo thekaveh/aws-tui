@@ -182,6 +182,62 @@ async def test_application_picker_overlay_preserves_page_geometry_through_escape
 
 
 @pytest.mark.asyncio
+async def test_activation_readiness_tracks_custom_targets_without_dispatch(monkeypatch) -> None:
+    from textual.widgets import Input, TextArea
+
+    from aws_tui.domain.emr_serverless import JobRunState
+    from aws_tui.ui.widgets.emr_serverless.job_run_logs_pane import JobRunLogsPane
+    from aws_tui.vm.emr_serverless.job_run_logs_vm import LogsState
+
+    app = EmrPageApp(theme="carbon")
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        page = app.query_one(EmrServerlessPage)
+        picker = app.query_one(ApplicationPicker)
+        runs = app.query_one(JobRunsPane)
+        logs = app.query_one(JobRunLogsPane)
+        detail = app.query_one(JobRunDetailPane)
+        calls = []
+        monkeypatch.setattr(picker, "action_activate", lambda: calls.append("picker"))
+        monkeypatch.setattr(runs, "action_commit_selection", lambda: calls.append("run"))
+        monkeypatch.setattr(logs, "action_load", lambda: calls.append("logs"))
+        assert page.can_activate_focused(picker)
+        assert page.can_activate_focused(runs)
+        # The actual run Enter route falls back to the first visible row even
+        # when its stored selection has been filtered out.
+        page.vm.job_runs.set_state_filter(frozenset({JobRunState.RUNNING}))
+        assert page.can_activate_focused(runs)
+        page.vm.job_runs.set_state_filter(frozenset({JobRunState.FAILED}))
+        assert not page.can_activate_focused(runs)
+        assert not page.can_activate_focused(detail)
+        assert not page.can_activate_focused(None)
+        assert not page.can_activate_focused(Input())
+        assert not page.can_activate_focused(TextArea())
+        for state in LogsState:
+            page.vm.job_run_logs._set_state(state)
+            assert page.can_activate_focused(logs) is (
+                state in (LogsState.IDLE, LogsState.NO_FILES)
+            )
+        assert calls == []
+        picker.open()
+        await pilot.pause()
+        options = picker.query_one(OptionList)
+        options.highlighted = 0
+        assert page.can_activate_focused(options)
+        options.highlighted = None
+        assert not page.can_activate_focused(options)
+        assert not page.can_activate_focused(picker)
+        options.highlighted = 0
+        options.get_option_at_index(0).disabled = True
+        assert not page.can_activate_focused(options)
+        picker.close()
+        await pilot.pause()
+        detail.focus()
+        await pilot.pause()
+        assert page.activate_focused(), "inert detail Enter must still be consumed"
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("size", [(100, 30), (80, 24)], ids=("wide", "narrow"))
 async def test_source_picker_overlay_preserves_every_page_region(
     size: tuple[int, int],

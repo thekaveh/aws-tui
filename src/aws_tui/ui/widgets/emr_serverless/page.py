@@ -22,7 +22,7 @@ from textual.app import ComposeResult
 from textual.binding import Binding, BindingType
 from textual.containers import Horizontal, Vertical
 from textual.widget import Widget
-from textual.widgets import OptionList
+from textual.widgets import Input, OptionList, TextArea
 from vmx import Message, MessageHub
 
 from aws_tui.infra.keymap_store import KeymapStore
@@ -362,31 +362,70 @@ class EmrServerlessPage(DeferredWorkerMixin, Widget):
     def action_cycle_panes_back(self) -> None:
         self._cycle("left")
 
+    def _activation_target(self, focused: Widget | None) -> Widget | None:
+        """Resolve the existing Enter route without activating its target."""
+        if focused is None or not self._contains_focus(focused):
+            return None
+        if isinstance(focused, OptionList):
+            return focused
+        return next(
+            (
+                target
+                for target in (
+                    self._source_header,
+                    self._picker,
+                    self._left,
+                    self._right_logs,
+                    self._right_detail,
+                )
+                if target is not None and self._is_within(focused, target)
+            ),
+            None,
+        )
+
+    def can_activate_focused(self, focused: Widget | None) -> bool:
+        """Project actionable Enter targets using the captured underlying focus."""
+        if isinstance(focused, (Input, TextArea)):
+            return False
+        target = self._activation_target(focused)
+        if target is None or target.disabled:
+            return False
+        if isinstance(target, OptionList):
+            return (
+                target.highlighted is not None
+                and not target.get_option_at_index(target.highlighted).disabled
+            )
+        if isinstance(target, ApplicationPicker):
+            return not target.is_open or self.can_activate_focused(target.query_one(OptionList))
+        if isinstance(target, JobRunsPane):
+            return bool(self._vm.job_runs.runs)
+        if isinstance(target, JobRunLogsPane):
+            return target.can_load
+        return isinstance(target, ServiceSourceHeader)
+
     def activate_focused(self) -> bool:
         """Activate the focused EMR selector or pane."""
-        focused = self.app.focused
-        if focused is None or not self._contains_focus(focused):
-            return False
-        if isinstance(focused, OptionList):
-            if self._picker is not None and self._is_within(focused, self._picker):
+        target = self._activation_target(self.app.focused)
+        if isinstance(target, OptionList):
+            if self._picker is not None and self._is_within(target, self._picker):
                 self._picker.action_commit()
             else:
-                focused.action_select()
+                target.action_select()
             return True
-        if self._source_header is not None and self._is_within(focused, self._source_header):
-            self._source_header.open()
+        if isinstance(target, ServiceSourceHeader):
+            target.open()
             return True
-        if self._picker is not None and self._is_within(focused, self._picker):
-            self._picker.action_activate()
+        if isinstance(target, ApplicationPicker):
+            target.action_activate()
             return True
-        if self._left is not None and self._is_within(focused, self._left):
-            self._left.action_commit_selection()
+        if isinstance(target, JobRunsPane):
+            target.action_commit_selection()
             return True
-        if self._right_logs is not None and self._is_within(focused, self._right_logs):
-            self._right_logs.action_load()
+        if isinstance(target, JobRunLogsPane):
+            target.action_load()
             return True
         # Detail has no activation action but must consume Enter.
-        return self._right_detail is not None and self._is_within(focused, self._right_detail)
+        return isinstance(target, JobRunDetailPane)
 
     def move_focused(self, delta: int) -> bool:
         """Move inside, or open, the currently focused EMR selector or pane."""

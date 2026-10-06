@@ -1035,3 +1035,373 @@ async def test_switch_source_omitted_when_fresh_s3_candidates_have_only_local(
         await pilot.pause()
         assert isinstance(app.screen, HelpModal)
         assert "app.swap_source" not in {row.action_id for row in app.screen.query(HelpActionRow)}
+
+
+async def test_hosted_emr_picker_help_palette_and_dispatch_share_activation(tmp_path):
+    from aws_tui.ui.widgets.emr_serverless.application_picker import ApplicationPicker
+    from aws_tui.ui.widgets.help_modal import HelpActionRow, HelpModal
+
+    ctx = build_app_context(config_dir=tmp_path, cache_dir=tmp_path, demo=True)
+    app = AwsTuiApp(ctx)
+    try:
+        async with app.run_test(size=(120, 40)) as pilot:
+            await pilot.pause()
+            await _host_demo_service(app, ctx, "emr-serverless")
+            setup = ctx.root_vm.content_host._setup_task
+            if setup is not None:
+                await setup
+            await drain_workers(app)
+            picker = app.query_one(ApplicationPicker)
+            picker.focus()
+            await pilot.pause()
+            vm = ctx.root_vm.content_host.current
+            slot = ctx.focus_coordinator.focused_slot
+            assert app.focused is picker
+            assert not picker.is_open
+            await pilot.press("question_mark")
+            await wait_until(lambda: isinstance(app.screen, HelpModal), what="EMR Help opened")
+            help_rows = {row.action_id: row for row in app.screen.query(HelpActionRow)}
+            assert "pane.descend" in help_rows, "actionable EMR picker must appear in Help"
+            presentation = help_rows["pane.descend"].presentation
+            assert presentation.label == "Open focused item"
+            assert presentation.available
+            assert presentation.effective_keys == ctx.keymap_store.resolve("pane.descend")
+            await pilot.press("escape")
+            await pilot.pause()
+            assert app.focused is picker
+            assert ctx.root_vm.content_host.current is vm
+            assert ctx.focus_coordinator.focused_slot is slot
+            assert not picker.is_open
+            await pilot.press("ctrl+k")
+            await wait_until(lambda: isinstance(app.screen, CommandPalette), what="EMR palette")
+            await pilot.press(*"Open focused item")
+            await pilot.pause()
+            rows = list(app.screen.query(".palette-item"))
+            assert len(rows) == 1
+            assert rows[0].action_id == "pane.descend"
+            assert rows[0].presentation == presentation
+            await pilot.press("enter")
+            await wait_until(lambda: picker.is_open, what="palette dispatch opened EMR picker")
+            assert not isinstance(app.screen, CommandPalette)
+            assert ctx.root_vm.content_host.current is vm
+            await pilot.press("escape")
+            await pilot.pause()
+            assert not picker.is_open
+            assert app.focused is picker
+            assert ctx.focus_coordinator.focused_slot is slot
+            assert ctx.command_palette_vm._pending_tasks == {}
+    finally:
+        ctx.root_vm.dispose()
+        ctx.log_sink.close()
+
+
+@pytest.mark.parametrize("target", ["runs", "logs"])
+async def test_hosted_emr_custom_activation_targets_dispatch_from_palette(
+    tmp_path, monkeypatch, target
+):
+    from aws_tui.domain.emr_logs import FilterMode, LogFilter
+    from aws_tui.ui.widgets.emr_serverless.job_run_logs_pane import JobRunLogsPane
+    from aws_tui.ui.widgets.emr_serverless.job_runs_pane import JobRunsPane
+    from aws_tui.ui.widgets.help_modal import HelpActionRow, HelpModal
+    from aws_tui.vm.emr_serverless.job_run_logs_vm import LogsState
+
+    (tmp_path / "config.toml").write_text(
+        '[connections.dev]\nkind = "aws"\nprofile = "dev"\nregion = "us-east-1"\n'
+        '[defaults]\nconnection = "dev"\n'
+    )
+    ctx = build_app_context(config_dir=tmp_path, cache_dir=tmp_path, demo=True)
+    app = AwsTuiApp(ctx)
+    calls = []
+    try:
+        async with app.run_test(size=(120, 40)) as pilot:
+            await pilot.pause()
+            await _host_demo_service(app, ctx, "emr-serverless")
+            setup = ctx.root_vm.content_host._setup_task
+            if setup is not None:
+                await setup
+            await drain_workers(app)
+            vm = ctx.root_vm.content_host.current
+            await wait_until(
+                lambda: vm.applications.sorted_applications, what="demo EMR applications loaded"
+            )
+            application = next(
+                application
+                for application in vm.applications.sorted_applications
+                if "etl-pipeline" in application.name
+            )
+            await vm.select_application(application.id)
+            run = next(run for run in vm.job_runs.runs if "etl-success" in run.job_run_id)
+            await vm.select_job_run(run.job_run_id)
+            await drain_workers(app)
+            if target == "runs":
+                control = app.query_one(JobRunsPane)
+                original = vm.select_job_run
+
+                async def select(run_id):
+                    calls.append("run")
+                    await original(run_id)
+
+                monkeypatch.setattr(vm, "select_job_run", select)
+                assert vm.job_runs.runs
+            else:
+                control = app.query_one(JobRunLogsPane)
+                original_load = vm.job_run_logs.load
+                vm.job_run_logs.set_filter(LogFilter((), mode=FilterMode.PASSTHROUGH))
+                assert vm.job_run_logs.state is LogsState.IDLE
+
+                async def load():
+                    calls.append("logs")
+                    await original_load()
+
+                monkeypatch.setattr(vm.job_run_logs, "load", load)
+            control.focus()
+            await pilot.pause()
+            assert app.focused is control
+            slot = ctx.focus_coordinator.focused_slot
+            await pilot.press("question_mark")
+            await wait_until(lambda: isinstance(app.screen, HelpModal), what="custom target Help")
+            help_rows = {row.action_id: row for row in app.screen.query(HelpActionRow)}
+            assert "pane.descend" in help_rows, "actionable EMR pane must appear in Help"
+            presentation = help_rows["pane.descend"].presentation
+            await pilot.press("escape")
+            await pilot.pause()
+            assert app.focused is control
+            assert ctx.focus_coordinator.focused_slot is slot
+            assert calls == []
+            await pilot.press("ctrl+k")
+            await pilot.press(*"Open focused item")
+            await pilot.pause()
+            row = app.screen.query_one(".palette-item")
+            assert row.action_id == "pane.descend"
+            assert row.presentation == presentation
+            await pilot.press("enter")
+            await wait_until(
+                lambda: calls == ["run" if target == "runs" else "logs"],
+                what="custom target dispatched",
+            )
+            await drain_workers(app)
+            assert app.focused is control
+            assert ctx.root_vm.content_host.current is vm
+            assert ctx.focus_coordinator.focused_slot is slot
+            assert not isinstance(app.screen, CommandPalette)
+            assert ctx.command_palette_vm._pending_tasks == {}
+            if target == "logs":
+                assert vm.job_run_logs.state is LogsState.READY
+                assert vm.job_run_logs.current_file is not None
+                assert vm.job_run_logs.lines
+    finally:
+        ctx.root_vm.dispose()
+        ctx.log_sink.close()
+
+
+async def test_hosted_glue_custom_tab_is_actionable_but_metadata_rows_are_inert(
+    app_context_factory,
+):
+    from textual.widgets import DataTable
+
+    from aws_tui.ui.widgets.help_modal import HelpActionRow, HelpModal
+
+    ctx = app_context_factory()
+    fake = seeded_glue()
+    ref = fake.tables["analytics"][0].ref
+    fake.table_details[ref] = replace(fake.table_details[ref], table_format=TableFormat.ICEBERG)
+    vm = GluePageVM(
+        client=fake,
+        iceberg_inspector=RecordingInspector(),
+        connection=Connection(
+            name="dev", kind="aws", region="us-east-1", source="test", profile="dev"
+        ),
+        hub=ctx.hub,
+        dispatcher=NULL_DISPATCHER,
+    )
+    vm.construct()
+    await vm.setup()
+    app = AwsTuiApp(ctx)
+    try:
+        async with app.run_test(size=(120, 40)) as pilot:
+            await pilot.pause()
+            await ctx.root_vm.content_host.set_content(vm, service_id="glue", already_prepared=True)
+            host = app.query_one("#content-host", Container)
+            await host.remove_children()
+            await host.mount(
+                GluePage(
+                    vm, hub=ctx.hub, focus_coordinator=ctx.focus_coordinator, id="content-glue-page"
+                )
+            )
+            await vm.select_view("catalog")
+            await vm.select_table(ref.table_name)
+            assert await vm.catalog.iceberg.select_view("snapshots")
+            await pilot.pause()
+            tab = app.query_one("#glue-iceberg-tab-history")
+            tab.focus()
+            await pilot.pause()
+            assert app.focused is tab
+            await pilot.press("question_mark")
+            await wait_until(lambda: isinstance(app.screen, HelpModal), what="Glue tab Help")
+            assert "pane.descend" in {row.action_id for row in app.screen.query(HelpActionRow)}
+            await pilot.press("escape")
+            await pilot.pause()
+            assert app.focused is tab
+            await pilot.press("ctrl+k")
+            await pilot.press(*"Open focused item")
+            await pilot.pause()
+            assert app.screen.query_one(".palette-item").action_id == "pane.descend"
+            await pilot.press("enter")
+            await wait_until(
+                lambda: vm.catalog.iceberg.active_view == "history",
+                what="palette selected Iceberg history",
+            )
+            await drain_workers(app)
+            table = app.query_one("#glue-iceberg-table", DataTable)
+            assert table.row_count > 0
+            table.focus()
+            await pilot.pause()
+            await pilot.press("ctrl+k")
+            await pilot.pause()
+            assert "pane.descend" not in {
+                row.action_id for row in app.screen.query(".palette-item")
+            }
+            await pilot.press("escape")
+            await pilot.pause()
+            assert app.focused is table
+    finally:
+        vm.dispose()
+
+
+@pytest.mark.parametrize("target", ["detail", "empty-runs", "empty-logs"])
+async def test_hosted_emr_inert_targets_are_omitted_and_restore_focus(tmp_path, target):
+    from aws_tui.ui.widgets.emr_serverless.job_run_detail_pane import JobRunDetailPane
+    from aws_tui.ui.widgets.emr_serverless.job_run_logs_pane import JobRunLogsPane
+    from aws_tui.ui.widgets.emr_serverless.job_runs_pane import JobRunsPane
+    from aws_tui.ui.widgets.help_modal import HelpActionRow, HelpModal
+
+    ctx = build_app_context(config_dir=tmp_path, cache_dir=tmp_path, demo=True)
+    app = AwsTuiApp(ctx)
+    try:
+        async with app.run_test(size=(120, 40)) as pilot:
+            await pilot.pause()
+            await _host_demo_service(app, ctx, "emr-serverless")
+            setup = ctx.root_vm.content_host._setup_task
+            if setup is not None:
+                await setup
+            await drain_workers(app)
+            vm = ctx.root_vm.content_host.current
+            if target == "detail":
+                control = app.query_one(JobRunDetailPane)
+            elif target == "empty-runs":
+                vm.job_runs.set_application(None)
+                control = app.query_one(JobRunsPane)
+                assert vm.job_runs.runs == ()
+            else:
+                vm.job_run_logs.set_target(None, None, None)
+                control = app.query_one(JobRunLogsPane)
+            control.focus()
+            await pilot.pause()
+            slot = ctx.focus_coordinator.focused_slot
+            assert app.focused is control
+            await pilot.press("question_mark")
+            await wait_until(lambda: isinstance(app.screen, HelpModal), what="inert EMR Help")
+            assert "pane.descend" not in {row.action_id for row in app.screen.query(HelpActionRow)}
+            await pilot.press("escape")
+            await pilot.pause()
+            assert app.focused is control
+            await pilot.press("ctrl+k")
+            await pilot.pause()
+            assert "pane.descend" not in {
+                row.action_id for row in app.screen.query(".palette-item")
+            }
+            await pilot.press("escape")
+            await pilot.pause()
+            assert app.focused is control
+            assert ctx.focus_coordinator.focused_slot is slot
+            assert ctx.root_vm.content_host.current is vm
+    finally:
+        ctx.root_vm.dispose()
+        ctx.log_sink.close()
+
+
+async def test_hosted_emr_retained_activation_rechecks_loadability(tmp_path, monkeypatch):
+    from aws_tui.ui.widgets.emr_serverless.job_run_logs_pane import JobRunLogsPane
+    from aws_tui.vm.emr_serverless.job_run_logs_vm import LogsState
+
+    ctx = build_app_context(config_dir=tmp_path, cache_dir=tmp_path, demo=True)
+    app = AwsTuiApp(ctx)
+    calls = []
+    try:
+        async with app.run_test(size=(120, 40)) as pilot:
+            await pilot.pause()
+            await _host_demo_service(app, ctx, "emr-serverless")
+            setup = ctx.root_vm.content_host._setup_task
+            if setup is not None:
+                await setup
+            await drain_workers(app)
+            logs = app.query_one(JobRunLogsPane)
+            vm = ctx.root_vm.content_host.current
+            vm.job_run_logs.set_target("test-app", "test-run", "s3://test-logs/logs")
+            logs.focus()
+            await pilot.pause()
+            origin = app._capture_discovery_origin()
+            assert next(
+                row for row in app._project_discovery_actions(origin) if row.id == "pane.descend"
+            ).available
+            await pilot.press("ctrl+k")
+            await pilot.press(*"Open focused item")
+            await pilot.pause()
+            assert app.screen.query_one(".palette-item").action_id == "pane.descend"
+            invoke = app._actions.invoke
+
+            def spy(action_id):
+                calls.append(action_id)
+                return invoke(action_id)
+
+            monkeypatch.setattr(app._actions, "invoke", spy)
+            # Keep the displayed row/callback, then change the underlying state
+            # without a projection event: dispatch must revalidate regardless.
+            monkeypatch.setattr(vm.job_run_logs, "_state", LogsState.LOADING)
+            await pilot.press("enter")
+            await pilot.pause()
+            assert not isinstance(app.screen, CommandPalette)
+            assert calls == ["pane.descend"], "only the existing modal Enter router may run"
+            assert ctx.command_palette_vm._pending_tasks == {}
+            assert app.focused is logs
+    finally:
+        ctx.root_vm.dispose()
+        ctx.log_sink.close()
+
+
+async def test_s3_directory_and_parent_activation_still_dispatch_after_modal_dismissal(
+    app_context_factory,
+):
+    from aws_tui.demo.in_memory_fs import InMemoryFS
+    from aws_tui.domain.filesystem import PathRef
+    from aws_tui.ui.widgets.pane import Pane
+    from aws_tui.vm.chrome.focus_coordinator_vm import FocusSlot
+
+    fs = InMemoryFS()
+    await fs.mkdir(PathRef(("folder",)))
+    ctx = app_context_factory(fs=fs)
+    app = AwsTuiApp(ctx)
+    async with app.run_test(size=(120, 40)) as pilot:
+        await pilot.pause()
+        await drain_workers(app)
+        pane = app.query_one("#pane-left", Pane).vm
+        await pane.navigate_to(PathRef(()))
+        for name, destination in (("folder", PathRef(("folder",))), ("..", PathRef(()))):
+            pane.move_cursor_to(
+                next(i for i, entry in enumerate(pane.filtered_entries) if entry.name == name)
+            )
+            ctx.focus_coordinator.set_focused_slot(FocusSlot.S3_LEFT)
+            app.set_focus(None)
+            await pilot.pause()
+            await pilot.press("ctrl+k")
+            await pilot.press(*"Open focused item")
+            await pilot.pause()
+            assert app.screen.query_one(".palette-item").action_id == "pane.descend"
+            await pilot.press("enter")
+            await wait_until(
+                lambda destination=destination: pane.path == destination,
+                what="S3 palette navigation",
+            )
+            assert not isinstance(app.screen, CommandPalette)
+        assert pane.path.is_root
+        assert all(entry.name != ".." for entry in pane.filtered_entries)
