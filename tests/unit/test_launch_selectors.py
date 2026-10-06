@@ -209,7 +209,9 @@ def test_explicit_connection_and_default_precedence(sources, monkeypatch):
 
 def test_s3_prefix_is_literal(sources):
     launch = resolve(sources, connection="selected", location="s3://bucket/a//b%2F?#雪/")
-    assert launch.location.path.as_posix() == "/bucket/a//b%2F?#雪/"
+    # The provider adds the directory delimiter; all key components survive.
+    assert launch.location.path.as_posix() == "/bucket/a//b%2F?#雪"
+    assert launch.location.path.join("report.csv").as_posix() == "/bucket/a//b%2F?#雪/report.csv"
     assert launch.location.scheme == "s3"
 
 

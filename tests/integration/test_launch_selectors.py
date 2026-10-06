@@ -13,6 +13,7 @@ from aws_tui.composition import build_app_context, make_source_check_factory
 from aws_tui.demo.in_memory_fs import InMemoryFS
 from aws_tui.domain.filesystem import ProviderUnreachableError
 from aws_tui.domain.local_fs import LocalFS
+from aws_tui.domain.s3_fs import S3FS
 from aws_tui.infra.config_store import ConfigStore
 from aws_tui.infra.connection_resolver import ConnectionResolver
 from aws_tui.launch import LaunchRequest, resolve_launch
@@ -23,6 +24,7 @@ from aws_tui.ui.widgets.glue.page import GluePage
 from aws_tui.vm.chrome.focus_coordinator_vm import FocusSlot
 from aws_tui.vm.file_manager.pane_vm import PaneState
 from tests.helpers import drain_workers, wait_until
+from tests.s3_readonly import LiteralS3Client
 
 
 class ReadOnlyFS(InMemoryFS):
@@ -192,6 +194,76 @@ async def test_s3_prefix_first_read_focus_and_no_mutation(source_files, monkeypa
     assert dict(os.environ) == env
     assert fs.mutations == []
     assert all(local.mutations == [] for local in locals_)
+    assert all(worker.is_finished for worker in app.workers._workers)
+
+
+@pytest.mark.parametrize("action", ["file", "child", "parent"])
+@pytest.mark.parametrize(
+    ("suffix", "prefix", "parent_prefix"),
+    [
+        ("/daily/", "daily/", ""),
+        ("/daily//", "daily//", "daily/"),
+        ("/daily///", "daily///", "daily//"),
+        ("/daily//雪%2F?#/", "daily//雪%2F?#/", "daily//"),
+        ("//daily/", "/daily/", "/"),
+        ("//", "/", ""),
+        ("/daily", "daily/", ""),
+        ("", "", None),
+        ("/", "", None),
+    ],
+)
+async def test_literal_s3_listing_child_read_and_parent_identity(
+    source_files, monkeypatch, suffix, prefix, parent_prefix, action
+):
+    client = LiteralS3Client(prefix)
+    fs = S3FS(session=client, bucket=None)
+    ctx, launch, calls, _, locals_ = make_context(
+        source_files,
+        monkeypatch,
+        remote=fs,
+        connection="selected",
+        location="s3://reports-bucket" + suffix,
+    )
+    before = ctx.config_store.path.read_bytes()
+    app = AwsTuiApp(ctx)
+    async with app.run_test(size=(120, 40)):
+        await ready(app, ctx)
+        pane = ctx.root_vm.content_host.current.left
+        assert pane.path == launch.location.path
+        assert client.calls == [
+            ("list", {"Bucket": "reports-bucket", "Prefix": prefix, "Delimiter": "/"})
+        ]
+        assert [entry.name for entry in pane.entries] == ["..", "child", "report.csv"]
+        if action == "file":
+            path = pane.path.join(pane.entries[2].name)
+            content = b"".join([chunk async for chunk in await fs.read_stream(path)])
+            assert content == b"listed report"
+            assert client.calls[-2:] == [
+                (method, {"Bucket": "reports-bucket", "Key": prefix + "report.csv"})
+                for method in ("head", "get")
+            ]
+        elif action == "child":
+            await pane.activate(1)
+            assert client.calls[-1][1]["Prefix"] == prefix + "child/"
+            assert [entry.name for entry in pane.entries] == ["..", "nested.csv"]
+            path = pane.path.join(pane.entries[1].name)
+            assert (
+                b"".join([chunk async for chunk in await fs.read_stream(path)]) == b"nested report"
+            )
+            await pane.activate(0)
+            assert client.calls[-1][1]["Prefix"] == prefix
+        else:
+            await pane.activate(0)
+            if parent_prefix is None:
+                assert pane.path.is_root
+                assert client.calls[-1][0] == "buckets"
+            else:
+                assert client.calls[-1][1]["Prefix"] == parent_prefix
+                assert parent_prefix != prefix
+        assert calls == [launch.connection]
+    assert ctx.config_store.path.read_bytes() == before
+    assert all(local.mutations == [] for local in locals_)
+    assert all(method in {"list", "buckets", "head", "get"} for method, _ in client.calls)
     assert all(worker.is_finished for worker in app.workers._workers)
 
 

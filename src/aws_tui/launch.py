@@ -85,9 +85,11 @@ def _location(value: str) -> LaunchLocation:
         bucket = literal.split("/", 1)[0]
         if not bucket or any(char in bucket for char in "?#\\:"):
             raise LaunchError("--location requires s3://BUCKET[/PREFIX] with a bucket")
-        # Split literally: PathRef.from_posix drops empty components and would
-        # change keys containing repeated or trailing slashes.
-        return LaunchLocation("s3", PathRef(tuple(literal.split("/"))))
+        # S3 directory paths omit exactly one listing delimiter. Other empty
+        # components are literal key characters: daily// becomes (daily, ""),
+        # so joining a listed child addresses daily//child. from_posix would
+        # discard those meaningful empty components.
+        return LaunchLocation("s3", PathRef(tuple(literal.removesuffix("/").split("/"))))
     if "://" in value or value.startswith("arn:"):
         raise LaunchError("--location supports only s3://BUCKET[/PREFIX] or a local directory")
     try:

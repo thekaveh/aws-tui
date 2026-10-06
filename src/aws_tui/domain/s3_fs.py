@@ -175,7 +175,7 @@ class S3FS:
         """Convert a PathRef to an absolute S3 object key (within bucket)."""
         joined = "/".join(path.segments)
         if self._prefix:
-            return f"{self._prefix}/{joined}" if joined else self._prefix
+            return f"{self._prefix}/{joined}" if path.segments else self._prefix
         return joined
 
     def _resolve(self, path: PathRef) -> tuple[str, str]:
@@ -216,11 +216,13 @@ class S3FS:
             bucket = path.segments[0]
             sub = PathRef(path.segments[1:])
             prefix = self._key_for(sub)
-            if prefix and not prefix.endswith("/"):
+            # Directory PathRefs omit one delimiter; a final empty segment is
+            # part of the key, not that delimiter. Even ("",) lists "/".
+            if prefix or sub.segments:
                 prefix = f"{prefix}/"
             return await self._list_objects(prefix, bucket=bucket)
         prefix = self._key_for(path)
-        if prefix and not prefix.endswith("/"):
+        if prefix or path.segments:
             prefix = f"{prefix}/"
         return await self._list_objects(prefix)
 
