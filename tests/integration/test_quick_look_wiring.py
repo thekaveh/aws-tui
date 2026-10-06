@@ -455,3 +455,94 @@ async def test_actual_app_direct_results_are_literal_and_render_bounded(
             raw = screen.query_one("#quicklook-body", Static).content.plain
             assert "\n\t[bold]" in raw
             assert r"raw\x1b[red]" in raw
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("cell_text", "domain_admitted", "structured"),
+    [
+        pytest.param("a" + "\u0301" * 217, True, False, id="admitted-combining-over-cap"),
+        pytest.param("a" + "\u0301" * 255, False, False, id="direct-combining-over-cap"),
+        pytest.param("a" + "\u0301" * 199, True, True, id="admitted-combining-below-cap"),
+        pytest.param("\u0301" * 218, True, False, id="admitted-zero-width-over-cap"),
+        pytest.param("界" * 80, True, True, id="admitted-wide-below-cap"),
+    ],
+)
+async def test_actual_app_unicode_render_budget_and_cached_toggle(
+    app_context_factory, cell_text, domain_admitted, structured
+):
+    from rich.console import Console
+    from textual.widgets import Static
+
+    from aws_tui.domain.preview import (
+        PreviewCell,
+        PreviewCellKind,
+        PreviewColumn,
+        PreviewFormat,
+        PreviewResult,
+        _bounded_result,
+    )
+    from aws_tui.domain.preview_limits import PREVIEW_MAX_RENDER_CHARS
+    from aws_tui.vm.chrome.quick_look_vm import QuickLookContent
+
+    columns = tuple(PreviewColumn("c") for _ in range(24))
+    rows = tuple(
+        tuple(PreviewCell(cell_text, PreviewCellKind.SCALAR) for _ in columns) for _ in range(50)
+    )
+    raw = b"cached-unicode-raw"
+    notes = ("combining-note\u0301",)
+    if domain_admitted:
+        result = _bounded_result(PreviewFormat.PARQUET, raw, columns, rows, notes)
+        assert result.format is PreviewFormat.PARQUET
+        assert result.columns == columns
+        assert result.rows == rows
+    else:
+        result = PreviewResult(PreviewFormat.PARQUET, raw, columns, rows, notes)
+    loader_calls = 0
+
+    async def loader():
+        nonlocal loader_calls
+        loader_calls += 1
+        return result
+
+    fs = RecordingFS()
+    await fs.write_stream(PathRef(("sample.csv",)), _stream(b"a,b\n1,2\n"))
+    writes = fs.writes
+    ctx = app_context_factory(fs=fs)
+    _inject_connection(ctx)
+    app = AwsTuiApp(ctx)
+    async with app.run_test(size=(120, 40)) as pilot:
+        await _open_file(app, pilot)
+        await wait_until(fs.closed.is_set, what="initial preview session drained")
+        screen = app.screen
+        screen.vm.open_command.execute(
+            QuickLookContent(
+                "unicode.parquet", "application/octet-stream", _stream(raw), None, loader
+            )
+        )
+        await wait_until(lambda: screen._result is result, what="Unicode result loaded")
+        await pilot.pause()
+        before = tuple(fs.requests)
+        console = Console(width=10000, force_terminal=False)
+        mode = screen.query_one("#quicklook-mode", Static)
+        for toggle in range(3):
+            if toggle:
+                await pilot.press("r")
+                await pilot.pause()
+            with console.capture() as capture:
+                console.print(screen.query_one("#quicklook-body", Static).content)
+            rendered = capture.get()
+            assert len(rendered) <= PREVIEW_MAX_RENDER_CHARS
+            if structured and toggle != 1:
+                assert "Structured" in str(mode.render())
+                assert cell_text in rendered
+                assert "combining-note\u0301" in rendered
+            else:
+                assert "Raw" in str(mode.render())
+                assert raw.decode() in rendered
+                if not structured and toggle != 1:
+                    assert "Structured output exceeds preview budget" in rendered
+            assert loader_calls == 1
+            assert tuple(fs.requests) == before
+        assert fs.writes == writes
+        assert app._crash_report is None

@@ -219,6 +219,13 @@ class QuickLook(HubSubscriberMixin, DeferredWorkerMixin, ModalScreen[None]):
             render_chars = (table_width + 1) * (len(rows) + 4) + sum(
                 len(note) + 1 for note in notes
             )
+            # Zero-width characters add text beyond the terminal-cell rectangle.
+            # Wide characters already fit within that conservative estimate.
+            render_chars += sum(
+                max(0, len(value) - cell_len(value))
+                for values in (headers, *rows)
+                for value in values
+            )
             if render_chars > PREVIEW_MAX_RENDER_CHARS:
                 raw = True
                 notes += ("Structured output exceeds preview budget",)
