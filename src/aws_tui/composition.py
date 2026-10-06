@@ -171,11 +171,15 @@ class _LaunchConnectionResolver(ConnectionResolver):
         launch = self._launch
         if launch.underlying is None or launch.connection is None:
             return current
-        if connection_route(current) != connection_route(launch.underlying):
+        # Other names retain ordinary resolution. The selected name must still
+        # match its retained source, even if an edit now equals the CLI override.
+        if current.name != launch.underlying.name:
             return current
-        if current.source == "config" and entry_source_identity(
-            self._config_store.load().connections.get(current.name)
-        ) != entry_source_identity(launch.source_entry):
+        if connection_route(current) != connection_route(launch.underlying) or (
+            current.source == "config"
+            and entry_source_identity(self._config_store.load().connections.get(current.name))
+            != entry_source_identity(launch.source_entry)
+        ):
             if strict:
                 raise ConnectionNotFound(current.name)
             return current

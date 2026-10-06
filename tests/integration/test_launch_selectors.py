@@ -513,6 +513,99 @@ async def test_source_reference_changed_before_startup_is_refused(source_files, 
         assert calls == []
 
 
+@pytest.mark.parametrize("selection", ["configured", "profile", "s3"])
+async def test_source_edit_to_effective_region_fails_before_startup_factories(
+    source_files, monkeypatch, selection
+):
+    source = source_files / "config.toml"
+    if selection == "s3":
+        source.write_text(
+            source.read_text().replace(
+                "kind = 'aws'\nprofile = 'analytics'\nregion = 'us-east-1'",
+                "kind = 's3-compatible'\nendpoint_url = 'http://localhost:9000'\n"
+                "region = 'us-east-1'\ncredentials = 'env:FIRST_'",
+            )
+        )
+        for prefix in ("FIRST_", "SECOND_"):
+            monkeypatch.setenv(prefix + "ACCESS_KEY_ID", prefix + "synthetic-access")
+            monkeypatch.setenv(prefix + "SECRET_ACCESS_KEY", prefix + "synthetic-secret")
+    selectors = {"profile": "analytics"} if selection == "profile" else {"connection": "selected"}
+    ctx, launch, calls, fs, locals_ = make_context(
+        source_files, monkeypatch, region="ap-southeast-2", **selectors
+    )
+    if selection == "profile":
+        source = Path(os.environ["AWS_CONFIG_FILE"])
+    source.write_text(
+        source.read_text()
+        .replace(launch.underlying.region, launch.connection.region)
+        .replace("env:FIRST_", "env:SECOND_")
+    )
+    before = ctx.config_store.path.read_bytes()
+    edited = source.read_bytes()
+    app = AwsTuiApp(ctx)
+    async with app.run_test(size=(120, 40)):
+        await wait_until(
+            lambda: app.launch_error is not None or app.launch_ready,
+            what="retained source edit startup refusal",
+        )
+        assert app.launch_error is not None
+        assert app.return_code == 1
+        assert not app.launch_ready
+        assert calls == []
+        assert locals_ == []
+        assert ctx.root_vm.content_host.current is None
+    assert fs.reads == []
+    assert fs.mutations == []
+    assert ctx.config_store.path.read_bytes() == before
+    assert source.read_bytes() == edited
+    assert all(worker.is_finished for worker in app.workers._workers)
+
+
+async def test_same_reference_credential_refresh_preserves_launch_session(
+    source_files, monkeypatch
+):
+    from types import SimpleNamespace
+
+    from aws_tui.infra.aws_session import TokenState
+
+    source = source_files / "config.toml"
+    source.write_text(
+        "[connections.selected]\nkind = 's3-compatible'\n"
+        "endpoint_url = 'http://localhost:9000'\nregion = 'us-east-1'\n"
+        "credentials = 'env:FIRST_'\n"
+    )
+    monkeypatch.setenv("FIRST_ACCESS_KEY_ID", "original-synthetic-access")
+    monkeypatch.setenv("FIRST_SECRET_ACCESS_KEY", "original-synthetic-secret")
+    ctx, launch, calls, fs, _ = make_context(
+        source_files, monkeypatch, connection="selected", region="ap-southeast-2"
+    )
+    monkeypatch.setattr(
+        ctx.aws_session,
+        "probe_token",
+        lambda connection: SimpleNamespace(state=TokenState.CONNECTED),
+    )
+    before = source.read_bytes()
+    app = AwsTuiApp(ctx)
+    async with app.run_test(size=(120, 40)):
+        await ready(app, ctx)
+        check = make_source_check_factory(ctx.config_store, ctx.connection_resolver)(calls[0])
+        assert await check()
+        monkeypatch.setenv("FIRST_ACCESS_KEY_ID", "refreshed-synthetic-access")
+        monkeypatch.setenv("FIRST_SECRET_ACCESS_KEY", "refreshed-synthetic-secret")
+        assert await check()
+        await app._recover_active_source()
+        assert len(calls) == 2
+        assert calls[0].access_key_id == "original-synthetic-access"
+        assert calls[1].access_key_id == "refreshed-synthetic-access"
+        assert calls[1].secret_access_key == "refreshed-synthetic-secret"
+        assert all(connection.region == launch.connection.region for connection in calls)
+        assert all(connection.name == "selected" for connection in calls)
+        assert ctx.root_vm.active_connection == calls[1]
+        assert app.launch_error is None
+    assert source.read_bytes() == before
+    assert fs.mutations == []
+
+
 async def test_region_only_uses_env_profile_alias_after_unknown_default(source_files, monkeypatch):
     from aws_tui.demo.seeds import seeded_demo_athena
 

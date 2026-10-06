@@ -199,6 +199,89 @@ def test_exact_profile_ignores_alias_and_nonaws_collision(sources):
     assert launch.underlying.region == "eu-west-1"
 
 
+@pytest.fixture(params=["configured", "profile", "s3"])
+def retained_session(request, sources, monkeypatch):
+    from aws_tui.composition import _LaunchConnectionResolver
+
+    source = sources / "config.toml"
+    if request.param == "s3":
+        source.write_text(
+            source.read_text().replace(
+                "kind = 'aws'\nprofile = 'analytics'\nregion = 'us-east-1'",
+                "kind = 's3-compatible'\nendpoint_url = 'http://localhost:9000'\n"
+                "region = 'us-east-1'\ncredentials = 'env:FIRST_'",
+            )
+        )
+        for prefix in ("FIRST_", "SECOND_"):
+            monkeypatch.setenv(prefix + "ACCESS_KEY_ID", prefix + "synthetic-access")
+            monkeypatch.setenv(prefix + "SECRET_ACCESS_KEY", prefix + "synthetic-secret")
+    selectors = (
+        {"profile": "analytics"} if request.param == "profile" else {"connection": "selected"}
+    )
+    launch = resolve(sources, region="ap-southeast-2", **selectors)
+    store = ConfigStore(path=sources / "config.toml", read_only=True)
+    resolver = _LaunchConnectionResolver(config_store=store, keychain=None, launch=launch)
+    if request.param == "profile":
+        source = Path(os.environ["AWS_CONFIG_FILE"])
+
+    def edit():
+        source.write_text(
+            source.read_text()
+            .replace(launch.underlying.region, launch.connection.region)
+            .replace("env:FIRST_", "env:SECOND_")
+        )
+
+    return store, resolver, launch, edit
+
+
+@pytest.mark.parametrize("method", ["resolve", "resolve_selected"])
+def test_retained_source_edit_to_override_region_is_refused(retained_session, method):
+    from aws_tui.infra.connection_resolver import ConnectionNotFound
+
+    _, resolver, launch, edit = retained_session
+    edit()
+    with pytest.raises(ConnectionNotFound):
+        getattr(resolver, method)(launch.connection.name)
+
+
+@pytest.mark.parametrize("initialized", [False, True])
+async def test_retained_source_edit_invalidates_first_and_established_guards(
+    retained_session, initialized
+):
+    from aws_tui.composition import make_source_check_factory
+
+    store, resolver, launch, edit = retained_session
+    check = make_source_check_factory(store, resolver)(launch.connection)
+    if initialized:
+        assert await check()
+    edit()
+    assert not await check()
+
+
+def test_retained_session_metadata_and_other_sources_keep_ordinary_resolution(retained_session):
+    store, resolver, launch, edit = retained_session
+    ordinary = ConnectionResolver(config_store=store, read_credentials=False)
+    other = ordinary.resolve_selected("other")
+    assert resolver.resolve_selected("other") == other
+    selected = next(item for item in resolver.list() if item.name == launch.connection.name)
+    assert selected == launch.connection
+    assert selected.access_key_id is None
+    assert selected.secret_access_key is None
+    if launch.request.profile is not None:
+        # The configured same-name S3 source is hidden by the exact profile,
+        # while the differently named AWS alias remains an ordinary source.
+        assert selected.kind == "aws"
+        assert selected.source == "auto-aws-profile"
+        assert resolver.resolve_selected("selected") == ordinary.resolve_selected("selected")
+    edit()
+    assert resolver.resolve_selected("other") == other
+    metadata = next(item for item in resolver.list() if item.name == launch.connection.name)
+    assert metadata.region == launch.connection.region
+    assert metadata.access_key_id is None
+    assert metadata.secret_access_key is None
+    assert next(item for item in resolver.list() if item.name == "other") == other
+
+
 def test_explicit_connection_and_default_precedence(sources, monkeypatch):
     monkeypatch.setenv("AWS_PROFILE", "analytics")
     assert resolve(sources, region="eu-west-1").connection.name == "other"
