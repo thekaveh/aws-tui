@@ -123,10 +123,13 @@ class AthenaResultsView(DeferredWorkerMixin, Widget):
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
         if event.button.id == "athena-more-results":
-            self._run_lifecycle_worker(
-                self._vm.load_more,
-                group="athena-more-results",
-            )
+            self.dispatch_load_more()
+
+    def dispatch_load_more(self) -> None:
+        self._run_lifecycle_worker(
+            self._vm.load_more,
+            group="athena-more-results",
+        )
 
     def _on_vm_changed(self, _property_name: str) -> None:
         if self._overlay_generation != self._vm.projection_generation:

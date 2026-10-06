@@ -202,6 +202,11 @@ focused soft fill, and single keyboard focus stop as Glue.
 | Execute editor SQL | `Ctrl+Enter` | Runs `athena.execute` only after the local read-only SQL validation succeeds. |
 | Stop query | `Esc` | Runs `athena.cancel`; Stop interrupts query submission or stops the active app-owned execution. |
 | Load more result rows | `l` | Runs `athena.load_more` when the selected result has another page. |
+| Inspect selected cell | `Alt+Enter` | `athena.inspect_cell`; complete read-only value; Escape/Close restores the cell. |
+| Copy selected cell / row as JSON | `Alt+C` / `Alt+Shift+C` | `athena.copy_cell` / `athena.copy_row`; original values, null and empty distinguished. |
+| Filter loaded results | `Alt+F` | `athena.filter_results`; literal case-insensitive substring; Apply, Clear, Cancel. |
+| Sort selected column | `Alt+S` | `athena.sort_results`; ascending → descending → loaded order; lexical strings, null last. |
+| Reset local result controls | `Alt+R` | `athena.reset_results`; clears filter and sort. |
 | Switch AWS source | `Shift+S` | Runs `app.swap_source` and rebuilds Athena under the next resolver-ordered supported AWS profile and region. The bordered **Source** selector can instead choose an exact source. |
 | Insert copied table reference | `i` | Runs `athena.insert_table_ref`, selecting Query when needed and inserting at the editor cursor or replacing its active selection. It refuses a copied connection/region that differs from Athena's active source and leaves both editor and typed clipboard unchanged; it never switches profiles because that could discard unrelated editor state. |
 | Open result artifact in S3 | `:` / `Ctrl+K`, then **Open Athena result in S3** | `athena.open_result_location` is palette-only and absent from `KeymapStore.DEFAULT_BINDINGS`; it validates the successful execution's exact connection, region, and S3 URI before navigating. |
@@ -221,6 +226,10 @@ detail. The active-view controls are:
   editor.
 
 Unavailable buttons are omitted, and `Shift+Tab` is the exact reverse order.
+The six result actions appear with configured keys in Help and the Athena
+command palette. See [loaded result semantics](services/athena.md#7-inspect-and-control-loaded-results)
+for JSON encoding, paging scope, reset behavior, and clipboard limitations.
+
 Bare printable bindings, including `i`, `W`, `C`, and `D`, are deliberately
 non-priority: a focused Athena editor receives them as text. Use the command
 palette or move focus outside the editor to invoke those actions.
@@ -259,6 +268,12 @@ A binding can be a single keystroke or a list of fallback keystrokes:
 "athena.execute" = "ctrl+enter"
 "athena.cancel" = "escape"
 "athena.load_more" = "l"
+"athena.inspect_cell" = "alt+enter"
+"athena.copy_cell" = "alt+c"
+"athena.copy_row" = "alt+shift+c"
+"athena.filter_results" = "alt+f"
+"athena.sort_results" = "alt+s"
+"athena.reset_results" = "alt+r"
 ```
 
 The default map is declared in `infra/keymap_store.py`. At composition
@@ -367,6 +382,12 @@ unbound until a handler ships.
 | `athena.execute` | `ctrl+enter` | yes | Submit validated, read-only editor SQL |
 | `athena.cancel` | `escape` | yes | Stop interrupts query submission or stops an active app-owned Athena execution |
 | `athena.load_more` | `l` | yes | Fetch the next available result page |
+| `athena.inspect_cell` | `alt+enter` | yes | Inspect complete original selected cell |
+| `athena.copy_cell` | `alt+c` | yes | Copy original selected cell as JSON |
+| `athena.copy_row` | `alt+shift+c` | yes | Copy selected row as a JSON array |
+| `athena.filter_results` | `alt+f` | yes | Filter already loaded rows literally |
+| `athena.sort_results` | `alt+s` | yes | Cycle selected column string sort and reset |
+| `athena.reset_results` | `alt+r` | yes | Clear local filter and sort |
 | `athena.open_result_location` | none (command palette) | yes | Open a validated successful Athena result artifact in S3 under its exact source identity |
 | `athena.open_in_glue` | none (command palette) | yes | Open the one unambiguous visible query table in Glue |
 | `pane.modal_left` | `left` | yes | Route left-arrow modal or pane navigation |

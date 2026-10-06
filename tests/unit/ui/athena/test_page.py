@@ -1037,6 +1037,7 @@ async def test_load_more_routes_by_focused_context_or_active_surface() -> None:
             await pilot.pause(0.05)
             assert target.has_focus
             await page.action_load_more()
+            await wait_until(lambda: bool(calls), what="explicit load-more route completed")
             assert calls.pop() == expected
 
         assert calls == []

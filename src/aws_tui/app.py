@@ -2224,6 +2224,15 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
                 )
                 else "auth.authenticate"
             )
+        elif (
+            key is not None
+            and action_id in {"glue.load_more", "athena.load_more"}
+            and self._bindings_overlap("glue.load_more", "athena.load_more", key=key)
+        ):
+            service = self._app_ctx.root_vm.content_host.current_id
+            if service not in {"glue", "athena"}:
+                return None
+            action_id = f"{service}.load_more"
         return self._actions.invoke(action_id)
 
     async def action_transfer_history(self) -> None:

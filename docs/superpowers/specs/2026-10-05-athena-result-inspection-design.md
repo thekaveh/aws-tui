@@ -1,14 +1,14 @@
 # Athena loaded-result inspection design — #253
 
-## Authority and intake
+## 1. Authority and intake
 
 The owner authorizes the complete sequential ticket cycle and routine decisions unsupervised, with applicable local checks only. This supersedes fresh design/worktree approval menus. #256 is CLOSED/Done and fully archived before this intake. Current issue #253 is OPEN/Todo, has eleven ACs and no comments or linked implementation PR. Its only cross-reference is #254 (complete-result export), which is out of scope and is not a dependency. Branch starts at develop `a1195a5cd838d0951ed44416ace26c4301bc32b4`; source tree `c2a21b3689d76618cf6da5ada24f56da7f8b84a4`. Clean primary checkout is reused, preserving unrelated dependency PRs. Fresh local baseline evidence is the unchanged-source 7,271-test run and 464-test post-promotion run archived with #256.
 
-## Approaches and decision
+## 2. Approaches and decision
 
 Use a pure index projection owned by AthenaResultsVM, with cell selection anchored to original loaded-row ordinal and numeric column ordinal. This keeps paging authoritative and makes stale/context reset and later page behavior directly testable. A UI-only projection would scatter selection reset and lifecycle rules across widgets. Mutating pager rows would compromise snapshot/paging semantics. Choose the VM projection; no dependency or SQL/provider change.
 
-## Binding behavior
+## 3. Binding behavior
 
 - Local operations use fetched rows only; no SQL rewrite/rerun, start_query_execution, automatic page fetch, AWS mutation or full-result export.
 - Rows remain `tuple[str | None, ...]`. The existing pager, token and 10,000-row ceiling stay authoritative. Projection state is transient and is not added to AthenaResultsSnapshot.
@@ -25,7 +25,7 @@ Use a pure index projection owned by AthenaResultsVM, with cell selection anchor
 - Results values, filter text and copy payloads are not logged, added to value-bearing notifications, crash dumps or repr-visible snapshot/projection objects. Errors use fixed messages. Original result/Snapshot privacy tests remain.
 - All necessary checks run locally. Actions stays disabled; normal protected push/PR/merge only. No force-push, admin merge, shared reset, release/package publication, remote docs publication or live AWS mutation.
 
-## Components and interfaces
+## 4. Components and interfaces
 
 `vm/athena/result_projection.py`: pure projection and JSON serializers; imports no UI/infra/provider.
 `AthenaResultsVM`: transient filter/sort/selection and generation; original rows/token/Snapshot fields untouched. Internal QueryVM-to-ResultsVM snapshot installation passes prepared context atomically, without public context-reset publication; coherent snapshot notification adds only visible_rows and selection, retaining the original bounded message contract.
@@ -34,7 +34,7 @@ Use a pure index projection owned by AthenaResultsVM, with cell selection anchor
 `App`, KeymapStore and HelpModal: scoped registered commands, configured keys, common clipboard worker/reporting.
 Documentation: Athena service and keybindings/cookbook updates; local generated site/wiki verification.
 
-## Acceptance evidence plan
+## 5. Acceptance evidence plan
 
 1. Extend tests/unit/ui/athena/test_page.py with cell cursor and inspector close exact-coordinate regression; sorted/filter/duplicate rows and stale execution included.
 2. Pilot copy-cell and copy-row intercept App.copy_value and compare exact JSON serialization of original string/null cells, including two same-label columns, not rendered text.
@@ -48,7 +48,7 @@ Documentation: Athena service and keybindings/cookbook updates; local generated 
 10. Pilot local actions with fake provider rejecting start_query_execution and any unrequested get_results_page.
 11. tests/snapshot/test_athena.py compact/wide full-app result/inspector/filter states with content guards and reviewable SVGs; interactive demo TTY pass with captured keyboard steps; help/remapped-key coverage. Feature-caused golden changes individually reviewed; unrelated goldens byte-preserved.
 
-## Verification and delivery
+## 6. Verification and delivery
 
 Task-scoped genuine RED/GREEN and covering tests, independent task reviews, one whole-branch review, final full applicable local suite with coverage plus all-file hooks, syntax, docs generation/strict checks, dependency audit if inputs change, package checks/smoke. Do not rerun unchanged failures until green or weaken assertions/goldens/timeouts. Reproduce failures, preserve evidence, repair and review before rerunning a changed-source gate.
 

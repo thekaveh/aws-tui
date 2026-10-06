@@ -5,6 +5,7 @@ from html import unescape
 from itertools import product
 from pathlib import Path
 from typing import cast
+from xml.etree import ElementTree
 
 import pytest
 from textual.pilot import Pilot
@@ -333,3 +334,86 @@ def test_athena_compact_snapshot_content_guards(theme: str) -> None:
     assert "Event&#160;count" in saved
     assert "7&#160;query" in rebound
     assert "1&#160;query" not in rebound
+
+
+@pytest.mark.parametrize(("theme", "size"), FULL_APP_CASES)
+@pytest.mark.parametrize("state", ["results", "inspector", "filter"])
+def test_athena_result_inspection_full_app_snapshot(theme, size, state, snap_compare):
+    from textual.coordinate import Coordinate
+    from textual.widgets import DataTable, Input
+
+    from aws_tui.ui.widgets.athena.result_cell_modal import AthenaResultCellModal
+    from aws_tui.ui.widgets.athena.result_filter_modal import AthenaResultFilterModal
+    from tests.integration.test_athena_result_inspection import LITERAL, show_loaded_results
+
+    async def show(pilot):
+        page, table, pages = await show_loaded_results(pilot)
+        await pilot.press("right", "down")
+        await wait_until(
+            lambda: page.vm.results.selection == (1, 1), what="snapshot second cell selected"
+        )
+        assert table.cursor_coordinate == Coordinate(1, 1)
+        if state == "inspector":
+            await pilot.press("alt+enter")
+            await wait_until(
+                lambda: isinstance(pilot.app.screen, AthenaResultCellModal),
+                what="snapshot literal inspector",
+            )
+            assert pilot.app.screen.query_one(TextArea).text == LITERAL
+        elif state == "filter":
+            await pilot.press("alt+f")
+            await wait_until(
+                lambda: isinstance(pilot.app.screen, AthenaResultFilterModal),
+                what="snapshot filter controls",
+            )
+            field = pilot.app.screen.query_one(Input)
+            field.value = "literal"
+            await wait_until(
+                lambda: "literal" in pilot.app.export_screenshot(),
+                what="snapshot filter input rendered",
+            )
+        else:
+            await wait_until(
+                lambda: "more&#160;available" in pilot.app.export_screenshot(),
+                what="snapshot loaded-only footer rendered",
+            )
+            assert pilot.app.query_one(DataTable).row_count == 5
+        assert pages.calls == [("acceptance", None)]
+
+    app = DemoModeApp(theme=theme)
+    try:
+        assert snap_compare(app, terminal_size=size, run_before=show)
+    finally:
+        app.app_ctx.root_vm.dispose()
+
+
+@pytest.mark.parametrize(("theme", "size"), FULL_APP_CASES)
+@pytest.mark.parametrize("state", ["results", "inspector", "filter"])
+def test_athena_result_inspection_full_app_content_guard(theme, size, state):
+    snapshot = _named_snapshot(
+        f"test_athena_result_inspection_full_app_snapshot[{state}-{theme}-{size[0]}x{size[1]}]"
+    )
+    rendered = "".join(
+        node.text or ""
+        for node in ElementTree.fromstring(snapshot).iter("{http://www.w3.org/2000/svg}text")
+    ).replace("\xa0", " ")
+    assert "Athena" in rendered
+    if state == "inspector":
+        assert "Loaded row 2" in rendered
+        assert "column 2" in rendered
+        assert "full literal [bold]é[/bold]" in rendered
+        assert "second line retained" in rendered
+        assert "Close" in rendered
+    elif state == "filter":
+        assert "Case-insensitive literal substring" in rendered
+        assert "loaded rows only" in rendered
+        assert "literal" in rendered
+        assert all(control in rendered for control in ("Apply", "Clear", "Cancel"))
+    else:
+        assert "5 visible" in rendered
+        assert "5 loaded" in rendered
+        assert "· local" in rendered
+        assert "more available" in rendered
+        assert "duplicate" in rendered
+        assert "demo-dev" in rendered
+        assert "DEMO MODE" in rendered
