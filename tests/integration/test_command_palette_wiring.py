@@ -81,6 +81,160 @@ async def test_palette_projects_only_global_and_active_service_commands(tmp_path
         ctx.log_sink.close()
 
 
+async def _prepare_marked_parent_cursor(app, ctx, pilot):
+    from aws_tui.demo.in_memory_fs import InMemoryFS
+    from aws_tui.domain.filesystem import PathRef
+    from aws_tui.vm.chrome.focus_coordinator_vm import FocusSlot
+
+    await pilot.pause()
+    await drain_workers(app)
+    pane = ctx.root_vm.content_host.current.right
+    fs = InMemoryFS()
+    await fs.mkdir(PathRef(("folder",)))
+
+    async def data():
+        yield b"marked contents"
+
+    await fs.write_stream(PathRef(("folder", "marked.txt")), data())
+    await pane.swap_provider(fs, identity_label="fixture", path_protocol="")
+    await pane.navigate_to(PathRef(("folder",)))
+    pane.mark_at(
+        next(i for i, entry in enumerate(pane.filtered_entries) if entry.name == "marked.txt")
+    )
+    pane.move_cursor_to(
+        next(i for i, entry in enumerate(pane.filtered_entries) if entry.is_parent_link)
+    )
+    ctx.focus_coordinator.set_focused_slot(FocusSlot.S3_RIGHT)
+    app.set_focus(None)
+    await pilot.pause()
+    assert pane.selected_entry.is_parent_link
+    assert [entry.name for entry in pane.marked_entries] == ["marked.txt"]
+    return pane, fs
+
+
+@pytest.mark.parametrize(("action", "label"), [("pane.copy", "Copy"), ("pane.delete", "Delete")])
+async def test_marked_parent_cursor_help_and_palette_open_real_confirmation(
+    app_context_factory,
+    action,
+    label,
+):
+    from aws_tui.domain.filesystem import PathRef
+    from aws_tui.ui.widgets.confirm_modal import ConfirmModal
+    from aws_tui.ui.widgets.help_modal import HelpActionRow, HelpModal
+
+    ctx = app_context_factory()
+    app = AwsTuiApp(ctx)
+    async with app.run_test(size=(120, 40)) as pilot:
+        pane, fs = await _prepare_marked_parent_cursor(app, ctx, pilot)
+        # Compact footer intentionally retains its cursor-only parent denial.
+        assert {"pane.copy", "pane.delete"} <= app._readiness_disabled()
+        await pilot.press("question_mark")
+        await wait_until(lambda: isinstance(app.screen, HelpModal), what="marked-target Help")
+        assert {"pane.copy", "pane.delete"} <= {
+            row.action_id for row in app.screen.query(HelpActionRow)
+        }
+        await pilot.press("escape", "ctrl+k")
+        await pilot.pause()
+        assert {"pane.copy", "pane.delete"} <= {
+            row.action_id for row in app.screen.query(".palette-item")
+        }
+        await pilot.press(*f"{label} selected entries")
+        await pilot.pause()
+        assert [row.id for row in ctx.command_palette_vm.filtered_entries] == [action]
+        await pilot.press("enter")
+        await wait_until(
+            lambda: isinstance(app.screen, ConfirmModal), what="marked-target confirmation"
+        )
+        request = ctx.confirm_vm.request
+        assert request.title == f"{label} 1 item?"
+        assert request.confirm_label == label
+        assert request.danger is (action == "pane.delete")
+        assert request.paths[0].path.endswith("/marked.txt")
+        await pilot.press("escape")
+        await drain_workers(app)
+        assert not ctx.confirm_vm.is_open
+        assert not app._confirmation_pending
+        assert pane.selected_entry.is_parent_link
+        assert [entry.name for entry in pane.marked_entries] == ["marked.txt"]
+        assert [entry.name for entry in await fs.list(PathRef(("folder",)))] == ["marked.txt"]
+        assert ctx.transfer_journal.load_history() == ()
+
+
+async def test_unmarked_parent_cursor_omits_copy_delete_from_help_and_palette(app_context_factory):
+    from aws_tui.ui.widgets.help_modal import HelpActionRow, HelpModal
+
+    ctx = app_context_factory()
+    app = AwsTuiApp(ctx)
+    async with app.run_test(size=(120, 40)) as pilot:
+        pane, _fs = await _prepare_marked_parent_cursor(app, ctx, pilot)
+        pane.set_marked_entries(pane.marked_entries, marked=False)
+        assert pane.marked_entries == ()
+        await pilot.press("question_mark")
+        await wait_until(lambda: isinstance(app.screen, HelpModal), what="unmarked-parent Help")
+        assert {"pane.copy", "pane.delete"}.isdisjoint(
+            row.action_id for row in app.screen.query(HelpActionRow)
+        )
+        await pilot.press("escape", "ctrl+k")
+        await pilot.pause()
+        assert {"pane.copy", "pane.delete"}.isdisjoint(
+            row.action_id for row in app.screen.query(".palette-item")
+        )
+        await pilot.press("escape")
+
+
+@pytest.mark.parametrize(("action", "label"), [("pane.copy", "Copy"), ("pane.delete", "Delete")])
+async def test_marked_parent_cursor_palette_rechecks_marks_after_dismissal(
+    app_context_factory,
+    monkeypatch,
+    action,
+    label,
+):
+    from aws_tui.ui.widgets.confirm_modal import ConfirmModal
+
+    ctx = app_context_factory()
+    app = AwsTuiApp(ctx)
+    async with app.run_test(size=(120, 40)) as pilot:
+        pane, _fs = await _prepare_marked_parent_cursor(app, ctx, pilot)
+        await pilot.press("ctrl+k")
+        await pilot.press(*f"{label} selected entries")
+        await pilot.pause()
+        assert [row.id for row in ctx.command_palette_vm.filtered_entries] == [action]
+        calls = []
+        invoke = app._actions.invoke
+        after_refresh = app.call_after_refresh
+        cleared = []
+
+        def spy(action_id):
+            calls.append(action_id)
+            return invoke(action_id)
+
+        def schedule(callback, *args, **kwargs):
+            if getattr(callback, "__name__", None) == "after_dismissal":
+
+                def clear_then_release():
+                    assert not isinstance(app.screen, CommandPalette)
+                    pane.set_marked_entries(pane.marked_entries, marked=False)
+                    cleared.append(True)
+                    callback()
+
+                return after_refresh(clear_then_release)
+            return after_refresh(callback, *args, **kwargs)
+
+        monkeypatch.setattr(app._actions, "invoke", spy)
+        monkeypatch.setattr(app, "call_after_refresh", schedule)
+        await pilot.press("enter")
+        await pilot.pause()
+        assert cleared == [True]
+        assert pane.marked_entries == ()
+        assert pane.selected_entry.is_parent_link
+        assert calls == ["pane.descend"], "only the existing modal Enter router may run"
+        assert action not in calls
+        assert not isinstance(app.screen, (CommandPalette, ConfirmModal))
+        assert not ctx.confirm_vm.is_open
+        assert not app._confirmation_pending
+        assert ctx.command_palette_vm._pending_tasks == {}
+
+
 @pytest.mark.asyncio
 async def test_colon_opens_command_palette(app_context_factory) -> None:  # type: ignore[no-untyped-def]
     app = AwsTuiApp(app_context_factory())

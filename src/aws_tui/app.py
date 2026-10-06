@@ -2519,9 +2519,15 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
                     reasons[spec.id] = "focus_required" if pane is None else "busy"
             if pane is not None:
                 selected = pane.selected_entry
+                # Copy/delete use marks first; the footer's parent-row denial
+                # applies only to their cursor fallback in discovery.
+                for action in ("pane.copy", "pane.delete"):
+                    if pane.marked_entries:
+                        if reasons.get(action) == "selection_required":
+                            reasons.pop(action)
+                    elif selected is None or selected.is_parent_link:
+                        reasons[action] = "selection_required"
                 for action in (
-                    "pane.copy",
-                    "pane.delete",
                     "pane.copy_entry_path",
                     "pane.mark_up",
                     "pane.mark_down",
