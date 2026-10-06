@@ -22,7 +22,7 @@ import time
 import tomllib
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, BinaryIO, Final
 
@@ -221,6 +221,7 @@ class Config:
     connections: dict[str, ConnectionEntry]
     defaults: Defaults
     keybindings: Keybindings
+    athena_sql_drafts: bool = False
 
 
 def _default_path() -> Path:
@@ -369,7 +370,15 @@ class ConfigStore:
                 raise ConfigError(f"[keybindings].{action} must be a string or list of strings")
         keybindings = Keybindings(bindings=kb_bindings)
 
+        raw_athena = raw.get("athena", {})
+        if type(raw_athena) is not dict:
+            raise ConfigError("[athena] must be a table")
+        sql_drafts = raw_athena.get("sql_drafts", False)
+        if type(sql_drafts) is not bool:
+            raise ConfigError("[athena].sql_drafts must be a boolean")
+
         return Config(
+            athena_sql_drafts=sql_drafts,
             connections=connections,
             defaults=defaults,
             keybindings=keybindings,
@@ -509,6 +518,9 @@ class ConfigStore:
         if config.keybindings.bindings:
             out["keybindings"] = dict(config.keybindings.bindings)
 
+        if config.athena_sql_drafts:
+            out["athena"] = {"sql_drafts": True}
+
         return out
 
     # ------------------------------------------------------------------
@@ -534,11 +546,7 @@ class ConfigStore:
             raise ConfigError(f"connection {entry.name!r} has invalid kind {entry.kind!r}")
 
         def _apply(cfg: Config) -> Config:
-            return Config(
-                connections={**cfg.connections, entry.name: entry},
-                defaults=cfg.defaults,
-                keybindings=cfg.keybindings,
-            )
+            return replace(cfg, connections={**cfg.connections, entry.name: entry})
 
         self._mutate(_apply)
 
@@ -559,11 +567,7 @@ class ConfigStore:
         def _apply(cfg: Config) -> Config:
             if name not in cfg.connections:
                 raise KeyError(name)
-            return Config(
-                connections={**cfg.connections, name: entry},
-                defaults=cfg.defaults,
-                keybindings=cfg.keybindings,
-            )
+            return replace(cfg, connections={**cfg.connections, name: entry})
 
         self._mutate(_apply)
 
@@ -584,11 +588,7 @@ class ConfigStore:
                 if cfg.defaults.connection == name
                 else cfg.defaults
             )
-            return Config(
-                connections=new_conns,
-                defaults=new_defaults,
-                keybindings=cfg.keybindings,
-            )
+            return replace(cfg, connections=new_conns, defaults=new_defaults)
 
         self._mutate(_apply)
 
@@ -598,13 +598,15 @@ class ConfigStore:
         def _apply(cfg: Config) -> Config:
             if name not in cfg.connections:
                 raise ConfigError(f"unknown connection: {name!r}")
-            return Config(
-                connections=cfg.connections,
-                defaults=Defaults(connection=name, theme=cfg.defaults.theme),
-                keybindings=cfg.keybindings,
-            )
+            return replace(cfg, defaults=replace(cfg.defaults, connection=name))
 
         self._mutate(_apply)
+
+    def set_athena_sql_drafts(self, enabled: bool) -> None:
+        """Persist the opt-in preference without changing other configuration."""
+        if type(enabled) is not bool:
+            raise ConfigError("[athena].sql_drafts must be a boolean")
+        self._mutate(lambda cfg: replace(cfg, athena_sql_drafts=enabled))
 
 
 def _fsync_directory(path: Path) -> None:

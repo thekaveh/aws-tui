@@ -104,3 +104,132 @@ async def test_service_owns_selections_but_builds_disposable_page_dependencies()
 
     await replacement.shutdown()
     replacement.dispose()
+
+
+@pytest.mark.asyncio
+async def test_staged_draft_editor_writes_only_after_commit_and_next_edit(tmp_path) -> None:
+    from tests.athena_drafts_helpers import runtime_at
+    from tests.helpers import wait_until
+
+    runtime, store = runtime_at(tmp_path)
+    checks = []
+
+    def factory(connection):
+        async def check():
+            checks.append(connection.name)
+            return True
+
+        return check
+
+    service = _service(
+        drafts=runtime,
+        source_check_factory=factory,
+        athena_client_factory=lambda c: PageClient(connection_name=c.name, region=c.region),
+    )
+    candidate = service.build_recovery_vm(_connection("analytics", region="us-west-2"))
+    page = candidate.vm
+    await page.setup()
+    page.query.set_sql("SELECT 'STAGED'")
+    await page.shutdown()
+    assert store.list().records == ()
+    page.dispose()
+    candidate = service.build_recovery_vm(_connection("analytics", region="us-west-2"))
+    page = candidate.vm
+    await page.setup()
+    from tests.unit.vm.athena.test_page_vm import make_page_vm
+
+    source = make_page_vm(PageClient())
+    await source.setup()
+    source.query.set_sql("SELECT 'SNAPSHOT'")
+    snapshot = source.export_snapshot()
+    await page.restore_snapshot(snapshot)
+    assert page.query.sql == "SELECT 'SNAPSHOT'"
+    assert store.list().records == ()
+    await source.shutdown()
+    candidate.commit_selection()
+    assert runtime._worker._thread is None
+    page.query.set_sql("SELECT 'NEXT_EDIT'")
+    await wait_until(lambda: page.query.draft_state == "saved", what="active edited draft")
+    assert store.list().records[0].sql == "SELECT 'NEXT_EDIT'"
+    assert checks == ["analytics", "analytics"]
+    await runtime.shutdown()
+    await page.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_old_page_flush_cannot_overwrite_new_active_page_edit(tmp_path) -> None:
+    from tests.athena_drafts_helpers import runtime_at
+
+    runtime, store = runtime_at(tmp_path)
+
+    async def check():
+        return True
+
+    service = _service(
+        drafts=runtime,
+        source_check_factory=lambda c: check,
+        athena_client_factory=lambda c: PageClient(connection_name=c.name, region=c.region),
+    )
+    connection = _connection("analytics", region="us-west-2")
+    old = service.build_vm(connection)
+    await old.setup()
+    old.query.set_sql("SELECT 'OLD'")
+    replacement = service.build_vm(connection)
+    await replacement.setup()
+    replacement.query.set_sql("SELECT 'NEW'")
+    await old.shutdown()
+    await runtime.shutdown()
+    await replacement.shutdown()
+    assert store.list().records[0].sql == "SELECT 'NEW'"
+
+
+@pytest.mark.asyncio
+async def test_shutdown_with_only_staged_editor_has_no_draft_writes(tmp_path):
+    from tests.athena_drafts_helpers import runtime_at
+
+    runtime, store = runtime_at(tmp_path)
+
+    async def check():
+        return True
+
+    service = _service(
+        drafts=runtime,
+        source_check_factory=lambda c: check,
+        athena_client_factory=lambda c: PageClient(connection_name=c.name, region=c.region),
+    )
+    candidate = service.build_recovery_vm(_connection("analytics", region="us-west-2"))
+    await candidate.vm.setup()
+    candidate.vm.query.set_sql("SELECT 'SPECULATIVE'")
+    assert (await runtime.shutdown()).unpersisted == 0
+    await candidate.vm.shutdown()
+    assert store.list().records == ()
+    assert runtime._worker._thread is None
+
+
+@pytest.mark.asyncio
+async def test_switching_source_keeps_each_editor_under_its_original_id(tmp_path):
+    from tests.athena_drafts_helpers import runtime_at
+
+    runtime, store = runtime_at(tmp_path)
+
+    async def check():
+        return True
+
+    service = _service(
+        drafts=runtime,
+        source_check_factory=lambda c: check,
+        athena_client_factory=lambda c: PageClient(connection_name=c.name, region=c.region),
+    )
+    old = service.build_vm(_connection("analytics", region="us-west-2"))
+    await old.setup()
+    old.query.set_sql("SELECT 'ORIGINAL'")
+    newer = service.build_vm(_connection("other", region="us-west-2"))
+    await newer.setup()
+    newer.query.set_sql("SELECT 'OTHER'")
+    await runtime.shutdown()
+    await old.shutdown()
+    await newer.shutdown()
+    records = {r.context[0]: r for r in store.list().records}
+    assert records["analytics"].sql == "SELECT 'ORIGINAL'"
+    assert records["other"].sql == "SELECT 'OTHER'"
+    assert records["analytics"].id != records["other"].id

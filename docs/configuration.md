@@ -14,6 +14,7 @@ preserved when present.
 | Path | Contents |
 |---|---|
 | `<config-dir>/config.toml` | Connections + defaults + keybindings |
+| `<config-dir>/athena-drafts/<id>.json` | Opt-in local Athena SQL drafts |
 | `<config-dir>/theme.tcss` | Optional `.tcss` overlay over the active theme |
 | `<config-dir>/themes/<name>.tcss` | Optional full custom themes |
 | `<cache-dir>/log/aws-tui.log` | JSON-lines log (rotated 5 MiB × 5) |
@@ -62,3 +63,40 @@ The global `app.transfer_history` action defaults to `Ctrl+T`. Remap it through
 `[keybindings]` as with other actions, or set it to `[]` to disable its shortcut.
 An existing custom binding using `Ctrl+T` must be moved or the history action
 remapped to avoid a new collision. See [Keybindings](keybindings.md#7-transfer-history-binding-migration).
+
+## 5. Local Athena SQL drafts
+
+Local SQL drafts default to off. Enable **Athena SQL drafts** in Settings or
+add this setting to `config.toml`:
+
+```toml
+[athena]
+sql_drafts = true
+```
+
+A missing or false setting creates no draft directory and performs no draft
+reads or writes. Demo mode disables local SQL drafts. Settings shows the actual
+draft directory and whether persistence is enabled.
+
+Drafts retain the latest SQL for each complete query context on this device.
+Schema version `1` stores only SQL, UTC creation/update timestamps, a stable
+identifier, and connection name, region, workgroup, catalog, and database.
+Results, execution state, credentials, and navigation state are not retained.
+SQL is stored as plaintext. The directory uses private `0700` permissions and
+record files use `0600` where POSIX permissions are supported; these are not
+encryption. Unsupported filesystems may not enforce those permissions.
+
+Retention allows at most `50` owned record files and `8_388_608` bytes (8 MiB)
+across them, with at most `262_144` SQL UTF-8 bytes and `278_528` bytes per
+record. Edits use a fixed `0.500` second debounce. These limits are not
+preferences.
+
+In Athena's **Drafts** manager, **Delete** removes the selected local record and
+**Clear all** removes owned records. Settings **Disable and delete drafts** asks
+for confirmation, turns persistence off, and deletes owned records. If cleanup
+fails, **Retry draft cleanup** retries deletion while the setting stays off.
+Deleting or clearing does not recreate a draft from untouched editor text;
+edit again to save a new revision. Draft contents are not collected by
+`doctor` or support diagnostics. See [Athena](services/athena.md#6-local-sql-draft-recovery)
+for recovery and [Cookbook](cookbook.md#66-save-and-recover-local-sql-drafts)
+for the keyboard procedure and shutdown limits.

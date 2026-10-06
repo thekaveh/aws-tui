@@ -71,3 +71,19 @@ def test_settings_vm_no_longer_has_dirty_set_or_sections(tmp_path: Path) -> None
     finally:
         vm.dispose()
         s3.dispose()
+
+
+def test_settings_dispose_does_not_dispose_shared_draft_owner(tmp_path):
+    from tests.athena_drafts_helpers import runtime_at
+
+    owner, _ = runtime_at(tmp_path, enabled=False)
+    vm, s3 = _make_vm(tmp_path)
+    shared = SettingsVM(s3=s3, athena_drafts=owner, hub=_hub(), dispatcher=NULL_DISPATCHER)
+    assert shared.athena_drafts is owner
+    shared.dispose()
+    assert not owner._disposed
+    assert owner._worker._thread is None
+    assert vm.athena_drafts is None
+    vm.dispose()
+    s3.dispose()
+    owner.dispose()

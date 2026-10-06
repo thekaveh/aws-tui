@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from typing import Any, ClassVar, Protocol
 
 from vmx import Message, MessageHub
@@ -13,6 +13,7 @@ from aws_tui.domain.athena_runner import AthenaQueryRunner
 from aws_tui.domain.sql_policy import ReadOnlySqlPolicy
 from aws_tui.infra.aws_session import AwsSession
 from aws_tui.infra.connection_resolver import Connection
+from aws_tui.vm.athena.drafts_vm import AthenaDraftsVM
 from aws_tui.vm.athena.page_vm import AthenaPageVM
 from aws_tui.vm.service_source_vm import SelectionScope, ServiceSelectionStore
 from aws_tui.vm.services_protocol import RecoveryServiceVM, ServiceDescriptor
@@ -111,7 +112,11 @@ class AthenaService:
         athena_client_factory: AthenaClientFactory | None = None,
         sql_policy_factory: SqlPolicyFactory | None = None,
         selection_store: ServiceSelectionStore | None = None,
+        drafts: AthenaDraftsVM | None = None,
+        source_check_factory: Callable[[Connection], Callable[[], Awaitable[bool]]] | None = None,
     ) -> None:
+        self._drafts = drafts
+        self._source_check_factory = source_check_factory
         self._hub = hub
         self._dispatcher = dispatcher
         self._aws_session = aws_session
@@ -123,20 +128,25 @@ class AthenaService:
         return connection.kind == "aws"
 
     def build_vm(self, connection: Connection) -> AthenaPageVM:
-        return self._build_vm(connection, self._selections)
+        return self._build_vm(connection, self._selections, drafts_active=True)
 
     def build_recovery_vm(self, connection: Connection) -> RecoveryServiceVM:
         selections = self._selections.clone()
         scope = SelectionScope(self.descriptor.id, connection.name, connection.region)
-        return RecoveryServiceVM(
-            vm=self._build_vm(connection, selections),
-            commit_selection=lambda: self._selections.replace_scope_from(selections, scope),
-        )
+        page = self._build_vm(connection, selections, drafts_active=False)
+
+        def commit_selection() -> None:
+            self._selections.replace_scope_from(selections, scope)
+            page.activate_drafts()
+
+        return RecoveryServiceVM(vm=page, commit_selection=commit_selection)
 
     def _build_vm(
         self,
         connection: Connection,
         selections: ServiceSelectionStore,
+        *,
+        drafts_active: bool,
     ) -> AthenaPageVM:
         client: AthenaClientProtocol = (
             self._client_factory(connection)
@@ -146,6 +156,11 @@ class AthenaService:
                 connection=connection,
             )
         )
+        source_check = (
+            self._source_check_factory(connection)
+            if self._source_check_factory is not None
+            else None
+        )
         policy = self._policy_factory()
         return AthenaPageVM(
             client=client,
@@ -153,6 +168,9 @@ class AthenaService:
             runner=AthenaQueryRunner(client, policy),
             connection=connection,
             selection_store=selections,
+            drafts=self._drafts,
+            drafts_active=drafts_active,
+            source_is_current=source_check,
             hub=self._hub,
             dispatcher=self._dispatcher,
         )

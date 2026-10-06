@@ -82,3 +82,37 @@ saved SQL, managed-output cases, customer-S3 artifacts, and scoped denial.
 Contract tests validate AWS request names and fields against the locked
 botocore model. Policy tests exercise accepted and rejected SQL across the
 minimum and locked SQLGlot versions.
+
+## 6. Local SQL draft recovery
+
+Enable **Local SQL drafts** in Settings's **Athena SQL drafts** section using
+**Enable local SQL drafts**. Persistence defaults to off and is unavailable in
+demo mode. The editor border shows **Draft pending**, **Draft saved**, or
+**Draft not saved** from the acknowledged save state. Pending text has not been
+confirmed saved. Read the full fixed error or context explanation in Execution
+detail; edit again to retry a failed save. **No saved draft** means no current
+saved SQL. See [Configuration](../configuration.md#5-local-athena-sql-drafts)
+for the plaintext storage location, retention, and deletion behavior.
+
+Tab to **Drafts** and press Enter to open the local manager. Its scrollable list
+and detail show metadata and saved timestamps, without SQL previews. Selecting
+a row or pressing Enter in the list does not restore it. Tab and Shift+Tab move
+between the list, scrollable detail, and actions; Up and Down scroll the focused
+detail. **Restore** is a separate action. Close or Escape returns focus to
+**Drafts**; a successful restore focuses the editor.
+
+Before restoring, select the exact original connection name and region, then
+its workgroup, catalog, and database. Recovery validates the current source and
+context afresh and refuses a missing, changed, or inaccessible context. It does
+not choose another connection or context. If the editor has unsaved text,
+**Replace unsaved SQL?** asks before replacement. **Keep current editor** clears
+only a failed recovery decision; it does not bypass the original-context guard
+on recovered SQL. Recovery never automatically executes SQL, loads result rows,
+or creates AWS named queries. Recovered SQL is validated again before execution.
+
+The five persisted context fields cannot attest same-name AWS credential-account
+changes across restarts. Verify the account behind the selected profile before
+running recovered SQL. Completed autosaves can be recovered after an abrupt
+exit; pending or failed edits are not guaranteed to be recoverable. Follow the
+[keyboard recovery recipe](../cookbook.md#66-save-and-recover-local-sql-drafts)
+for restart and shutdown details.
