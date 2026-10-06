@@ -239,7 +239,11 @@ async def test_log_commands_actual_keys_palette_hints_and_focus(tmp_path, monkey
     ctx = build_app_context(config_dir=tmp_path / "config", cache_dir=tmp_path / "cache", demo=True)
     if rebound:
         ctx.keymap_store = KeymapStore(
-            overlay={"emr.logs.source": ["ctrl+g"], "emr.logs.follow": ["ctrl+h"]}
+            overlay={
+                "glue.compare_tables": [],
+                "emr.logs.source": ["ctrl+g"],
+                "emr.logs.follow": ["ctrl+h"],
+            }
         )
     app = AwsTuiApp(ctx)
     waiting = asyncio.Event()

@@ -111,6 +111,9 @@ ACTION_SPECS: tuple[ActionSpec, ...] = (
         "EMR Serverless",
         service_ids=frozenset(("emr-serverless",)),
     ),
+    ActionSpec(
+        "glue.compare_tables", "Compare Glue tables", "Glue", service_ids=frozenset(("glue",))
+    ),
     ActionSpec("glue.catalog", "Glue catalog", "Glue", service_ids=frozenset(("glue",))),
     ActionSpec("glue.jobs", "Glue jobs", "Glue", service_ids=frozenset(("glue",))),
     ActionSpec("glue.crawlers", "Glue crawlers", "Glue", service_ids=frozenset(("glue",))),

@@ -61,6 +61,7 @@ from aws_tui.infra.doctor_probe import probe_source
 from aws_tui.infra.keymap_store import textual_key_name
 from aws_tui.infra.redaction import redact_text
 from aws_tui.infra.theme_store import ThemeNotFound, ThemeStore
+from aws_tui.services.glue.service import GlueService
 from aws_tui.ui import notifications
 from aws_tui.ui.actions import ActionRegistry
 from aws_tui.ui.bindings import BindingResolver
@@ -83,6 +84,7 @@ from aws_tui.ui.widgets.first_run import (
     FirstRunConnectionList,
     FirstRunView,
 )
+from aws_tui.ui.widgets.glue.comparison_modal import GlueComparisonModal
 from aws_tui.ui.widgets.glue.page import GluePage
 from aws_tui.ui.widgets.help_modal import HelpModal
 from aws_tui.ui.widgets.hint_legend import HintLegend
@@ -708,6 +710,7 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
             "glue.choose_crawler_state",
             self.action_choose_glue_crawler_state,
         )
+        self._actions.register("glue.compare_tables", self.action_glue_compare_tables)
         self._actions.register(
             "glue.copy_table_ref",
             self.action_copy_glue_table_reference,
@@ -2543,6 +2546,7 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
         if glue is not None:
             disabled = set()
             for action, ready in (
+                ("glue.compare_tables", glue.vm.actions_available),
                 ("glue.copy_table_ref", glue.vm.can_copy_table_reference),
                 ("glue.query_in_athena", glue.vm.can_query_in_athena),
                 ("glue.time_travel_in_athena", glue.vm.can_time_travel_in_athena),
@@ -4857,6 +4861,32 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
         page = self._glue_page()
         if page is not None:
             await page.action_load_more()
+
+    def action_glue_compare_tables(self) -> None:
+        page = self._glue_page()
+        if page is None or not page.vm.actions_available or len(self.screen_stack) > 1:
+            return
+        service = self._app_ctx.registry.get("glue")
+        if not isinstance(service, GlueService):
+            return
+        self.record_action("glue.compare_tables")
+        detail = page.vm.catalog.table_detail
+        candidate = (
+            detail.summary.ref if page.vm.can_copy_table_reference and detail is not None else None
+        )
+        vm = service.build_comparison_vm(
+            connections=partial(_service_source_candidates, self._app_ctx, "glue")
+        )
+        origin = self.focused
+        screen = GlueComparisonModal(
+            vm, pin_candidate=candidate, copy=self.copy_value, initial_source=page.vm.source
+        )
+
+        def dismissed(_result: None) -> None:
+            if origin is not None and origin.is_attached and origin.screen is self.screen:
+                self.set_focus(origin)
+
+        self.push_screen(screen, dismissed)
 
     def action_copy_glue_table_reference(self) -> None:
         self.record_action("glue.copy_table_ref")
@@ -7214,6 +7244,11 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
                 return
             subscription.dispose()
             setattr(self, attribute, None)
+
+        for screen in tuple(getattr(self, "screen_stack", ())):
+            if isinstance(screen, GlueComparisonModal):
+                run_cleanup("glue_comparison.close", screen.close)
+                await await_cleanup("glue_comparison.shutdown", screen.shutdown)
 
         run_cleanup("service_navigation.close_intake", self._close_service_navigation_intake)
         recovery_task = getattr(self, "_auth_recovery_task", None)

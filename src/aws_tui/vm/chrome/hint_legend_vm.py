@@ -53,6 +53,7 @@ _SERVICE_ACTIONS: dict[str, tuple[str, ...]] = {
         "glue.crawlers",
         "glue.choose_run_state",
         "glue.choose_crawler_state",
+        "glue.compare_tables",
         "glue.copy_table_ref",
         "glue.query_in_athena",
         "glue.time_travel_in_athena",
@@ -127,6 +128,7 @@ _ACTION_LABELS: dict[str, str] = {
     "glue.crawlers": "crawlers",
     "glue.choose_run_state": "run state",
     "glue.choose_crawler_state": "crawler state",
+    "glue.compare_tables": "compare",
     "glue.copy_table_ref": "copy",
     "glue.query_in_athena": "Athena",
     "glue.time_travel_in_athena": "snapshot",
@@ -173,6 +175,7 @@ _ACTION_EFFECTS: dict[str, str] = {
     "glue.crawlers": "Show Glue crawlers and their read-only state.",
     "glue.choose_run_state": "Open the Glue job-run state filter.",
     "glue.choose_crawler_state": "Open the Glue crawler-state filter.",
+    "glue.compare_tables": "Open an independent read-only comparison of two explicitly selected Glue tables.",
     "glue.copy_table_ref": "Copy the selected Glue table's fully qualified SQL identifier.",
     "glue.query_in_athena": (
         "Open the selected Glue table in Athena and prefill a bounded read-only SELECT. "

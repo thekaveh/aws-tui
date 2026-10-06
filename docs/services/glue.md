@@ -71,7 +71,59 @@ adds `FOR VERSION AS OF <snapshot-id>`. Both requests preserve catalog,
 database, table, connection, and region in immutable messages. The destination
 editor is prefilled for review; neither command executes SQL.
 
-## 5. Architecture and verification
+## 5. Compare table definitions
+
+Press `Ctrl+G` or choose **Compare Glue tables** in the command palette.
+The comparison opens with both tables unset. Each side has its own configured
+AWS source, editable region (commit with **Apply region**), database, and table.
+Catalog is fixed to `AwsDataCatalog`. Choose each table explicitly; matching
+names never select a counterpart. **Pin open → Left/Right** captures the table
+that was open when the comparison launched, then fetches it again. The page
+behind the comparison keeps its source and selection.
+
+The headers retain each exact source, region, catalog, database and table,
+with a separate UTC timestamp sampled after that side's successful fetch.
+**Refresh Left/Right** refreshes independently. While refreshing, and after a
+failed refresh, the previous successful definition and its original timestamp
+remain visible with an explicit freshness status. Changing a source, region,
+database or table clears that side's previous definition. At narrow widths,
+controls scroll vertically and long reference fields wrap in independent
+read-only viewers; side labels and fetch times stay visible above those viewers.
+
+Changes are directed from **Left to Right**: added means present only on Right,
+removed means present only on Left. Columns and partition keys are compared
+separately by exact, case-sensitive names. Relative order of common columns
+reports reordering without treating an insertion as a reorder. Duplicate names
+are shown as unavailable for unambiguous matching. Type comparison conservatively
+ignores ASCII outer whitespace and whitespace around type punctuation outside
+quotes; case, quoted content, and malformed type expressions remain significant.
+This is a metadata difference, not a schema-compatibility verdict.
+
+Storage compares location, input/output formats, SerDe, compression, table type,
+and table format. Missing, empty, false and absent values remain distinct.
+Compression reflects the provider's boolean: when Glue omits `Compressed`, the
+existing provider reports `False`, so absence and explicit false compare equally.
+Parameters expose key presence only; their values remain redacted/unavailable
+and are never inspected for equality.
+
+`Tab` / `Shift+Tab` visits controls; Enter or Space commits selectors and buttons,
+and arrows move within selectors. `Ctrl+1` / `Ctrl+2` focuses the Left/Right source,
+`Ctrl+R` refreshes the last focused side (Left initially), and `Ctrl+D` toggles
+**Differences only**. Unavailable values remain in that filtered view.
+`Ctrl+C` or **Copy full summary** always exports the complete comparison with
+both references, timestamps and freshness, regardless of the filter. Copy is
+disabled until both definitions are available. **View full summary** provides a
+read-only selectable version when clipboard delivery is unavailable; clipboard
+status uses the existing application writer. Escape closes an open selector
+first, then the comparison, restoring the page's focus.
+
+Comparison uses only Glue database listing, table listing and table-detail
+reads. It performs no partition/statistics reads, Athena queries or writes.
+Each side's listing stops at 1,000 items, 64 page requests, repeated tokens or
+three consecutive empty pages. Closing invalidates pending work immediately;
+cleanup drains requests that resist cancellation without publishing stale data.
+
+## 6. Architecture and verification
 
 `GlueService` composes `GluePageVM` from Catalog, Jobs, Crawlers, and Iceberg
 VMs. VMx token-paged compositions own AWS continuation tokens, and the app
