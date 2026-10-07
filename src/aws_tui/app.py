@@ -2624,8 +2624,13 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
         )
 
     def _select_discovery_service(self, service_id: str) -> None:
-        if self._discovery_service_supported(service_id):
-            self._app_ctx.root_vm.services_menu.switch_service_command.execute(service_id)
+        if not self._discovery_service_supported(service_id):
+            return
+        if service_id == "athena":
+            glue = self._glue_page()
+            if glue is not None and glue.vm.query_in_athena():
+                return
+        self._app_ctx.root_vm.services_menu.switch_service_command.execute(service_id)
 
     def _discovery_unavailability(self, origin: _DiscoveryOrigin) -> dict[str, str]:
         reasons = {

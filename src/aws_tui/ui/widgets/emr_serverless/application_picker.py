@@ -14,6 +14,7 @@ from textual.binding import BindingType
 from textual.containers import Horizontal
 from textual.events import Click
 from textual.message import Message as TextualMessage
+from textual.screen import Screen
 from textual.widget import Widget
 from textual.widgets import OptionList, Static
 from textual.widgets.option_list import Option
@@ -53,8 +54,8 @@ def _state_option(state: ApplicationState, name: str) -> Text:
     """Render a styled row with a literal state for non-color access."""
     style, glyph = _APP_STATE_MARKER.get(state, ("white", "?"))
     prompt = Text(no_wrap=True, overflow="ellipsis")
+    prompt.append(f"{name} · ")
     prompt.append(f"{glyph} {state.value}", style=style)
-    prompt.append(f" · {name}")
     return prompt
 
 
@@ -90,12 +91,14 @@ class ApplicationPicker(Widget, can_focus=True):
         text-style: bold;
     }
     ApplicationPicker > OverlayOptionList {
-        width: 1fr;
+        /* Fit names independently of the trigger and the page's fixed width. */
+        width: auto !important;
+        max-width: 100vw;
         height: auto;
         max-height: 16;
         display: none;
         overlay: screen;
-        constrain: none inside;
+        constrain: inside inside;
         text-wrap: nowrap;
         text-overflow: ellipsis;
     }
@@ -160,6 +163,7 @@ class ApplicationPicker(Widget, can_focus=True):
         self._marker_widget: Static | None = None
         self._value_widget: Static | None = None
         self._option_list: OverlayOptionList | None = None
+        self._layout_screen: Screen[object] | None = None
 
     def compose(self) -> ComposeResult:
         marker, value = self._trigger_fragments()
@@ -179,8 +183,16 @@ class ApplicationPicker(Widget, can_focus=True):
         # instance.
         self._sub = self._vm.on_property_changed.subscribe(on_next=self._on_vm_property_changed)
         self._refresh_accessibility_text()
+        self._layout_screen = self.screen
+        self._layout_screen.screen_layout_refresh_signal.subscribe(
+            self, self._refresh_overlay_bounds
+        )
+        self._refresh_overlay_bounds(self._layout_screen)
 
     def on_unmount(self) -> None:
+        if self._layout_screen is not None:
+            self._layout_screen.screen_layout_refresh_signal.unsubscribe(self)
+            self._layout_screen = None
         was_open = self.is_open
         self._focus_intent.advance()
         self.remove_class("-open")
@@ -259,6 +271,16 @@ class ApplicationPicker(Widget, can_focus=True):
             self.post_message(self.ApplicationCommitted(opt.id))
 
     # ── Internal ────────────────────────────────────────────────────────────
+
+    def _refresh_overlay_bounds(self, screen: Screen[object]) -> None:
+        """Invalidate cached overlay layout when its fixed-width owner doesn't resize."""
+        opts = self._option_list
+        if opts is None or not opts.is_attached:
+            return
+        # Cell bounds change on terminal resize even if the trigger size stays
+        # constant. Unchanged assignments don't schedule another layout pass.
+        opts.styles.max_width = screen.size.width
+        opts.styles.max_height = min(16, screen.size.height)
 
     def focus_on_click(self) -> bool:
         """Keep the option list focused while its owner trigger is clicked."""
@@ -462,10 +484,9 @@ class ApplicationPicker(Widget, can_focus=True):
         the order the user reads in the dropdown is the order they
         cycle through with the keybinding.
 
-        Prompt: ``<colored-glyph> <STATE> · <name>`` — no fire emoji.
-        State-first ordering keeps the literal state visible when a narrow
-        selector must ellipsize the application name; matching marker/state
-        styling preserves fast scanning.
+        Prompt: ``<name> · <colored-glyph> <STATE>`` — no fire emoji.
+        Name-first ordering preserves useful names on narrow terminals; the
+        marker and literal state keep status accessible without color.
 
         Error states (UNREACHABLE / AUTH_REQUIRED / FORBIDDEN /
         ERROR) and LOADING surface as a single non-selectable
@@ -497,10 +518,7 @@ class ApplicationPicker(Widget, can_focus=True):
             return [Option(prompt=f"⚠ {_escape_markup(msg)}", id="__placeholder__", disabled=True)]
         return [
             Option(
-                # Name is AWS-controlled — escape Rich markup
-                # characters so a name like ``my-app [v2]`` doesn't
-                # crash the OptionList renderer. Marker is the only
-                # intentional markup in the prompt.
+                # Rich Text keeps AWS-controlled names literal, including brackets.
                 prompt=_state_option(a.state, a.name),
                 id=a.id,
             )
