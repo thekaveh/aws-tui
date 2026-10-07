@@ -15,6 +15,7 @@ from collections.abc import Callable
 import pytest
 from rich.text import Text
 from textual.app import App, ComposeResult
+from textual.containers import Horizontal
 from textual.widgets import OptionList, Static
 from vmx import NULL_DISPATCHER, MessageHub
 from vmx.messages.protocols import Message
@@ -24,6 +25,7 @@ from aws_tui.domain.emr_serverless import ApplicationState
 from aws_tui.ui.widgets.emr_serverless.application_picker import ApplicationPicker
 from aws_tui.vm.emr_serverless.applications_vm import ApplicationsVM
 from tests.helpers import focus_and_settle, wait_until
+from tests.snapshot.apps.emr import EmrPageApp, _build_page_vm
 
 
 def _make_vm(fake: _InMemoryEmr | None = None) -> tuple[ApplicationsVM, MessageHub[Message]]:
@@ -490,10 +492,157 @@ async def test_application_options_expose_literal_state_with_state_styling() -> 
 
         assert all(isinstance(prompt, Text) for prompt in prompts)
         assert [prompt.plain for prompt in prompts if isinstance(prompt, Text)] == [
-            "◇ CREATED · ready",
-            "○ STOPPED · quiet",
+            "ready · ◇ CREATED",
+            "quiet · ○ STOPPED",
         ]
         assert [prompt.spans[0].style for prompt in prompts if isinstance(prompt, Text)] == [
             "white",
             "dim",
         ]
+
+
+@pytest.mark.parametrize("state", list(ApplicationState))
+async def test_application_option_starts_with_literal_name_before_state(
+    state: ApplicationState,
+) -> None:
+    fake = _InMemoryEmr()
+    name = "production-etl [blue] [/red]"
+    fake.add_application(app_id="stable-app-id", name=name, state=state)
+    vm, _ = _make_vm(fake)
+    await vm.refresh()
+    picker = ApplicationPicker(vm)
+
+    option = picker._build_options()[0]
+    assert isinstance(option.prompt, Text)
+    assert option.prompt.plain.startswith(f"{name} · ")
+    assert option.prompt.plain.endswith(f" {state.value}")
+    assert option.id == "stable-app-id"
+    # AWS-controlled brackets remain text; only the trailing state is styled.
+    assert option.prompt.spans[0].start >= len(name)
+
+
+@pytest.mark.parametrize("terminal_size", [(120, 40), (80, 24), (40, 16)])
+async def test_application_overlay_fits_names_and_screen_and_commits_stable_id(
+    terminal_size: tuple[int, int],
+) -> None:
+    fake = _InMemoryEmr()
+    name = "production-analytics-nightly-batch [blue]"
+    fake.add_application(app_id="first-id", name=name, state=ApplicationState.STARTED)
+    fake.add_application(app_id="second-id", name=name, state=ApplicationState.STARTED)
+    app = EmrPageApp(theme="carbon")
+    app._page_vm = _build_page_vm(fake)
+
+    async with app.run_test(size=terminal_size) as pilot:
+        await pilot.pause()
+        picker = app.query_one(ApplicationPicker)
+        options = picker.query_one(OptionList)
+        runs = app.query_one("#emr-runs-pane")
+        before = (picker.region, runs.region)
+        picker.open()
+        await wait_until(
+            lambda: picker.is_open and app.focused is options,
+            what="application overlay opened and focused before measuring",
+        )
+        await pilot.pause()
+
+        prompt = options.get_option_at_index(0).prompt
+        assert isinstance(prompt, Text)
+        required_width = prompt.cell_len + options.styles.gutter.width
+        assert options.region.width >= min(required_width, terminal_size[0])
+        assert options.region.width > picker.region.width
+        assert app.screen.region.contains_region(options.region)
+        assert (picker.region, runs.region) == before
+        # Assert actual mounted rendering, including state at sizes where it fits.
+        rendered = options.render_line(0).text
+        assert name[:20] in rendered
+        if terminal_size[0] >= required_width:
+            assert name in rendered
+            assert "● STARTED" in rendered
+
+        await pilot.press("escape")
+        await wait_until(
+            lambda: not picker.is_open and app.focused is picker,
+            what="Escape closed the widened application overlay and returned focus",
+        )
+        assert app._page_vm.applications.selected_id == "first-id"
+
+        picker.open()
+        await wait_until(
+            lambda: picker.is_open and app.focused is options,
+            what="application overlay reopened for stable-id selection",
+        )
+        # Rebuilding options on open leaves no highlight; the first Down
+        # highlights row zero and the second reaches the duplicate name.
+        assert options.highlighted is None
+        await pilot.press("down", "down", "enter")
+        await wait_until(
+            lambda: (
+                not picker.is_open
+                and app._page_vm.applications.selected_id == "second-id"
+                and app.focused is picker
+            ),
+            what="keyboard selection committed the second duplicate name by stable id",
+        )
+        assert (picker.region, runs.region) == before
+
+
+class _RightEdgePickerApp(_PickerApp):
+    CSS = """
+    #picker-row { height: 3; }
+    #leading-space { width: 1fr; }
+    #picker { width: 14; }
+    """
+
+    def compose(self) -> ComposeResult:
+        with Horizontal(id="picker-row"):
+            yield Static(id="leading-space")
+            yield ApplicationPicker(self._vm, id="picker")
+        yield _FocusableStatic(id="after-picker")
+
+
+async def test_application_overlay_at_right_edge_resizes_and_clicks_by_id() -> None:
+    fake = _InMemoryEmr()
+    name = "production-etl [blue] [/red]"
+    fake.add_application(app_id="first-id", name=name, state=ApplicationState.CREATED)
+    fake.add_application(app_id="second-id", name=name, state=ApplicationState.CREATED)
+    for index in range(18):
+        fake.add_application(app_id=f"z-extra-{index}", name=name, state=ApplicationState.CREATED)
+    vm, hub = _make_vm(fake)
+    await vm.refresh()
+
+    async with _RightEdgePickerApp(vm, hub).run_test(size=(80, 24)) as pilot:
+        await pilot.pause()
+        picker = pilot.app.query_one(ApplicationPicker)
+        options = picker.query_one(OptionList)
+        picker.open()
+        await wait_until(
+            lambda: picker.is_open and pilot.app.focused is options,
+            what="right-edge application overlay opened and focused",
+        )
+        await pilot.pause()
+        assert picker.region.right == 80
+        assert options.region.x < picker.region.x
+        assert pilot.app.screen.region.contains_region(options.region)
+        assert name in options.render_line(0).text
+
+        await pilot.resize_terminal(30, 12)
+        await pilot.pause()
+        assert picker.is_open
+        assert pilot.app.focused is options
+        assert options.region.width == 30
+        assert options.region.height <= 12
+        assert pilot.app.screen.region.contains_region(options.region)
+        assert name[:20] in options.render_line(0).text
+
+        await pilot.resize_terminal(80, 24)
+        await pilot.pause()
+        assert pilot.app.screen.region.contains_region(options.region)
+        assert name in options.render_line(0).text
+        assert "◇ CREATED" in options.render_line(0).text
+        await pilot.click(options, offset=(2, options.styles.gutter.top + 1))
+        await wait_until(
+            lambda: (
+                not picker.is_open and vm.selected_id == "second-id" and pilot.app.focused is picker
+            ),
+            what="click in widened overlay committed the second duplicate name by id",
+        )
