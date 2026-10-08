@@ -47,6 +47,7 @@ from aws_tui.vm.athena.history_vm import AthenaHistorySnapshot, AthenaHistoryVM
 from aws_tui.vm.athena.query_vm import AthenaQuerySnapshot, AthenaQueryVM
 from aws_tui.vm.athena.results_vm import AthenaResultsVM
 from aws_tui.vm.athena.saved_vm import AthenaSavedSnapshot, AthenaSavedVM, SavedQueryKind
+from aws_tui.vm.athena.tables_vm import AthenaTablesVM
 from aws_tui.vm.file_manager.pane_vm import PaneState
 from aws_tui.vm.messages import OpenGlueTableRequest, ServiceOperationFailedMessage
 from aws_tui.vm.service_diagnostics import report_unexpected_service_error
@@ -223,6 +224,31 @@ class AthenaPageVM:
             hub=hub,
             dispatcher=dispatcher,
         )
+        self.tables = AthenaTablesVM(client=client, context=self._context, hub=hub)
+        self._selected_table_ref: TableRef | None = None
+
+    @property
+    def selected_table_ref(self) -> TableRef | None:
+        return self._selected_table_ref
+
+    async def select_table(self, table_name: str) -> None:
+        if (
+            not self._is_alive()
+            or self.tables.context != self._context
+            or self.tables.state is not PaneState.IDLE
+            or self.query.context != self._context
+            or self.query.is_executing
+            or self.query.is_submitting
+            or self.query.is_context_resolving
+        ):
+            return
+        ref = next((row.ref for row in self.tables.items if row.ref.table_name == table_name), None)
+        if ref is None:
+            return
+        self._selected_table_ref = ref
+        self._select_view_state("query")
+        self.query.set_sql(select_starter_sql(ref))
+        self._notify("selected_table_ref")
 
     @property
     def drafts(self) -> AthenaDraftsVM | None:
@@ -879,6 +905,7 @@ class AthenaPageVM:
         self._catalog_generation += 1
         self._database_generation += 1
         self._context = context.context
+        self.tables.replace_context(self._context, notify=False)
         self._loaded_views = set(snapshot.loaded_views)
         self._active_view = snapshot.active_view
         self._workgroup_detail = context.workgroup_detail
@@ -911,6 +938,8 @@ class AthenaPageVM:
             limit_reached=context.databases_limit_reached,
         )
         self.query._install_snapshot(snapshot.query)
+        refs = self._policy.table_refs(snapshot.query.sql, self._context)
+        self._selected_table_ref = refs[0] if len(refs) == 1 else None
         self.history._install_snapshot(snapshot.history)
         self.saved._install_snapshot(snapshot.saved)
         self._workgroups_state = PaneState.IDLE if context.workgroups else PaneState.EMPTY
@@ -1073,6 +1102,8 @@ class AthenaPageVM:
         self._select_view_state("query")
         self.query.begin_context_resolution()
         self.query.set_sql(select_starter_sql(table_ref, snapshot_id))
+        self._selected_table_ref = table_ref
+        self._notify("selected_table_ref")
 
     def abandon_table_query_prime(self) -> None:
         self.query.end_context_resolution()
@@ -1244,6 +1275,11 @@ class AthenaPageVM:
         )
 
     async def refresh_query_context(self) -> None:
+        await self._refresh_query_context()
+        if self._is_alive() and all(self._context.cache_key):
+            await self.tables.refresh()
+
+    async def _refresh_query_context(self) -> None:
         if not self._is_alive():
             return
         workgroup = self._context.workgroup
@@ -1377,6 +1413,7 @@ class AthenaPageVM:
                 self.query.shutdown(),
                 self.history.shutdown(),
                 self.saved.shutdown(),
+                self.tables.shutdown(),
             )
             await self._drain_page_tasks()
             self._shutdown_complete = True
@@ -1391,6 +1428,7 @@ class AthenaPageVM:
         self._catalog_pager.dispose()
         self._database_pager.dispose()
         self.saved.dispose()
+        self.tables.dispose()
         self.history.dispose()
         self.query.dispose()
         self._on_property_changed.on_completed()
@@ -1576,6 +1614,9 @@ class AthenaPageVM:
             catalog,
             database,
         )
+        self.tables.replace_context(self._context)
+        if not self.query.is_context_resolving:
+            self._selected_table_ref = None
         self.results.clear()
         self.history.replace_context(self._context)
         self.saved.replace_workgroup(workgroup)

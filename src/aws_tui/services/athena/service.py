@@ -52,6 +52,15 @@ class AthenaClientProtocol(Protocol):
         start_token: str | None = None,
     ) -> tuple[list[Any], str | None]: ...
 
+    async def list_tables_page(
+        self,
+        catalog: str,
+        database: str,
+        *,
+        workgroup: str | None = None,
+        start_token: str | None = None,
+    ) -> tuple[list[Any], str | None]: ...
+
     async def get_query_execution(self, execution_id: str) -> Any: ...
 
     async def get_query_executions(self, execution_ids: list[str]) -> tuple[Any, ...]: ...

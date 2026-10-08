@@ -12,6 +12,7 @@ from textual.geometry import Size
 from textual.widgets import Button, DataTable, OptionList, Static, TextArea
 from vmx import NULL_DISPATCHER
 
+from aws_tui.domain.filesystem import ProviderError
 from aws_tui.domain.query import ResultColumn, ResultPage
 from aws_tui.infra.theme_store import ThemeStore
 from aws_tui.ui.widgets.athena.history_view import AthenaHistoryView
@@ -2408,3 +2409,53 @@ async def test_private_result_filter_events_are_scrubbed_before_post_and_event_l
             value == "" and marker not in representation for _, value, representation in logged
         )
         assert calls == [("controls", None)]
+
+
+@pytest.mark.asyncio
+async def test_background_page_projection_preserves_pending_typing_but_observes_explicit_sql() -> (
+    None
+):
+    vm, client = _build_vm()
+    await vm.setup()
+    try:
+        async with _AthenaApp(vm).run_test() as pilot:
+            page = pilot.app.query_one(AthenaPage)
+            editor = pilot.app.query_one("#athena-editor", TextArea)
+            await focus_and_settle(editor)
+            editor.insert("SELECT 42")
+            assert vm.query.sql == ""
+            page._refresh_page()
+            assert editor.text == "SELECT 42"
+            await wait_until(lambda: vm.query.sql == "SELECT 42", what="pending typing delivered")
+            vm.query.set_sql('SELECT * FROM "default"."events" LIMIT 5')
+            await wait_until(
+                lambda: editor.text == 'SELECT * FROM "default"."events" LIMIT 5',
+                what="explicit table SQL projected by the query view",
+            )
+            assert client.start_calls == []
+    finally:
+        await vm.shutdown()
+        vm.dispose()
+
+
+@pytest.mark.asyncio
+async def test_metadata_only_workgroup_error_projects_in_query_detail() -> None:
+    vm, client = _build_vm()
+    await vm.setup()
+    try:
+        async with _AthenaApp(vm).run_test() as pilot:
+            await pilot.pause()
+            client.workgroup_detail_error = ProviderError("temporary failure")
+            await vm.select_workgroup("analysts")
+            await wait_until(
+                lambda: (
+                    "Athena workgroup request failed"
+                    in str(pilot.app.query_one("#athena-query-detail-text", Static).render())
+                ),
+                what="metadata-only workgroup error displayed in query detail",
+                timeout=2,
+            )
+            assert client.start_calls == []
+    finally:
+        await vm.shutdown()
+        vm.dispose()

@@ -2628,7 +2628,7 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
             return
         if service_id == "athena":
             glue = self._glue_page()
-            if glue is not None and glue.vm.query_in_athena():
+            if glue is not None and glue.query_in_athena():
                 return
         self._app_ctx.root_vm.services_menu.switch_service_command.execute(service_id)
 
@@ -4852,7 +4852,7 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
         page = self._glue_page()
         if page is not None and not page.vm.actions_available:
             return
-        if page is not None and page.vm.query_in_athena():
+        if page is not None and page.query_in_athena():
             return
         notifications.advise(
             self._app_ctx.root_vm.chrome.toast_stack,

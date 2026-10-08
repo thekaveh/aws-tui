@@ -458,6 +458,8 @@ def test_focus_slot_enum_has_all_required_members() -> None:
         "ATHENA_CATALOG_MORE",
         "ATHENA_DATABASE",
         "ATHENA_DATABASE_MORE",
+        "ATHENA_TABLE",
+        "ATHENA_TABLE_MORE",
         "ATHENA_TABS",
         "ATHENA_PRIMARY",
         "ATHENA_SECONDARY",

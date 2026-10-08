@@ -12,6 +12,7 @@ from textual.widget import Widget
 from textual.widgets import Button, DataTable, OptionList, TextArea
 from vmx import Message, MessageHub
 
+from aws_tui.domain.query import QueryContext
 from aws_tui.infra.keymap_store import KeymapStore
 from aws_tui.ui.widgets._focus_guard import focus_rests_within, is_on_active_screen
 from aws_tui.ui.widgets._subscriber import HubSubscriberMixin
@@ -41,6 +42,8 @@ _ATHENA_FOCUS_ORDER = (
     FocusSlot.ATHENA_CATALOG_MORE,
     FocusSlot.ATHENA_DATABASE,
     FocusSlot.ATHENA_DATABASE_MORE,
+    FocusSlot.ATHENA_TABLE,
+    FocusSlot.ATHENA_TABLE_MORE,
     FocusSlot.ATHENA_TABS,
     FocusSlot.ATHENA_PRIMARY,
     FocusSlot.ATHENA_SAVED_NAMED_MORE,
@@ -102,6 +105,18 @@ class AthenaPage(DeferredWorkerMixin, HubSubscriberMixin, Widget):
         width: 1fr;
         height: 1fr;
     }
+    AthenaPage > #athena-table-row {
+        height: 3;
+        width: 1fr;
+    }
+    AthenaPage #athena-table {
+        width: 1fr;
+        border: solid $primary;
+    }
+    AthenaPage #athena-more-tables {
+        width: 3;
+        min-width: 3;
+    }
     AthenaPage.-narrow-context #athena-source-header {
         width: 20;
         min-width: 20;
@@ -148,6 +163,7 @@ class AthenaPage(DeferredWorkerMixin, HubSubscriberMixin, Widget):
         self._syncing_context = False
         self._focus_subscriptions: list[DisposableBase] = []
         self._picker_open_intent = PickerOpenIntent()
+        self._table_request_context: tuple[QueryContext, int] | None = None
 
     @property
     def vm(self) -> AthenaPageVM:
@@ -198,6 +214,15 @@ class AthenaPage(DeferredWorkerMixin, HubSubscriberMixin, Widget):
                 id="athena-more-databases",
                 tooltip="Load more databases",
             )
+        with Horizontal(id="athena-table-row"):
+            yield ContextPicker(
+                "Table",
+                (),
+                selected=None,
+                open_intent=self._picker_open_intent,
+                id="athena-table",
+            )
+            yield AthenaLoadMoreButton(id="athena-more-tables", tooltip="Load more tables")
         yield ServiceTabStrip(
             tuple(
                 (
@@ -238,6 +263,7 @@ class AthenaPage(DeferredWorkerMixin, HubSubscriberMixin, Widget):
             vm=self._vm,
             property_names=(
                 "active_view",
+                "selected_table_ref",
                 "context",
                 "workgroups",
                 "catalogs",
@@ -290,7 +316,14 @@ class AthenaPage(DeferredWorkerMixin, HubSubscriberMixin, Widget):
             self._focus_subscriptions.append(
                 self._vm.drafts.on_property_changed.subscribe(self._on_page_changed)
             )
+        self._focus_subscriptions.append(
+            self._vm.tables.on_property_changed.subscribe(self._on_page_changed)
+        )
+        self._focus_subscriptions.append(
+            self._vm.query.on_property_changed.subscribe(self._on_query_availability_changed)
+        )
         self.call_after_refresh(self._refresh_page)
+        self.call_after_refresh(self._request_table_refresh)
         self.call_after_refresh(self._maybe_focus_active)
 
     def on_unmount(self) -> None:
@@ -311,7 +344,12 @@ class AthenaPage(DeferredWorkerMixin, HubSubscriberMixin, Widget):
         if self._syncing_context:
             return
         value = event.value
-        if event.control.id == "athena-workgroup" and value != self._vm.context.workgroup:
+        if event.control.id == "athena-table":
+            self._run_lifecycle_worker(
+                partial(self._vm.select_table, value),
+                group="athena-context",
+            )
+        elif event.control.id == "athena-workgroup" and value != self._vm.context.workgroup:
             self._run_lifecycle_worker(
                 partial(self._vm.select_workgroup, value),
                 group="athena-context",
@@ -388,6 +426,7 @@ class AthenaPage(DeferredWorkerMixin, HubSubscriberMixin, Widget):
             "athena-more-workgroups": self._vm.load_more_workgroups,
             "athena-more-catalogs": self._vm.load_more_catalogs,
             "athena-more-databases": self._vm.load_more_databases,
+            "athena-more-tables": self._vm.tables.load_more,
         }
         loader = loaders.get(event.button.id or "")
         if loader is not None:
@@ -427,6 +466,8 @@ class AthenaPage(DeferredWorkerMixin, HubSubscriberMixin, Widget):
             await self._vm.load_more_catalogs()
         elif focused_ids & {"athena-database", "athena-more-databases"}:
             await self._vm.load_more_databases()
+        elif focused_ids & {"athena-table", "athena-more-tables"}:
+            await self._vm.tables.load_more()
         elif self._vm.active_view == "history":
             await self._vm.history.load_more()
         elif self._vm.active_view == "results":
@@ -456,6 +497,8 @@ class AthenaPage(DeferredWorkerMixin, HubSubscriberMixin, Widget):
             return self._vm.has_more_catalogs and not self._vm.is_loading_more_catalogs
         if focused_ids & {"athena-database", "athena-more-databases"}:
             return self._vm.has_more_databases and not self._vm.is_loading_more_databases
+        if focused_ids & {"athena-table", "athena-more-tables"}:
+            return self._vm.tables.has_more and not self._vm.tables.is_loading_more
         if self._vm.active_view == "history":
             return self._vm.history.has_more and not self._vm.history.is_loading_more
         if self._vm.active_view == "results":
@@ -586,6 +629,13 @@ class AthenaPage(DeferredWorkerMixin, HubSubscriberMixin, Widget):
             load_more = self.query_one(more_selector, AthenaLoadMoreButton)
             if self._is_focus_target(load_more):
                 targets.append((more_slot, load_more))
+        for slot, selector in (
+            (FocusSlot.ATHENA_TABLE, "#athena-table"),
+            (FocusSlot.ATHENA_TABLE_MORE, "#athena-more-tables"),
+        ):
+            table_widget = self.query_one(selector, Widget)
+            if self._vm.active_view == "query" and self._is_focus_target(table_widget):
+                targets.append((slot, table_widget))
         targets.append(
             (
                 FocusSlot.ATHENA_TABS,
@@ -796,6 +846,24 @@ class AthenaPage(DeferredWorkerMixin, HubSubscriberMixin, Widget):
     def _on_page_changed(self, _property_name: str) -> None:
         self.call_after_refresh(self._refresh_page)
 
+    def _on_query_availability_changed(self, property_name: str) -> None:
+        if property_name in {"context", "is_executing", "is_submitting", "is_context_resolving"}:
+            self._on_page_changed(property_name)
+
+    def _request_table_refresh(self) -> None:
+        if (
+            not self._picker_coordination_available()
+            or self._vm.active_view != "query"
+            or self._vm.query.is_context_resolving
+        ):
+            return
+        context = self._vm.context
+        request = (context, self._vm.tables.context_revision)
+        if not all(context.cache_key) or request == self._table_request_context:
+            return
+        self._table_request_context = request
+        self._run_lifecycle_worker(self._vm.tables.refresh, group="athena-tables")
+
     def _on_focus_availability_changed(
         self,
         sensitive_slots: frozenset[FocusSlot],
@@ -820,11 +888,59 @@ class AthenaPage(DeferredWorkerMixin, HubSubscriberMixin, Widget):
         if context_controls is None or view_controls is None:
             return
         self._sync_context(context_controls)
+        self._sync_tables()
         self._sync_view(view_controls)
-        cast(AthenaQueryView, view_controls[0][0]).refresh_from_vm()
+        # Context metadata must not overwrite editor changes still queued by Textual.
+        cast(AthenaQueryView, view_controls[0][0]).refresh_metadata_from_vm()
+        self._request_table_refresh()
         focus_targets = dict(self._focus_targets())
         if reference is not None and reference not in focus_targets:
             self.call_after_refresh(partial(self._maybe_focus_active, reference))
+
+    def _sync_tables(self) -> None:
+        row = self.query_one("#athena-table-row", Widget)
+        row.display = self._vm.active_view == "query"
+        tables = self._vm.tables
+        picker = self.query_one("#athena-table", ContextPicker)
+        ref = self._vm.selected_table_ref
+        selected = (
+            ref.table_name
+            if ref is not None
+            and (ref.connection_name, ref.region, ref.catalog_name, ref.database_name)
+            == (
+                self._vm.context.connection_name,
+                self._vm.context.region,
+                self._vm.context.catalog,
+                self._vm.context.database,
+            )
+            else None
+        )
+        options = tuple(
+            ContextOption(item.ref.table_name, item.ref.table_name) for item in tables.items
+        )
+        if selected is not None and not any(option.value == selected for option in options):
+            options = (ContextOption(selected, selected), *options)
+        picker.set_options(options, selected=selected)
+        picker.set_state(
+            loading=tables.state is PaneState.LOADING,
+            disabled=(
+                tables.state is not PaneState.IDLE
+                or not tables.items
+                or self._vm.query.is_executing
+                or self._vm.query.is_submitting
+                or self._vm.query.is_context_resolving
+            ),
+            warning=tables.state is PaneState.FORBIDDEN,
+            error=tables.state is PaneState.ERROR,
+            tooltip=tables.error_text,
+        )
+        self.query_one("#athena-more-tables", AthenaLoadMoreButton).sync(
+            has_more=tables.has_more,
+            busy=tables.is_loading_more,
+            state=tables.state,
+            error_text=tables.error_text,
+            limit_reached=tables.limit_reached,
+        )
 
     def _context_controls(self) -> _ContextControls | None:
         if not self.is_mounted:
