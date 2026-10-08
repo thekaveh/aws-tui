@@ -141,6 +141,11 @@ class GluePage(DeferredWorkerMixin, HubSubscriberMixin, Widget):
     def vm(self) -> GluePageVM:
         return self._vm
 
+    def query_in_athena(self) -> bool:
+        if not self.is_attached or not self.display or self._vm.active_view != "catalog":
+            return False
+        return self.query_one(GlueCatalogView).query_in_athena()
+
     def compose(self) -> ComposeResult:
         with Horizontal(id="glue-context-row"):
             yield ServiceSourceHeader(

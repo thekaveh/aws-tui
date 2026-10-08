@@ -322,8 +322,15 @@ class ContextPicker(Widget, can_focus=True):
         option_list = self._option_list
         if option_list is None or not option_list.is_attached:
             return
-        option_list.set_options(self._build_options())
-        self._restore_highlight()
+        pending = None
+        if self.is_open and option_list.highlighted is not None:
+            pending = option_list.get_option_at_index(option_list.highlighted).id
+        options = self._build_options()
+        option_list.set_options(options)
+        if pending is not None and any(option.id == pending for option in options):
+            option_list.highlighted = option_list.get_option_index(pending)
+        else:
+            self._restore_highlight()
 
     def _restore_highlight(self) -> None:
         option_list = self._option_list

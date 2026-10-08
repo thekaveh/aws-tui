@@ -82,6 +82,8 @@ class FocusSlot(StrEnum):
     ATHENA_CATALOG_MORE = "athena.catalog.more"
     ATHENA_DATABASE = "athena.database"
     ATHENA_DATABASE_MORE = "athena.database.more"
+    ATHENA_TABLE = "athena.table"
+    ATHENA_TABLE_MORE = "athena.table.more"
     ATHENA_TABS = "athena.tabs"
     ATHENA_PRIMARY = "athena.primary"
     ATHENA_SECONDARY = "athena.secondary"

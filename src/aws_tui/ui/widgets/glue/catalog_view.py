@@ -96,6 +96,17 @@ class GlueCatalogView(DeferredWorkerMixin, Widget):
                 group="glue-select-table",
             )
 
+    def query_in_athena(self) -> bool:
+        databases = self.query_one("#glue-databases-pane", ResourceListPane).option_list
+        tables = self.query_one("#glue-tables-pane", ResourceListPane).option_list
+        if databases.highlighted is None or tables.highlighted is None:
+            return False
+        database = databases.get_option_at_index(databases.highlighted).id
+        table = tables.get_option_at_index(tables.highlighted).id
+        if database != self._vm.selected_database_name or table is None:
+            return False
+        return self._page_vm.query_in_athena(table_name=table)
+
     def _on_vm_changed(self, _property_name: str) -> None:
         self.call_after_refresh(self._refresh_all)
 

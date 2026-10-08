@@ -233,6 +233,10 @@ class AthenaQueryView(DeferredWorkerMixin, Widget):
     def refresh_from_vm(self) -> None:
         self._refresh()
 
+    def refresh_metadata_from_vm(self) -> None:
+        """Project page metadata and controls without replacing queued editor input."""
+        self._refresh(sync_editor=False)
+
     def _move_focus(self, *, forward: bool) -> None:
         targets: tuple[Widget, ...] = (
             self.query_one("#athena-editor", TextArea),
@@ -288,7 +292,7 @@ class AthenaQueryView(DeferredWorkerMixin, Widget):
             return
         self._vm.set_sql(editor.text)
 
-    def _refresh(self) -> None:
+    def _refresh(self, *, sync_editor: bool = True) -> None:
         try:
             editor = self.query_one("#athena-editor", TextArea)
             execute = self.query_one("#athena-execute", Button)
@@ -297,7 +301,7 @@ class AthenaQueryView(DeferredWorkerMixin, Widget):
             detail = self.query_one("#athena-query-detail-text", Static)
         except Exception:
             return
-        if editor.text != self._vm.sql:
+        if sync_editor and editor.text != self._vm.sql:
             self._syncing_editor = True
             try:
                 editor.text = self._vm.sql
