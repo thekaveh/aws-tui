@@ -101,7 +101,8 @@ dev = [
   # here, and capping next-major would actively roll back working
   # versions when uv has already moved to them (e.g. mypy 2.x,
   # pytest 9.x, pre-commit 9.x in the resolved lock).
-  "pytest>=8",
+  # Older pytest releases have vulnerable tmpdir handling (PYSEC-2026-1845).
+  "pytest>=9.0.3",
   "pytest-asyncio>=0.24",
   "pytest-cov>=4",
   "pytest-timeout>=2.4",

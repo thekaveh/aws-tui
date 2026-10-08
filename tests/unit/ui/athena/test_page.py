@@ -1994,6 +1994,10 @@ async def test_results_refresh_when_activated_and_after_background_modal_changes
         await vm.select_view("results")
         await pilot.pause()
         table = app.query_one(DataTable)
+        await wait_until(
+            lambda: table.row_count == 3,
+            what="Athena results populated after view activation",
+        )
         assert table.row_count == 3
         modal = ModalScreen()
         app.push_screen(modal)
