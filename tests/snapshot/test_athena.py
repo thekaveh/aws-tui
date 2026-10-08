@@ -12,6 +12,7 @@ from textual.pilot import Pilot
 from textual.widgets import TextArea
 
 from aws_tui.ui.widgets.athena.page import AthenaPage
+from aws_tui.ui.widgets.context_picker import ContextPicker
 from tests.helpers import drain_workers, seed_athena_sql, wait_until
 from tests.snapshot.apps.athena import AthenaFixture, AthenaPageApp
 from tests.snapshot.apps.demo_mode import DemoModeApp
@@ -417,3 +418,30 @@ def test_athena_result_inspection_full_app_content_guard(theme, size, state):
         assert "duplicate" in rendered
         assert "demo-dev" in rendered
         assert "DEMO MODE" in rendered
+
+
+async def _show_full_app_selected_table(pilot: Pilot[None]) -> None:
+    await _show_full_app_query(pilot)
+    app = cast(DemoModeApp, pilot.app)
+    page = app.query_one(AthenaPage)
+    await wait_until(lambda: bool(page.vm.tables.items), what="snapshot table metadata loaded")
+    ref = page.vm.tables.items[-1].ref
+    await page.vm.select_table(ref.table_name)
+    await pilot.pause()
+    picker = app.query_one("#athena-table", ContextPicker)
+    editor = app.query_one("#athena-editor", TextArea)
+    assert picker.value == ref.table_name
+    assert page.vm.selected_table_ref == ref
+    assert ref.table_name in editor.text
+    assert editor.text.endswith(" LIMIT 5")
+    assert editor.region.height >= 3
+    assert page.vm.query.execution_ref is None
+
+
+@pytest.mark.parametrize(("theme", "size"), FULL_APP_CASES)
+def test_athena_selected_table_full_app_snapshot(theme: str, size: tuple[int, int], snap_compare):
+    app = DemoModeApp(theme=theme)
+    try:
+        assert snap_compare(app, terminal_size=size, run_before=_show_full_app_selected_table)
+    finally:
+        app.app_ctx.root_vm.dispose()

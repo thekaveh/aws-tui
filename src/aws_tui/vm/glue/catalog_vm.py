@@ -587,12 +587,15 @@ class GlueCatalogVM:
                 return None
         return self._is_alive() and available()
 
-    def query_in_athena(self, snapshot_id: int | None = None) -> bool:
-        """Publish the selected table identity for Athena composition."""
-        if not self._is_alive() or self._selected_table_name is None:
+    def query_in_athena(
+        self, snapshot_id: int | None = None, *, table_name: str | None = None
+    ) -> bool:
+        """Publish a current catalog row, including a pending visible selection."""
+        selected = table_name if table_name is not None else self._selected_table_name
+        if not self._is_alive() or selected is None:
             return False
         summary = next(
-            (row for row in self.tables if row.ref.table_name == self._selected_table_name),
+            (row for row in self.tables if row.ref.table_name == selected),
             None,
         )
         if summary is None:

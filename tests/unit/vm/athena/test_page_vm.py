@@ -17,7 +17,7 @@ from aws_tui.domain.athena import (
     AthenaWorkgroupDetail,
     AthenaWorkgroupSummary,
 )
-from aws_tui.domain.data_catalog import DatabaseRef, DatabaseSummary, TableRef
+from aws_tui.domain.data_catalog import DatabaseRef, DatabaseSummary, TableRef, TableSummary
 from aws_tui.domain.filesystem import (
     PermissionDeniedError,
     ProviderError,
@@ -211,6 +211,16 @@ class PageClient:
         if self.database_row_override is not None:
             rows = [self.database_row_override]
         return rows, None
+
+    async def list_tables_page(
+        self,
+        catalog: str,
+        database: str,
+        *,
+        workgroup: str | None = None,
+        start_token: str | None = None,
+    ) -> tuple[list[TableSummary], str | None]:
+        return [], None
 
     async def list_query_executions_page(
         self,

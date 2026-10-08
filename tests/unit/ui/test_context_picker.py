@@ -679,3 +679,58 @@ async def test_context_picker_closed_height_stays_stable_when_options_change() -
 
         assert picker.is_open is False
         assert picker.size.height == closed_height
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("projection", ["options", "state", "both"])
+async def test_open_picker_preserves_pending_choice_across_background_projection(
+    projection: str,
+) -> None:
+    picker = _picker()
+    app = PickerHost(picker)
+    async with app.run_test() as pilot:
+        await focus_and_settle(picker)
+        await pilot.press("enter", "down")
+        options = picker.query_one(OptionList)
+        assert picker.is_open
+        assert picker.value == "primary"
+        assert options.highlighted == 1
+        if projection in {"options", "both"}:
+            picker.set_options(_OPTIONS, selected="primary")
+        if projection in {"state", "both"}:
+            picker.set_state()
+        await pilot.pause()
+        assert options.highlighted == 1
+        await pilot.press("enter")
+        assert picker.value == "analytics"
+        assert app.changes == ["analytics"]
+
+
+@pytest.mark.asyncio
+async def test_open_picker_error_projection_replaces_pending_choice_safely() -> None:
+    picker = _picker()
+    async with PickerHost(picker).run_test() as pilot:
+        await focus_and_settle(picker)
+        await pilot.press("enter", "down")
+        picker.set_state(error=True)
+        assert picker.query_one(OptionList).option_count == 1
+        await pilot.press("enter")
+        assert pilot.app.changes == []
+        picker.set_state()
+        await pilot.press("end", "enter")
+        assert picker.value == "analytics"
+
+
+@pytest.mark.asyncio
+async def test_open_picker_tracks_pending_identity_when_options_are_reordered_or_removed() -> None:
+    picker = _picker()
+    async with PickerHost(picker).run_test() as pilot:
+        await focus_and_settle(picker)
+        await pilot.press("enter", "down")
+        picker.set_options(tuple(reversed(_OPTIONS)), selected="primary")
+        assert picker.query_one(OptionList).highlighted == 0
+        picker.set_options((_OPTIONS[0],), selected="primary")
+        assert picker.query_one(OptionList).highlighted == 0
+        await pilot.press("enter")
+        assert picker.value == "primary"
+        assert pilot.app.changes == ["primary"]

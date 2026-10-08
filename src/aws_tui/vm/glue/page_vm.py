@@ -341,10 +341,10 @@ class GluePageVM:
             return False
         return self.catalog.open_s3_location(preferred_pane=preferred_pane)
 
-    def query_in_athena(self) -> bool:
+    def query_in_athena(self, *, table_name: str | None = None) -> bool:
         if not self.can_query_in_athena:
             return False
-        return self.catalog.query_in_athena()
+        return self.catalog.query_in_athena(table_name=table_name)
 
     @property
     def can_query_in_athena(self) -> bool:
