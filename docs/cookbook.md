@@ -53,7 +53,7 @@ dataset and how to extend it.
 ```bash
 docker run --rm -d --name s3mock \
     -p 127.0.0.1:9000:9090 \
-    adobe/s3mock:5.2.2@sha256:e7c36014dcf4c7f0f6bec9de888477d1d9b8f55eceb7d9c1186f70d7aadf81ca
+    adobe/s3mock:5.2.3@sha256:ab01a6946750f451ca215a47e91030695b260e4003b8a5a6201d25029b8fca92
 ```
 
 ### 1.2. Store the credentials in the macOS Keychain (recommended)
