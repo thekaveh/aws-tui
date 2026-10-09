@@ -15,127 +15,143 @@ imports, and checks the banned edges in the script. `app.py` and
 VMs to build service pages, but it cannot import Textual widgets.
 
 ## 1. Layers
+
 - **View** — Textual widgets and `.tcss` themes
-  (`src/aws_tui/ui/`). Never touches `boto3`, `aioboto3`, or
-  `botocore`. Talks to VMs via property reads + relay-command
-  ``execute(...)``; subscribes to ``MessageHub`` for change
-  notifications. The S3 root is the code-backed `DualPane` from
-  `src/aws_tui/ui/widgets/dual_pane.py`, mounted through
-  `src/aws_tui/ui/widgets/service_view_factory.py`; there is no `S3Page` class.
+    (`src/aws_tui/ui/`). Never touches `boto3`, `aioboto3`, or
+    `botocore`. Talks to VMs via property reads + relay-command
+    ``execute(...)``; subscribes to ``MessageHub`` for change
+    notifications. The S3 root is the code-backed `DualPane` from
+    `src/aws_tui/ui/widgets/dual_pane.py`, mounted through
+    `src/aws_tui/ui/widgets/service_view_factory.py`; there is no `S3Page` class.
 
-  `ContextPicker` provides bordered keyboard-focusable context selection, and
-  EMR's specialized `ApplicationPicker` preserves its Rich application-state
-  rendering. Both compose the shared `OverlayOptionList`. The trigger keeps its compact footprint while the choices use Textual's screen overlay. Thus, opening or closing a picker does not resize adjacent regions.
+    `ContextPicker` provides bordered keyboard-focusable context selection, and
+    EMR's specialized `ApplicationPicker` preserves its Rich application-state
+    rendering. Both compose the shared `OverlayOptionList`. The trigger keeps its compact footprint while the choices use Textual's screen overlay. Thus, opening or closing a picker does not resize adjacent regions.
 
-  Overlay geometry and
-  dismissal remain view state rather than entering VMx. `ServiceTabStrip`
-  renders a persistent segmented frame while providing one predictable focus
-  stop for service-local views.
+    Overlay geometry and
+    dismissal remain view state rather than entering VMx. `ServiceTabStrip`
+    renders a persistent segmented frame while providing one predictable focus
+    stop for service-local views.
+
 - **ViewModel** — VMx-based viewmodels with reactive commands and
-  property-changed messages (`src/aws_tui/vm/`). Never imports
-  Textual; tests run headless. `ServiceSelectionStore` is a VM-layer type in
-  `src/aws_tui/vm/service_source_vm.py`, shared by the single-context service
-  VMs rather than owned by Infrastructure. Subtrees:
-  - `vm/chrome/` — persistent shell state (hint legend, toasts,
-    and overlays like command palette / confirm / quick look / crash).
-    Transfer journals are diagnostic-only; no startup recovery VM or UI ships.
-    `HintLegendVM` owns service-scoped action
-    membership, configured shortcut labels, complete effect/prerequisite
-    tooltips, availability, and fitting priority. The `HintLegend` view performs terminal-width measurement and centers a fitted one-line command row. Lower-priority hints still yield to `[:] more` and `[q] quit` rather than wrapping, without changing shortcut bindings.
-  - `vm/file_manager/` — `DualPaneVM`, two `PaneVM` children, entry VMs, and
-    transfer state. `DualPaneVM` owns cross-provider copy/move orchestration;
-    each `PaneVM` owns one provider-backed projection and cursor.
-  - `vm/table_clipboard_vm.py` — `TableClipboardVM`, an app-lifetime VMx
-    component that retains one typed, replaceable table reference.
-  - `vm/emr_serverless/` — `EmrServerlessPageVM` plus its
-    `ApplicationsVM` / `JobRunsVM` / `JobRunDetailVM` / `JobRunLogsVM` children
-    (the read-mostly EMR Serverless browser with logs streaming and focused
-    clone submission).
-    Its immutable `ServiceSourceContext` carries the active connection name, optional distinct AWS profile, and region to the service view. The shared `ServiceSourceHeader` renders that identity above the EMR application picker.
+    property-changed messages (`src/aws_tui/vm/`). Never imports
+    Textual; tests run headless. `ServiceSelectionStore` is a VM-layer type in
+    `src/aws_tui/vm/service_source_vm.py`, shared by the single-context service
+    VMs rather than owned by Infrastructure. Subtrees:
 
-    `ServiceSelectionStore` scopes remembered service selections by
-    `(service_id, connection_name, region)`.
-    `JobRunCloneVM` backs the clone-job-run modal — a
-    sibling VM under `vm/emr_serverless/clone_vm.py`, instantiated
-    per modal-mount with the focused run as the source.
-  - `vm/glue/` — `GluePageVM` with independent Catalog, Jobs, and
-    Crawlers child VMs. `GlueCatalogVM` owns a `GlueIcebergVM` child that
-    appears only for tables classified as Iceberg and loads Snapshots,
-    History, Manifests, Files, Partitions, and References independently.
-    The page shares `ServiceSourceContext` and
-    connection/region-scoped selection memory with the other
-    single-context AWS services.
+    - `vm/chrome/` — persistent shell state (hint legend, toasts,
+        and overlays like command palette / confirm / quick look / crash).
+        `HintLegendVM` owns service-scoped action
+        membership, configured shortcut labels, complete effect/prerequisite
+        tooltips, availability, and fitting priority. The `HintLegend` view performs terminal-width measurement and centers a fitted one-line command row. Lower-priority hints still yield to `[:] more` and `[q] quit` rather than wrapping, without changing shortcut bindings.
 
-    `GluePageVM` owns page-scoped table and snapshot
-    handoff capability checks. `GlueCatalogVM` publishes immutable,
-    service-neutral `OpenS3LocationRequest` and table `OpenAthenaTableRequest`
-    messages from the selected table; `GlueIcebergVM` publishes snapshot
-    `OpenAthenaTableRequest` messages from the visible snapshot. They never mount
-    a Textual view or construct a destination service themselves.
-  - `vm/athena/` — `AthenaPageVM` with Query, History, Results, and Saved
-    child VMs. The view composes Source, Workgroup, Catalog, and Database as
-    individually framed selectors in an unframed row, followed by the tabs and
-    active view. Its context and remembered selections are scoped by connection
-    name and region; changing workgroup, catalog, or database invalidates the
-    query context.
+    - `vm/file_manager/` — `DualPaneVM`, two `PaneVM` children, entry VMs, and
+        transfer state. `DualPaneVM` owns cross-provider copy/move orchestration;
+        each `PaneVM` owns one provider-backed projection and cursor.
 
-    Query work stays in the VM layer, while `domain/athena.py`
-    owns boto mapping and `domain/sql_policy.py` fails closed before dispatch.
-    `AthenaPageVM.open_table(...)` sets exact catalog/database context and
-    prefills a quoted, context-relative `LIMIT 5` starter without executing it.
-    `open_table_in_glue()` publishes `OpenGlueTableRequest` only when the
-    current SQL resolves to one visible table.
-  - `vm/settings/` — `SettingsVM` (built per-mount when the user
-    selects the Settings nav peer) and `S3ConnectionsVM` (singleton
-    on `AppContext`, drives the in-app Connections CRUD).
-  - Top-level `vm/nav_menu_vm.py` — `NavMenuVM` (renamed from
-    `ServicesMenuVM`; `RootVM.services_menu` is a legacy alias) keeps the active
-    service selected while focus moves into its content. The same layer includes
-    `vm/content_host_vm.py` and `vm/root_vm.py`.
+        At startup, `TransferHistoryVM` loads persisted summaries and interrupted transfer records.
+        `Ctrl+T` opens History and Recovery for explicit, endpoint-bound new-copy retries.
+        Automatic replay and multipart resume remain unsupported.
+
+    - `vm/table_clipboard_vm.py` — `TableClipboardVM`, an app-lifetime VMx
+        component that retains one typed, replaceable table reference.
+
+    - `vm/emr_serverless/` — `EmrServerlessPageVM` plus its
+        `ApplicationsVM` / `JobRunsVM` / `JobRunDetailVM` / `JobRunLogsVM` children
+        (the read-mostly EMR Serverless browser with logs streaming and focused
+        clone submission).
+        Its immutable `ServiceSourceContext` carries the active connection name, optional distinct AWS profile, and region to the service view. The shared `ServiceSourceHeader` renders that identity above the EMR application picker.
+
+        `ServiceSelectionStore` scopes remembered service selections by
+        `(service_id, connection_name, region)`.
+        `JobRunCloneVM` backs the clone-job-run modal — a
+        sibling VM under `vm/emr_serverless/clone_vm.py`, instantiated
+        per modal-mount with the focused run as the source.
+
+    - `vm/glue/` — `GluePageVM` with independent Catalog, Jobs, and
+        Crawlers child VMs. `GlueCatalogVM` owns a `GlueIcebergVM` child that
+        appears only for tables classified as Iceberg and loads Snapshots,
+        History, Manifests, Files, Partitions, and References independently.
+        The page shares `ServiceSourceContext` and
+        connection/region-scoped selection memory with the other
+        single-context AWS services.
+
+        `GluePageVM` owns page-scoped table and snapshot
+        handoff capability checks. `GlueCatalogVM` publishes immutable,
+        service-neutral `OpenS3LocationRequest` and table `OpenAthenaTableRequest`
+        messages from the selected table; `GlueIcebergVM` publishes snapshot
+        `OpenAthenaTableRequest` messages from the visible snapshot. They never mount
+        a Textual view or construct a destination service themselves.
+
+    - `vm/athena/` — `AthenaPageVM` with Query, History, Results, and Saved
+        child VMs. The view composes Source, Workgroup, Catalog, and Database as
+        individually framed selectors in an unframed row, followed by the tabs and
+        active view. Its context and remembered selections are scoped by connection
+        name and region; changing workgroup, catalog, or database invalidates the
+        query context.
+
+        Query work stays in the VM layer, while `domain/athena.py`
+        owns boto mapping and `domain/sql_policy.py` fails closed before dispatch.
+        `AthenaPageVM.open_table(...)` sets exact catalog/database context and
+        prefills a quoted, context-relative `LIMIT 5` starter without executing it.
+        `open_table_in_glue()` publishes `OpenGlueTableRequest` only when the
+        current SQL resolves to one visible table.
+
+    - `vm/settings/` — `SettingsVM` (built per-mount when the user
+        selects the Settings nav peer) and `S3ConnectionsVM` (singleton
+        on `AppContext`, drives the in-app Connections CRUD).
+
+    - Top-level `vm/nav_menu_vm.py` — `NavMenuVM` (renamed from
+        `ServicesMenuVM`; `RootVM.services_menu` is a legacy alias) keeps the active
+        service selected while focus moves into its content. The same layer includes
+        `vm/content_host_vm.py` and `vm/root_vm.py`.
+
 - **Service plugins** — One folder per top-level service
-  (`src/aws_tui/services/`). The current tree ships `s3`,
-  `emr-serverless` (read-only browser + clone-job-run plus job-run
-  logs — applications listing, job-runs master-detail, state-filter
-  chips, clone-and-edit modal via `c`, and confirmed cancellation via `x`;
-  vanilla submit remains deferred), `glue` (read-only Catalog, Jobs, and Crawlers), and
-  `athena` (read-only query, history, results, and saved-query views).
+    (`src/aws_tui/services/`). The current tree ships `s3`,
+    `emr-serverless` (read-only browser + clone-job-run plus job-run
+    logs — applications listing, job-runs master-detail, state-filter
+    chips, clone-and-edit modal via `c`, and confirmed cancellation via `x`;
+    vanilla submit remains deferred), `glue` (read-only Catalog, Jobs, and Crawlers), and
+    `athena` (read-only query, history, results, and saved-query views).
 
-  `GlueService` composes both `GlueClient` and an Athena-backed
-  `IcebergInspector`; `AthenaService` composes the query page.
-  Each service implements the `Service` protocol (declared in
-  `vm/services_protocol.py`, re-exported from `services/__init__.py`).
+    `GlueService` composes both `GlueClient` and an Athena-backed
+    `IcebergInspector`; `AthenaService` composes the query page.
+    Each service implements the `Service` protocol (declared in
+    `vm/services_protocol.py`, re-exported from `services/__init__.py`).
+
 - **Domain** — `FileSystemProvider` protocol with `LocalFS` and `S3FS`
-  implementations + the cross-FS copy/move engine + the transfer
-  journal (`src/aws_tui/domain/`). The Norton-Commander unifier; the
-  pane VMs treat both sides as the same protocol. Domain adapters perform the runtime AWS and filesystem I/O. `LocalFS` and `TransferJournal` access host storage. `S3FS`, `EmrServerlessClient`, `GlueClient`, and `AthenaClient` issue service operations and map external responses/errors into domain values.
+    implementations + the cross-FS copy/move engine + the transfer
+    journal (`src/aws_tui/domain/`). The Norton-Commander unifier; the
+    pane VMs treat both sides as the same protocol. Domain adapters perform the runtime AWS and filesystem I/O. `LocalFS` and `TransferJournal` access host storage. `S3FS`, `EmrServerlessClient`, `GlueClient`, and `AthenaClient` issue service operations and map external responses/errors into domain values.
 
-  `TableRef` and `QueryContext` carry immutable table and
-  execution identity. User-driven Glue and EMR lists use VMx token paging
-  through the app's bounded composition specialization. Athena uses an
-  app-owned bounded snapshot pager because VMx does not expose public snapshot
-  hydration, while retaining VMx commands for execution and enablement.
+    `TableRef` and `QueryContext` carry immutable table and
+    execution identity. User-driven Glue and EMR lists use VMx token paging
+    through the app's bounded composition specialization. Athena uses an
+    app-owned bounded snapshot pager because VMx does not expose public snapshot
+    hydration, while retaining VMx commands for execution and enablement.
 
-  Both
-  stop at explicit cumulative collection ceilings, and the UI distinguishes a
-  safety-limit stop from an ordinary continuation. `IcebergInspector` uses
-  `AthenaQueryRunner` to read bounded Iceberg metadata tables; Athena history
-  hydrates each bounded page with one batch request.
+    Both
+    stop at explicit cumulative collection ceilings, and the UI distinguishes a
+    safety-limit stop from an ordinary continuation. `IcebergInspector` uses
+    `AthenaQueryRunner` to read bounded Iceberg metadata tables; Athena history
+    hydrates each bounded page with one batch request.
 
-  `ReadOnlySqlPolicy`
-  validates both user and generated SQL. Raw AWS responses remain below VMs.
+    `ReadOnlySqlPolicy`
+    validates both user and generated SQL. Raw AWS responses remain below VMs.
+
 - **Infrastructure** — Infrastructure owns sessions, credentials,
-  configuration, SDK client construction, and OS-backed stores.
-  `AwsSession` and `ConnectionResolver` provide configured AWS identities and
-  client contexts to the domain adapters. Resolver order drives `Shift+S`;
-  the VM-layer `ServiceSelectionStore` scopes workgroup and resource
-  selections by service, connection name, and region.
+    configuration, SDK client construction, and OS-backed stores.
+    `AwsSession` and `ConnectionResolver` provide configured AWS identities and
+    client contexts to the domain adapters. Resolver order drives `Shift+S`;
+    the VM-layer `ServiceSelectionStore` scopes workgroup and resource
+    selections by service, connection name, and region.
 
-  `ConfigStore`, `ThemeStore`,
-  `KeymapStore`, `LogSink`, `CrashDump`, and `KeychainBackend` persist
-  application and platform state. `ConfigStore` and Settings share endpoint
-  and credential-source validation for S3-compatible connections.
-  Infrastructure prepares those boundaries; domain adapters perform the
-  provider operations.
+    `ConfigStore`, `ThemeStore`,
+    `KeymapStore`, `LogSink`, `CrashDump`, and `KeychainBackend` persist
+    application and platform state. `ConfigStore` and Settings share endpoint
+    and credential-source validation for S3-compatible connections.
+    Infrastructure prepares those boundaries; domain adapters perform the
+    provider operations.
 
 `demo/` is a composition-only provider substitution outside the production
 layers. Demo mode selects in-memory service adapters at the composition root;

@@ -177,6 +177,7 @@ click **Approve** in the Actions UI. This is the final manual stop after all
 mandatory release gates have passed.
 
 After approval the pipeline:
+
 1. Publishes only after `verify` builds and checks the artifacts and the mandatory `platform-tests` gate passes behavioral tests on macOS and Windows. The `smoke-install` gate must also clean-install the built wheel on macOS, Linux, and Windows across Python 3.11, 3.12, and 3.13. The same gate clean-installs the sdist on
    Linux with Python 3.12, covering the artifact consumed by Homebrew.
 2. Requires `lowest-supported-dependencies` to install every declared direct

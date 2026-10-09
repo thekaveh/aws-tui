@@ -379,10 +379,13 @@ unmask option, account-wide search, or newer `startFromHead` field is consumed.
 
 Missing `nextToken` ends pagination; empty pages with a token continue, and a
 repeated/cyclic token raises a safe provider error. Discovery fails above
-100 pages or 200 streams, counting rejected/duplicate returned records. Reads
-fail above 100 pages, 10,000 events (including duplicates), 8 MiB of UTF-8 message
+100 pages or 200 streams, counting rejected/duplicate returned records.
+
+Reads fail above 100 pages, 10,000 events (including duplicates), 8 MiB of UTF-8 message
 bytes or 1 MiB per event. Each operation has a 30 seconds deadline, including
-client cleanup. Stream names allow 512 Unicode characters / 2048 UTF-8 bytes;
+client cleanup.
+
+Stream names allow 512 Unicode characters / 2048 UTF-8 bytes;
 ids and tokens have separate bounded storage. Configuration must explicitly
 report CloudWatch enabled. A literal custom prefix is discovered conservatively;
 only names unambiguously identifying the selected application/run are accepted.
