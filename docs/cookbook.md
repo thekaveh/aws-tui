@@ -700,25 +700,25 @@ omits it and therefore requires the workgroup to use one of two distinct output
 modes:
 
 - **Customer S3 output.** A workgroup-enforced customer S3 output location is
-  authoritative when `EnforceWorkGroupConfiguration` is enabled. Grant
-  `s3:GetBucketLocation`, `s3:ListBucket`, and
-  `s3:ListBucketMultipartUploads` on the result bucket, plus `s3:PutObject`,
-  `s3:AbortMultipartUpload`, `s3:ListMultipartUploadParts`, and
-  `s3:GetObject` on the result prefix. Athena uses multipart uploads for query
-  results, including partial failed or cancelled output.
+    authoritative when `EnforceWorkGroupConfiguration` is enabled. Grant
+    `s3:GetBucketLocation`, `s3:ListBucket`, and
+    `s3:ListBucketMultipartUploads` on the result bucket, plus `s3:PutObject`,
+    `s3:AbortMultipartUpload`, `s3:ListMultipartUploadParts`, and
+    `s3:GetObject` on the result prefix. Athena uses multipart uploads for query
+    results, including partial failed or cancelled output.
 
-  `s3:GetObject` is
-  also required to retrieve output and to browse the artifact through S3.
-  See
-  [Work with query results and recent queries](https://docs.aws.amazon.com/athena/latest/ug/querying.html)
-  and the AWS
-  [S3 API permission mapping](https://docs.aws.amazon.com/AmazonS3/latest/userguide/using-with-s3-policy-actions.html).
+    `s3:GetObject` is
+    also required to retrieve output and to browse the artifact through S3.
+    See
+    [Work with query results and recent queries](https://docs.aws.amazon.com/athena/latest/ug/querying.html)
+    and the AWS
+    [S3 API permission mapping](https://docs.aws.amazon.com/AmazonS3/latest/userguide/using-with-s3-policy-actions.html).
+
 - **Athena managed results.** Managed results do not create a customer S3
-  result artifact. They remain available through Athena for 24 hours and
-  managed results do not support result reuse. aws-tui continues to page rows
-  with `GetQueryResults`; no S3 output location is required. If the workgroup uses a customer managed KMS key, both the query principal and the managed results key policy need the documented KMS access. This includes `kms:Decrypt`, `kms:GenerateDataKey`, and `kms:DescribeKey`. See
-  [Managed query results](https://docs.aws.amazon.com/athena/latest/ug/managed-results.html).
-
+    result artifact. They remain available through Athena for 24 hours and
+    managed results do not support result reuse. aws-tui continues to page rows
+    with `GetQueryResults`; no S3 output location is required. If the workgroup uses a customer managed KMS key, both the query principal and the managed results key policy need the documented KMS access. This includes `kms:Decrypt`, `kms:GenerateDataKey`, and `kms:DescribeKey`. See
+    [Managed query results](https://docs.aws.amazon.com/athena/latest/ug/managed-results.html).
 The Query view labels the workgroup mode as managed results or S3 output. If
 neither mode is configured, aws-tui shows the typed result-configuration error
 instead of choosing a bucket. With managed results, **Open Athena result in

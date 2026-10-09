@@ -283,40 +283,48 @@ The composition root and `app.py` are deliberately excluded — they live
 at `src/aws_tui/` top-level so the check never inspects them.
 
 ## 7. Where to start reading the code
+
 1. `src/aws_tui/composition.py` — see how everything wires.
+
 2. `src/aws_tui/vm/root_vm.py` — top of the VM tree.
+
 3. `src/aws_tui/vm/file_manager/dual_pane_vm.py` — the first concrete
-   page VM (S3 service hosts it).
-   `src/aws_tui/vm/emr_serverless/page_vm.py::EmrServerlessPageVM` —
-   another concrete page VM; a richer pattern
-   that orchestrates four child VMs (`ApplicationsVM`,
-   `JobRunsVM`, `JobRunDetailVM`, `JobRunLogsVM`) and runs three independent
-   pollers.
+    page VM (S3 service hosts it).
+    `src/aws_tui/vm/emr_serverless/page_vm.py::EmrServerlessPageVM` —
+    another concrete page VM; a richer pattern
+    that orchestrates four child VMs (`ApplicationsVM`,
+    `JobRunsVM`, `JobRunDetailVM`, `JobRunLogsVM`) and runs three independent
+    pollers.
+
 4. `src/aws_tui/services/s3/service.py` — the first concrete service
-   in v0.7.0; pattern for future ones.
-   `src/aws_tui/services/emr_serverless/service.py` uses the richer per-service
-   subtree pattern (dedicated domain client + VM subtree + UI
-   widget tree).
-   `src/aws_tui/services/glue/service.py` follows the same factory
-   lifecycle for an AWS-only, read-only three-view page and retains
-   validated selection identifiers per connection name and region.
+    in v0.7.0; pattern for future ones.
+    `src/aws_tui/services/emr_serverless/service.py` uses the richer per-service
+    subtree pattern (dedicated domain client + VM subtree + UI
+    widget tree).
+    `src/aws_tui/services/glue/service.py` follows the same factory
+    lifecycle for an AWS-only, read-only three-view page and retains
+    validated selection identifiers per connection name and region.
 
-   S3 owns independent sources for each pane. Single-context AWS services use `RootVM`'s active connection and are rebuilt as a whole when their source changes.
-   `src/aws_tui/services/athena/service.py` is the corresponding query-service
-   reference: it composes an Athena client, read-only SQL policy, and a fresh
-   `AthenaPageVM` per AWS connection.
+    S3 owns independent sources for each pane. Single-context AWS services use `RootVM`'s active connection and are rebuilt as a whole when their source changes.
+    `src/aws_tui/services/athena/service.py` is the corresponding query-service
+    reference: it composes an Athena client, read-only SQL policy, and a fresh
+    `AthenaPageVM` per AWS connection.
 
-   Glue composes its own contextual Athena
-   client for `IcebergInspector`; it does not reuse the mounted Athena VM.
+    Glue composes its own contextual Athena
+    client for `IcebergInspector`; it does not reuse the mounted Athena VM.
+
 5. `src/aws_tui/domain/cross_fs.py` — the engine that moves bytes
-   between any pair of `FileSystemProvider`s.
+    between any pair of `FileSystemProvider`s.
+
 6. `src/aws_tui/ui/widgets/` — pure Textual widgets; per-VM smoke
-   tests in `tests/unit/ui/`.
+    tests in `tests/unit/ui/`.
+
 7. `src/aws_tui/vm/nav_menu_vm.py` + `src/aws_tui/ui/widgets/nav_menu.py` —
-   the left-rail nav: services list on top, Settings docked at the
-   bottom (`NavRow` widgets in two `Vertical` containers).
+    the left-rail nav: services list on top, Settings docked at the
+    bottom (`NavRow` widgets in two `Vertical` containers).
+
 8. `src/aws_tui/vm/settings/settings_vm.py` +
-   `src/aws_tui/ui/widgets/settings_view.py` — the in-app Settings
-   page (built per-mount, not as an `AppContext` singleton — see the
-   lifecycle amendment in the
-   [Settings-as-nav-page design spec](superpowers/specs/2026-06-20-settings-as-first-class-nav-page-design.md)).
+    `src/aws_tui/ui/widgets/settings_view.py` — the in-app Settings
+    page (built per-mount, not as an `AppContext` singleton — see the
+    lifecycle amendment in the
+    [Settings-as-nav-page design spec](superpowers/specs/2026-06-20-settings-as-first-class-nav-page-design.md)).
