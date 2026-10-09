@@ -364,6 +364,51 @@ def test_portable_read_precheck_refuses_nonregular_without_open(
         read_metadata(target)
 
 
+@pytest.mark.parametrize("operation", ["save", "load"])
+@pytest.mark.parametrize("already_closed", [False, True])
+def test_fdopen_construction_preserves_original_error(
+    tmp_path, monkeypatch, operation, already_closed
+):
+    import errno
+
+    store = TransferHistoryStore(base_dir=tmp_path)
+    previous = history_record()
+    store.save(previous)
+    path = tmp_path / f"{previous.id}.json"
+    original_payload = path.read_bytes()
+    replacement = replace(previous, destination_uri="s3://bucket/distinct-replacement")
+    original_error = MemoryError("fixture stream construction failure")
+    real_fdopen, real_fstat, real_close = os.fdopen, os.fstat, os.close
+    descriptors = []
+
+    def fail_construction(fd, mode, *args, **kwargs):
+        if mode == ("wb" if operation == "save" else "rb"):
+            descriptors.append(fd)
+            # Native ownership is established separately; do not induce real OOM.
+            if already_closed:
+                real_close(fd)
+            raise original_error
+        return real_fdopen(fd, mode, *args, **kwargs)
+
+    monkeypatch.setattr(os, "fdopen", fail_construction)
+
+    def invoke_operation():
+        if operation == "save":
+            store.save(replacement)
+        else:
+            store.load()
+
+    with pytest.raises(MemoryError) as caught:
+        invoke_operation()
+    assert caught.value is original_error
+    assert path.read_bytes() == original_payload
+    assert not list(tmp_path.glob(".history-*.tmp"))
+    assert len(descriptors) == 1
+    with pytest.raises(OSError, match=r".") as closed:
+        real_fstat(descriptors[0])
+    assert closed.value.errno == errno.EBADF
+
+
 @pytest.mark.skipif(
     not hasattr(os, "mkfifo") or not hasattr(os, "O_NONBLOCK"),
     reason="POSIX FIFO flags unavailable",

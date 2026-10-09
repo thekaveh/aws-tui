@@ -225,7 +225,13 @@ def _atomic_record(directory: Path, name: str, payload: bytes, permit: DraftPerm
     descriptor, raw_path = tempfile.mkstemp(prefix=".draft-", suffix=".tmp", dir=directory)
     temporary = Path(raw_path)
     try:
-        with os.fdopen(descriptor, "wb") as output:
+        try:
+            output = os.fdopen(descriptor, "wb")
+        except BaseException:
+            with contextlib.suppress(OSError):
+                os.close(descriptor)
+            raise
+        with output:
             output.write(payload)
             output.flush()
             os.fsync(output.fileno())

@@ -4041,6 +4041,25 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
         replacement: Widget | None = None
         staging_host: Container | None = None
         host: Container | None = None
+
+        def claim_outgoing_input() -> bool:
+            """Close live Athena intake only at the host's shutdown boundary."""
+            outgoing = ctx.root_vm.content_host.current
+            if not isinstance(outgoing, AthenaPageVM):
+                return True
+            page = next((page for page in self.query(AthenaPage) if page.vm is outgoing), None)
+            if page is None or not page.is_attached:
+                return False
+            editor = page.query_one("#athena-editor", TextArea)
+            # A Changed message may still be queued. Keep the live tree if
+            # its visible editor has not settled with the captured VM state.
+            if editor.text != outgoing.query.sql:
+                return False
+            editor.read_only = True
+            page.disabled = True
+            outgoing.close_input_admission()
+            return True
+
         try:
             replacement = build_service_view(
                 service_id,
@@ -4081,12 +4100,20 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
 
         prior_children = tuple(child for child in host.children if child is not staging_host)
         try:
-            await ctx.root_vm.adopt_prepared_service_vm(
+            adopted = await ctx.root_vm.adopt_prepared_service_vm(
                 connection,
                 TokenState.CONNECTED,
                 service_id,
                 recovery.vm,
+                ownership_is_current=is_current,
+                claim_input=claim_outgoing_input,
             )
+            if not adopted:
+                try:
+                    await staging_host.remove()
+                finally:
+                    await self._discard_staged_service_recovery(recovery.vm)
+                return False
         except BaseException:
             with contextlib.suppress(Exception):
                 await staging_host.remove()

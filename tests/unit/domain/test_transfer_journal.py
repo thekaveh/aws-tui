@@ -794,3 +794,45 @@ def test_destination_intent_refuses_to_exceed_safe_metadata_bound(tmp_path):
     assert failure == "destination intent exceeds metadata size limit"
     assert unchanged
     assert journal.load_history()[0].id == tid
+
+
+@pytest.mark.parametrize("operation", ["append", "replay"])
+@pytest.mark.parametrize("already_closed", [False, True])
+def test_fdopen_construction_preserves_original_error(
+    tmp_path, monkeypatch, operation, already_closed
+):
+    journal = TransferJournal(base_dir=tmp_path)
+    tid = journal.begin(
+        source_uri="src://original", destination_uri="dst://original", bytes_total=7
+    )
+    path = tmp_path / f"{tid}.jsonl"
+    original_payload = path.read_bytes()
+    original_error = MemoryError("fixture stream construction failure")
+    real_fdopen, real_fstat, real_close = os.fdopen, os.fstat, os.close
+    descriptors = []
+
+    def fail_construction(fd, mode, *args, **kwargs):
+        if mode == ("a" if operation == "append" else "r"):
+            descriptors.append(fd)
+            # Inject the documented late-close state, not a native allocation failure.
+            if already_closed:
+                real_close(fd)
+            raise original_error
+        return real_fdopen(fd, mode, *args, **kwargs)
+
+    monkeypatch.setattr(os, "fdopen", fail_construction)
+
+    def invoke_operation():
+        if operation == "append":
+            journal.record_part(tid, part_index=1, etag="distinct", bytes_written=3)
+        else:
+            journal.find_unfinished()
+
+    with pytest.raises(MemoryError) as caught:
+        invoke_operation()
+    assert caught.value is original_error
+    assert path.read_bytes() == original_payload
+    assert len(descriptors) == 1
+    with pytest.raises(OSError, match=r".") as closed:
+        real_fstat(descriptors[0])
+    assert closed.value.errno == errno.EBADF

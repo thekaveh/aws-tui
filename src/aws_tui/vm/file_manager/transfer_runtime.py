@@ -354,7 +354,10 @@ class TransferRuntime:
             done, total = value.bytes_transferred, value.bytes_total
             self._totals[tid] = (done, total)
             self._observed_ids.add(tid)
-            self.progress(tid, TransferState.RUNNING, done, total)
+            # Providers may finish reporting while owned cancellation drains.
+            # Keep final byte totals without reviving a cancelled/evicted row.
+            if not event.is_set():
+                self.progress(tid, TransferState.RUNNING, done, total)
 
         copy_task = asyncio.create_task(
             operation(src_path, dst_path, progress=progress, on_conflict=on_conflict)

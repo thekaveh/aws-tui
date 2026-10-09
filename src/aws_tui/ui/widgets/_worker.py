@@ -1,34 +1,65 @@
-"""Deferred dispatch for exclusive Textual workers.
+"""Lifecycle ownership for Textual workers.
 
-``DOMNode.run_worker`` accepts either a coroutine object or a
-zero-argument callable returning an awaitable. Passing the coroutine object
-constructs it at call time, before the worker that will consume it exists.
+Creating a coroutine before worker admission can abandon it if cancellation
+occurs before the first worker turn. This occurs during exclusive replacement
+and shutdown.
 
-With ``exclusive=True`` that is a leak. A second call in the same group cancels
-the first worker, and when the first has not been scheduled yet its coroutine is
-discarded without ever being awaited -- a ``coroutine ... was never awaited``
-RuntimeWarning, plus whatever the coroutine had already allocated. Measured on a
-minimal Textual app, five rapid ``exclusive=True`` dispatches leak four
-coroutines; the same five through :func:`run_deferred_worker` leak none.
-Dispatching and then removing the widget leaks one, and none respectively.
+``run_deferred_worker`` constructs work inside the worker. Use it when invocation
+can wait until the worker starts.
 
-Deferring also means the work callable is invoked *inside* the worker, so
-``get_current_worker()`` resolves for anything the callable itself runs.
+``run_owned_awaitable`` retains existing work when synchronous dispatch must
+capture context immediately. It closes native coroutines or cancels futures if
+cancellation precedes entry.
 
-:class:`DeferredWorkerMixin` carries the widget-facing spelling; ``AwsTuiApp``
-uses it too, so the whole UI layer has one idiom for this.
+Both functions keep Textual's worker ownership and error handling. The owned
+bridge keeps independent invocations in the same group.
+
+``DeferredWorkerMixin`` provides the widget-facing deferred spelling.
 """
 
 from __future__ import annotations
 
+import asyncio
+import inspect
 from collections.abc import Awaitable, Callable
 from typing import TYPE_CHECKING, TypeVar, cast
 
+from textual.worker import Worker
+
 if TYPE_CHECKING:
     from textual.dom import DOMNode
-    from textual.worker import Worker
 
 _ResultT = TypeVar("_ResultT")
+
+
+class _OwnedAwaitableWorker(Worker[_ResultT]):
+    """Release supplied work if cancellation precedes the worker's first turn."""
+
+    def __init__(self, node: DOMNode, work: Awaitable[_ResultT], *, group: str) -> None:
+        super().__init__(node, work, group=group)
+        self._owned_awaitable = work
+        self._entered = False
+
+    async def run(self) -> _ResultT:
+        self._entered = True
+        return await self._owned_awaitable
+
+    def cancel(self) -> None:
+        super().cancel()
+        if not self._entered:
+            if inspect.iscoroutine(self._owned_awaitable):
+                self._owned_awaitable.close()
+            elif asyncio.isfuture(self._owned_awaitable):
+                self._owned_awaitable.cancel()
+
+
+def run_owned_awaitable(
+    node: DOMNode, work: Awaitable[_ResultT], *, group: str
+) -> Worker[_ResultT]:
+    """Own existing work while preserving synchronous dispatch and App lifetime."""
+    worker = _OwnedAwaitableWorker(node, work, group=group)
+    node.workers.add_worker(worker, exclusive=False)
+    return worker
 
 
 def run_deferred_worker(
@@ -82,4 +113,4 @@ class DeferredWorkerMixin:
         )
 
 
-__all__ = ["DeferredWorkerMixin", "run_deferred_worker"]
+__all__ = ["DeferredWorkerMixin", "run_deferred_worker", "run_owned_awaitable"]

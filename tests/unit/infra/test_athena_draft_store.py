@@ -614,3 +614,36 @@ def test_draft_diagnostics_never_include_payload(tmp_path, monkeypatch, case):
     assert error.__cause__ is None
     assert error.__context__ is None
     assert all(sentinel not in text for text in artifacts)
+
+
+@pytest.mark.parametrize("already_closed", [False, True])
+def test_fdopen_construction_preserves_original_error(tmp_path, monkeypatch, already_closed):
+    import errno
+
+    store = _enabled(tmp_path)
+    assert store.save(record(sql="SELECT 'original'"), permit=DraftPermit()).code is None
+    path = _path(tmp_path)
+    original_payload = path.read_bytes()
+    original_error = KeyboardInterrupt("fixture stream construction interruption")
+    real_fdopen, real_fstat, real_close = os.fdopen, os.fstat, os.close
+    descriptors = []
+
+    def fail_construction(fd, mode, *args, **kwargs):
+        if mode == "wb":
+            descriptors.append(fd)
+            # Represent a constructor that adopted and closed its fd before raising.
+            if already_closed:
+                real_close(fd)
+            raise original_error
+        return real_fdopen(fd, mode, *args, **kwargs)
+
+    monkeypatch.setattr(module.os, "fdopen", fail_construction)
+    with pytest.raises(KeyboardInterrupt) as caught:
+        store.save(record(sql="SELECT 'replacement'"), permit=DraftPermit())
+    assert caught.value is original_error
+    assert path.read_bytes() == original_payload
+    assert not list(path.parent.glob(".draft-*.tmp"))
+    assert len(descriptors) == 1
+    with pytest.raises(OSError, match=r".") as closed:
+        real_fstat(descriptors[0])
+    assert closed.value.errno == errno.EBADF

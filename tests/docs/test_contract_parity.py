@@ -183,20 +183,25 @@ def _default_binding_actions() -> tuple[str, ...]:
     raise AssertionError("KeymapStore.DEFAULT_BINDINGS not found")
 
 
-def _registered_service_actions() -> tuple[str, ...]:
-    actions: set[str] = set()
-    for node in ast.walk(_module("src/aws_tui/app.py")):
-        if (
-            isinstance(node, ast.Call)
-            and isinstance(node.func, ast.Attribute)
-            and node.func.attr == "register"
-            and node.args
-            and isinstance(node.args[0], ast.Constant)
-            and isinstance(node.args[0].value, str)
-            and node.args[0].value.startswith(("glue.", "athena."))
-        ):
-            actions.add(node.args[0].value)
-    return tuple(sorted(actions))
+def _registered_service_actions(tmp_path: Path) -> tuple[str, ...]:
+    from aws_tui.app import AwsTuiApp
+    from aws_tui.composition import build_app_context
+
+    context = build_app_context(
+        config_dir=tmp_path / "config", cache_dir=tmp_path / "cache", demo=True
+    )
+    try:
+        # Construction registers literal and generated IDs without invoking actions.
+        app = AwsTuiApp(context)
+        return tuple(
+            sorted(
+                action
+                for action in app._actions.known_actions()
+                if action.startswith(("glue.", "athena."))
+            )
+        )
+    finally:
+        context.close_unstarted()
 
 
 def _public_requests() -> tuple[str, ...]:
@@ -256,15 +261,12 @@ def test_theme_docs_describe_registered_palette_commands() -> None:
         assert "palette: `theme switch" not in text
 
 
-def test_public_service_action_ledger_matches_registered_source() -> None:
+def test_public_service_action_ledger_matches_registered_source(tmp_path: Path) -> None:
     ledger = _text("docs/contract-ledger.md")
-    assert (
-        _text_ledger_block(
-            ledger,
-            "Public Glue and Athena action ledger",
-        )
-        == _registered_service_actions()
-    )
+    assert _text_ledger_block(
+        ledger,
+        "Public Glue and Athena action ledger",
+    ) == _registered_service_actions(tmp_path)
 
 
 def test_cross_service_message_ledger_matches_request_classes() -> None:
