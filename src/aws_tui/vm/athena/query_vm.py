@@ -130,6 +130,7 @@ class AthenaQueryVM:
         self._hub = hub
         self._disposed = False
         self._shutdown_started = False
+        self._input_admission_closed = False
         self._shutdown_complete = False
         self._lifecycle_transition = False
         self._lifecycle_lock = asyncio.Lock()
@@ -226,7 +227,13 @@ class AthenaQueryVM:
 
     def install_draft_sql(self, record: SqlDraft) -> None:
         # Caller owns the lifecycle guard; recovery acknowledges SQL without an edit/save.
-        if self._draft_session is None or record.context != self._context.cache_key:
+        if (
+            self._disposed
+            or self._shutdown_started
+            or self._input_admission_closed
+            or self._draft_session is None
+            or record.context != self._context.cache_key
+        ):
             raise ValueError("Draft context is unavailable")
         self._sql = record.sql
         self._validation_error = None
@@ -328,7 +335,12 @@ class AthenaQueryVM:
         self._results.construct()
 
     def set_sql(self, sql: str) -> None:
-        if self._disposed or sql == self._sql:
+        if (
+            self._disposed
+            or self._shutdown_started
+            or self._input_admission_closed
+            or sql == self._sql
+        ):
             return
         self._sql = sql
         self._validation_error = None
@@ -337,8 +349,17 @@ class AthenaQueryVM:
         self._notify("sql")
         self._notify("validation_error")
 
+    def close_input_admission(self) -> None:
+        """Close editor intake synchronously before outgoing shutdown can yield."""
+        self._input_admission_closed = True
+
     def begin_context_resolution(self) -> None:
-        if self._disposed or self._shutdown_started or self._is_context_resolving:
+        if (
+            self._disposed
+            or self._shutdown_started
+            or self._input_admission_closed
+            or self._is_context_resolving
+        ):
             return
         self._is_context_resolving = True
         self._notify("is_context_resolving")
@@ -350,7 +371,7 @@ class AthenaQueryVM:
         self._notify("is_context_resolving")
 
     def export_snapshot(self) -> AthenaQuerySnapshot:
-        if self._disposed or self._shutdown_started:
+        if self._disposed or self._shutdown_started or self._input_admission_closed:
             raise ValueError("Athena query is unavailable")
         if self._snapshot_export_is_busy():
             raise ValueError("Athena query is busy")
@@ -376,7 +397,7 @@ class AthenaQueryVM:
     async def restore_snapshot(self, snapshot: AthenaQuerySnapshot) -> None:
         prepared = _prepare_query_snapshot(snapshot, self._context)
         del snapshot
-        if self._disposed or self._shutdown_started:
+        if self._disposed or self._shutdown_started or self._input_admission_closed:
             raise ValueError("Athena query is unavailable")
         if prepared is None:
             raise ValueError(_SNAPSHOT_ERROR)
@@ -394,7 +415,13 @@ class AthenaQueryVM:
     @asynccontextmanager
     async def snapshot_restore_guard(self, expected_generation: int) -> AsyncIterator[None]:
         async with self._lifecycle_lock:
-            if expected_generation != self._generation or self._snapshot_export_is_busy():
+            if (
+                self._disposed
+                or self._shutdown_started
+                or self._input_admission_closed
+                or expected_generation != self._generation
+                or self._snapshot_export_is_busy()
+            ):
                 raise ValueError("Athena snapshot restore is unavailable")
             yield
 
@@ -537,10 +564,20 @@ class AthenaQueryVM:
         )
 
     async def set_context(self, context: QueryContext) -> None:
-        if self._disposed or context == self._context:
+        if (
+            self._disposed
+            or self._shutdown_started
+            or self._input_admission_closed
+            or context == self._context
+        ):
             return
         async with self._lifecycle_lock:
-            if self._disposed or context == self._context:
+            if (
+                self._disposed
+                or self._shutdown_started
+                or self._input_admission_closed
+                or context == self._context
+            ):
                 return
             self._lifecycle_transition = True
             self._generation += 1
@@ -576,6 +613,7 @@ class AthenaQueryVM:
             not self._execute_command.can_execute()
             and not self._disposed
             and not self._shutdown_started
+            and not self._input_admission_closed
             and not self._busy
             and bool(self._sql.strip())
         ):
@@ -656,12 +694,15 @@ class AthenaQueryVM:
             and generation == self._generation
             and not self._disposed
             and not self._shutdown_started
+            and not self._input_admission_closed
             and captured_context == self._context
             and captured_editor_revision == session.editor_revision
             and not self.draft_execution_blocked
         )
 
     async def _run_execution(self) -> None:
+        if self._disposed or self._shutdown_started or self._input_admission_closed:
+            return
         task = asyncio.current_task()
         if task is None:
             return
@@ -803,9 +844,21 @@ class AthenaQueryVM:
             self._notify("state")
             self._notify("is_submitting")
             self._execute_command.cancel()
-            await self._drain_execution_task()
-            await self._stop_pending_cleanup(report_error=True)
-            self._lifecycle_transition = False
+            cleanup = asyncio.create_task(
+                self._finish_cancel_transition(), name="athena-cancel-transition-cleanup"
+            )
+            cancelled = False
+            try:
+                while not cleanup.done():
+                    try:
+                        await asyncio.shield(cleanup)
+                    except asyncio.CancelledError:
+                        cancelled = True
+                cleanup.result()
+            finally:
+                self._lifecycle_transition = False
+            if cancelled:
+                raise asyncio.CancelledError
 
     async def _try_stop(
         self,
@@ -898,6 +951,10 @@ class AthenaQueryVM:
     async def _finish_context_transition(self) -> None:
         await self._drain_execution_task()
         await self._stop_pending_cleanup(report_error=False)
+
+    async def _finish_cancel_transition(self) -> None:
+        await self._drain_execution_task()
+        await self._stop_pending_cleanup(report_error=True)
 
     async def _drain_execution_task(self) -> None:
         task = self._execution_task
@@ -1054,6 +1111,7 @@ class AthenaQueryVM:
         if (
             self._disposed
             or self._shutdown_started
+            or self._input_admission_closed
             or self._is_context_resolving
             or not self._sql.strip()
             or self._busy

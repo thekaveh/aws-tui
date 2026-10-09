@@ -25,6 +25,7 @@ exposing legacy diagnostics or multipart identifiers in history summaries.
 
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import re
@@ -414,7 +415,13 @@ class TransferJournal:
         # `_write_journal_line` still makes the CONTENT durable on every record.
         created = not path.exists()
         fd = _private_append_opener(str(path), os.O_APPEND | os.O_WRONLY)
-        with os.fdopen(fd, "a", encoding="utf-8") as fh:
+        try:
+            fh = os.fdopen(fd, "a", encoding="utf-8")
+        except BaseException:
+            with contextlib.suppress(OSError):
+                os.close(fd)
+            raise
+        with fh:
             _write_journal_line(fh, line)
         if created:
             _fsync_directory(path.parent)
@@ -473,7 +480,13 @@ def _iter_jsonl(path: Path) -> Iterator[dict[str, Any]]:
     # Legacy diagnostics can contain many multipart lines. Preserve streaming
     # replay and its torn-final-line tolerance; new recovery uses bounded reads.
     fd = open_regular_metadata(path)
-    with os.fdopen(fd, "r", encoding="utf-8") as fh:
+    try:
+        fh = os.fdopen(fd, "r", encoding="utf-8")
+    except BaseException:
+        with contextlib.suppress(OSError):
+            os.close(fd)
+        raise
+    with fh:
         for raw in fh:
             stripped = raw.strip()
             if not stripped:

@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 import argparse
+import stat
 import tarfile
 import zipfile
 from collections.abc import Iterable, Sequence
-from pathlib import Path, PurePosixPath
+from pathlib import Path, PurePosixPath, PureWindowsPath
 
 _DENIED_COMPONENTS = frozenset(
     {
@@ -37,20 +38,41 @@ class ArtifactContentsError(ValueError):
     """A distribution contains an unsafe or repository-only member."""
 
 
-def _member_names(path: Path) -> tuple[str, ...]:
+def _members(path: Path) -> tuple[tuple[str, ...], tuple[str, ...]]:
+    """Return all member names and the names that contain regular file payloads."""
     if zipfile.is_zipfile(path):
         with zipfile.ZipFile(path) as archive:
-            return tuple(archive.namelist())
+            zip_members = archive.infolist()
+            files = []
+            for member in zip_members:
+                mode = member.external_attr >> 16 if member.create_system == 3 else 0
+                kind = stat.S_IFMT(mode)
+                if kind not in {0, stat.S_IFREG, stat.S_IFDIR}:
+                    raise ArtifactContentsError(
+                        f"{path} contains unsupported member type: {member.filename}"
+                    )
+                if not member.is_dir() and kind != stat.S_IFDIR and not member.external_attr & 0x10:
+                    files.append(member.filename)
+            return tuple(member.filename for member in zip_members), tuple(files)
     if tarfile.is_tarfile(path):
         with tarfile.open(path) as archive:
-            return tuple(member.name for member in archive.getmembers())
+            tar_members = archive.getmembers()
+            for tar_member in tar_members:
+                if not tar_member.isfile() and not tar_member.isdir():
+                    raise ArtifactContentsError(
+                        f"{path} contains unsupported member type: {tar_member.name}"
+                    )
+            return (
+                tuple(member.name for member in tar_members),
+                tuple(member.name for member in tar_members if member.isfile()),
+            )
     raise ArtifactContentsError(f"unsupported distribution artifact: {path}")
 
 
 def _denied_reason(name: str) -> str | None:
     normalized = name.replace("\\", "/")
     path = PurePosixPath(normalized)
-    if path.is_absolute() or ".." in path.parts:
+    if path.is_absolute() or PureWindowsPath(normalized).drive or ".." in path.parts:
         return "unsafe path"
     parts = tuple(part for part in path.parts if part not in {"", "."})
     denied = next((part for part in parts if part in _DENIED_COMPONENTS), None)
@@ -80,7 +102,7 @@ def _required_sdist_members(root: str) -> frozenset[str]:
 
 def validate_artifact(path: str | Path) -> None:
     artifact = Path(path)
-    members = _member_names(artifact)
+    members, files = _members(artifact)
     violations = [
         f"{name} ({reason})" for name in members if (reason := _denied_reason(name)) is not None
     ]
@@ -89,10 +111,10 @@ def validate_artifact(path: str | Path) -> None:
         suffix = "" if len(violations) <= 8 else f", and {len(violations) - 8} more"
         raise ArtifactContentsError(f"{artifact} contains denied members: {preview}{suffix}")
     if artifact.name.endswith(".whl"):
-        missing = sorted(_required_wheel_members().difference(members))
+        missing = sorted(_required_wheel_members().difference(files))
     elif artifact.name.endswith(".tar.gz"):
         root = artifact.name.removesuffix(".tar.gz")
-        missing = sorted(_required_sdist_members(root).difference(members))
+        missing = sorted(_required_sdist_members(root).difference(files))
     else:
         missing = []
     if missing:

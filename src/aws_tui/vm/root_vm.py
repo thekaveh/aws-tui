@@ -301,21 +301,29 @@ class RootVM:
         auth_state: TokenState,
         service_id: str,
         vm: object,
-    ) -> None:
-        """Atomically publish a service VM whose setup already succeeded."""
+        *,
+        ownership_is_current: Callable[[], bool] | None = None,
+        claim_input: Callable[[], bool] | None = None,
+    ) -> bool:
+        """Publish prepared content, or return False with its caller retaining it."""
         service = self._registry.get(service_id)
         if not service.supports(connection):
             raise RuntimeError(
                 f"service {service_id!r} does not support connection {connection.name!r}"
             )
-        await self._adopt_service_vm(
+        adopted = await self._adopt_service_vm(
             service_id,
             vm,
             before_publish=lambda: self._set_connection_state(connection, auth_state),
             already_prepared=True,
+            ownership_is_current=ownership_is_current,
+            claim_input=claim_input,
         )
+        if not adopted:
+            return False
         self._hub.send(ConnectionChangedMessage(connection=connection, auth_state=auth_state))
         self._services_menu.switch_service_command.execute(service_id)
+        return True
 
     async def _adopt_service_vm(
         self,
@@ -325,7 +333,9 @@ class RootVM:
         prepare_vm: Callable[[object], None] | None = None,
         before_publish: Callable[[], None] | None = None,
         already_prepared: bool = False,
-    ) -> None:
+        ownership_is_current: Callable[[], bool] | None = None,
+        claim_input: Callable[[], bool] | None = None,
+    ) -> bool:
         """Adopt one prebuilt service VM with selection rollback."""
         # Reflect the selection in the menu BEFORE adoption — the user
         # clicked S3, the ribbon should jump to S3 the next render
@@ -341,12 +351,14 @@ class RootVM:
         prior_selection = self._services_menu.selected_id
         self._services_menu.switch_service_command.execute(service_id)
         try:
-            await self._content_host.set_content(
+            adopted = await self._content_host.set_content(
                 vm,
                 service_id=service_id,
                 prepare=prepare_vm,
                 before_publish=before_publish,
                 already_prepared=already_prepared,
+                ownership_is_current=ownership_is_current,
+                claim_input=claim_input,
             )
         except (Exception, asyncio.CancelledError):
             # Revert — host failed to adopt, ribbon must not advance.
@@ -355,6 +367,12 @@ class RootVM:
             else:
                 self._services_menu.clear_selection()
             raise
+        if not adopted and self._services_menu.selected_id == service_id:
+            if prior_selection is not None:
+                self._services_menu.switch_service_command.execute(prior_selection)
+            else:
+                self._services_menu.clear_selection()
+        return adopted
 
     def _set_connection_state(self, connection: Connection, auth_state: TokenState) -> None:
         self._connection = connection

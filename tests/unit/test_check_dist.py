@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+import stat
 import tarfile
 import zipfile
 from io import BytesIO
@@ -122,3 +123,84 @@ def test_directory_mode_ignores_non_artifact_housekeeping_files(tmp_path: Path) 
     (tmp_path / ".gitignore").write_text("*\n", encoding="utf-8")
 
     assert main([str(tmp_path)]) == 0
+
+
+@pytest.mark.parametrize("member", ["C:/temp/payload.py", "C:\\temp\\payload.py", "C:payload.py"])
+@pytest.mark.parametrize("kind", ["wheel", "sdist"])
+def test_validate_artifact_rejects_windows_drive_paths(
+    tmp_path: Path, member: str, kind: str
+) -> None:
+    if kind == "wheel":
+        artifact = tmp_path / "aws_tui-0.8.0-py3-none-any.whl"
+        _write_complete_wheel(artifact)
+        with zipfile.ZipFile(artifact, "a") as archive:
+            archive.writestr(member, "fixture")
+    else:
+        artifact = tmp_path / "aws_tui-0.8.0.tar.gz"
+        _write_complete_sdist(artifact)
+        with tarfile.open(artifact, "r:gz") as archive:
+            members = [(info.name, archive.extractfile(info).read()) for info in archive]
+        with tarfile.open(artifact, "w:gz") as archive:
+            for name, payload in [*members, (member, b"fixture")]:
+                info = tarfile.TarInfo(name)
+                info.size = len(payload)
+                archive.addfile(info, BytesIO(payload))
+    with pytest.raises(ArtifactContentsError, match="unsafe path"):
+        validate_artifact(artifact)
+
+
+@pytest.mark.parametrize("member_type", [tarfile.SYMTYPE, tarfile.LNKTYPE, tarfile.FIFOTYPE])
+def test_validate_sdist_rejects_non_file_members(tmp_path: Path, member_type: bytes) -> None:
+    artifact = tmp_path / "aws_tui-0.8.0.tar.gz"
+    _write_complete_sdist(artifact)
+    with tarfile.open(artifact, "r:gz") as archive:
+        members = [(info, archive.extractfile(info).read()) for info in archive]
+    with tarfile.open(artifact, "w:gz") as archive:
+        for info, payload in members:
+            archive.addfile(info, BytesIO(payload))
+        unsafe = tarfile.TarInfo("aws_tui-0.8.0/payload")
+        unsafe.type = member_type
+        unsafe.linkname = "../../outside"
+        archive.addfile(unsafe)
+    with pytest.raises(ArtifactContentsError, match="unsupported member type"):
+        validate_artifact(artifact)
+
+
+def test_validate_wheel_rejects_symlink(tmp_path: Path) -> None:
+    artifact = tmp_path / "aws_tui-0.8.0-py3-none-any.whl"
+    _write_complete_wheel(artifact)
+    with zipfile.ZipFile(artifact, "a") as archive:
+        link = zipfile.ZipInfo("aws_tui/payload")
+        link.create_system = 3
+        link.external_attr = (stat.S_IFLNK | 0o777) << 16
+        archive.writestr(link, "../../outside")
+    with pytest.raises(ArtifactContentsError, match="unsupported member type"):
+        validate_artifact(artifact)
+
+
+@pytest.mark.parametrize("kind", ["wheel", "wheel-dos-directory", "sdist"])
+def test_required_package_member_must_be_a_file(tmp_path: Path, kind: str) -> None:
+    if kind.startswith("wheel"):
+        artifact = tmp_path / "aws_tui-0.8.0-py3-none-any.whl"
+        _write_complete_wheel(artifact, omit="aws_tui/py.typed")
+        with zipfile.ZipFile(artifact, "a") as archive:
+            directory = zipfile.ZipInfo("aws_tui/py.typed")
+            directory.create_system = 3
+            directory.external_attr = (stat.S_IFDIR | 0o755) << 16
+            if kind == "wheel-dos-directory":
+                directory.create_system = 0
+                directory.external_attr = 0x10
+            archive.writestr(directory, "")
+    else:
+        artifact = tmp_path / "aws_tui-0.8.0.tar.gz"
+        _write_complete_sdist(artifact, omit="aws_tui-0.8.0/src/aws_tui/py.typed")
+        with tarfile.open(artifact, "r:gz") as archive:
+            members = [(info, archive.extractfile(info).read()) for info in archive]
+        with tarfile.open(artifact, "w:gz") as archive:
+            for info, payload in members:
+                archive.addfile(info, BytesIO(payload))
+            directory = tarfile.TarInfo("aws_tui-0.8.0/src/aws_tui/py.typed")
+            directory.type = tarfile.DIRTYPE
+            archive.addfile(directory)
+    with pytest.raises(ArtifactContentsError, match="missing required package members"):
+        validate_artifact(artifact)

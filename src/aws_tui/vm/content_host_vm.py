@@ -115,19 +115,29 @@ class ContentHostVM:
         prepare: Callable[[Any], None] | None = None,
         before_publish: Callable[[], None] | None = None,
         already_prepared: bool = False,
-    ) -> None:
+        ownership_is_current: Callable[[], bool] | None = None,
+        claim_input: Callable[[], bool] | None = None,
+    ) -> bool:
+        """Adopt content, or leave a rejected candidate owned by its caller.
+
+        Compare ownership after outgoing setup drains, then optionally claim
+        input synchronously before shutdown. False preserves the outgoing tree;
+        its caller must drain/dispose the rejected candidate.
+        """
         try:
             async with self._swap_lock:
-                await self._set_content_locked(
+                return await self._set_content_locked(
                     vm,
                     service_id=service_id,
                     prepare=prepare,
                     before_publish=before_publish,
                     already_prepared=already_prepared,
+                    ownership_is_current=ownership_is_current,
+                    claim_input=claim_input,
                 )
         except BaseException:
-            # Ownership transfers before lock acquisition. If adoption never
-            # happened, the host is the candidate's sole disposer.
+            # On exceptional adoption, ownership transfers before lock
+            # acquisition and the host disposes an unadopted candidate.
             if vm is not None and self._current is not vm:
                 vm.dispose()
             raise
@@ -140,7 +150,9 @@ class ContentHostVM:
         prepare: Callable[[Any], None] | None,
         before_publish: Callable[[], None] | None,
         already_prepared: bool,
-    ) -> None:
+        ownership_is_current: Callable[[], bool] | None,
+        claim_input: Callable[[], bool] | None,
+    ) -> bool:
         """Swap the hosted VM. Idempotent only for the identical VM instance.
 
         Adoption + the ``"current"`` :class:`PropertyChangedMessage`
@@ -158,7 +170,7 @@ class ContentHostVM:
         """
         if self._current is vm and vm is not None:
             # Re-adopting the identical VM instance is a true no-op.
-            return
+            return True
         if vm is not None and not already_prepared:
             # Construction is the only synchronous adoption step that can
             # fail. Complete it while the outgoing VM is still intact so a
@@ -172,6 +184,12 @@ class ContentHostVM:
         shutdown_cancelled = False
         try:
             await self._cancel_and_drain_setup()
+            # Setup cleanup can yield while the outgoing page still accepts
+            # input. Fence prepared recovery before shutting down that page.
+            if ownership_is_current is not None and not ownership_is_current():
+                return False
+            if claim_input is not None and not claim_input():
+                return False
             shutdown_cancelled = await self._shutdown_current_for_swap()
         except BaseException:
             raise
@@ -191,7 +209,7 @@ class ContentHostVM:
 
         if vm is None:
             send_value_free(self._hub, PropertyChangedMessage.create(self, self.name, "current"))
-            return
+            return True
 
         # Adopt the already-constructed candidate before driving setup. Adopting
         # first means a setup failure (e.g. ``S3FS.list`` raising
@@ -239,6 +257,7 @@ class ContentHostVM:
                 # task.done() and drops the reference, and
                 # asyncio's GC emits the warning.
                 self._setup_task.add_done_callback(self._on_setup_done)
+        return True
 
     async def shutdown(self) -> None:
         """Await the current VM's optional graceful-shutdown hook."""

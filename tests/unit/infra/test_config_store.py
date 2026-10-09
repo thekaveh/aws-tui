@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import os
 import subprocess
 import sys
@@ -883,3 +884,140 @@ def test_sql_drafts_read_only_setter_does_not_write(tmp_path: Path) -> None:
     assert store.load().athena_sql_drafts is True
     assert path.read_bytes() == previous
     assert not path.with_name(".config.toml.lock").exists()
+
+
+@pytest.mark.parametrize("failure", ["fdopen", "fstat", "initial-write", "initial-chmod"])
+def test_lock_initialization_failure_closes_descriptor(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, failure: str
+) -> None:
+    import errno
+    from unittest.mock import Mock
+
+    real_open = os.open
+    real_fdopen = os.fdopen
+    real_fstat = os.fstat
+    real_chmod = Path.chmod
+    descriptors: list[int] = []
+    files = []
+
+    def open_lock(*args, **kwargs):
+        fd = real_open(*args, **kwargs)
+        descriptors.append(fd)
+        return fd
+
+    def wrap_lock(fd, *args, **kwargs):
+        if failure == "fdopen":
+            raise OSError(errno.EIO, "fixture fdopen failure")
+        file = real_fdopen(fd, *args, **kwargs)
+        files.append(file)
+        if failure == "initial-write":
+            proxy = Mock(wraps=file)
+            proxy.write.side_effect = OSError(errno.ENOSPC, "fixture initial write failure")
+            return proxy
+        return file
+
+    def inspect_lock(fd):
+        if failure == "fstat" and fd in descriptors:
+            raise OSError(errno.EIO, "fixture fstat failure")
+        return real_fstat(fd)
+
+    def chmod_lock(path, *args, **kwargs):
+        if failure == "initial-chmod" and path.name == "config.lock":
+            raise KeyboardInterrupt("fixture chmod interrupted")
+        return real_chmod(path, *args, **kwargs)
+
+    monkeypatch.setattr(config_store_module.os, "open", open_lock)
+    monkeypatch.setattr(config_store_module.os, "fdopen", wrap_lock)
+    monkeypatch.setattr(config_store_module.os, "fstat", inspect_lock)
+    monkeypatch.setattr(Path, "chmod", chmod_lock)
+    try:
+        # Retain the traceback to ensure cleanup does not depend on finalization.
+        expected = KeyboardInterrupt if failure == "initial-chmod" else OSError
+        with pytest.raises(expected, match="fixture") as raised:
+            config_store_module._acquire_os_file_lock(tmp_path / "config.lock", 0.1)
+        if isinstance(raised.value, OSError):
+            assert raised.value.errno in {errno.EIO, errno.ENOSPC}
+        assert len(descriptors) == 1
+        with pytest.raises(OSError, match=r".") as closed:
+            real_fstat(descriptors[0])
+        assert closed.value.errno == errno.EBADF
+    finally:
+        for file in files:
+            file.close()
+        for fd in descriptors:
+            with contextlib.suppress(OSError):
+                os.close(fd)
+
+
+@pytest.mark.parametrize("failure", [OSError, KeyboardInterrupt])
+def test_save_wrapper_failure_closes_descriptor_and_preserves_config(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, failure: type[BaseException]
+) -> None:
+    import errno
+
+    store = ConfigStore(path=tmp_path / "config.toml")
+    config = Config(connections={}, defaults=Defaults(), keybindings=Keybindings({}))
+    store.save(config)
+    replacement = replace(config, defaults=replace(config.defaults, theme="github-light"))
+    original = store.path.read_bytes()
+    real_fdopen = os.fdopen
+    real_fstat = os.fstat
+    descriptors: list[int] = []
+
+    def wrap_file(fd, mode, *args, **kwargs):
+        if mode == "wb":
+            descriptors.append(fd)
+            raise failure("fixture wrapper failure")
+        return real_fdopen(fd, mode, *args, **kwargs)
+
+    monkeypatch.setattr(config_store_module.os, "fdopen", wrap_file)
+    try:
+        with pytest.raises(failure, match="fixture"):
+            store.save(replacement)
+        assert store.path.read_bytes() == original
+        assert not list(tmp_path.glob(".config-*.toml.tmp"))
+        assert len(descriptors) == 1
+        with pytest.raises(OSError, match=r".") as closed:
+            real_fstat(descriptors[0])
+        assert closed.value.errno == errno.EBADF
+    finally:
+        for fd in descriptors:
+            with contextlib.suppress(OSError):
+                os.close(fd)
+
+
+@pytest.mark.parametrize("stage", ["lock", "save"])
+@pytest.mark.parametrize("already_closed", [False, True])
+def test_fdopen_construction_preserves_original_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, stage: str, already_closed: bool
+) -> None:
+    import errno
+
+    store = ConfigStore(path=tmp_path / "config.toml")
+    original_config = Config(connections={}, defaults=Defaults(), keybindings=Keybindings({}))
+    store.save(original_config)
+    original_payload = store.path.read_bytes()
+    replacement = replace(original_config, defaults=Defaults(theme="github-light"))
+    original_error = MemoryError("fixture stream construction failure")
+    real_fdopen, real_fstat, real_close = os.fdopen, os.fstat, os.close
+    descriptors = []
+
+    def fail_construction(fd, mode, *args, **kwargs):
+        if mode == ("r+b" if stage == "lock" else "wb"):
+            descriptors.append(fd)
+            # Represent CPython's known post-adoption state, without inducing OOM.
+            if already_closed:
+                real_close(fd)
+            raise original_error
+        return real_fdopen(fd, mode, *args, **kwargs)
+
+    monkeypatch.setattr(config_store_module.os, "fdopen", fail_construction)
+    with pytest.raises(MemoryError) as caught:
+        store.save(replacement)
+    assert caught.value is original_error
+    assert store.path.read_bytes() == original_payload
+    assert not list(tmp_path.glob(".config-*.toml.tmp"))
+    assert len(descriptors) == 1
+    with pytest.raises(OSError, match=r".") as closed:
+        real_fstat(descriptors[0])
+    assert closed.value.errno == errno.EBADF

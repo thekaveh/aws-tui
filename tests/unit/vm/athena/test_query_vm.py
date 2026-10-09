@@ -1867,3 +1867,71 @@ async def test_enabled_query_requires_validation_callback_and_notifies_value_fre
     await vm.shutdown()
     vm.dispose()
     runtime.dispose()
+
+
+async def test_cancelled_query_cancel_drains_retained_stop_and_releases_handoff() -> None:
+    from aws_tui.domain.filesystem import AuthRequiredError
+
+    class RetainedStopAthena(InMemoryAthena):
+        def __init__(self) -> None:
+            super().__init__(
+                executions=(
+                    (_detail("q-app-1", QueryState.RUNNING),),
+                    (_detail("q-app-2", QueryState.RUNNING),),
+                )
+            )
+            self.block_poll_for = "q-app-1"
+            self.gate_retained_stop = False
+            self.retained_stop_started = asyncio.Event()
+            self.release_retained_stop = asyncio.Event()
+
+        async def stop_query(self, execution_id: str) -> None:
+            if execution_id == "q-app-1" and self.gate_retained_stop:
+                self.retained_stop_started.set()
+                await self.release_retained_stop.wait()
+            await super().stop_query(execution_id)
+
+    fake = RetainedStopAthena()
+    vm = make_query_vm(fake)
+    vm.set_sql("SELECT 1")
+    execution = asyncio.create_task(vm.execute())
+    cancellation: asyncio.Task[None] | None = None
+    try:
+        await asyncio.wait_for(fake.poll_started.wait(), timeout=1)
+        fake.stop_error = AuthRequiredError("fixture authentication expired")
+        await vm.set_context(replace(_CONTEXT, workgroup="other"))
+        await execution
+        await vm.set_context(_CONTEXT)
+        fake.stop_error = None
+        fake.block_poll_for = "q-app-2"
+        fake.poll_started.clear()
+        fake.gate_retained_stop = True
+        execution = asyncio.create_task(vm.execute())
+        await asyncio.wait_for(fake.poll_started.wait(), timeout=1)
+
+        cancellation = asyncio.create_task(vm.cancel())
+        await asyncio.wait_for(fake.retained_stop_started.wait(), timeout=1)
+        cancellation.cancel()
+        await asyncio.sleep(0)
+        # VMx retires command admission promptly; lifecycle cleanup retains its lock.
+        assert vm._lifecycle_transition
+        await vm.cancel()
+        await asyncio.sleep(0)
+        with pytest.raises(ValueError, match="busy"):
+            vm.export_snapshot()
+        fake.release_retained_stop.set()
+        with pytest.raises(asyncio.CancelledError):
+            await asyncio.wait_for(cancellation, timeout=1)
+        await execution
+        await _wait_until(lambda: not vm._lifecycle_transition)
+
+        assert not vm._lifecycle_transition
+        assert vm._pending_cleanup_refs == {}
+        assert vm.export_snapshot().state is QueryState.CANCELLED
+    finally:
+        fake.release_retained_stop.set()
+        if cancellation is not None:
+            await asyncio.gather(cancellation, return_exceptions=True)
+        await vm.shutdown()
+        await asyncio.gather(execution, return_exceptions=True)
+        vm.dispose()
