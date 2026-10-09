@@ -782,3 +782,41 @@ async def test_application_selection_invalidates_old_logs_before_list_wait(monke
     await task
     await page.shutdown()
     page.dispose()
+
+
+@pytest.mark.asyncio
+async def test_application_poll_never_repeats_a_completed_user_selection(monkeypatch):
+    page, fake = _make()
+    for app_id in ("a", "b"):
+        fake.add_application(app_id=app_id, name=app_id)
+        for run_id in (app_id + "1", app_id + "2"):
+            fake.add_job_run(application_id=app_id, job_run_id=run_id)
+            fake.add_job_run_detail(
+                application_id=app_id, job_run_id=run_id, entry_point="s3://b/x.py"
+            )
+    await page.setup()
+    await page.select_application("a")
+    entered = asyncio.Event()
+    release = asyncio.Event()
+    original_list = fake.list_applications
+
+    async def blocked_list():
+        entered.set()
+        await release.wait()
+        return await original_list()
+
+    monkeypatch.setattr(fake, "list_applications", blocked_list)
+    poll = asyncio.create_task(page.refresh_applications())
+    await entered.wait()
+    await page.select_application("b")
+    await page.select_job_run("b2")
+    release.set()
+    await poll
+    assert page.applications.selected_id == "b"
+    assert page.job_runs.selected_id == "b2"
+    assert page.job_run_detail.detail is not None
+    assert page.job_run_detail.detail.job_run_id == "b2"
+    assert page.job_run_logs.job_run_id == "b2"
+    await page.shutdown()
+    page.dispose()
+    fake.dispose()

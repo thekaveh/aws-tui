@@ -24,6 +24,58 @@ def _make() -> tuple[JobRunDetailVM, _InMemoryEmr]:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("outcome", ["detail", "provider-error", "unexpected-error"])
+@pytest.mark.parametrize("switch_target", [False, True])
+async def test_newer_run_read_drops_its_older_inflight_response(
+    outcome: str, switch_target: bool
+) -> None:
+    vm, fake = _make()
+    fake.add_job_run(application_id="a1", job_run_id="r1", state=JobRunState.RUNNING)
+    old = fake.add_job_run_detail(application_id="a1", job_run_id="r1", entry_point="old.py")
+    fake.add_job_run(application_id="a1", job_run_id="r1", state=JobRunState.SUCCESS)
+    current = fake.add_job_run_detail(
+        application_id="a1", job_run_id="r1", entry_point="current.py"
+    )
+    started = asyncio.Event()
+    released = asyncio.Event()
+    calls = 0
+
+    async def read(_app_id, _run_id):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            started.set()
+            await released.wait()
+            if outcome == "provider-error":
+                raise ProviderError("old read failed")
+            if outcome == "unexpected-error":
+                raise RuntimeError("old client failed")
+            return old
+        return current
+
+    fake.get_job_run = read
+    vm.set_target("a1", "r1")
+    pending = asyncio.create_task(vm.refresh())
+    try:
+        await asyncio.wait_for(started.wait(), timeout=1)
+        if switch_target:
+            vm.set_target("a1", "r2")
+            vm.set_target("a1", "r1")
+        await vm.refresh()
+        assert vm.detail is current
+        released.set()
+        await pending
+        assert vm.detail is current
+        assert vm.state is PaneState.IDLE
+        assert vm.error_text is None
+        assert vm.is_terminal_state()
+    finally:
+        released.set()
+        await pending
+        vm.dispose()
+
+
+@pytest.mark.asyncio
 async def test_refresh_with_target_loads_detail() -> None:
     vm, fake = _make()
     fake.add_job_run(application_id="a1", job_run_id="r1", state=JobRunState.RUNNING)

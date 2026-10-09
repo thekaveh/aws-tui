@@ -136,7 +136,7 @@ async def test_glue_iceberg_handoff_can_commit_a_different_athena_context(
                 assert current is not vm
                 assert current.context.connection_name == "demo-prod"
                 assert current.context.region == "us-east-1"
-                assert app.query_one(ServiceSourceHeader).tooltip == current.source.label
+                assert app.query_one(ServiceSourceHeader).tooltip.plain == current.source.label
                 assert current.query.sql == ""
                 assert app.query_one("#athena-editor", TextArea).text == current.query.sql
                 for name in ("workgroup", "catalog", "database"):

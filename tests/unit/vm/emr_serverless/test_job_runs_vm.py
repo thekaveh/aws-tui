@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+
 import pytest
 from vmx import NULL_DISPATCHER, MessageHub
 from vmx.messages.protocols import Message
@@ -640,3 +642,31 @@ async def test_on_property_changed_isolates_cross_vm_state_events() -> None:
     finally:
         sub.dispose()
         vm2.dispose()
+
+
+@pytest.mark.asyncio
+async def test_selection_made_during_poll_survives_changed_rows(monkeypatch):
+    vm, fake = _make()
+    _seed_runs(fake, "a1")
+    vm.set_application("a1")
+    await vm.refresh()
+    vm.select("r1")
+    entered = asyncio.Event()
+    release = asyncio.Event()
+    original_list = fake.list_job_runs_page
+
+    async def blocked_list(*args, **kwargs):
+        entered.set()
+        await release.wait()
+        return await original_list(*args, **kwargs)
+
+    monkeypatch.setattr(fake, "list_job_runs_page", blocked_list)
+    poll = asyncio.create_task(vm.refresh())
+    await entered.wait()
+    vm.select("r2")
+    fake.add_job_run(application_id="a1", job_run_id="r5", state=JobRunState.SUCCESS)
+    release.set()
+    await poll
+    assert vm.selected_id == "r2"
+    assert any(run.job_run_id == "r5" for run in vm.runs)
+    vm.dispose()

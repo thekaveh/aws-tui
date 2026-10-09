@@ -94,9 +94,10 @@ preferences.
 In Athena's **Drafts** manager, **Delete** removes the selected local record and
 **Clear all** removes owned records. Settings **Disable and delete drafts** asks
 for confirmation, turns persistence off, and deletes owned records. If cleanup
-fails, **Retry draft cleanup** retries deletion while the setting stays off.
-Deleting or clearing does not recreate a draft from untouched editor text;
-edit again to save a new revision. Draft contents are not collected by
+fails, **Retry draft cleanup** retries deletion while the setting stays off. Deleting or clearing does not recreate a draft from untouched editor text;
+edit again to save a new revision.
+
+Draft contents are not collected by
 `doctor` or support diagnostics. See [Athena](services/athena.md#6-local-sql-draft-recovery)
 for recovery and [Cookbook](cookbook.md#66-save-and-recover-local-sql-drafts)
 for the keyboard procedure and shutdown limits.

@@ -9,8 +9,11 @@ from dataclasses import replace
 from pathlib import Path
 
 import pytest
+from textual.app import ComposeResult
 from textual.containers import Container
+from textual.widgets import Static
 
+from aws_tui import app as app_module
 from aws_tui.app import AwsTuiApp
 from aws_tui.composition import AppContext, build_app_context
 from aws_tui.demo.in_memory_fs import InMemoryFS
@@ -127,6 +130,43 @@ def _mount_athena_for_recovery(
     initial = PageClient(connection_name="demo-dev", region="us-east-1")
     service._client_factory = lambda _connection: initial  # type: ignore[attr-defined]
     return AwsTuiApp(ctx), ctx, service, initial
+
+
+@pytest.mark.asyncio
+async def test_authenticate_during_quit_does_not_start_new_recovery(tmp_path, monkeypatch):
+    app, ctx, service, _ = _mount_athena_for_recovery(tmp_path)
+    draining = asyncio.Event()
+    release = asyncio.Event()
+    original_shutdown = ctx.command_palette_vm.shutdown
+    candidates = []
+
+    async def blocked_shutdown():
+        draining.set()
+        await release.wait()
+        await original_shutdown()
+
+    def candidate_factory(_connection):
+        client = PageClient(connection_name="demo-dev", region="us-east-1")
+        candidates.append(client)
+        return client
+
+    monkeypatch.setattr(ctx.command_palette_vm, "shutdown", blocked_shutdown)
+    async with app.run_test(size=(120, 40)) as pilot:
+        await open_service(ctx, pilot, "athena")
+        service._client_factory = candidate_factory
+        app.action_dispatch("app.quit")
+        await asyncio.wait_for(draining.wait(), timeout=1)
+        try:
+            assert app._service_navigation_closed
+            assert app._auth_recovery_task is None
+            dispatched = app.action_dispatch("auth.authenticate")
+            assert dispatched is not None
+            await dispatched
+            assert candidates == []
+            assert app._auth_recovery_task is None
+        finally:
+            release.set()
+            await app._aws_tui_shutdown()
 
 
 @pytest.mark.asyncio
@@ -714,6 +754,68 @@ async def test_athena_recovery_mount_failure_preserves_live_vm_widget_and_auth(
         ctx.log_sink.close()
 
 
+@pytest.mark.parametrize("failure", ["compose", "mount", "descendant"])
+@pytest.mark.asyncio
+async def test_athena_recovery_lifecycle_failure_preserves_live_page(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    failure: str,
+) -> None:
+    class FailingView(Static):
+        def compose(self) -> ComposeResult:
+            if failure == "compose":
+                raise RuntimeError("candidate compose failure")
+            if failure == "descendant":
+                yield FailingChild()
+
+        def on_mount(self) -> None:
+            if failure == "mount":
+                raise RuntimeError("candidate mount failure")
+
+    class FailingChild(Static):
+        def on_mount(self) -> None:
+            raise RuntimeError("candidate descendant failure")
+
+    app, ctx, service, _initial = _mount_athena_for_recovery(tmp_path)
+    candidates: list[AthenaPageVM] = []
+
+    def failing_view(_service_id: str, vm: AthenaPageVM, **_kwargs: object) -> Static:
+        candidates.append(vm)
+        return FailingView()
+
+    try:
+        async with app.run_test(size=(120, 40)) as pilot:
+            await open_service(ctx, pilot, "athena")
+            live_vm = ctx.root_vm.content_host.current
+            live_page = app.query_one("#content-athena-page", AthenaPage)
+            original = ctx.root_vm.active_connection
+            assert original is not None
+            ctx.root_vm.refresh_connection_state(original, TokenState.EXPIRED)
+            service._client_factory = lambda _connection: PageClient(  # type: ignore[attr-defined]
+                connection_name="demo-dev", region="us-east-1"
+            )
+            monkeypatch.setattr(app_module, "build_service_view", failing_view)
+
+            await app.action_authenticate()
+            await pilot.pause()
+
+            assert app.crash_report is None
+            assert ctx.root_vm.content_host.current is live_vm
+            assert ctx.root_vm.active_connection is original
+            assert ctx.root_vm.active_auth_state is TokenState.EXPIRED
+            assert app.query_one("#content-athena-page", AthenaPage) is live_page
+            assert live_page.display
+            assert candidates
+            assert candidates[0]._disposed  # type: ignore[attr-defined]
+            assert not app.query(FailingView)
+    finally:
+        with contextlib.suppress(Exception):
+            await ctx.root_vm.content_host.shutdown()
+        with contextlib.suppress(Exception):
+            ctx.root_vm.dispose()
+        ctx.log_sink.close()
+
+
 @pytest.mark.asyncio
 async def test_glue_jobs_recovery_preserves_job_run_and_filter(tmp_path: Path) -> None:
     ctx = build_app_context(
@@ -990,4 +1092,185 @@ async def test_emr_logs_recovery_rejects_missing_exact_file(tmp_path: Path) -> N
             await ctx.root_vm.content_host.shutdown()
         with contextlib.suppress(Exception):
             ctx.root_vm.dispose()
+        ctx.log_sink.close()
+
+
+@pytest.mark.parametrize("late_failure", [False, True])
+@pytest.mark.asyncio
+async def test_recovery_cancellation_prunes_an_attached_mounting_candidate(
+    tmp_path, monkeypatch, late_failure
+):
+    entered, release = asyncio.Event(), asyncio.Event()
+
+    class SlowView(Static):
+        async def on_mount(self) -> None:
+            entered.set()
+            await release.wait()
+            if late_failure:
+                raise RuntimeError("late candidate lifecycle failure")
+
+    app, ctx, service, _ = _mount_athena_for_recovery(tmp_path)
+    try:
+        async with app.run_test(size=(120, 40)) as pilot:
+            await open_service(ctx, pilot, "athena")
+            live = ctx.root_vm.content_host.current
+            page = app.query_one("#content-athena-page", AthenaPage)
+            service._client_factory = lambda _connection: PageClient(
+                connection_name="demo-dev", region="us-east-1"
+            )
+            monkeypatch.setattr(app_module, "build_service_view", lambda *_a, **_kw: SlowView())
+            recovery = asyncio.create_task(app._recover_active_source())
+            await asyncio.wait_for(entered.wait(), timeout=1)
+            recovery.cancel()
+            asyncio.get_running_loop().call_later(0.01, release.set)
+            with pytest.raises(asyncio.CancelledError):
+                await asyncio.wait_for(recovery, timeout=2)
+            await pilot.pause()
+            assert ctx.root_vm.content_host.current is live
+            assert app.query_one("#content-athena-page", AthenaPage) is page
+            assert app.crash_report is None
+            assert not app.query(SlowView)
+            assert not app._recovery_mount_errors
+    finally:
+        release.set()
+        with contextlib.suppress(Exception):
+            await ctx.root_vm.content_host.shutdown()
+        with contextlib.suppress(Exception):
+            ctx.root_vm.dispose()
+        ctx.log_sink.close()
+
+
+@pytest.mark.parametrize("transition", ["source_aba", "navigation_intent"])
+@pytest.mark.asyncio
+async def test_recovery_discards_candidate_superseded_during_mount(
+    tmp_path, monkeypatch, transition
+):
+    entered, release = asyncio.Event(), asyncio.Event()
+    candidates = []
+
+    class SlowView(Static):
+        async def on_mount(self) -> None:
+            entered.set()
+            await release.wait()
+
+    def view(_service, vm, **_kwargs):
+        candidates.append(vm)
+        return SlowView()
+
+    app, ctx, service, _ = _mount_athena_for_recovery(tmp_path)
+    try:
+        async with app.run_test(size=(120, 40)) as pilot:
+            await open_service(ctx, pilot, "athena")
+            live = ctx.root_vm.content_host.current
+            page = app.query_one("#content-athena-page", AthenaPage)
+            original = ctx.root_vm.active_connection
+            assert original is not None
+            ctx.root_vm.refresh_connection_state(original, TokenState.EXPIRED)
+            service._client_factory = lambda _connection: PageClient(
+                connection_name="demo-dev", region="us-east-1"
+            )
+            monkeypatch.setattr(app_module, "build_service_view", view)
+            recovering = asyncio.create_task(app._recover_active_source())
+            await asyncio.wait_for(entered.wait(), timeout=1)
+            if transition == "source_aba":
+                ctx.root_vm.refresh_connection_state(
+                    replace(original, name="other"), TokenState.CONNECTED
+                )
+                ctx.root_vm.refresh_connection_state(original, TokenState.EXPIRED)
+            else:
+                app._advance_service_navigation("service", cancel_table_tasks=True)
+            release.set()
+            await recovering
+            await pilot.pause()
+            assert ctx.root_vm.content_host.current is live
+            assert ctx.root_vm.active_connection is original
+            assert ctx.root_vm.active_auth_state is TokenState.EXPIRED
+            assert app.query_one("#content-athena-page", AthenaPage) is page
+            assert not app.query(SlowView)
+            assert candidates
+            assert candidates[0]._disposed
+            assert app.crash_report is None
+    finally:
+        release.set()
+        with contextlib.suppress(Exception):
+            await ctx.root_vm.content_host.shutdown()
+        with contextlib.suppress(Exception):
+            ctx.root_vm.dispose()
+        ctx.log_sink.close()
+
+
+@pytest.mark.asyncio
+async def test_athena_recovery_discards_candidate_after_live_sql_edit(tmp_path):
+    app, ctx, service, _ = _mount_athena_for_recovery(tmp_path)
+    candidates = []
+    original_build = ctx.root_vm.build_recovery_service_vm
+
+    def record_candidate(*args):
+        recovery = original_build(*args)
+        candidates.append(recovery.vm)
+        return recovery
+
+    ctx.root_vm.build_recovery_service_vm = record_candidate
+    try:
+        async with app.run_test(size=(120, 40)) as pilot:
+            await open_service(ctx, pilot, "athena")
+            live = ctx.root_vm.content_host.current
+            live.query.set_sql("SELECT old_text")
+            candidate_client = PageClient(connection_name="demo-dev", region="us-east-1")
+            candidate_client.block_workgroup_detail_for = "primary"
+            service._client_factory = lambda _: candidate_client
+            recovery = asyncio.create_task(app._recover_active_source())
+            await asyncio.wait_for(candidate_client.workgroup_detail_started.wait(), timeout=1)
+            live.query.set_sql("SELECT new_text")
+            candidate_client.release_workgroup_detail.set()
+            await recovery
+            assert ctx.root_vm.content_host.current is live
+            assert live.query.sql == "SELECT new_text"
+            assert candidates[0]._disposed
+    finally:
+        with contextlib.suppress(Exception):
+            await ctx.root_vm.content_host.shutdown()
+        ctx.root_vm.dispose()
+        ctx.log_sink.close()
+
+
+@pytest.mark.asyncio
+async def test_athena_recovery_never_interrupts_an_owned_query(tmp_path):
+    app, ctx, service, initial = _mount_athena_for_recovery(tmp_path)
+    entered = asyncio.Event()
+    release = asyncio.Event()
+    original_get = initial.get_query_execution
+
+    async def blocked_get(execution_id):
+        entered.set()
+        await release.wait()
+        return await original_get(execution_id)
+
+    initial.get_query_execution = blocked_get
+    execution = None
+    try:
+        async with app.run_test(size=(120, 40)) as pilot:
+            await open_service(ctx, pilot, "athena")
+            live = ctx.root_vm.content_host.current
+            live.query.set_sql("SELECT 1")
+            execution = asyncio.create_task(live.query.execute())
+            await asyncio.wait_for(entered.wait(), timeout=1)
+            assert live.query.owns_active_query
+            candidate_client = PageClient(connection_name="demo-dev", region="us-east-1")
+            service._client_factory = lambda _: candidate_client
+            await app.action_authenticate()
+            assert ctx.root_vm.content_host.current is live
+            assert live.query.owns_active_query
+            assert initial.stop_calls == []
+            assert candidate_client.workgroup_detail_started.is_set() is False
+            release.set()
+            await execution
+    finally:
+        release.set()
+        if execution is not None:
+            with contextlib.suppress(Exception, asyncio.CancelledError):
+                await execution
+        with contextlib.suppress(Exception):
+            await ctx.root_vm.content_host.shutdown()
+        ctx.root_vm.dispose()
         ctx.log_sink.close()

@@ -43,7 +43,7 @@ _AUTHORIZATION_HEADER = re.compile(
     r"([^\s,;}]+)",
     re.IGNORECASE,
 )
-_URL = re.compile(r"https?://[^\s\"'<>]+")
+_URL = re.compile(r"https?://\S+", re.IGNORECASE)
 
 
 def is_sensitive_key(key: str) -> bool:
@@ -137,7 +137,9 @@ def _redact_url(raw: str) -> str:
     try:
         parts = urlsplit(raw)
     except ValueError:
-        return raw
+        # Failed parsing cannot establish safe URL component boundaries.
+        # Keep harmless malformed addresses useful for diagnosis.
+        return _REDACTED if any(marker in raw for marker in ("@", "?", "#")) else raw
     netloc = parts.netloc
     if "@" in netloc:
         _, host = netloc.rsplit("@", 1)

@@ -124,7 +124,11 @@ async def test_has_more_is_false_when_fewer_rows_than_the_limit_return() -> None
         (DuckDbOutcome.NOT_FOUND, PaneState.ERROR, "table location not found"),
         (DuckDbOutcome.AUTH_REQUIRED, PaneState.AUTH_REQUIRED, "AWS authentication is required"),
         (DuckDbOutcome.NOT_ICEBERG, PaneState.ERROR, "not a readable Iceberg table"),
-        (DuckDbOutcome.ENGINE_MISSING, PaneState.ERROR, "pip install aws-tui[duckdb]"),
+        (
+            DuckDbOutcome.ENGINE_MISSING,
+            PaneState.ERROR,
+            'pip install "aws-tui[duckdb] @ git+https://github.com/thekaveh/aws-tui.git"',
+        ),
         (DuckDbOutcome.FAILED, PaneState.ERROR, "local preview failed"),
     ],
 )

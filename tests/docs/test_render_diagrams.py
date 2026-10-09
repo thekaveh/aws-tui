@@ -93,6 +93,17 @@ def test_svg_to_png_writes_png_magic(tmp_path):
     assert out.read_bytes()[:8] == b"\x89PNG\r\n\x1a\n"
 
 
+def test_svg_to_png_default_keeps_landscape_exports_at_two_times_source_size(tmp_path):
+    _require_cairosvg()
+    svg = "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 1600 900'/>"
+    out = tmp_path / "landscape.png"
+
+    svg_to_png(svg, out)
+
+    with Image.open(out) as image:
+        assert image.size == (3200, 1800)
+
+
 def test_committed_png_comparison_allows_bounded_cross_platform_raster_drift():
     baseline = Image.new("RGBA", (100, 100), "black")
     platform_render = baseline.copy()

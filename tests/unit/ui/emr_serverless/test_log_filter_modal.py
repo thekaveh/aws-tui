@@ -311,3 +311,25 @@ async def test_log_filter_modal_patterns_parsing() -> None:
 
 
 __all__ = []
+
+
+@pytest.mark.parametrize("pattern", [r"a{e<=x}", r"a{4294967295}"])
+async def test_apply_keeps_compile_failure_inline(pattern: str) -> None:
+    from textual.widgets import Static
+
+    class FilterApp(App[None]):
+        async def on_mount(self) -> None:
+            await self.push_screen(LogFilterModal(DEFAULT_LOG_FILTER))
+
+    app = FilterApp()
+    async with app.run_test(size=(100, 40)) as pilot:
+        await pilot.pause()
+        modal = app.screen
+        assert isinstance(modal, LogFilterModal)
+        modal.query_one("#log-patterns", TextArea).load_text(pattern)
+        modal.action_apply()
+        await pilot.pause()
+        assert app.screen is modal
+        assert "invalid regex pattern" in str(
+            modal.query_one("#log-patterns-error", Static).render()
+        )

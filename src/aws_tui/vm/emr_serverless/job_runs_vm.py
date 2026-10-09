@@ -298,7 +298,6 @@ class JobRunsVM:
         self._set_state(PaneState.LOADING)
         self._has_more_suppressed = False
         prior_items = self._items
-        prior_selected_id = self.selected_id
         self._pager_refresh_existing_count = len(prior_items)
         self._paging_identity = (target_app_id, None)
         try:
@@ -334,7 +333,7 @@ class JobRunsVM:
         # TokenPagedComposition persists it internally.
         unchanged = self._items == prior_items
         if not unchanged:
-            self._sync_inner_to_pager(prior_items, prior_selected_id=prior_selected_id)
+            self._sync_inner_to_pager(prior_items, prior_selected_id=self.selected_id)
             self._notify("runs")
         # Success path — drop any error text carried forward from a
         # prior failed poll (sibling parity with PaneVM._reload).

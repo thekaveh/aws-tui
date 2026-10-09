@@ -427,7 +427,7 @@ class JobRunLogsPane(Widget, can_focus=True):
             return
         state = self._vm.state
         if (
-            self._vm.selected_source is LogSource.CLOUDWATCH
+            (self._vm.selected_source is LogSource.CLOUDWATCH or state is LogsState.ERROR)
             and self._vm.lines
             and state in (LogsState.READY, LogsState.LOADING, LogsState.ERROR, LogsState.NO_FILES)
         ):

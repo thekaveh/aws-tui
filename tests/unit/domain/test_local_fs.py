@@ -1149,6 +1149,42 @@ async def test_read_missing_raises(tmp_path: Path) -> None:
         await _drain(await fs.read_stream(PathRef.from_posix("/nope")))
 
 
+@pytest.mark.skipif(os.name == "nt", reason="POSIX FIFO open semantics")
+@pytest.mark.parametrize("rooted", [True, False])
+async def test_read_stream_rejects_fifo_without_waiting_for_a_writer(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    rooted: bool,
+) -> None:
+    from aws_tui.domain import local_fs
+
+    fifo = tmp_path / "source.pipe"
+    os.mkfifo(fifo)
+    fs = LocalFS(root=tmp_path if rooted else None)
+    path = PathRef.from_posix("/source.pipe" if rooted else fifo.as_posix())
+    opened: list[int] = []
+    real_open = local_fs._open_nofollow
+
+    def guarded_open(host: str, flags: int, *, dir_fd: int | None = None) -> int:
+        if Path(host).name == fifo.name:
+            # Fail before a blocking FIFO open can strand the test worker.
+            assert flags & os.O_NONBLOCK
+            fd = real_open(host, flags, dir_fd=dir_fd)
+            opened.append(fd)
+            return fd
+        return real_open(host, flags, dir_fd=dir_fd)
+
+    monkeypatch.setattr(local_fs, "_open_nofollow", guarded_open)
+
+    with pytest.raises(local_fs.UnsupportedSourceError, match="not a regular file"):
+        await _drain(await fs.read_stream(path))
+
+    assert len(opened) == 1
+    with pytest.raises(OSError, match="Bad file descriptor") as closed:
+        os.fstat(opened[0])
+    assert closed.value.errno == errno.EBADF
+
+
 async def test_read_stream_does_not_open_until_iteration(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -1239,6 +1275,100 @@ async def test_read_stream_closes_descriptor_cancelled_during_the_thread_hop(
         await asyncio.sleep(0.02)
 
     assert closed == [777], "descriptor opened on the worker thread was not closed"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("operation", ["read", "write"])
+@pytest.mark.parametrize("close_fails", [False, True])
+async def test_cancelled_stream_closes_descriptor_before_queued_file_io_starts(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, operation: str, close_fails: bool
+) -> None:
+    import asyncio
+    import threading
+    from concurrent.futures import ThreadPoolExecutor
+
+    from aws_tui.domain import local_fs
+
+    (tmp_path / "payload.txt").write_bytes(b"payload")
+    captured = []
+    opener_name = "_windows_open" if os.name == "nt" else "_rooted_open"
+    original_open = getattr(local_fs, opener_name)
+
+    def capture_open(*args, **kwargs):
+        descriptor = original_open(*args, **kwargs)
+        captured.append(descriptor)
+        return descriptor
+
+    monkeypatch.setattr(local_fs, opener_name, capture_open)
+    if close_fails:
+        original_fdopen = local_fs.os.fdopen
+
+        def fail_after_close(*args, **kwargs):
+            file = original_fdopen(*args, **kwargs)
+            original_close = file.close
+
+            def close():
+                if not file.closed:
+                    original_close()
+                    raise OSError(errno.EIO, "synthetic close failure")
+
+            file.close = close
+            return file
+
+        monkeypatch.setattr(local_fs.os, "fdopen", fail_after_close)
+    loop = asyncio.get_running_loop()
+    original_executor_call = loop.run_in_executor
+    queued = asyncio.Event()
+    close_queued = asyncio.Event()
+    release = threading.Event()
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        blocker = executor.submit(release.wait, 5)
+
+        def queue_file_io(_executor, function, *args):
+            future = original_executor_call(executor, function, *args)
+            if queued.is_set():
+                close_queued.set()
+            queued.set()
+            return future
+
+        monkeypatch.setattr(loop, "run_in_executor", queue_file_io)
+        stream = await LocalFS(root=tmp_path).read_stream(PathRef(("payload.txt",)))
+        if operation == "read":
+            task = asyncio.create_task(anext(stream))
+        else:
+
+            async def source():
+                yield b"replacement"
+
+            task = asyncio.create_task(
+                LocalFS(root=tmp_path).write_stream(PathRef(("payload.txt",)), source())
+            )
+        try:
+            await asyncio.wait_for(queued.wait(), timeout=1)
+            task.cancel()
+            await asyncio.wait_for(close_queued.wait(), timeout=1)
+            task.cancel()
+            await asyncio.sleep(0)
+            assert not task.done(), "cancellation must drain the owned close"
+            release.set()
+            expected_error = ProviderError if close_fails else asyncio.CancelledError
+            with pytest.raises(expected_error):
+                await task
+            assert len(captured) == 1
+            with pytest.raises(OSError, match=rf"\[Errno {errno.EBADF}\]") as exc:
+                os.fstat(captured[0])
+            assert exc.value.errno == errno.EBADF
+        finally:
+            release.set()
+            blocker.result(timeout=5)
+            if not task.done():
+                task.cancel()
+            with suppress(asyncio.CancelledError, ProviderError):
+                await task
+            await stream.aclose()
+            for descriptor in captured:
+                with suppress(OSError):
+                    os.close(descriptor)
 
 
 # ---------------------------------------------------------------------------

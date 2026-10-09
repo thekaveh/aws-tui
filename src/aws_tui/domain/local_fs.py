@@ -18,18 +18,19 @@ import os
 import shutil
 import stat
 import threading
-from collections.abc import AsyncGenerator, AsyncIterator, Callable, Iterator, Sequence
-from contextlib import contextmanager, suppress
+from collections.abc import AsyncIterator, Callable, Iterator, Sequence
+from contextlib import asynccontextmanager, contextmanager, suppress
 from ctypes import wintypes
 from datetime import UTC, datetime
 from functools import partial
 from pathlib import Path, PureWindowsPath
 from string import ascii_uppercase
-from typing import Any, cast
+from typing import Any, Literal, cast
 from uuid import uuid4
 
-import aiofiles
 import anyio
+from aiofiles.threadpool import wrap
+from aiofiles.threadpool.binary import AsyncBufferedIOBase
 from anyio import Path as AnyioPath
 
 from aws_tui.domain.filesystem import (
@@ -713,19 +714,23 @@ class LocalFS:
             # owned by an object both sides can reach, not by ``fd`` alone.
             claim = _FdClaim()
             fd: int | None = None
-            handed_off = False
             try:
                 if _WINDOWS:
                     opener = partial(_windows_open, self._root, path, os.O_RDONLY)
                 elif self._root is not None:
-                    opener = partial(_rooted_open, self._root, path, os.O_RDONLY)
+                    opener = partial(_rooted_open, self._root, path, os.O_RDONLY | os.O_NONBLOCK)
                 else:
-                    opener = partial(_open_nofollow, host.as_posix(), os.O_RDONLY)
+                    opener = partial(_open_nofollow, host.as_posix(), os.O_RDONLY | os.O_NONBLOCK)
                 fd = await anyio.to_thread.run_sync(claim.open_with, opener)
                 opened = os.fstat(fd)
                 if not stat.S_ISREG(opened.st_mode):
                     raise UnsupportedSourceError(f"not a regular file: {host.as_posix()}")
-                handed_off = True
+                async with _owned_async_file(claim, fd, "rb") as fh:
+                    while True:
+                        chunk = await fh.read(chunk_size)
+                        if not chunk:
+                            return
+                        yield chunk
             except FileNotFoundError as exc:
                 raise NotFoundError(host.as_posix()) from exc
             except PermissionError as exc:
@@ -735,18 +740,7 @@ class LocalFS:
                     raise UnsupportedSourceError(f"refusing symlink: {host.as_posix()}") from exc
                 raise _map_os_error(exc, host.as_posix()) from exc
             finally:
-                if handed_off:
-                    claim.release()
-                else:
-                    claim.abandon()
-
-            assert fd is not None
-            stream = _read_chunks_fd(fd, host.as_posix(), chunk_size)
-            try:
-                async for chunk in stream:
-                    yield chunk
-            finally:
-                await stream.aclose()
+                claim.abandon()
 
         return _iterate()
 
@@ -761,12 +755,8 @@ class LocalFS:
     ) -> None:
         host = self._resolve_leaf(path)
         flags = os.O_WRONLY | os.O_CREAT | (os.O_TRUNC if overwrite else os.O_EXCL)
-        # See ``_FdClaim``. ``read_stream`` at least paired its open with a
-        # ``finally``; this path had neither, so a cancellation anywhere between
-        # the thread hop and ``aiofiles.open`` taking ownership left the
-        # descriptor with no owner at all.
+        # The claim owns a late opener result until a file object takes it.
         claim = _FdClaim()
-        handed_off = False
         try:
             if _WINDOWS:
                 opener = partial(_windows_open, self._root, path, flags)
@@ -775,10 +765,7 @@ class LocalFS:
             else:
                 opener = partial(_open_nofollow, host.as_posix(), flags)
             fd = await anyio.to_thread.run_sync(claim.open_with, opener)
-            async with aiofiles.open(fd, "wb", closefd=True) as fh:
-                # ``closefd=True`` transfers ownership; from here the context
-                # manager closes the descriptor on every exit path.
-                handed_off = True
+            async with _owned_async_file(claim, fd, "wb") as fh:
                 bytes_written = 0
                 async for chunk in source:
                     await fh.write(chunk)
@@ -803,10 +790,7 @@ class LocalFS:
                 raise ConflictError(f"refusing symlink: {host.as_posix()}") from exc
             raise _map_os_error(exc, host.as_posix()) from exc
         finally:
-            if handed_off:
-                claim.release()
-            else:
-                claim.abandon()
+            claim.abandon()
 
 
 # ---------------------------------------------------------------------------
@@ -1987,21 +1971,30 @@ class _AbandonedOpen(Exception):
     """Raised on the worker thread when the caller cancelled before hand-off."""
 
 
-async def _read_chunks_fd(fd: int, filename: str, chunk_size: int) -> AsyncGenerator[bytes, None]:
-    """Async generator yielding ``chunk_size`` blocks from a local file."""
+@asynccontextmanager
+async def _owned_async_file(
+    claim: _FdClaim, fd: int, mode: Literal["rb", "wb"]
+) -> AsyncIterator[AsyncBufferedIOBase]:
+    """Transfer a claimed descriptor without an asynchronous ownership gap."""
+    # Wrapping an existing descriptor does no path lookup. Transfer ownership
+    # before any await, including when the executor has no available worker.
+    file = os.fdopen(fd, mode, closefd=True)
+    claim.release()
     try:
-        async with aiofiles.open(fd, "rb", closefd=True) as fh:
-            while True:
-                chunk = await fh.read(chunk_size)
-                if not chunk:
-                    return
-                yield chunk
-    except FileNotFoundError as exc:
-        raise NotFoundError(filename) from exc
-    except PermissionError as exc:
-        raise PermissionDeniedError(filename) from exc
-    except OSError as exc:
-        raise _map_os_error(exc, filename) from exc
+        yield wrap(file)
+    finally:
+        # Close may wait for an in-flight read/write or flush buffered bytes.
+        # Keep it off the loop and drain it through repeated cancellation.
+        close = asyncio.get_running_loop().run_in_executor(None, file.close)
+        cancelled = False
+        while not close.done():
+            try:
+                await asyncio.shield(close)
+            except asyncio.CancelledError:
+                cancelled = True
+        close.result()
+        if cancelled:
+            raise asyncio.CancelledError
 
 
 def _supports_secure_dir_fd() -> bool:

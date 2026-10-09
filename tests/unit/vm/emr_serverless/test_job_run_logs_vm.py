@@ -1700,3 +1700,31 @@ async def test_cloudwatch_custom_prefix_keeps_exact_attempt_worker_identity(monk
         assert vm.lines == (f"ERROR CloudWatch {index}",)
     await vm.shutdown()
     vm.dispose()
+
+
+async def test_cloudwatch_filter_deadline_failure_preserves_body_and_reset_recovers(monkeypatch):
+    from aws_tui.domain.emr_logs import LogFilter, LogFilterTimeoutError
+    from aws_tui.vm.emr_serverless import job_run_logs_vm
+
+    vm, fake, _ = _cw_vm(monkeypatch)
+    await vm.load()
+    old_filter, lines, progress = vm.filter, vm.lines, (vm.lines_scanned, vm.matched_count)
+    calls = len(fake.calls)
+    ticks = iter((1.0, 1.2))
+    with monkeypatch.context() as scoped:
+        scoped.setattr(job_run_logs_vm, "monotonic", lambda: next(ticks))
+        vm.set_filter(LogFilter(("changed",)))
+    assert vm.filter == old_filter
+    assert vm.lines == lines
+    assert (vm.lines_scanned, vm.matched_count) == progress
+    assert vm.state is LogsState.ERROR
+    assert vm.error_text == str(LogFilterTimeoutError())
+    assert not vm.following
+    assert len(fake.calls) == calls
+    vm.set_filter(old_filter)
+    assert vm.state is LogsState.READY
+    assert vm.error_text is None
+    assert vm.lines == lines
+    assert len(fake.calls) == calls
+    await vm.shutdown()
+    vm.dispose()

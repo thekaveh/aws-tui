@@ -31,9 +31,7 @@ is the single source: it lists every page and the order they appear in. From it,
 `scripts/docs/build_docs.py` renders the MkDocs site, the GitHub wiki, `PYPI.md`,
 and `mkdocs.yml` itself.
 
-Edit the files under `docs/` and `README.md`. Do **not** hand-edit `mkdocs.yml`,
-`PYPI.md`, or anything under `generated/` — they are produced from the manifest
-and overwritten on the next build. Adding a page means adding it to
+Edit the files under `docs/` and `README.md`. Do **not** hand-edit `mkdocs.yml`, `PYPI.md`, or anything under `generated/`. They are produced from the manifest and overwritten on the next build. Adding a page means adding it to
 `docs/manifest.yaml` too, or the completeness check fails.
 
 The docs tooling lives in its own dependency group:
@@ -86,7 +84,9 @@ Scopes follow the layer names (`infra`, `domain`, `vm`, `services`, `ui`, `app`,
 
 The unit workflow retains its manual OS/Python matrix: `macos-14`, `ubuntu-24.04`, and `windows-latest`, each on Python 3.11, 3.12, and 3.13. It uses `fail-fast: false` and sets no explicit `strategy.max-parallel` cap; actual capacity depends on runner availability. No capacity measurement supports a speculative change.
 
-The `PermissionError` in #284 came from the test predicate racing atomic TOML replacement; #284 fixed that Settings polling/read race. The retained Windows Peek failure reached `the first preview scan finished` after the selected table's detail and preview availability waits passed. The old click had no rendered-geometry readiness check. #282 adds display, positive-geometry, and hit-test waits, asserts click delivery, and covers deferred projection with a controlled Pilot regression. Historical click geometry and interleaving were not logged, so the exact cause of that occurrence is not established.
+The `PermissionError` in #284 came from the test predicate racing atomic TOML replacement; #284 fixed that Settings polling/read race. The retained Windows Peek failure reached `the first preview scan finished` after the selected table's detail and preview availability waits passed. The old click had no rendered-geometry readiness check. #282 adds display, positive-geometry, and hit-test waits, asserts click delivery, and covers deferred projection with a controlled Pilot regression.
+
+Historical click geometry and interleaving were not logged, so the exact cause of that occurrence is not established.
 
 The following consecutive main promotions had all three Windows Python jobs pass on attempt 1:
 

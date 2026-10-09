@@ -19,6 +19,7 @@ from collections.abc import Iterator
 from contextlib import aclosing
 from dataclasses import dataclass
 from enum import StrEnum
+from time import monotonic
 from typing import Literal, cast
 
 import reactivex as rx
@@ -39,6 +40,7 @@ from aws_tui.domain.emr_logs import (
     LogFile,
     LogFileKind,
     LogFilter,
+    LogFilterTimeoutError,
     build_run_prefix,
     parse_log_uri,
 )
@@ -470,11 +472,23 @@ class JobRunLogsVM:
         self._notify_all()
 
     def set_filter(self, filter_: LogFilter) -> None:
-        if filter_ == self._filter:
+        if filter_ == self._filter and self._error_text != str(LogFilterTimeoutError()):
             return
+        prior_filter = self._filter
         self._filter = filter_
         if self._selected_source is LogSource.CLOUDWATCH:
-            self._project_cloudwatch()
+            try:
+                self._project_cloudwatch()
+            except LogFilterTimeoutError as error:
+                self._filter = prior_filter
+                generation = self._invalidate()
+                self._cloudwatch_failure(error, generation)
+                return
+            if self._error_text == str(LogFilterTimeoutError()):
+                self._error_text = self._failure_state = self._failure_kind = None
+                self._set_state(
+                    LogsState.READY if self._current_stream is not None else self._state
+                )
         else:
             self._invalidate()
         self._notify("filter")
@@ -768,7 +782,7 @@ class JobRunLogsVM:
     def _cloudwatch_failure(self, error: Exception, generation: int) -> None:
         if not self._current(generation):
             return
-        safe = safe_cloudwatch_error(error)
+        safe = error if isinstance(error, LogFilterTimeoutError) else safe_cloudwatch_error(error)
         self._failure_kind = "unexpected"
         for cls, kind in (
             (AuthRequiredError, "auth_required"),
@@ -822,10 +836,13 @@ class JobRunLogsVM:
     def _project_cloudwatch(self) -> None:
         display: deque[tuple[str, int]] = deque()
         size = scanned = matched = 0
+        deadline = monotonic() + 0.1
         for event in self._raw_events:
             for line in _message_lines(event.message):
                 scanned += 1
-                if not self._filter.matches(line):
+                if self._filter.mode is FilterMode.MATCH and monotonic() >= deadline:
+                    raise LogFilterTimeoutError
+                if not self._filter.matches(line, deadline=deadline):
                     continue
                 matched += 1
                 n = len(line.encode("utf-8")) + 1

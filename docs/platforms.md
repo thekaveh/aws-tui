@@ -14,9 +14,7 @@ capabilities also differ by platform.
 | **Linux** | GNOME Terminal, Konsole, Alacritty, kitty, WezTerm | Any Nerd Font / Powerline-aware font | `$XDG_CONFIG_HOME/aws-tui` (defaults to `~/.config/aws-tui`) | `$XDG_CACHE_HOME/aws-tui` (defaults to `~/.cache/aws-tui`) |
 | **Windows** | **Windows Terminal 1.18+** hosting **PowerShell** (5.1 or 7+) | Cascadia Code (Windows Terminal default) | `%APPDATA%\aws-tui` | `%LOCALAPPDATA%\aws-tui\Cache` |
 
-The legacy `~/.config/aws-tui` location is preferred when it already
-exists on disk (macOS / Linux upgrade path), so an existing install is
-never silently abandoned for the new platform-native slot.
+The legacy `~/.config/aws-tui` location is preferred when it already exists on disk (macOS / Linux upgrade path). Thus, an existing install is never silently abandoned for the new platform-native slot.
 
 ## 2. Windows — the supported launch path
 
@@ -63,11 +61,11 @@ legacy `conhost.exe` (the console window you get if you launch
 ### 2.3. Font
 
 Windows Terminal's default font is **Cascadia Code**, which already
-ships with every box-drawing glyph aws-tui needs. If you've switched
-to another font and the banner shows boxes instead of `█`, switch back
-to Cascadia Code via *Settings → Profile → Appearance → Font face* —
-or to any Nerd Font (e.g. Fira Code Nerd Font, JetBrains Mono Nerd
-Font).
+ships with every box-drawing glyph aws-tui needs. Another font can show
+boxes instead of `█` in the banner.
+
+Open *Settings → Profile → Appearance → Font face*. Select Cascadia Code or a Nerd Font.
+Fira Code Nerd Font and JetBrains Mono Nerd Font are examples.
 
 ### 2.4. AWS profile resolution on Windows
 
@@ -92,9 +90,9 @@ A terminal has two ways to tell a full-screen app its window changed size:
 the kernel's `SIGWINCH` signal, and the newer in-band window-resize
 protocol (DEC private mode 2048). Textual 8.2.8 stops listening to
 `SIGWINCH` altogether the moment a terminal accepts mode 2048, leaving the
-in-band report as the only channel. If one report is missed — a macOS Space
-switch that resizes a window on an inactive desktop is the case this was
-reported against — the app keeps painting the old geometry. Text runs past
+in-band report as the only channel.
+
+If one report is missed, the app keeps painting the old geometry. The reported case was a macOS Space switch that resized a window on an inactive desktop. Text runs past
 the edge or the layout sits in a corner; keys still work, but nothing you
 can do inside the app repairs it.
 
@@ -120,13 +118,9 @@ negotiation, and turning it off loses both:
   Textual requests pixel-precision mouse reporting (DEC mode 1016) only from
   the same branch, so it is never requested here.
 
-Neither touches layout, colours, or what the panes contain, and neither is
-new if you use Terminal.app or iTerm2: they never negotiate mode 2048 —
-Textual skips iTerm2 deliberately — so both have always behaved this way
-there, as has Windows, whose driver has no in-band resize path at all. The
-default only changes anything on a terminal that does advertise the mode,
-such as Ghostty, WezTerm, or kitty, and there it trades a smoother drag for a
-window size the app can always recover. Set `TEXTUAL_SMOOTH_SCROLL=1` if you
+Neither touches layout, colours, or what the panes contain. Neither is new on Terminal.app or iTerm2: they never negotiate mode 2048, and Textual skips iTerm2 deliberately. Both have always behaved this way there. The same applies to Windows, whose driver has no in-band resize path.
+
+The default only changes behavior on a terminal that advertises the mode, such as Ghostty, WezTerm, or kitty. There it trades a smoother drag for a window size the app can always recover. Set `TEXTUAL_SMOOTH_SCROLL=1` if you
 would rather have it the other way round.
 
 ## 4. Linux
@@ -136,10 +130,7 @@ Konsole, Alacritty, kitty, WezTerm. Install a Powerline-aware or Nerd
 Font for full box-drawing glyph support.
 
 If you set `$XDG_CONFIG_HOME` or `$XDG_CACHE_HOME`, aws-tui follows
-them through `platformdirs` on fresh installs. One upgrade caveat:
-when an existing legacy `~/.config/aws-tui` or `~/.cache/aws-tui`
-directory is present, that legacy directory wins so existing users do
-not silently launch against an empty config/cache root.
+them through `platformdirs` on fresh installs. One upgrade caveat: an existing legacy `~/.config/aws-tui` or `~/.cache/aws-tui` directory wins. This prevents existing users from silently launching against an empty config/cache root.
 
 ## 5. What's not supported
 

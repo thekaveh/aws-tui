@@ -45,3 +45,44 @@ async def test_literal_directory_prefix_and_returned_keys(
     assert child.parent() == path
     await fs.list(child.parent())
     assert client.calls[-1][1]["Prefix"] == prefix
+
+
+@pytest.mark.parametrize(
+    ("left", "right"),
+    [((), ("",)), (("daily",), ("daily", "")), (("a", "", "b"), ("a", "b"))],
+)
+def test_canonical_storage_identity_preserves_literal_empty_segments(left, right):
+    fs = S3FS(session=object(), bucket="b")
+    assert fs.canonical_storage_path(PathRef(left)) != fs.canonical_storage_path(PathRef(right))
+
+
+def test_canonical_storage_identity_preserves_second_endpoint_separator():
+    left = S3FS(session=object(), bucket="b", endpoint_url="https://host/base//")
+    right = S3FS(session=object(), bucket="b", endpoint_url="https://host/base/")
+    assert left.canonical_storage_path(PathRef(("k",))) != right.canonical_storage_path(
+        PathRef(("k",))
+    )
+
+
+@pytest.mark.parametrize(
+    ("left", "right"),
+    [
+        ("https://HOST:443/", "https://host"),
+        ("http://HOST:80", "http://host/"),
+        ("https://[2001:db8::1]:443/", "https://[2001:db8::1]"),
+    ],
+)
+def test_canonical_storage_identity_matches_default_ports_and_host_case(left, right):
+    source = S3FS(session=object(), bucket="b", endpoint_url=left)
+    destination = S3FS(session=object(), bucket="b", endpoint_url=right)
+    assert source.canonical_storage_path(PathRef(("k",))) == destination.canonical_storage_path(
+        PathRef(("k",))
+    )
+
+
+def test_canonical_storage_identity_preserves_nondefault_port():
+    source = S3FS(session=object(), bucket="b", endpoint_url="https://host:444")
+    destination = S3FS(session=object(), bucket="b", endpoint_url="https://host")
+    assert source.canonical_storage_path(PathRef(("k",))) != destination.canonical_storage_path(
+        PathRef(("k",))
+    )

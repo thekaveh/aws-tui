@@ -348,3 +348,65 @@ async def test_persistent_clear_focused_enter_never_activates(
         assert pane.path == before_path
         assert len(app.screen_stack) == 1
         assert fs.calls == baseline
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("rebuilt", [False, True])
+async def test_find_queued_selection_uses_captured_option(app_context_factory, rebuilt):
+    from textual.widgets import OptionList
+
+    from aws_tui.ui.widgets.pane_listing_controls import FindPaneModal
+
+    ctx = app_context_factory(fs=await seeded())
+    _use_injected_s3_connection(ctx)
+    app = AwsTuiApp(ctx)
+    async with app.run_test(size=(120, 40)) as pilot:
+        await drain_workers(app)
+        await pilot.press("ctrl+p")
+        await pilot.pause()
+        modal = app.screen
+        assert isinstance(modal, FindPaneModal)
+        choices = modal.query_one(OptionList)
+        captured = OptionList.OptionSelected(choices, choices.get_option_at_index(0), 0)
+        expected = modal.results[0]
+        pane = app._focused_file_pane()
+        if rebuilt:
+            editor = modal.query_one(Input)
+            editor.value = "gamma"
+            await pilot.pause()
+            assert modal.results[0].name == "gamma.txt"
+        else:
+            choices.highlighted = 1
+        modal.on_option_list_option_selected(captured)
+        await pilot.pause()
+        if rebuilt:
+            assert app.screen is modal
+            assert pane.selected_entry.name != "gamma.txt"
+        else:
+            assert len(app.screen_stack) == 1
+            assert pane.selected_entry is expected
+
+
+@pytest.mark.asyncio
+async def test_sort_queued_selection_uses_captured_option(app_context_factory):
+    from textual.widgets import OptionList
+
+    from aws_tui.ui.widgets.pane_listing_controls import SortPaneModal
+
+    ctx = app_context_factory(fs=await seeded())
+    _use_injected_s3_connection(ctx)
+    app = AwsTuiApp(ctx)
+    async with app.run_test(size=(120, 40)) as pilot:
+        await drain_workers(app)
+        pane = app._focused_file_pane()
+        await pilot.press("colon", *"Sort loaded entries", "enter")
+        await pilot.pause()
+        modal = app.screen
+        assert isinstance(modal, SortPaneModal)
+        choices = modal.query_one(OptionList)
+        captured = OptionList.OptionSelected(choices, choices.get_option_at_index(0), 0)
+        choices.highlighted = 1
+        modal.on_option_list_option_selected(captured)
+        await pilot.pause()
+        assert pane._sort_field.value == "name"
+        assert pane._sort_descending is False

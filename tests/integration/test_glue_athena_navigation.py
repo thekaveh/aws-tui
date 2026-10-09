@@ -2034,3 +2034,66 @@ async def test_cross_navigation_logs_never_include_full_sql(
     finally:
         with contextlib.suppress(Exception):
             ctx.root_vm.dispose()
+
+
+@pytest.mark.asyncio
+async def test_superseded_glue_table_handoff_keeps_newer_destination_choice(tmp_path, monkeypatch):
+    from aws_tui.demo.in_memory_glue import InMemoryGlue
+    from aws_tui.services.glue.service import GlueService
+    from aws_tui.vm.service_source_vm import SelectionScope
+
+    ctx = build_app_context(config_dir=tmp_path / "config", cache_dir=tmp_path / "cache", demo=True)
+    fake = InMemoryGlue(connection_name="demo-dev", region="us-east-1")
+    ref = fake.add_table("analytics", "events").ref
+    fake.add_table("warehouse", "events")
+    service = ctx.registry.get("glue")
+    assert isinstance(service, GlueService)
+    monkeypatch.setattr(service, "_client_factory", lambda _connection: fake)
+    app = AwsTuiApp(ctx)
+    reached, release = asyncio.Event(), asyncio.Event()
+    original = fake.get_table
+    reads = 0
+
+    async def blocked(target):
+        nonlocal reads
+        if target == ref:
+            reads += 1
+            if reads == 2:
+                reached.set()
+                await release.wait()
+        return await original(target)
+
+    monkeypatch.setattr(fake, "get_table", blocked)
+    try:
+        async with app.run_test(size=(120, 40)) as pilot:
+            await _wait_for_service_setup(ctx, app, pilot)
+            generation = app._advance_service_navigation("table")
+            handoff = asyncio.create_task(
+                app._open_table_request(OpenGlueTableRequest(ref), generation)
+            )
+            try:
+                await asyncio.wait_for(reached.wait(), timeout=5)
+                target = ctx.root_vm.content_host.current
+                assert isinstance(target, GluePageVM)
+                await target.select_database("warehouse")
+                release.set()
+                await handoff
+                assert ctx.root_vm.content_host.current is target
+                assert target.catalog.selected_database_name == "warehouse"
+                assert target.catalog.selected_table_name == "events"
+                assert ctx.root_vm.content_host.current_id == "glue"
+                assert (
+                    service._selections.get(
+                        SelectionScope("glue", "demo-dev", "us-east-1"), "database_name"
+                    )
+                    == "warehouse"
+                )
+                assert not any(
+                    toast.model.id == "table-handoff-destination-failed"
+                    for toast in ctx.root_vm.chrome.toast_stack.toasts
+                )
+            finally:
+                release.set()
+                await handoff
+    finally:
+        ctx.root_vm.dispose()

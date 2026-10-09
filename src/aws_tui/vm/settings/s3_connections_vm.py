@@ -144,6 +144,7 @@ class S3ConnectionsVM:
             }:
                 raise ValueError(f"connection {entry.name!r} already exists")
             service = app_keychain_service(entry.name)
+            self._ensure_credential_service_available(entry, service)
             old_secrets = self._read_keychain_service(service)
             try:
                 persisted = self._persist_credentials(entry, service=service)
@@ -174,6 +175,7 @@ class S3ConnectionsVM:
             old_entry = self._config_store.load().connections.get(name)
             old_secrets = self._read_keychain_credentials(old_entry)
             staged_service = self._next_revision_service(name, old_entry)
+            self._ensure_credential_service_available(entry, staged_service)
             try:
                 persisted = self._persist_credentials(entry, service=staged_service)
                 self._config_store.update_connection(name, persisted)
@@ -361,6 +363,17 @@ class S3ConnectionsVM:
             entry.credentials == credential_ref
             for entry in self._config_store.load().connections.values()
         )
+
+    def _ensure_credential_service_available(self, entry: ConnectionEntry, service: str) -> None:
+        if (
+            self._keychain is not None
+            and entry.kind == "s3-compatible"
+            and self._service_is_still_referenced(service)
+        ):
+            raise ConfigError(
+                "credential service is referenced by another connection; "
+                "use an unshared credential reference"
+            )
 
     def _ensure_writable(self) -> None:
         if self._config_store.read_only:

@@ -360,8 +360,8 @@ async def test_each_service_exact_identity_region_and_guard(
             assert calls == []
             assert vm.source.connection_key == (launch.connection.name, "ap-southeast-2")
             header = app.query_one(ServiceSourceHeader)
-            assert header.tooltip == vm.source.label
-            assert "ap-southeast-2" in header.tooltip
+            assert header.tooltip.plain == vm.source.label
+            assert "ap-southeast-2" in header.tooltip.plain
         else:
             assert "ap-southeast-2" in vm.left.identity_label
         check = make_source_check_factory(ctx.config_store, ctx.connection_resolver)(

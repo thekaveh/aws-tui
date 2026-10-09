@@ -26,6 +26,7 @@ pytestmark = pytest.mark.unit
 
 class _CopyClient:
     def __init__(self) -> None:
+        self.list_objects_v2 = AsyncMock(return_value={"Contents": [], "KeyCount": 0})
         self.destination_size = 5 * 1024**3 + 1
         self.destination_etag = '"multipart-etag"'
         self.destination_version_id: str | None = None

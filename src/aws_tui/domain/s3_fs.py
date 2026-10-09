@@ -29,7 +29,7 @@ from contextlib import AsyncExitStack
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
-from urllib.parse import urlencode
+from urllib.parse import urlencode, urlsplit
 
 import aioboto3
 from botocore.config import Config as BotoConfig
@@ -161,6 +161,31 @@ class S3FS:
     @property
     def storage_identity(self) -> tuple[str, str | None, str | None, str]:
         return ("s3", self._endpoint_url, self._bucket, self._prefix)
+
+    def canonical_storage_path(
+        self, path: PathRef
+    ) -> tuple[tuple[str, str | None, str], PathRef] | None:
+        """Resolve transfer aliases without normalizing literal key components."""
+        if self._bucket is None and path.is_root:
+            return None  # The virtual service root has no one bucket namespace.
+        bucket, key = self._resolve(path)
+        endpoint = self._endpoint_url
+        if endpoint is not None:
+            parsed = urlsplit(endpoint)
+            # Botocore removes one endpoint separator when joining object
+            # requests. A second separator remains meaningful.
+            host = parsed.hostname or ""
+            if ":" in host:
+                host = f"[{host}]"
+            port = parsed.port
+            default_port = {"http": 80, "https": 443}.get(parsed.scheme)
+            if port is not None and port != default_port:
+                host = f"{host}:{port}"
+            # Endpoint credentials are not part of the bucket namespace.
+            endpoint = parsed._replace(netloc=host, path=parsed.path.removesuffix("/")).geturl()
+        bucket_root = path.is_root if self._bucket is not None else len(path.segments) == 1
+        segments = () if bucket_root and not key else tuple(key.split("/"))
+        return (("s3", endpoint, bucket), PathRef(segments))
 
     atomic_write_replaces = True
 
@@ -325,9 +350,12 @@ class S3FS:
                     resp = await s3.list_objects_v2(**kwargs)
                     for cp in resp.get("CommonPrefixes", []) or []:
                         key = cp["Prefix"]
-                        name = key[len(prefix) :].rstrip("/")
-                        if not name:
-                            continue
+                        name = key[len(prefix) :].removesuffix("/")
+                        if not name or "/" in name:
+                            raise ProviderError(
+                                "S3 listing contains an empty or unsupported path component; "
+                                "inspect the literal keys with the AWS console / CLI"
+                            )
                         entries.append(
                             FileEntry(
                                 name=name,
@@ -390,6 +418,12 @@ class S3FS:
                         if _error_code(exc) not in {"404", "NoSuchKey", "NotFound"}:
                             raise _map_client_error(exc, key) from exc
                     else:
+                        if await self._prefix_exists(s3, bucket, key):
+                            raise ProviderError(
+                                f"ambiguous S3 name: both an object {key!r} and a "
+                                f"prefix {key + '/'!r} exist — remove one via "
+                                "the AWS console / CLI before inspecting or transferring it"
+                            )
                         return FileEntry(
                             name=path.name,
                             kind=EntryKind.FILE,
