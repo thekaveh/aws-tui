@@ -109,6 +109,7 @@ No bound may fire on evidence that a healthy paste can also produce.
 from __future__ import annotations
 
 import logging
+import re
 import sys
 from collections.abc import Callable, Iterable, Iterator
 from contextlib import AbstractContextManager, contextmanager
@@ -244,12 +245,7 @@ class BracketedPasteGuard:
         if not self._open:
             return
         if isinstance(token, events.Paste):
-            # The only flush site in ``parse`` — proof the parser left paste
-            # mode. Note the corner this deliberately does not cover: a single
-            # read holding a close *and* a later re-open would clear the flag
-            # the re-open had just set, leaving the guard disarmed for the
-            # second paste. That needs two pastes inside one 4 KiB read, and
-            # its only cost is falling back to upstream behaviour.
+            # feed synchronizes marker segments before a later paste reopens.
             self._settle()
         elif paste_was_open and isinstance(token, events.Key) and self._abandoned_at is None:
             # The inner loop abandoned a partial escape sequence mid-paste.
@@ -309,14 +305,19 @@ class GuardedXTermParser(CellMouseXTermParser):
 
     def feed(self, data: str) -> Iterable[Message]:
         now = self._clock()
-        # Read before ``note_input``: this chunk may hold the start marker
-        # itself, and anything parsed from the bytes ahead of that marker was
-        # parsed outside paste mode.
-        was_open = self.guard.paste_open
-        self.guard.note_input(data, now)
-        for token in super().feed(data):
-            self.guard.note_token(token, now, paste_was_open=was_open)
-            yield token
+        # Keep a real EOF input, but never send empty split artifacts to the
+        # parser: Textual interprets feed("") as EOF.
+        segments = (
+            (segment for segment in re.split(r"(\x1b\[200~|\x1b\[201~)", data) if segment)
+            if data
+            else ("",)
+        )
+        for segment in segments:
+            was_open = self.guard.paste_open
+            self.guard.note_input(segment, now)
+            for token in super().feed(segment):
+                self.guard.note_token(token, now, paste_was_open=was_open)
+                yield token
 
     def tick(self) -> Iterable[Message]:
         for token in super().tick():

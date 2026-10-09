@@ -57,3 +57,23 @@ async def test_running_help_uses_literal_runtime_paths_and_keyboard_scroll(
         assert diagnostic.region.overlaps(body.region)
         await pilot.press("escape")
         await wait_until(lambda: not isinstance(app.screen, HelpModal), what="help dismissal")
+
+
+@pytest.mark.parametrize("help_key", ["h", "ctrl+h"])
+async def test_help_footer_advertises_a_working_modal_close_key(help_key: str) -> None:
+    from textual.app import App
+
+    from aws_tui.infra.keymap_store import KeymapStore
+
+    class HelpApp(App[None]):
+        async def on_mount(self) -> None:
+            await self.push_screen(HelpModal(keymap=KeymapStore(overlay={"app.help": help_key})))
+
+    app = HelpApp()
+    async with app.run_test(size=(100, 40)) as pilot:
+        await pilot.pause()
+        assert isinstance(app.screen, HelpModal)
+        footer = str(app.screen.query_one("#help-footer", Static).render())
+        assert footer == "press ? / Esc to close"
+        await pilot.press("question_mark")
+        await wait_until(lambda: not isinstance(app.screen, HelpModal), what="advertised close key")

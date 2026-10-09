@@ -128,7 +128,7 @@ def write_svg(out_path: str | Path, svg: str) -> None:
     _atomic_write_bytes(out_path, svg.encode("utf-8"))
 
 
-def svg_to_png(svg: str, out_path: str | Path, *, width: int = 1600) -> None:
+def svg_to_png(svg: str, out_path: str | Path, *, width: int = 3200) -> None:
     import cairosvg  # lazy — only needed when rasterizing
 
     png = cairosvg.svg2png(

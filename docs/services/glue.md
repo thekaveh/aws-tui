@@ -25,9 +25,7 @@ recent runs. Crawlers lists crawler state, configuration, metrics, and latest
 crawl detail. Access denial remains scoped to the affected pane and does not
 invalidate the AWS source for other services.
 
-`y` copies the selected table as a fully quoted, source-aware `TableRef` into
-the VM-owned clipboard, then hands it to the single app-level clipboard writer
-for the operating-system clipboard. That writer's toast names the channel that
+`y` copies the selected table as a fully quoted, source-aware `TableRef` into the VM-owned clipboard. It then hands the reference to the single app-level clipboard writer for the operating-system clipboard. That writer's toast names the channel that
 actually accepted the text and never reports an unacknowledged OSC 52 write as
 a copy. The command palette can open a valid selected table location in S3
 under the same connection and region.
@@ -49,17 +47,11 @@ The bounded limits and required permissions are documented in the
 [Cookbook](../cookbook.md#71-iceberg-detection-and-metadata-views). These
 queries incur ordinary Athena workgroup and result-storage behavior.
 
-A seventh tab, **Peek**, previews table rows by querying the table's S3
-location directly with a local DuckDB engine instead of Athena — no
-workgroup, no query execution, no query bill. It needs the optional `duckdb`
-extra (`pip install aws-tui[duckdb]`) and an AWS profile connection; it does
-not appear for `s3-compatible` connections, and without the extra installed
-it stays present and selectable; choosing it reports the missing engine with
-an install prompt rather than disappearing silently. Its row limit is a real
-ceiling, not a local-window
-widen: the load-more control reruns a genuinely new scan at the next
-row-limit step (100 → 1,000 → 10,000), unlike the same control on the six
-metadata tabs above. See the
+A seventh tab, **Peek**, previews table rows by querying the table's S3 location directly with a local DuckDB engine instead of Athena. There is no workgroup, query execution, or query bill.
+
+It needs the optional `duckdb` extra (the [Git installation with the DuckDB extra](../install.md#2-optional-extras)) and an AWS profile connection. It does not appear for `s3-compatible` connections. Without the extra installed, it stays present and selectable. Choosing it reports the missing engine with an install prompt rather than disappearing silently.
+
+Its row limit is a real ceiling, not a local-window widen. The load-more control reruns a genuinely new scan at the next row-limit step (100 → 1,000 → 10,000). This differs from the same control on the six metadata tabs above. See the
 [Cookbook](../cookbook.md#74-local-row-preview-with-duckdb-peek) for a full
 walkthrough.
 
@@ -73,10 +65,10 @@ editor is prefilled for review; neither command executes SQL.
 
 ## 5. Compare table definitions
 
-Press `Ctrl+G` or choose **Compare Glue tables** in the command palette.
-The comparison opens with both tables unset. Each side has its own configured
-AWS source, editable region (commit with **Apply region**), database, and table.
-Catalog is fixed to `AwsDataCatalog`. Choose each table explicitly; matching
+Press `Ctrl+G` or choose **Compare Glue tables** in the command palette. The comparison opens with both tables unset. Each side has its own configured
+AWS source, editable region (commit with **Apply region**), database, and table. Catalog is fixed to `AwsDataCatalog`.
+
+Choose each table explicitly; matching
 names never select a counterpart. **Pin open → Left/Right** captures the table
 that was open when the comparison launched, then fetches it again. The page
 behind the comparison keeps its source and selection.
@@ -86,7 +78,9 @@ with a separate UTC timestamp sampled after that side's successful fetch.
 **Refresh Left/Right** refreshes independently. While refreshing, and after a
 failed refresh, the previous successful definition and its original timestamp
 remain visible with an explicit freshness status. Changing a source, region,
-database or table clears that side's previous definition. At narrow widths,
+database or table clears that side's previous definition.
+
+At narrow widths,
 controls scroll vertically and long reference fields wrap in independent
 read-only viewers; side labels and fetch times stay visible above those viewers.
 
@@ -94,10 +88,11 @@ Changes are directed from **Left to Right**: added means present only on Right,
 removed means present only on Left. Columns and partition keys are compared
 separately by exact, case-sensitive names. Relative order of common columns
 reports reordering without treating an insertion as a reorder. Duplicate names
-are shown as unavailable for unambiguous matching. Type comparison conservatively
+are shown as unavailable for unambiguous matching.
+
+Type comparison conservatively
 ignores ASCII outer whitespace and whitespace around type punctuation outside
-quotes; case, quoted content, and malformed type expressions remain significant.
-This is a metadata difference, not a schema-compatibility verdict.
+quotes; case, quoted content, and malformed type expressions remain significant. This is a metadata difference, not a schema-compatibility verdict.
 
 Storage compares location, input/output formats, SerDe, compression, table type,
 and table format. Missing, empty, false and absent values remain distinct.
@@ -109,9 +104,10 @@ and are never inspected for equality.
 `Tab` / `Shift+Tab` visits controls; Enter or Space commits selectors and buttons,
 and arrows move within selectors. `Ctrl+1` / `Ctrl+2` focuses the Left/Right source,
 `Ctrl+R` refreshes the last focused side (Left initially), and `Ctrl+D` toggles
-**Differences only**. Unavailable values remain in that filtered view.
-`Ctrl+C` or **Copy full summary** always exports the complete comparison with
-both references, timestamps and freshness, regardless of the filter. Copy is
+**Differences only**. Unavailable values remain in that filtered view. `Ctrl+C` or **Copy full summary** always exports the complete comparison with
+both references, timestamps and freshness, regardless of the filter.
+
+Copy is
 disabled until both definitions are available. **View full summary** provides a
 read-only selectable version when clipboard delivery is unavailable; clipboard
 status uses the existing application writer. Escape closes an open selector

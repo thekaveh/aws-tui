@@ -445,3 +445,24 @@ def test_application_mode_guard_spans_start_to_stop() -> None:
 
     assert driver.seen == [GuardedXTermParser, GuardedXTermParser]
     assert linux_driver.XTermParser is XTermParser
+
+
+def test_coalesced_pastes_keep_the_second_paste_guard_armed() -> None:
+    clock = _FakeClock()
+    parser = _guarded_parser(clock)
+    tokens = list(
+        parser.feed(
+            f"{BRACKETED_PASTE_START}first{BRACKETED_PASTE_END}{BRACKETED_PASTE_START}second"
+        )
+    )
+    assert _pastes(tokens) == ["first"]
+    assert parser.guard.paste_open
+    list(parser.feed("\x1b"))
+    time.sleep(_SPLIT_GAP_SECONDS)
+    list(parser.tick())
+    list(parser.feed("[201~"))
+    clock.advance(_TEST_ABANDON_GRACE + 0.01)
+    recovered = list(parser.tick())
+    assert _pastes(recovered) == ["second\x1b[201~"]
+    assert parser.guard.recoveries == 1
+    assert _keys(parser.feed("q")) == ["q"]

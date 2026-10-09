@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import gzip
+import subprocess
+import sys
 from unittest.mock import AsyncMock
 
 import botocore.exceptions
@@ -12,6 +14,20 @@ from aws_tui.domain.emr_logs import (
     build_run_prefix,
     parse_log_uri,
 )
+
+
+def test_pathological_filter_is_bounded_in_an_isolated_process() -> None:
+    code = """
+from aws_tui.domain.emr_logs import LogFilter
+from aws_tui.domain.filesystem import ValidationError
+try:
+    LogFilter(patterns=(r'(a+)+$',)).matches('a' * 10000 + '!')
+except ValidationError as error:
+    assert str(error) == 'log filter time limit exceeded; simplify patterns or use Show all'
+else:
+    raise AssertionError('filter unexpectedly completed')
+"""
+    subprocess.run([sys.executable, "-c", code], timeout=3, check=True)
 
 
 def test_parse_log_uri_extracts_bucket_and_prefix() -> None:
@@ -104,7 +120,7 @@ class _RaisingBody:
 class _StubS3:
     def __init__(self, body: bytes) -> None:
         self.body = _StubBody(body)
-        self.get_object = AsyncMock(return_value={"Body": self.body})
+        self.get_object = AsyncMock(return_value={"Body": self.body, "ContentLength": len(body)})
         self.exited = False
 
     async def __aenter__(self) -> _StubS3:
@@ -258,6 +274,41 @@ async def test_list_log_files_classifies_only_the_run_relative_suffix() -> None:
         (LogFileKind.EXECUTOR_STDOUT, fake_keys[0][0]),
         (LogFileKind.TEZ_TASK_STDERR, fake_keys[1][0]),
     ]
+
+
+@pytest.mark.parametrize("trailing_slash", [False, True])
+@pytest.mark.parametrize("honor_prefix", [False, True])
+async def test_list_log_files_excludes_sibling_run_prefixes(
+    trailing_slash: bool, honor_prefix: bool
+) -> None:
+    from aws_tui.domain.emr_logs import list_log_files
+
+    prefix = "logs/applications/a/jobs/r"
+    selected = f"{prefix}/SPARK_DRIVER/stderr.gz"
+    sibling = f"{prefix}-archive/SPARK_DRIVER/stderr.gz"
+    stub = _StubS3ListObjectsV2([(selected, 10), (sibling, 20)])
+    calls = []
+    original_list = stub.list_objects_v2
+
+    async def list_by_prefix(**kwargs: object) -> dict[str, object]:
+        calls.append(kwargs)
+        response = await original_list(**kwargs)
+        if honor_prefix:
+            response["Contents"] = [
+                obj for obj in response["Contents"] if obj["Key"].startswith(str(kwargs["Prefix"]))
+            ]
+        return response
+
+    stub.list_objects_v2 = list_by_prefix  # type: ignore[method-assign]
+    files = await list_log_files(  # type: ignore[arg-type]
+        session=_StubSessionListObjectsV2(stub),
+        region_name="us-east-1",
+        bucket="b",
+        run_prefix=prefix + ("/" if trailing_slash else ""),
+    )
+
+    assert [file.key for file in files] == [selected]
+    assert calls == [{"Bucket": "b", "Prefix": prefix + "/"}]
 
 
 @pytest.mark.asyncio
@@ -415,6 +466,68 @@ async def test_stream_log_exact_compressed_limit_is_not_truncated() -> None:
 
     assert chunks[-1].lines == ("ERROR complete",)
     assert chunks[-1].truncated is False
+
+
+@pytest.mark.parametrize("read_size", [1, 7, 65536])
+async def test_stream_log_reads_concatenated_gzip_members(read_size: int) -> None:
+    from aws_tui.domain.emr_logs import DEFAULT_LOG_FILTER, LogFile, stream_log
+
+    payload = gzip.compress(b"ERROR first\nERR") + gzip.compress(b"OR second\n")
+    stub = _StubS3(payload)
+    read = stub.body.read
+
+    async def bounded_read(n: int) -> bytes:
+        return await read(min(n, read_size))
+
+    stub.body.read = bounded_read  # type: ignore[method-assign]
+    chunks = [
+        chunk
+        async for chunk in stream_log(
+            session=_StubSession(stub),  # type: ignore[arg-type]
+            region_name="us-east-1",
+            log_file=LogFile(key="members.gz", kind=LogFileKind.DRIVER_STDERR),
+            bucket="b",
+            max_bytes=len(payload),
+            filter_=DEFAULT_LOG_FILTER,
+        )
+    ]
+
+    assert [line for chunk in chunks for line in chunk.lines] == ["ERROR first", "ERROR second"]
+    assert chunks[-1].bytes_read == len(payload)
+    assert chunks[-1].lines_scanned == 2
+    assert chunks[-1].truncated is False
+    assert stub.body.closed
+
+
+@pytest.mark.parametrize("declared_length", ["actual", None, "invalid"])
+async def test_stream_log_flags_unread_member_at_exact_compressed_budget(declared_length) -> None:
+    from aws_tui.domain.emr_logs import DEFAULT_LOG_FILTER, LogFile, stream_log
+
+    first = gzip.compress(b"ERROR first\n")
+    payload = first + gzip.compress(b"ERROR second\n")
+    stub = _StubS3(payload)
+    if declared_length is None:
+        stub.get_object.return_value.pop("ContentLength")
+    else:
+        stub.get_object.return_value["ContentLength"] = (
+            len(payload) if declared_length == "actual" else declared_length
+        )
+    chunks = [
+        chunk
+        async for chunk in stream_log(
+            session=_StubSession(stub),  # type: ignore[arg-type]
+            region_name="us-east-1",
+            log_file=LogFile(key="members.gz", kind=LogFileKind.DRIVER_STDERR),
+            bucket="b",
+            max_bytes=len(first),
+            filter_=DEFAULT_LOG_FILTER,
+        )
+    ]
+
+    assert chunks[-1].lines == ("ERROR first",)
+    assert chunks[-1].bytes_read == len(first)
+    assert chunks[-1].truncated is True
+    assert stub.body.closed
 
 
 @pytest.mark.asyncio
@@ -937,3 +1050,105 @@ async def test_client_stream_closes_the_inner_generator_when_abandoned(
             break  # the consumer walks away mid-stream
 
     assert closed, "the inner stream_log generator was never closed"
+
+
+@pytest.mark.parametrize(
+    ("pattern", "line", "case_insensitive"),
+    [
+        (r"(?i:error)", "ERROR", False),
+        (r"(ab)\1", "abab", False),
+        (r"(?<=start )error(?= end)", "start error end", False),
+        (r"^ERROR$", "ERROR\n", False),
+        (r"(?>a+)b", "aaab", False),
+        (r"a++b", "aaab", False),
+        (r"\bERROR\b", "notERROR", True),
+    ],
+)
+def test_bounded_filter_preserves_supported_regex_examples(pattern, line, case_insensitive):
+    import re
+
+    from aws_tui.domain.emr_logs import LogFilter
+
+    expected = bool(re.search(pattern, line, re.IGNORECASE if case_insensitive else 0))
+    assert LogFilter((pattern,), case_insensitive=case_insensitive).matches(line) is expected
+
+
+def test_filter_shares_one_deadline_between_patterns(monkeypatch):
+    from aws_tui.domain import emr_logs
+
+    calls = []
+
+    class NoMatch:
+        def search(self, _line, *, timeout):
+            calls.append(timeout)
+            return None
+
+    filter_ = emr_logs.LogFilter(("first", "second"))
+    object.__setattr__(filter_, "_compiled", (NoMatch(), NoMatch()))
+    ticks = iter((1.0, 1.01, 1.03))
+    monkeypatch.setattr(emr_logs, "monotonic", lambda: next(ticks))
+    assert filter_.matches("line", deadline=1.04) is False
+    assert calls == pytest.approx((0.03, 0.01))
+
+
+@pytest.mark.parametrize("patterns", [("x",) * 65, ("x" * 4097,)])
+def test_filter_rejects_excessive_pattern_inputs(patterns):
+    from aws_tui.domain.emr_logs import LogFilter
+
+    with pytest.raises(ValueError, match="at most 64 patterns"):
+        LogFilter(patterns)
+
+
+@pytest.mark.parametrize("newline", [True, False])
+async def test_filter_timeout_preserves_pending_matches_and_closes_stream(monkeypatch, newline):
+    from aws_tui.domain.emr_logs import (
+        DEFAULT_LOG_FILTER,
+        LogFile,
+        LogFilter,
+        LogFilterTimeoutError,
+        stream_log,
+    )
+
+    original = LogFilter.matches
+
+    def matches(self, line, **kwargs):
+        if line == "slow":
+            raise LogFilterTimeoutError
+        return original(self, line, **kwargs)
+
+    monkeypatch.setattr(LogFilter, "matches", matches)
+    stub = _StubS3(gzip.compress(b"ERROR retained\nslow" + (b"\n" if newline else b"")))
+    chunks = []
+
+    async def collect() -> None:
+        async for chunk in stream_log(
+            session=_StubSession(stub),
+            region_name="us-east-1",
+            log_file=LogFile("log.gz", LogFileKind.DRIVER_STDERR),
+            bucket="b",
+            max_bytes=1024,
+            filter_=DEFAULT_LOG_FILTER,
+        ):
+            chunks.append(chunk)
+
+    with pytest.raises(LogFilterTimeoutError):
+        await collect()
+    assert chunks[-1].lines == ("ERROR retained",)
+    assert chunks[-1].truncated
+    assert stub.body.closed
+
+
+def test_bounded_filter_documents_scoped_ascii_case_folding() -> None:
+    from aws_tui.domain.emr_logs import LogFilter
+
+    # VERSION0 uses the timeout engine's Unicode case tables for IGNORECASE.
+    assert LogFilter((r"(?a:i)",), case_insensitive=True).matches("İ")
+    assert not LogFilter((r"(?a:i)",), case_insensitive=False).matches("İ")
+
+
+@pytest.mark.parametrize("pattern", [r"a{e<=x}", r"a{4294967295}"])
+def test_timeout_engine_compile_failure_is_inline_validation_error(pattern: str) -> None:
+    from aws_tui.domain.emr_logs import LogFilter
+
+    with pytest.raises(ValueError, match="invalid regex pattern"):
+        LogFilter((r"a{e<=x}",))

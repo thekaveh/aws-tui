@@ -164,6 +164,8 @@ class ApplicationPicker(Widget, can_focus=True):
         self._value_widget: Static | None = None
         self._option_list: OverlayOptionList | None = None
         self._layout_screen: Screen[object] | None = None
+        self._pending_highlight: str | None = None
+        self._pending_scroll = 0.0
 
     def compose(self) -> ComposeResult:
         marker, value = self._trigger_fragments()
@@ -196,6 +198,8 @@ class ApplicationPicker(Widget, can_focus=True):
         was_open = self.is_open
         self._focus_intent.advance()
         self.remove_class("-open")
+        self._pending_highlight = None
+        self._pending_scroll = 0.0
         if was_open and self.parent is not None:
             intent_epoch = (
                 self._open_intent.observe(self, False) if self._open_intent is not None else None
@@ -224,6 +228,8 @@ class ApplicationPicker(Widget, can_focus=True):
 
         was_open = self.is_open
         epoch = self._focus_intent.advance()
+        if not was_open and self._option_list is not None:
+            self._option_list.highlighted = None
         self.add_class("-open")
         intent_epoch = (
             self._open_intent.observe(self, True) if self._open_intent is not None else None
@@ -241,6 +247,8 @@ class ApplicationPicker(Widget, can_focus=True):
         was_open = self.is_open
         epoch = self._focus_intent.advance()
         self.remove_class("-open")
+        self._pending_highlight = None
+        self._pending_scroll = 0.0
         if was_open:
             intent_epoch = (
                 self._open_intent.observe(self, False) if self._open_intent is not None else None
@@ -262,6 +270,8 @@ class ApplicationPicker(Widget, can_focus=True):
         if opts.highlighted is None:
             return
         opt = opts.get_option_at_index(opts.highlighted)
+        if opt.disabled or opt.id == "__placeholder__":
+            return
         self.close()
         if opt.id is not None:
             self._vm.select(opt.id)
@@ -329,8 +339,7 @@ class ApplicationPicker(Widget, can_focus=True):
         Trigger label depends on the selected app's name + state
         glyph; refresh it on any of these property changes (cheap).
         The OptionList rebuild is heavier and only fires on
-        list-or-state changes (PR #100(b) absorbed at the VM via
-        dedup-on-set — no no-change events reach here).
+        list-or-state changes. Unchanged polls still emit loading and idle.
         """
         if prop in {"applications", "selected_id", "state"}:
             self.call_after_refresh(self._refresh_trigger)
@@ -389,13 +398,30 @@ class ApplicationPicker(Widget, can_focus=True):
         opts = self._option_list
         if opts is None or not opts.is_attached:
             return
-        # The dedup-on-set guard that used to live here (PR #100(b)) has
-        # moved into ApplicationsVM.refresh() per the round-3 directive
-        # (spec §9.bis.11 + §9.bis.9 / Q-A): the VM no-ops on a no-change
-        # poll, so a PropertyChangedMessage reaching this handler means
-        # the data actually changed. The View just rebuilds.
+        # State notifications include loading even when the application list
+        # is unchanged. Preserve the user's pending identity across that gap.
+        if self.is_open and opts.highlighted is not None:
+            highlighted = opts.get_option_at_index(opts.highlighted)
+            if not highlighted.disabled and highlighted.id != "__placeholder__":
+                self._pending_highlight = highlighted.id
+                self._pending_scroll = opts.scroll_y
         options = self._build_options()
         opts.set_options(options)
+        if self.is_open and self._pending_highlight is not None:
+            pending = next(
+                (
+                    option
+                    for option in options
+                    if option.id == self._pending_highlight and not option.disabled
+                ),
+                None,
+            )
+            if pending is not None and pending.id is not None:
+                opts.highlighted = opts.get_option_index(pending.id)
+                opts.scroll_to(y=self._pending_scroll, animate=False, immediate=True)
+            elif self._vm.state is not PaneState.LOADING:
+                self._pending_highlight = None
+                self._pending_scroll = 0.0
 
     def _focus_dropdown(self, epoch: int) -> None:
         opts = self._option_list

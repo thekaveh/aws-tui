@@ -27,14 +27,13 @@ closed above 100 pages or 1,000 applications. The retained bulk job-run helper
 also requests at most 50 rows per page and stops above 100 pages. `r` refreshes
 the focused surface.
 
-The logs pane loads only on demand. It discovers the exact Spark or Hive log
-objects for the selected run, streams gzip content in bounded chunks, and
-applies the configured regular-expression filter. Discovery fails closed if a
+The logs pane loads only on demand. It discovers Spark or Hive log objects
+under the selected run's complete prefix. It streams all gzip members in bounded
+chunks and applies the configured regular-expression filter. Discovery fails closed if a
 provider exceeds 100 listing pages or 200 classified log files, preventing an
-unbounded object list from becoming VM state. Classification uses only the
-run-relative key suffix, so a configured S3 prefix containing a reserved worker
-marker cannot change a log's role; labels use the last retry/worker marker.
-Retry attempts and worker identity remain visible in the file choices. The pane
+unbounded object list from becoming VM state.
+
+Classification uses only the run-relative key suffix. Thus, a configured S3 prefix containing a reserved worker marker cannot change a log's role. Labels use the last retry/worker marker. Retry attempts and worker identity remain visible in the file choices. The pane
 updates one reusable text widget for the streamed body and updates progress
 separately, keeping mounted widget count bounded as logs grow.
 
@@ -65,13 +64,29 @@ run's monitoring configuration; aws-tui does not enable or modify it:
 CloudWatch requires `enabled: true`. An omitted group uses
 `/aws/emr-serverless`. Default streams start with
 `/applications/{applicationId}/jobs/{jobRunId}/`; driver, worker suffixes and
-`attempts/{attempt}/` remain distinct choices. For a custom prefix, discovery
+`attempts/{attempt}/` remain distinct choices.
+
+For a custom prefix, discovery
 conservatively accepts only names starting with that literal prefix followed
 by the same complete application/run path. It does not guess an undocumented
 AWS prefix join convention or search unrelated runs. Missing groups/streams
 show **not created yet** and can be retried. Left/Right selects an exact stream.
 
-`f` edits the regex filter and `Shift+F` restores its defaults. For CloudWatch,
+`f` edits the regex filter and `Shift+F` restores its defaults.
+
+Filters permit at most 64 patterns, with 4,096 characters per pattern. A match
+has a shared 50 ms deadline across patterns. CloudWatch matching also has a
+100 ms deadline across loaded lines. A limit failure preserves the previous
+CloudWatch display and stops follow. Simplify the patterns, reset the filter,
+or choose **Show all**.
+
+Matching uses the timeout-capable `regex` engine in VERSION0 mode. Unicode case
+folding can differ from Python's standard regex engine, including scoped ASCII
+flags. Brace expressions can also use engine-specific syntax, such as fuzzy
+matching. Both engines must accept a pattern before it can be applied.
+
+Enable
+**Match case** when exact character case matters. For CloudWatch,
 `filter: loaded data only` means edits immediately reproject retained events
 without an AWS request; they are not account-wide searches. Bodies, source
 names and regex text render literally, including Rich-style brackets.
@@ -82,7 +97,9 @@ CloudWatch discovery permits 100 pages and 200 returned records, including
 rejected/duplicate names. One event read permits 100 pages, 10,000 returned
 events, 8 MiB of UTF-8 message bytes, and 1 MiB per event. Each discovery/read
 has a 30-second timeout. Continuing beyond a cap or repeating a token fails
-closed with fixed guidance. The pane retains the newest 5,000 whole events /
+closed with fixed guidance.
+
+The pane retains the newest 5,000 whole events /
 4 MiB of message bytes, then at most 5,000 display lines / 4 MiB including
 newlines. **buffer capped** identifies discarded loaded data. Existing S3
 limits remain 100 MiB compressed, 5,000 matched lines, and five cached reads.
@@ -92,7 +109,9 @@ CloudWatch. **Stop follow** remains available during a pending read. Follow
 waits two seconds after each completed read, with no overlapping polls, and
 rereads a 60-second timestamp overlap. It deduplicates event IDs, retains
 separate IDs with identical text, and stops if 20,000 overlap IDs would be
-exceeded. Events arriving with timestamps older than the overlap may be missed
+exceeded.
+
+Events arriving with timestamps older than the overlap may be missed
 until an explicit reload. A fixed end bounds eligibility, but pagination does
 not provide an atomic AWS snapshot. The status shows Following/Stopped, last
 successful check time and latest event time; an empty successful poll advances
@@ -105,6 +124,7 @@ and connection replacement. Credential
 recovery restores the exact source/group/stream and filter with one fresh
 uncached read. Missing streams or changed monitoring identity reject the
 candidate; no default stream is substituted and following stays stopped.
+
 Authentication, denial, throttling and unavailable-service failures have fixed
 safe categories; no log body or original exception text enters diagnostics.
 
@@ -119,9 +139,9 @@ job's writer permissions are separate; see
 Press `c` on a selected Spark run to open a prefilled form. Hive, missing or
 unsupported job drivers are refused before the Spark form opens. The form
 preserves the source name, execution role, entry point, arguments and Spark
-parameters. Arguments use a JSON array of strings, preserving empty strings,
-embedded newlines and whitespace; `null` omits the argument field and `[]` sends
-an explicit empty array. Spark parameters use a JSON string or `null` to omit
+parameters. Arguments use a JSON array of strings, preserving empty strings, embedded newlines and whitespace. `null` omits the argument field and `[]` sends an explicit empty array.
+
+Spark parameters use a JSON string or `null` to omit
 them. JSON escapes preserve mixed line endings and Unicode separators exactly
 through editing and review.
 
@@ -133,12 +153,13 @@ zero timeouts remain distinct from omission. Unsupported keys or values are
 refused with a reason rather than silently dropped. The installed SDK model
 defines supported nested settings.
 
-Choose **Review** (or press Enter in a single-line field) before **Submit**.
-Review identifies the source run, connection, profile, region, application and
+Choose **Review** (or press Enter in a single-line field) before **Submit**. Review identifies the source run, connection, profile, region, application and
 execution role. It lists preserved settings and every changed source/proposed
 value. Application release, network, image and worker settings are inherited
 from the current application; equality with the source run is unknown. Hidden
-application defaults are also unknown. Run identifiers, status, timestamps,
+application defaults are also unknown.
+
+Run identifiers, status, timestamps,
 attempts and resource usage are read-only outputs and are not copied. Scroll
 through the review; Tab reaches the fixed Back, Cancel and Submit buttons even
 at 80×24. Back preserves the form; further edits require a fresh review.
@@ -152,10 +173,11 @@ a blank submit form. During submission,
 
 Submission carries an app-owned `clientToken`. The token is minted when the
 clone form opens and reused after an ambiguous failure if the request remains
-unchanged. Retry that unchanged review after a lost response to let AWS resolve
-the same request instead of creating a second job. Every request-affecting edit,
+unchanged. Retry that unchanged review after a lost response. This lets AWS resolve the same request instead of creating a second job. Every request-affecting edit,
 including advanced nested settings, rotates the token; reapplying equal values
-does not. Successful submission or closing and reopening the form starts a new
+does not.
+
+Successful submission or closing and reopening the form starts a new
 intent. Before reopening after an uncertain outcome, inspect the application's
 runs because the earlier request may already have succeeded.
 
@@ -168,8 +190,7 @@ available for `SUBMITTED`, `PENDING`, `SCHEDULED`, `QUEUED`, and `RUNNING`.
 receive another request. The hint is disabled and the palette entry is removed
 when the selected run is ineligible or a request is pending.
 
-If your custom keymap already uses `x` for another action, explicitly remap
-`emr.cancel` to a distinct unused key, such as `z`. See
+If your custom keymap already uses `x` for another action, explicitly remap `emr.cancel` to a distinct unused key. For example, use `z`. See
 [Migrating custom x bindings](../keybindings.md#21-migrating-custom-x-bindings)
 for the configuration example and the entire-overlay fallback on collision.
 
@@ -207,12 +228,10 @@ surface is in [Keybindings](../keybindings.md).
 
 ## 6. Verification and demo
 
-Demo mode provides profile-isolated applications, terminal and active runs,
-clone transitions, CloudWatch-only and both-source runs with retry/worker
-streams, and streamable success and failure logs without network
-access. Demo cancellation changes only the selected backend run to `CANCELLED`,
+Demo mode provides profile-isolated applications, terminal and active runs, and clone transitions. It includes CloudWatch-only and both-source runs with retry/worker streams, and streamable success and failure logs without network access. Demo cancellation changes only the selected backend run to `CANCELLED`,
 which existing reads then reveal. A cancelled clone stops its state walk and
-cannot resume or affect another run. Unit tests cover poller cadence, stale-target rejection, clone
-validation, provider errors, bounded discovery, and bounded log streaming.
-Snapshot and end-to-end tests cover selectors, focus order, master-detail
+cannot resume or affect another run.
+
+Unit tests cover poller cadence, stale-target rejection, clone
+validation, provider errors, bounded discovery, and bounded log streaming. Snapshot and end-to-end tests cover selectors, focus order, master-detail
 behavior, modal submission, and log filtering.

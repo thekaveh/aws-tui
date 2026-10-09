@@ -14,6 +14,7 @@ from pathlib import Path
 
 import pytest
 from textual.widgets import TextArea
+from textual.widgets.text_area import Selection
 
 from aws_tui.app import AwsTuiApp
 from aws_tui.demo.in_memory_fs import InMemoryFS
@@ -388,3 +389,29 @@ async def test_cancelled_settings_adoption_keeps_existing_view_mounted(
             await task
 
         assert tuple(host.children) == prior_children
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("reverse", [False, True])
+async def test_enter_in_modal_text_area_replaces_selection(
+    app_context_factory: AppContextBuilder,
+    reverse: bool,
+) -> None:
+    ctx = app_context_factory()
+    app = AwsTuiApp(ctx)
+    async with app.run_test(size=(120, 40)) as pilot:
+        modal = LogFilterModal(DEFAULT_LOG_FILTER)
+        await app.push_screen(modal)
+        editor = modal.query_one("#log-patterns", TextArea)
+        editor.load_text("prefix selected suffix")
+        await focus_and_settle(editor)
+        endpoints = ((0, 7), (0, 15))
+        editor.selection = Selection(*(reversed(endpoints) if reverse else endpoints))
+
+        await pilot.press("enter")
+        await pilot.pause()
+
+        assert app.screen is modal
+        assert editor.text == "prefix \n suffix"
+        assert editor.selection == Selection.cursor((1, 0))
+        assert app._crash_report is None

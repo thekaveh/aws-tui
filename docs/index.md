@@ -20,26 +20,22 @@ Linux, and Windows. Powered by
 [Textual](https://textual.textualize.io/) and the
 [VMx](https://github.com/thekaveh/VMx) MVVM framework.
 
-aws-tui puts the AWS work that usually means switching between the web console
-and a shell behind a single keyboard-driven terminal interface: a
-Norton-Commander-style dual-pane file manager for S3 and S3-compatible storage,
-an EMR Serverless console, and read-only operations consoles for AWS Glue and
-Amazon Athena. What sets it apart is that those services are wired to each
-other rather than merely bundled together — a Glue catalog table generates the
-Athena SQL that reads it, Athena results hand back to the S3 pane as artifacts,
-and Iceberg table metadata is reachable from both directions. Destructive
-operations always confirm first, long operations run on cancellable background
-workers, and one keystroke re-points the whole application at a different AWS
-profile or S3 endpoint.
+aws-tui provides a dual-pane file manager for S3 and S3-compatible storage,
+an EMR Serverless console, and read-only consoles for AWS Glue and Amazon Athena.
+Glue tables generate Athena starter queries. Athena results can open their S3
+artifacts, and both services expose Iceberg metadata. The interface supports
+keyboard navigation throughout these services.
+
+Destructive operations require confirmation. Transfers and service reads run in
+cancellable workers. `Shift+S` changes the focused S3 pane's source. In EMR,
+Glue, and Athena, it changes the active service's AWS connection.
 
 > **Status: v0.9.0 development; no package release published** — install from Git
 > until the `aws-tui` project name is available on PyPI. Glue, Athena, and
-> their integrated Iceberg workflows are Unreleased v0.9.0 feature work. The
-> package metadata remains `0.8.0` until the release-preparation PR bumps it;
-> the current tree must not be tagged as v0.8.0. The per-release history
-> lives in `CHANGELOG.md` in the repository, which is the one document these
-> surfaces cannot carry: its version headings resolve through `/compare/`
-> links into the repository itself.
+> their integrated Iceberg workflows are Unreleased v0.9.0 feature work.
+>
+> The package metadata remains `0.8.0` until the release-preparation PR bumps it;
+> the current tree must not be tagged as v0.8.0. The per-release history lives in `CHANGELOG.md` in the repository. These surfaces cannot carry that document: its version headings resolve through `/compare/` links into the repository itself.
 
 ## 1. Features
 

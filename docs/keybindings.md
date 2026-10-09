@@ -38,11 +38,11 @@ as the universal escape hatch.
 | Clear selection | `u` | Clears all marks, including hidden rows; keeps multi-select mode |
 | Exit multi-select mode | `Ctrl+V` | Clears marks and leaves mode; focused editors retain paste |
 
-All five selection commands also appear in the file-manager command palette.
-They act only on the focused pane and are inert behind modals or during loading.
-The pane summary uses `multi: N marked · size` to show mode, marked count, and
+All five selection commands also appear in the file-manager command palette. They act only on the focused pane and are inert behind modals or during loading. The pane summary uses `multi: N marked · size` to show mode, marked count, and
 selected bytes even with zero marks. Hidden marks stay stored but do not participate in transfers or
-summary totals until the filter is cleared. Clear selection removes hidden marks
+summary totals until the filter is cleared.
+
+Clear selection removes hidden marks
 too. Only keys shared by an alias pair choose behavior from context. Separately
 remapped keys and exclusive keys in partly overlapping lists keep each action's
 explicit meaning.
@@ -52,7 +52,7 @@ explicit meaning.
 | Action | Default | Notes |
 |---|---|---|
 | Copy across panes | `c` | Streams through `CrossFsCopy`, shows confirm modal |
-| Move across panes | `pane.move` action — *(deferred)* | The move handler is not yet wired in `AwsTuiApp`; the always-visible navigation rail does not claim `m`, so the key remains available when move wiring lands. |
+| Move across panes | `pane.move` action — *(deferred)* | The move handler is not yet wired in `AwsTuiApp`. The always-visible navigation rail does not claim `m`, so the key remains available when move wiring lands. |
 | Delete (with confirm) | `d` | Confirm modal; destructive ops always ask |
 | New folder | `pane.new` action — *(deferred)* | No handler wired in v0.8.x |
 | Rename in place | `pane.move` action — *(deferred)* | Bundled into the move handler; not wired |
@@ -83,10 +83,8 @@ explicit meaning.
 
 > **Nav-menu visibility:** the left rail is always visible at a single
 > fixed width and shows text labels (Settings is docked at the bottom with its
-> settings icon). The former `m`-key collapse/expand toggle was dropped because
-> there is no longer a collapsed mode to toggle into;
-> `BindingResolver` does not emit `m` because the deferred `pane.move`
-> action has no registered handler (§1.3).
+> settings icon). The former `m`-key collapse/expand toggle was dropped because there is no longer a collapsed mode to toggle into.
+> `BindingResolver` does not emit `m` because the deferred `pane.move` action has no registered handler (§1.3).
 
 ### 1.6. Connection and Authentication
 
@@ -158,12 +156,11 @@ focused editable widget can consume text first.
 Glue is a single-context AWS service. It keeps one active connection
 and region for the whole page; S3-compatible connections are excluded. The
 bordered **AWS source** selector stands on its own. Jobs and Crawlers add an
-adjacent bordered state selector without an enclosing context frame. The
-untitled segmented view frame is one Tab stop; its active view keeps accent
-text after focus moves into content and gains a soft fill while the frame is
-focused. Focus a selector and press `Enter` or `Space` to open it; use the
-arrow keys and `Enter` to commit a value, or `Esc` to close it without changing
-the value. Every selector dropdown overlays the current layout; opening or
+adjacent bordered state selector without an enclosing context frame.
+
+The untitled segmented view frame is one Tab stop. Its active view keeps accent text after focus moves into content. The active view gains a soft fill while the frame is focused. Focus a selector and press `Enter` or `Space` to open it. Use the arrow keys and `Enter` to commit a value. Press `Esc` to close it without changing the value.
+
+Every selector dropdown overlays the current layout; opening or
 closing it leaves the context row, view tabs, and adjacent content panes at the
 same size.
 
@@ -175,30 +172,22 @@ same size.
 | Cursor up / down | `↑` `↓` (also `k` / `j`) | Moves the focused resource list or scrolls detail. |
 | Cycle focus | `Tab` / `Shift+Tab` | Walks the complete deterministic Glue ring described below; reverse traversal is the exact inverse. |
 | Refresh active view | `r` | Reloads only the selected Catalog, Jobs, or Crawlers view. |
-| Load more rows in the focused list | `l`, or `:` / `Ctrl+K`, then **Load more Glue rows** | Runs `glue.load_more`. Fetches the next page for the focused Glue list (databases, tables, partitions, jobs, runs, crawlers, or the focused Iceberg metadata tab); clicking a list footer that reads `more available` does the same. Disabled when the list has no further page or hit its 1,000-item safety limit. On the Iceberg **Peek** tab the same control instead reruns a genuinely new local DuckDB query at the next row-limit step (100 → 1,000 → 10,000); its ceiling is real, not a local-window widen, and its footer never reads `more available`. |
+| Load more rows in the focused list | `l`, or `:` / `Ctrl+K`, then **Load more Glue rows** | Runs `glue.load_more`. Fetches the next page for the focused Glue list (databases, tables, partitions, jobs, runs, crawlers, or the focused Iceberg metadata tab); clicking a list footer that reads `more available` does the same. Disabled when the list has no further page or hit its 1,000-item safety limit. On the Iceberg **Peek** tab the same control instead reruns a genuinely new local DuckDB query at the next row-limit step (100 → 1,000 → 10,000). Its ceiling is real, not a local-window widen, and its footer never reads `more available`. |
 | Switch AWS source | `Shift+S` | Runs `app.swap_source` and rebuilds Glue under the next resolver-ordered supported AWS profile and region. The bordered **Source** selector can instead choose an exact source. |
 | Compare table definitions | `Ctrl+G` | Runs `glue.compare_tables`. Opens independent Left/Right source, region and table selection; no counterpart is selected automatically. See the [comparison workflow](services/glue.md#5-compare-table-definitions) for modal keys, refresh and full-summary copy. |
-| Copy selected table reference | `y` | Runs `glue.copy_table_ref`. The canonical, fully quoted identifier and its source identity are retained in the authoritative typed in-app clipboard; the OS clipboard write then goes through the single app-level writer, whose toast names the channel that actually accepted the text and never reports an unacknowledged OSC 52 write as a copy. |
+| Copy selected table reference | `y` | Runs `glue.copy_table_ref`. The canonical, fully quoted identifier and its source identity are retained in the authoritative typed in-app clipboard. The OS clipboard write then goes through the single app-level writer. Its toast names the channel that actually accepted the text and never reports an unacknowledged OSC 52 write as a copy. |
 | Open selected table location in S3 | `:` / `Ctrl+K`, then **Open table location in S3** | `glue.open_s3_location` is palette-only and absent from `KeymapStore.DEFAULT_BINDINGS`. It preserves the exact Glue connection name and region; malformed or missing locations do not navigate. |
 | Query selected table in Athena | `Shift+Q` (`Q`) or `:` / `Ctrl+K`, then **Query table in Athena** | Runs `glue.query_in_athena` for a visible selected Glue table. It opens Athena, resolves the exact catalog/database request context, and prefills the quoted `SELECT * FROM "database"."table" LIMIT 5`; it does not execute the query. |
 | Query selected Iceberg snapshot in Athena | `Shift+V` (`V`), `:` / `Ctrl+K`, then **Query Iceberg snapshot in Athena**, or the Iceberg time-travel button | Runs `glue.time_travel_in_athena` only for a visible selected snapshot on the Snapshots tab. It opens Athena with the same exact source and bounded SQL plus `FOR VERSION AS OF <snapshot-id>` before `LIMIT 5`; it does not execute the query. |
 
-`Ctrl+G` is reserved by `glue.compare_tables` in the default keymap. If an
-existing configuration assigns it to another action, explicitly disable
-`"glue.compare_tables" = []` or remap that action (for example to `"alt+g"`)
-in `[keybindings]`; otherwise the existing collision validator rejects the
-overlay. The comparison remains available in the command palette when unbound.
+`Ctrl+G` is reserved by `glue.compare_tables` in the default keymap. If an existing configuration assigns it to another action, explicitly disable `"glue.compare_tables" = []` or remap that action. For example, remap it to `"alt+g"` in `[keybindings]`. Otherwise the existing collision validator rejects the overlay. The comparison remains available in the command palette when unbound.
 
 Glue's forward focus order is:
 
 - **Catalog:** Source, view tabs, databases, tables, table detail, then every
-  visible and enabled Iceberg tab/control, and the navigation rail. The
-  seventh Iceberg tab, **Peek**, previews table rows through a local DuckDB
-  engine; it needs the optional `duckdb` extra and an AWS profile connection,
-  so it is simply absent without an AWS profile connection, but stays present
-  and selectable — never disabled — when the extra is missing: choosing it
-  is how the install prompt is reached, the same Iceberg-only visibility
-  gating as the six metadata tabs it follows.
+  visible and enabled Iceberg tab/control, and the navigation rail.
+
+  The seventh Iceberg tab, **Peek**, previews table rows through a local DuckDB engine. It needs the optional `duckdb` extra and an AWS profile connection. It is absent without an AWS profile connection, following the same Iceberg-only visibility gating as the six metadata tabs. When the extra is missing, the tab stays present and selectable — never disabled. Choosing it is how the install prompt is reached.
 - **Jobs:** Source, Run state, view tabs, jobs, runs, job detail, and the
   navigation rail.
 - **Crawlers:** Source, Crawler state, view tabs, crawlers, crawler detail, and
@@ -231,13 +220,11 @@ focused soft fill, and single keyboard focus stop as Glue.
 | Sort selected column | `Alt+S` | `athena.sort_results`; ascending → descending → loaded order; lexical strings, null last. |
 | Reset local result controls | `Alt+R` | `athena.reset_results`; clears filter and sort. |
 | Switch AWS source | `Shift+S` | Runs `app.swap_source` and rebuilds Athena under the next resolver-ordered supported AWS profile and region. The bordered **Source** selector can instead choose an exact source. |
-| Insert copied table reference | `i` | Runs `athena.insert_table_ref`, selecting Query when needed and inserting at the editor cursor or replacing its active selection. It refuses a copied connection/region that differs from Athena's active source and leaves both editor and typed clipboard unchanged; it never switches profiles because that could discard unrelated editor state. |
+| Insert copied table reference | `i` | Runs `athena.insert_table_ref`, selecting Query when needed and inserting at the editor cursor or replacing its active selection. It refuses a copied connection/region that differs from Athena's active source and leaves both editor and typed clipboard unchanged. It never switches profiles because that could discard unrelated editor state. |
 | Open result artifact in S3 | `:` / `Ctrl+K`, then **Open Athena result in S3** | `athena.open_result_location` is palette-only and absent from `KeymapStore.DEFAULT_BINDINGS`; it validates the successful execution's exact connection, region, and S3 URI before navigating. |
 | Open query table in Glue | `:` / `Ctrl+K`, then **Open query table in Glue** | `athena.open_in_glue` is palette-only and works only when the current read-only SQL resolves to one visible table. |
 
-Athena's forward focus order is Source, Workgroup, its enabled load-more
-button, Catalog, its enabled load-more button, Database, its enabled load-more
-button, view tabs, the active view's controls, and the navigation rail. The
+Athena's forward focus order starts with Source, Workgroup, its enabled load-more button, Catalog, and its enabled load-more button. It continues with Database, its enabled load-more button, view tabs, the active view's controls, and the navigation rail. The
 Query view lays out Query controls above the Query editor, then Execution
 detail. The active-view controls are:
 
@@ -303,23 +290,20 @@ A binding can be a single keystroke or a list of fallback keystrokes:
 The default map is declared in `infra/keymap_store.py`. At composition
 time, aws-tui validates the overlay and `BindingResolver` installs keys
 only for registered actions. Unknown action IDs are logged and the app
-continues with the default keymap so a typo does not crash startup.
-The new `pane.object_details` action defaults to `ctrl+o`. Existing custom
-keybinding overlays inherit this default; if an existing action already uses
-`ctrl+o`, move that action or remap `"pane.object_details" = "ctrl+i"` in
-`[keybindings]` to avoid a collision. The named **S3 object details** palette
+continues with the default keymap so a typo does not crash startup. The new `pane.object_details` action defaults to `ctrl+o`.
+
+Existing custom keybinding overlays inherit this default. If an existing action already uses `ctrl+o`, move that action or remap `"pane.object_details" = "ctrl+i"` in `[keybindings]`. This avoids a collision. The named **S3 object details** palette
 entry follows the same focused-row and read-only guards.
 
 For example, use `"pane.copy" = "ctrl+y"` to move pane copy without
 claiming bare `y`, which is reserved by `glue.copy_table_ref`.
 
-The bindings that are wired today include `q`,
-`Ctrl+C`, `Tab` / `Shift+Tab`, `↑/↓` (and `j/k`), `Enter`,
-`Backspace`, `left`, `→`, `r`, `a`, `?`, `:`, `t`, `T`, `,` (comma → Settings),
-`c`, `d`, `x`, `S` (Shift+S), `A` (Shift+A), Glue `1` / `2` / `3`, Athena
-`1` / `2` / `3` / `4`, `F`, `G`, `y`, `Q`, `W`, `C`, `D`, `i`, `V`,
-`Ctrl+Enter`, `Esc`, `l`, `p`, `P` (Shift+P), `Space`, `f`,
-`Shift+↑`, and `Shift+↓`.
+The bindings that are wired today include:
+
+- `q`, `Ctrl+C`, `Tab` / `Shift+Tab`, `↑/↓` (and `j/k`), `Enter`, `Backspace`, `left`, `→`.
+- `r`, `a`, `?`, `:`, `t`, `T`, `,` (comma → Settings), `c`, `d`, `x`.
+- `S` (Shift+S), `A` (Shift+A), Glue `1` / `2` / `3`, Athena `1` / `2` / `3` / `4`.
+- `F`, `G`, `y`, `Q`, `W`, `C`, `D`, `i`, `V`, `Ctrl+Enter`, `Esc`, `l`, `p`, `P` (Shift+P), `Space`, `f`, `Shift+↑`, and `Shift+↓`.
 
 ### 2.1. Migrating custom x bindings
 
@@ -392,7 +376,7 @@ unbound until a handler ships.
 | `pane.switch_focus` | `tab` | yes | Cycle the active page's focus ring |
 | `pane.switch_focus_back` | `shift+tab` | yes | Cycle the active page's focus ring in reverse |
 | `pane.object_details` | `ctrl+o` | yes | Inspect current S3 object properties without content download or mutation |
-| `pane.quick_look` | `space` (normal mode) | yes | Stream first 64 KB |
+| `pane.quick_look` | `space` (normal mode) | yes | Preview bounded structured content and cache a raw prefix of at most 64 KiB |
 | `pane.filter` | `/` | yes | Local loaded-name filter |
 | `pane.fuzzy_find` | `ctrl+p` | yes | Find loaded entries |
 | `pane.enter_multiselect` | `v` | yes | Enter focused-pane multi-select mode without marking |
@@ -468,13 +452,13 @@ including `Shift+↑` / `Shift+↓` for extend-selection. Their
 > **Commands pane** — the bottom legend has exactly one compact content row at
 > wide and narrow supported widths. Service commands precede global commands,
 > and each content-sized chip exposes a tooltip with the full shortcut, effect,
-> execution or mutation behavior, and any unmet prerequisite. When all hints do
-> not fit, lower-priority entries are removed deterministically instead of
-> wrapping; `[:] more` and `[q] quit` remain visible, and `[:] more` opens the
-> service-scoped command palette. Clicking an enabled visible chip dispatches
-> the same registered action as its shortcut and command-palette entry; disabled
-> chips remain inert. Chips do not enter the Tab sequence. Hidden actions remain
-> bound and palette-visible.
+> execution or mutation behavior, and any unmet prerequisite.
+
+> When all hints do not fit, lower-priority entries are removed deterministically instead of wrapping.
+> `[:] more` and `[q] quit` remain visible, and `[:] more` opens the service-scoped command palette.
+> Clicking an enabled visible chip dispatches the same registered action as its shortcut and command-palette entry; disabled chips remain inert.
+>
+> Chips do not enter the Tab sequence. Hidden actions remain bound and palette-visible.
 
 ## 4. Modal Forwarding for Enter Escape and Arrow Keys
 
@@ -483,13 +467,11 @@ screen bindings. Without that, pressing `Enter` inside the theme
 picker or confirm modal would fire the dual-pane `descend` action and
 never reach the modal's confirm handler.
 
-`AwsTuiApp` works around this via `_forward_to_modal(*action_names)`:
-when a modal is on top of the screen stack, `action_descend` /
-`action_ascend` / `action_move_up` / `action_move_down` first look for
-the corresponding handler on the active screen and forward there. The
-result: `Enter` confirms in any modal, `Esc` (or `Backspace`) cancels,
-and `↑/↓` navigate the picker even though the app reserves them for
-the dual-pane cursor.
+`AwsTuiApp._consumed_by_modal(*action_names)` forwards supported actions to the active modal and consumes keys even without a handler. Arrow actions route to the palette, focused Input/TextArea, or modal before pane navigation.
+
+Enter has separate routing. In a focused editable multiline editor, Enter replaces the selection with a newline; a read-only editor consumes it without editing. Other focused modal buttons or modal-specific handlers receive Enter. If no handler applies, Enter is swallowed.
+
+Backspace deletes text when an Input or TextArea has focus. Otherwise, it tries the modal's cancel, close, or dismiss handler. Escape remains locally owned by each overlay. These routes prevent hidden pane navigation.
 
 ## 5. Layer separation
 
@@ -498,9 +480,9 @@ VM messages handle cross-service requests. Keep new keyed actions in
 `KeymapStore` and `ActionRegistry` together. Palette-only commands such
 as `glue.open_s3_location` belong in `ActionRegistry` and the curated
 palette, but do not need a default key. The same rule applies to
-`athena.open_result_location`. The Glue table and snapshot Athena handoffs are
-keyed, palette-visible actions; keyboard, palette, and button entry points all
-dispatch their registered action IDs before the VM publishes the typed request.
+`athena.open_result_location`.
+
+The Glue table and snapshot Athena handoffs are keyed, palette-visible actions. Keyboard, palette, and button entry points dispatch their registered action IDs before the VM publishes the typed request.
 
 ## 6. Loaded listing controls
 
@@ -519,6 +501,7 @@ Choose **Sort loaded entries** in `:` / `Ctrl+K` for Name, Size, or Modified,
 each ascending or descending. There is no default sort shortcut. The parent
 stays first; missing size/time metadata stays last in both directions. Metadata
 ties use ascending name order. Name compares casefolded text then original text.
+
 Filtering and sorting preserve cursor identity where visible and make no provider
 calls. Navigation, source replacement, and committed credential recovery reset
 the filter; refreshing the same directory preserves it. The chosen sort lasts

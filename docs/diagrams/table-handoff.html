@@ -23,7 +23,7 @@
   <section class="frame">
     <svg viewBox="0 0 1600 900" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="title desc">
       <title id="title">aws-tui table handoff sequence</title>
-      <desc id="desc">A Glue catalog selection publishes an immutable table request on the message hub. The app validates connection and region identity, snapshots the destination for rollback, adopts the Athena page through the content host, and prefills one exact quoted statement without executing it. The user runs the statement explicitly, the read-only policy validates it fail-closed, and the client starts, polls and pages the execution. A succeeded execution can then hand its result location to the S3 pane under the same connection and region. Any failure restores the snapshot instead of leaving a half-switched service.</desc>
+      <desc id="desc">Glue catalog selection publishes an immutable table request through the message hub. The app validates connection and region, snapshots rollback state, adopts the Athena page through the content host, and prefills an exact quoted statement. Execution requires explicit user action and fail-closed read-only validation; the client starts, polls, and pages it. Succeeded executions can hand result locations to the S3 pane under the same connection and region. Handoff adoption failures restore the snapshot.</desc>
       <defs>
         <pattern id="grid" width="40" height="40" patternUnits="userSpaceOnUse"><path d="M40 0H0V40" fill="none" stroke="#1e293b" stroke-width="0.5"/></pattern>
         <marker id="arrow" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto"><polygon points="0 0,10 3.5,0 7" fill="#94a3b8"/></marker>
@@ -112,7 +112,7 @@
       </g>
       <g>
         <rect x="60" y="760" width="560" height="62" rx="5" fill="#0f172a" stroke="#fb7185" stroke-width="1.5" stroke-dasharray="6 4"/>
-        <text x="340" y="784" font-family="Fira Code Embedded" font-size="12" font-weight="700" fill="#fb7185" text-anchor="middle">Failure at any step above</text>
+        <text x="340" y="784" font-family="Fira Code Embedded" font-size="12" font-weight="700" fill="#fb7185" text-anchor="middle">Failure during handoff adoption</text>
         <text x="340" y="806" font-family="Fira Code Embedded" font-size="11" fill="#fda4af" text-anchor="middle">the snapshot is restored — no half-switched service</text>
       </g>
       <path d="M620 791H734" fill="none" stroke="#fb7185" stroke-width="2" stroke-dasharray="6 4" marker-end="url(#arrowRollback)"/>

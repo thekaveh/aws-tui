@@ -3,6 +3,7 @@
 import ast
 import json
 import re
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -111,8 +112,37 @@ def test_lifecycle_recipe_merges_into_the_existing_bucket_configuration() -> Non
         parsed = json.loads(block)
         assert parsed["Rules"][0]["AbortIncompleteMultipartUpload"] == {"DaysAfterInitiation": 1}
 
-    assert "exit 1" not in section
+    assert "|| { cat get-lifecycle.err; exit 1; }" in section
     assert 'map(select(.ID != "abort-incomplete-mpu"))' in section
+
+
+def test_lifecycle_recipe_stops_before_put_on_auth_failure(tmp_path: Path) -> None:
+    section = _read("docs/connections.md").split(
+        "## 6. Recommended 1-Day MPU Abort Lifecycle Rule", 1
+    )[1]
+    recipe = _fenced_blocks(section, "bash")[0].replace("<name>", "test-bucket")
+    stubs = """
+aws() {
+    case "$*" in
+        *get-bucket-lifecycle-configuration*) echo AccessDenied >&2; return 1 ;;
+        *) echo UNEXPECTED_AWS_WRITE; return 0 ;;
+    esac
+}
+jq() { echo UNEXPECTED_MERGE; return 0; }
+"""
+    result = subprocess.run(
+        ["bash"],
+        input=stubs + recipe,
+        text=True,
+        cwd=tmp_path,
+        capture_output=True,
+        check=False,
+    )
+    assert result.returncode == 1
+    assert "AccessDenied" in result.stdout
+    assert "UNEXPECTED" not in result.stdout
+    assert (tmp_path / "current-lifecycle.json").read_text() == ""
+    assert not (tmp_path / "merged-lifecycle.json").exists()
 
 
 def test_scripts_docs_package_imports():
@@ -527,7 +557,7 @@ def test_athena_canonical_surfaces_and_diagram_match_current_tree() -> None:
         "navigation messages",
     ):
         assert nonvisual_detail not in alt_text
-    assert "hosted VM shutdown is awaited before disposal" in _squash(architecture)
+    assert "hosted vm shutdown is awaited before disposal" in _squash(architecture).casefold()
     assert "Domain adapters perform the runtime AWS and filesystem I/O" in _squash(architecture)
     assert (
         "Infrastructure owns sessions, credentials, configuration, SDK client construction, and OS-backed stores"
@@ -850,7 +880,11 @@ def test_source_cycle_example_states_the_resolver_order() -> None:
     section = connections.split("## 4. Switching between connections at runtime", 1)[1]
     section = section.split("\n## ", 1)[0]
 
-    assert "explicit `[connections.*]` entries first, in config-file order" in section
-    assert "then auto-discovered AWS profiles" in section
+    assert "ring starts with `local`, followed by explicit `[connections.*]` entries" in section
+    assert "in config-file order and regardless of kind" in section
+    assert (
+        "Auto-discovered AWS profiles from `~/.aws/config` and `~/.aws/credentials` follow"
+        in section
+    )
     assert "shadow" in section
     assert "→ ... (every other AWS profile)" not in section

@@ -33,14 +33,15 @@ libraries should be filed with those projects.
 
 The in-TUI Settings form stores secrets in the OS keychain through the Python
 `keyring` library and persists only a `keychain:` reference in
-`<config-dir>/config.toml` (see `docs/platforms.md` for the exact OS path).
-Credential updates write to the inactive one of two bounded revision services
-before the configuration reference changes, so the previous committed
-credentials remain available if persistence fails. Hand-authored
+`<config-dir>/config.toml` (see `docs/platforms.md` for the exact OS path). Credential updates write to the inactive one of two bounded revision services before the configuration reference changes. Thus, the previous committed credentials remain available if persistence fails.
+
+Hand-authored
 `credentials = "static"` entries
 remain supported for compatibility, but their key fields are plaintext in
 `config.toml` and trigger a launch-time warning toast.
 
 ### 3.2. Crash dumps can contain redacted log content
 
-The crash-recovery flow writes a dump to `<cache-dir>/crash/<ts>.txt` containing the traceback, the last 1000 lines of the JSON log, and the last 100 user-action records. aws-tui redacts secret-like structured fields, key/value text, URL userinfo, and URL query strings before writing durable logs or crash reports. A user who has added third-party logging or who shares a crash file with a maintainer should still review the file first because no text redactor can prove arbitrary third-party output is safe.
+The crash-recovery flow writes a dump to `<cache-dir>/crash/<ts>.txt` containing the traceback, the last 1000 lines of the JSON log, and the last 100 user-action records. aws-tui redacts secret-like structured fields, key/value text, URL userinfo, and URL query strings before writing durable logs or crash reports.
+
+If you added third-party logging or share a crash file with a maintainer, review the file first. No text redactor can prove arbitrary third-party output is safe.

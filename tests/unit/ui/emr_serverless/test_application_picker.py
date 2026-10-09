@@ -9,6 +9,7 @@ tests lock the open/closed contract in place.
 
 from __future__ import annotations
 
+import asyncio
 import inspect
 from collections.abc import Callable
 
@@ -646,3 +647,55 @@ async def test_application_overlay_at_right_edge_resizes_and_clicks_by_id() -> N
             ),
             what="click in widened overlay committed the second duplicate name by id",
         )
+
+
+@pytest.mark.parametrize("removed", [False, True])
+async def test_open_application_picker_retains_pending_identity_across_poll(removed):
+    class DelayedEmr(_InMemoryEmr):
+        block = False
+        entered = asyncio.Event()
+        release = asyncio.Event()
+
+        async def list_applications(self):
+            if self.block:
+                self.entered.set()
+                await self.release.wait()
+            return await super().list_applications()
+
+    fake = DelayedEmr()
+    fake.add_application(app_id="a", name="first", state=ApplicationState.STARTED)
+    fake.add_application(app_id="b", name="second", state=ApplicationState.STARTED)
+    vm, hub = _make_vm(fake)
+    await vm.refresh()
+    vm.select("a")
+    async with _PickerApp(vm, hub).run_test() as pilot:
+        picker = pilot.app.query_one(ApplicationPicker)
+        picker.open()
+        await pilot.pause()
+        opts = picker.query_one(OptionList)
+        opts.highlighted = opts.get_option_index("b")
+        await pilot.pause()
+        fake.block = True
+        poll = asyncio.create_task(vm.refresh())
+        await fake.entered.wait()
+        await pilot.pause()
+        # The loading placeholder must not dispatch a synthetic application ID.
+        opts.highlighted = 0
+        picker.action_commit()
+        assert picker.is_open
+        assert vm.selected_id == "a"
+        if removed:
+            fake._apps.pop("b")
+        fake.release.set()
+        await poll
+        await pilot.pause()
+        if removed:
+            assert opts.highlighted is None
+            picker.action_commit()
+            assert vm.selected_id == "a"
+        else:
+            assert opts.get_option_at_index(opts.highlighted).id == "b"
+            await pilot.press("enter")
+            await pilot.pause()
+            assert vm.selected_id == "b"
+            assert not picker.is_open

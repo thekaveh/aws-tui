@@ -53,9 +53,7 @@ The switch lives only for the session unless you also update
 `config.toml`. No restart needed — `ThemeChangedMessage` reflows
 the active stylesheet on the fly.
 
-The command palette has two working global theme commands: `:` then
-**Theme picker** opens the same picker as `t`, and `:` then **Cycle theme**
-has the same effect as `Shift+T`. Per-theme dynamic entries such as
+The command palette has two working global theme commands. `:` then **Theme picker** opens the same picker as `t`. `:` then **Cycle theme** has the same effect as `Shift+T`. Per-theme dynamic entries such as
 `theme switch ▸ voidline` remain deferred and are not registered, so use
 **Theme picker** to select a specific built-in or custom theme.
 
@@ -79,9 +77,7 @@ Screen {
 
 ### 3.2. Full custom themes
 Drop a full `.tcss` file under `<config-dir>/themes/<name>.tcss` and select
-it with `t` or `:` then **Theme picker**. A full replacement bypasses the
-built-in composition, so use a repository checkout to compose the raw
-built-in theme, then the shared operational layer, in that file:
+it with `t` or `:` then **Theme picker**. A full replacement bypasses the built-in composition. Use a repository checkout to compose the raw built-in theme, then the shared operational layer, in that file:
 
 ```bash
 # Linux shown; see docs/platforms.md for the macOS and Windows locations.
@@ -118,9 +114,7 @@ The Carbon palette tokens (full spec table in §5.5):
 | `warning` | `#f0c674` | Auth-pending state |
 | `danger` | `#ff6b7a` | Destructive op modal accents |
 
-Every shipped theme defines the same token set. Read any of them directly at
-`src/aws_tui/ui/themes/<name>.tcss` -- that file is the palette, so it cannot
-drift from what the app renders.
+Every shipped theme defines the same token set. Read any of them directly at `src/aws_tui/ui/themes/<name>.tcss`. That file is the palette, so it cannot drift from what the app renders.
 
 ## 5. How the loader works
 `infra/theme_store.py` reads the active theme by:

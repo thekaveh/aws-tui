@@ -40,6 +40,11 @@ from aws_tui.vm.messages import (
 from aws_tui.vm.paging import BoundedTokenPagedComposition
 from aws_tui.vm.service_diagnostics import report_unexpected_service_error
 
+
+class GlueSelectionSuperseded(ValueError):
+    """An exact table open lost ownership to a later catalog selection."""
+
+
 _DISCOVERY_PAGE_LIMIT = 64
 _DISCOVERY_EMPTY_PAGE_LIMIT = 3
 _MAX_DATABASE_ITEMS = 1_000
@@ -511,6 +516,12 @@ class GlueCatalogVM:
         if not self._is_alive():
             raise ValueError("table cannot be opened")
 
+        request_epoch = self._selection_request_epoch
+
+        def ensure_current() -> None:
+            if not self._is_alive() or request_epoch != self._selection_request_epoch:
+                raise GlueSelectionSuperseded("table selection was superseded")
+
         def database_available() -> bool:
             return any(
                 row
@@ -528,12 +539,15 @@ class GlueCatalogVM:
             item_count=lambda: len(self.databases),
             load_more=self.load_more_databases,
         )
+        ensure_current()
         if database_discovery is None:
             raise ProviderError("Glue catalog discovery did not complete")
         if not database_discovery:
             raise ValueError("table is unavailable in the active Glue source")
         if self._selected_database_name != ref.database_name:
+            request_epoch += 1
             await self.select_database(ref.database_name)
+            ensure_current()
 
         def table_available() -> bool:
             return any(row.ref == ref for row in self.tables)
@@ -545,12 +559,19 @@ class GlueCatalogVM:
             item_count=lambda: len(self.tables),
             load_more=self.load_more_tables,
         )
+        ensure_current()
         if table_discovery is None:
             raise ProviderError("Glue catalog discovery did not complete")
         if not table_discovery:
             raise ValueError("table is unavailable in the active Glue source")
+        request_epoch += 1
         await self.select_table(ref.table_name)
-        if self._selected_table_name != ref.table_name:
+        ensure_current()
+        selected_ref = next(
+            (row.ref for row in self.tables if row.ref.table_name == self._selected_table_name),
+            None,
+        )
+        if self._selected_database_name != ref.database_name or selected_ref != ref:
             raise ValueError("table is unavailable in the active Glue source")
 
     async def _load_until_discovered(
@@ -1051,4 +1072,4 @@ class GlueCatalogVM:
         self._on_property_changed.on_next(property_name)
 
 
-__all__ = ["GlueCatalogVM"]
+__all__ = ["GlueCatalogVM", "GlueSelectionSuperseded"]

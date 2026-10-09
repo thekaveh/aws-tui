@@ -29,7 +29,7 @@ def test_current_docs_describe_in_session_credential_recovery() -> None:
     connections = _text("docs/connections.md")
     s3 = _text("docs/services/s3.md")
 
-    assert "`a` retries the active source in place" in readme
+    assert "press `a` to retry the active source in place" in readme
     assert "**Retry active source credentials**" in keybindings
     assert "aws-tui never runs the AWS CLI or writes credentials" in connections
     assert "expired SSO, missing credentials, access denied, and network failures" in connections

@@ -1,8 +1,8 @@
 # Adding a New Service
 
-> The current tree ships `s3`, `emr-serverless`, `glue`, and `athena`;
-> Glue and Athena are linked by immutable table-navigation messages, and EMR includes
-> the read-only browser, job-run logs, and clone-job-run modal. This
+> The current tree ships `s3`, `emr-serverless`, `glue`, and `athena`.
+> Glue and Athena are linked by immutable table-navigation messages.
+> EMR includes the read-only browser, job-run logs, and clone-job-run modal. This
 > doc is the pattern for the
 > next ones (EC2, IAM, Lambda, ...). For richer references than S3
 > (dedicated domain client + per-service VM subtree + per-service
@@ -13,10 +13,7 @@
 
 aws-tui's service-plugin spine keeps service construction additive: a
 new folder under `src/aws_tui/services/<name>/` and one registration
-call in `composition.py`. Today the app shell still owns the view
-factory, so non-`DualPane` services also need an explicit route in
-`AwsTuiApp._mount_initial_service_view` / `_mount_service_view` until
-the planned service-owned view-factory contract lands.
+call in `composition.py`. Today the app shell still owns the view factory. Non-`DualPane` services also need an explicit route in `AwsTuiApp._mount_initial_service_view` / `_mount_service_view` until the planned service-owned view-factory contract lands.
 
 ## 1. The `Service` protocol
 Declared in `src/aws_tui/vm/services_protocol.py`, re-exported from
@@ -37,11 +34,7 @@ class Service(Protocol):
 ```
 
 The `descriptor` is a `ClassVar` so the registry can introspect it
-without instantiating. `build_vm` is structurally typed as
-`-> Any` on the protocol so the `vm/` layer never has to import
-`vmx.ComponentVM` just to spell the bound; concrete services return
-whatever VMx VM they actually host (`S3Service.build_vm` returns
-`DualPaneVM`, see the §2 template below). `ContentHostVM` only
+without instantiating. `build_vm` is structurally typed as `-> Any` on the protocol. Thus, the `vm/` layer never has to import `vmx.ComponentVM` just to spell the bound. Concrete services return whatever VMx VM they actually host (`S3Service.build_vm` returns `DualPaneVM`, see the §2 template below). `ContentHostVM` only
 needs a `construct → destruct → dispose` surface.
 
 ## 2. Steps
@@ -99,11 +92,7 @@ needs a `construct → destruct → dispose` surface.
    it from both app mount paths.
 
 5. **Reuse existing VM families** where possible:
-    - For storage-like services (lists with hierarchy): the file-
-      manager VMs in `vm/file_manager/` work as-is — write a new
-      `FileSystemProvider` (see `src/aws_tui/domain/filesystem.py`
-      for the protocol, and §3 / §4 of the design spec for the
-      architectural shape) and reuse `PaneVM` + `DualPaneVM`.
+    - For storage-like services (lists with hierarchy), the file-manager VMs in `vm/file_manager/` work as-is. Write a new `FileSystemProvider` and reuse `PaneVM` + `DualPaneVM`. See `src/aws_tui/domain/filesystem.py` for the protocol, and §3 / §4 of the design spec for the architectural shape.
     - For flat resource lists (EC2 instances, IAM users): write a new
       `ListPaneVM` under `vm/<service>/` and a corresponding widget
       family under `ui/widgets/<service>/`.
@@ -112,11 +101,11 @@ needs a `construct → destruct → dispose` surface.
       selector. `ContextPicker` and specialized wrappers such as EMR's
       `ApplicationPicker` must compose `OverlayOptionList`, retain their compact
       trigger footprint while open, and leave parent and sibling regions
-      unchanged. Keep that transient overlay geometry in the Textual view.
+      unchanged.
+
+      Keep that transient overlay geometry in the Textual view.
       Extend `FocusCoordinatorVM` instead of creating another focus authority.
-      Add an enclosing context frame only when multiple dependent controls form
-      one coherent region; a standalone source control does not require a
-      second frame.
+      Add an enclosing context frame only when multiple dependent controls form one coherent region. A standalone source control does not require a second frame.
 
 6. **Layer rules.** Services live one layer above domain, so they may
     import from `domain/`, `infra/`, and the public VM surface
@@ -140,7 +129,9 @@ needs a `construct → destruct → dispose` surface.
    effect / execution / prerequisite tooltip metadata, and deterministic
    fitting priorities. The Commands pane remains one content row; reserve the
    protected `[:] more` command-palette hint and `[q] quit` at narrow widths,
-   while hidden actions remain bound and palette-visible. Publish immutable
+   while hidden actions remain bound and palette-visible.
+
+   Publish immutable
    typed requests for app-level cross-service state; the composition root owns
    delivery and Textual integration. Buttons, keys, and palette entries must
    dispatch the same registered action rather than calling a VM through a
@@ -148,16 +139,14 @@ needs a `construct → destruct → dispose` surface.
 
 For cross-service links, publish an immutable VM message carrying plain
 identifiers and source identity. The app composition root resolves the
-destination connection and owns `RootVM` switching plus Textual mounting.
-`OpenS3LocationRequest` carries connection, region, URI, pane, and reveal
+destination connection and owns `RootVM` switching plus Textual mounting. `OpenS3LocationRequest` carries connection, region, URI, pane, and reveal
 intent. `OpenAthenaTableRequest` and `OpenGlueTableRequest` carry a shared
-`TableRef`; the Athena request may add a non-negative snapshot ID. `app.py`
+`TableRef`; the Athena request may add a non-negative snapshot ID.
+
+`app.py`
 rejects missing connections or region mismatches, serializes table handoffs,
 and reuses registered service factories. Do not pass clients, VMs, widgets,
-raw SDK responses, or credentials in cross-service messages. A navigation
-handoff may prefill destination state, but it must document whether it executes
-or mutates anything; Glue's `Shift+Q` and `Shift+V` actions prefill bounded
-Athena SQL and do not execute it.
+raw SDK responses, or credentials in cross-service messages. A navigation handoff may prefill destination state, but it must document whether it executes or mutates anything. Glue's `Shift+Q` and `Shift+V` actions prefill bounded Athena SQL and do not execute it.
 
 ## 3. Layer rules cheat-sheet for services
 A service module **may** import from:
@@ -285,9 +274,7 @@ query-service reference:
   connections. A `build_vm(connection)` call makes a fresh `AthenaPageVM`,
   while `ServiceSelectionStore` retains only connection- and region-scoped
   UI selections.
-- `domain/athena.py` performs one paginated AWS request at a time and maps
-  workgroups, catalogs, databases, tables, query history/detail, runtime
-  statistics, result pages, named queries, and prepared statements. It owns
+- `domain/athena.py` performs one paginated AWS request at a time. It maps workgroups, catalogs, databases, tables, query history/detail, runtime statistics, result pages, named queries, and prepared statements. It owns
   the `start_query_execution` / `stop_query_execution` boundary; views and
   VMs never receive raw boto responses.
 - `domain/sql_policy.py` parses one Athena-dialect statement before dispatch.

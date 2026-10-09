@@ -468,12 +468,17 @@ class GlueIcebergView(DeferredWorkerMixin, Widget):
                 if placeholder is not None and preview.state is not PaneState.IDLE
                 else ""
             )
+            status.tooltip = Text(preview.error_text) if preview.error_text else None
             status.set_class(preview.state is PaneState.FORBIDDEN, "-warning")
             status.set_class(preview.state is PaneState.ERROR, "-error")
             snapshot_suffix = (
                 f" · snapshot {preview.snapshot_id}" if preview.snapshot_id is not None else ""
             )
-            footer.update(f"{len(preview.rows)} rows · limit {preview.limit}{snapshot_suffix}")
+            footer.update(
+                Text(preview.error_text)
+                if preview.state is PaneState.ERROR and preview.error_text
+                else f"{len(preview.rows)} rows · limit {preview.limit}{snapshot_suffix}"
+            )
             more.disabled = not preview.has_more or preview.state is PaneState.LOADING
             retry.display = preview.state in {
                 PaneState.AUTH_REQUIRED,
@@ -495,6 +500,7 @@ class GlueIcebergView(DeferredWorkerMixin, Widget):
                 if placeholder is not None and self._vm.state is not PaneState.IDLE
                 else ""
             )
+            status.tooltip = Text(self._vm.error_text) if self._vm.error_text else None
             status.set_class(self._vm.state is PaneState.FORBIDDEN, "-warning")
             status.set_class(self._vm.state is PaneState.ERROR, "-error")
             suffix = " · more available" if self._vm.has_more else ""

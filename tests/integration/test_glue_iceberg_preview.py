@@ -24,6 +24,7 @@ from collections.abc import Callable
 from pathlib import Path
 
 import pytest
+from textual.geometry import Region
 from textual.widgets import Button, DataTable, Static
 
 from aws_tui.app import AwsTuiApp
@@ -315,7 +316,7 @@ async def test_peek_pane_shows_the_install_line_when_the_engine_is_missing(
             )
             await wait_until(
                 lambda: (
-                    "pip install aws-tui[duckdb]"
+                    'pip install "aws-tui[duckdb] @ git+https://github.com/thekaveh/aws-tui.git"'
                     in str(app.query_one("#glue-iceberg-status", Static).render())
                     and app.query_one("#glue-iceberg-retry", Button).display
                     and not app.query_one("#glue-iceberg-retry", Button).disabled
@@ -324,13 +325,29 @@ async def test_peek_pane_shows_the_install_line_when_the_engine_is_missing(
             )
 
             assert vm.catalog.iceberg.preview.error_text == (
-                "local preview needs DuckDB: pip install aws-tui[duckdb]"
+                'local preview needs DuckDB: pip install "aws-tui[duckdb] @ git+https://github.com/thekaveh/aws-tui.git"'
             )
             status = app.query_one("#glue-iceberg-status", Static)
-            assert "pip install aws-tui[duckdb]" in str(status.render())
+            assert (
+                'pip install "aws-tui[duckdb] @ git+https://github.com/thekaveh/aws-tui.git"'
+                in str(status.render())
+            )
             retry = app.query_one("#glue-iceberg-retry", Button)
             assert retry.display
             assert not retry.disabled
+            await pilot.pause()
+            footer = app.query_one("#glue-iceberg-footer", Static)
+            visible = "".join(
+                line.text
+                for line in footer.render_lines(Region(0, 0, footer.size.width, footer.size.height))
+            )
+            assert "git+https://github.com/thekaveh/aws-tui.git" in visible.replace(" ", "")
+            assert str(status.tooltip) == vm.catalog.iceberg.preview.error_text
+            # Returning to metadata clears the stale preview recovery hint.
+            assert await pilot.click("#glue-iceberg-tab-snapshots")
+            await pilot.pause()
+            assert status.tooltip is None
+            assert "pip install" not in str(footer.render())
     finally:
         with contextlib.suppress(Exception):
             ctx.root_vm.dispose()
