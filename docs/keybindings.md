@@ -185,13 +185,15 @@ same size.
 Glue's forward focus order is:
 
 - **Catalog:** Source, view tabs, databases, tables, table detail, then every
-  visible and enabled Iceberg tab/control, and the navigation rail.
+    visible and enabled Iceberg tab/control, and the navigation rail.
 
-  The seventh Iceberg tab, **Peek**, previews table rows through a local DuckDB engine. It needs the optional `duckdb` extra and an AWS profile connection. It is absent without an AWS profile connection, following the same Iceberg-only visibility gating as the six metadata tabs. When the extra is missing, the tab stays present and selectable — never disabled. Choosing it is how the install prompt is reached.
+    The seventh Iceberg tab, **Peek**, previews table rows through a local DuckDB engine. It needs the optional `duckdb` extra and an AWS profile connection. It is absent without an AWS profile connection, following the same Iceberg-only visibility gating as the six metadata tabs. When the extra is missing, the tab stays present and selectable — never disabled. Choosing it is how the install prompt is reached.
+
 - **Jobs:** Source, Run state, view tabs, jobs, runs, job detail, and the
-  navigation rail.
+    navigation rail.
+
 - **Crawlers:** Source, Crawler state, view tabs, crawlers, crawler detail, and
-  the navigation rail.
+    the navigation rail.
 
 Disabled Iceberg load-more/retry/time-travel controls are omitted. `Shift+Tab`
 walks the same active ring in reverse.

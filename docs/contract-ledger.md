@@ -279,7 +279,7 @@ This section also records one *new* integration point rather than a moved pin: t
 
 | Integration point | Pinned version / ref | Consumed contract | Verification method |
 |---|---:|---|---|
-| Python runtime and AWS SDK graph | `aioboto3==15.5.0`, `aiobotocore==2.25.1`, `botocore==1.40.61`, `textual==8.2.8`, `vmx==3.23.0`, `reactivex==5.1.0`, `rich==15.0.0`, `keyring==25.7.0`, `tomli-w==1.2.0`, `platformdirs==4.11.10`, `sqlglot==30.18.0`, `anyio==4.15.1`, and `aiofiles==25.1.0` from `uv.lock` | VMx and the other runtime packages use public facades or documented module paths. The Textual compatibility adapter uses exact-version private hooks (`_bindings`, `_pre_process`, `_handle_exception`, `Screen._clear_tooltip`, and `_xterm_parser.XTermParser`) because Textual 8.2.8 has no equivalent public binding-replacement, lifecycle-recovery, tooltip-dismissal, or input-parser surface; `Screen._clear_tooltip` is the routine Textual itself calls from `Screen._on_screen_suspend`, and it is invoked here on `AppBlur`, which Textual 8.2.8 leaves uncovered. The same `AppBlur` handler releases a held mouse capture through the public `App.capture_mouse(None)`: `App._watch_app_focus` drops focus without it, and `ScrollBar._on_mouse_capture` pairs `App._realtime_animation_begin` — which calls `gc.disable()` under `PAUSE_GC_ON_SCROLL` — only with a `MouseRelease`. `XTermParser` is subclassed for the bracketed-paste guard: `XTermParser.parse` strands `bracketed_paste` set forever when the closing `\x1b[201~` is split by more than `constants.ESCAPE_DELAY`, because the `ParseTimeout` path abandons the partial sequence without returning its bytes to `paste_buffer`, so the app keeps repainting while every key is swallowed. `App.get_driver_class` therefore wraps the selected driver, and the wrapper rebinds the module-level `XTermParser` name each Textual driver builds its parser from (`linux_driver.py:426`, `linux_inline_driver.py:129`, `web_driver.py:187`, `win32.py:230`) rather than forking an input loop; only `feed`, `tick` and `parse_mouse_code` are overridden. Bracketed paste stays enabled. `textual.constants.SMOOTH_SCROLL` is additionally rebound to `False` in `main()` before `App.run` whenever the user has not exported `TEXTUAL_SMOOTH_SCROLL`: `constants` reads the environment once at import time so setting the variable after `aws_tui.app` has imported Textual does nothing, while `_xterm_parser.py:319-323` resolves the name through the module at parse time. That flag has exactly one use site in Textual 8.2.8 — acceptance of the `mode_id == "2048"` in-band window-resize report — so clearing it restores the `SIGWINCH` fallback that `drivers/linux_driver.py:246-248` makes a no-op once in-band resize is negotiated. The branch it gates reaches one hop further, and the cost is named rather than assumed to be nil: `App.supports_smooth_scrolling` is assigned only from the resulting `InBandWindowResize` message (`app.py:5016-5019`) and read only at `scrollbar.py:395`, so a scrollbar drag animates towards the pointer instead of tracking it; and `LinuxDriver._enable_mouse_pixels` (`linux_driver.py:474-482`, writing `\x1b[?1016h` at `:145-150`) is reachable only from that branch, so mouse coordinates stay cell-granular. Both losses are Textual's own behaviour on iTerm2 and Terminal.app, which never negotiate 2048, and on Windows, whose driver has no in-band resize path. The in-band resize *report* handler (`_xterm_parser.py:271-283`) sets `mouse_pixels` unconditionally — gated on neither `SMOOTH_SCROLL` nor `IS_ITERM` — so a mode 2048 left set by an earlier app would otherwise flip the parser into pixel coordinates that mode 1016 never negotiated, dividing every SGR click by the pixel/cell ratio; `CellMouseXTermParser.parse_mouse_code` keeps the two halves in step. An explicit `TEXTUAL_SMOOTH_SCROLL` wins in either direction. The exact Textual pin prevents unreviewed drift, and is the runtime requirement `pyproject.toml` declares, not merely a development constraint: `uv pip install --resolution lowest-direct .` resolves `textual==8.2.8`, so the shipped floor and the tested version are the same. VMx owns command admission/cancellation, modal focus restoration, immutable form construction, observable state, component lifecycle, filtering, and paging. AWS operations and request members are validated against the locked Botocore models. | Full unit, integration, snapshot, and E2E tiers; minimum-direct-dependency tests; import/layer checks; `tests/integration/test_app_blur_cleanup.py` pins the tooltip and mouse-capture teardown on `AppBlur` and the balanced realtime-animation count; `tests/unit/ui/test_paste_guard.py` reproduces the upstream wedge against the stock parser and pins the module-level parser name the swap depends on, and `tests/integration/test_paste_guard_recovery.py` drives split-marker bytes into a live app and asserts it still answers a key; `tests/unit/ui/test_terminal_protocol.py` reproduces both the upstream 2048 negotiation and the stale-mode pixel-coordinate collapse against the stock parser, pins the `SIGWINCH` gate, the single `SMOOTH_SCROLL` use site and the two indirect consumers of the branch it gates (`app.py` → `scrollbar.py`, and `_enable_mouse_pixels` → `\x1b[?1016h`) in the installed package, and asserts the default is settled before `App.run`; VMx compatibility regressions for command cancellation, retired pager generations, form validation, and modal restoration; source-derived Botocore operation and input-member tests. |
+| Python runtime and AWS SDK graph | `aioboto3==15.5.0`, `aiobotocore==2.25.1`, `botocore==1.40.61`, `textual==8.2.8`, `vmx==3.23.0`, `reactivex==5.1.0`, `rich==15.0.0`, `keyring==25.7.0`, `tomli-w==1.2.0`, `platformdirs==4.11.10`, `sqlglot==30.18.0`, `anyio==4.15.1`, and `aiofiles==25.1.0` from `uv.lock` | Public runtime facades and locked Botocore models define the consumed APIs. The [runtime and Textual compatibility contracts](#81-runtime-and-textual-compatibility-contracts) below record private hooks, recovery behaviour, platform tradeoffs, and pin requirements. | Full unit, integration, snapshot, and E2E tiers; minimum-direct-dependency tests; import/layer checks; `tests/integration/test_app_blur_cleanup.py` pins the tooltip and mouse-capture teardown on `AppBlur` and the balanced realtime-animation count; `tests/unit/ui/test_paste_guard.py` reproduces the upstream wedge against the stock parser and pins the module-level parser name the swap depends on, and `tests/integration/test_paste_guard_recovery.py` drives split-marker bytes into a live app and asserts it still answers a key; `tests/unit/ui/test_terminal_protocol.py` reproduces both the upstream 2048 negotiation and the stale-mode pixel-coordinate collapse against the stock parser, pins the `SIGWINCH` gate, the single `SMOOTH_SCROLL` use site and the two indirect consumers of the branch it gates (`app.py` → `scrollbar.py`, and `_enable_mouse_pixels` → `\x1b[?1016h`) in the installed package, and asserts the default is settled before `App.run`; VMx compatibility regressions for command cancellation, retired pager generations, form validation, and modal restoration; source-derived Botocore operation and input-member tests. |
 | VMx 3.23 compatibility and specialization | `vmx==3.23.0` from `uv.lock`; runtime requirement `vmx>=3.23.0,<4.0.0` | `FocusCoordinatorVM` delegates modal save/restore behavior to public `DiscriminatorVM.modal_open()` / `modal_close()`. `S3ConnectionFormVM` supplies complete field and model validation through `FormVMBuilder` at construction time. Athena drains public `AsyncRelayCommand.is_executing` admission state after cancellation and tracks the provider task behind nested command execution so shutdown waits for cancellation-resistant I/O. No VM reaches into VMx private fields. | Focus, Settings form, Athena query/results, VMx smoke, mypy, and lifecycle tests run against the locked package. The dated VMx 3.23 maintenance report records adopted and rejected candidates plus production-line metrics. |
 | Bounded AWS operational state | Botocore service contracts above plus internal provider-error taxonomy | EMR requests at most 50 applications or job runs per page; application discovery stops above 100 pages or 1,000 records, and bulk job-run discovery stops above 100 pages. User-driven Glue Catalog, Glue Jobs, Glue Crawlers, and EMR job-run collections stop at 1,000 items through a bounded VMx token-pager specialization. Athena history, saved-query, and context collections stop at 1,000 items, while result rows stop at 10,000, through an app-owned bounded snapshot pager that retains VMx commands. A visible, snapshot-stable safety-limit state replaces the ordinary load-more affordance when a ceiling ends pagination. Log discovery classifies only the run-relative suffix so user prefixes cannot impersonate worker markers. Recursive S3 deletion stops above 100 listing pages or 10,000 objects and reports how many objects were already removed. S3 `SlowDown` and `RequestLimitExceeded` responses map to `ThrottledError`; service availability and transport failures map to `ProviderUnreachableError`. | Exact request-shape and pager tests assert page size, page ceilings, collection ceilings, final-page clipping, refresh and snapshot preservation, visible truncation state, partial-delete diagnostics, repeated-token rejection, run-relative log classification, and throttling versus reachability behavior. |
 | Bounded local and cross-provider state | Internal `InMemoryFS` and `CrossFs` contracts | Demo objects are limited to 100 MiB each and 256 MiB in aggregate, and a directory listing fails closed above 10,000 entries. Recursive cross-provider copy and move traversals stop above 10,000 entries or 128 levels; owned staging data is cleaned after a limit failure. | In-memory filesystem boundary tests cover known-size and streamed writes, overwrite accounting, and listing ceilings. Cross-filesystem tests cover entry/depth rejection and stage cleanup. |
@@ -308,6 +308,95 @@ PutObject
 UploadPart
 UploadPartCopy
 ```
+
+### 8.1. Runtime and Textual compatibility contracts
+
+**Runtime ownership and pins**
+
+VMx and the other runtime packages use public facades or documented module paths.
+VMx owns command admission/cancellation, modal focus restoration, immutable form
+construction, observable state, component lifecycle, filtering, and paging.
+AWS operations and request members are validated against the locked Botocore models.
+
+The exact Textual pin prevents unreviewed drift. It is a runtime requirement in
+`pyproject.toml`, not merely a development constraint.
+`uv pip install --resolution lowest-direct .` resolves `textual==8.2.8`, so the
+shipped floor and tested version are the same.
+
+**Private compatibility hooks**
+
+The Textual compatibility adapter uses `_bindings`, `_pre_process`,
+`_handle_exception`, `Screen._clear_tooltip`, and `_xterm_parser.XTermParser`.
+Textual 8.2.8 has no equivalent public binding-replacement, lifecycle-recovery,
+tooltip-dismissal, or input-parser surface.
+
+Textual calls `Screen._clear_tooltip` from `Screen._on_screen_suspend`.
+The app calls that same routine on `AppBlur`, which Textual 8.2.8 leaves uncovered.
+
+**Mouse capture and animation cleanup**
+
+The same `AppBlur` handler releases held mouse capture through public
+`App.capture_mouse(None)`. `App._watch_app_focus` drops focus without releasing capture.
+
+`ScrollBar._on_mouse_capture` calls `App._realtime_animation_begin`, which calls
+`gc.disable()` under `PAUSE_GC_ON_SCROLL`.
+Textual pairs that animation start only with `MouseRelease`.
+
+**Bracketed-paste recovery**
+
+`XTermParser` is subclassed for the bracketed-paste guard.
+`XTermParser.parse` leaves `bracketed_paste` set forever when the closing
+`\x1b[201~` is split by more than `constants.ESCAPE_DELAY`.
+
+The `ParseTimeout` path abandons the partial sequence without returning its bytes
+to `paste_buffer`. The app then keeps repainting while every key is swallowed.
+
+`App.get_driver_class` wraps the selected driver instead of forking an input loop.
+The wrapper rebinds the module-level `XTermParser` name that each Textual driver
+uses to build its parser.
+
+Those construction sites are `linux_driver.py:426`, `linux_inline_driver.py:129`,
+`web_driver.py:187`, and `win32.py:230`.
+Only `feed`, `tick`, and `parse_mouse_code` are overridden. Bracketed paste stays enabled.
+
+**Resize negotiation and environment precedence**
+
+Unless the user exported `TEXTUAL_SMOOTH_SCROLL`, `main()` rebinds
+`textual.constants.SMOOTH_SCROLL` to `False` before `App.run`.
+An explicit `TEXTUAL_SMOOTH_SCROLL` wins in either direction.
+
+`constants` reads the environment once at import time.
+Setting the variable after `aws_tui.app` has imported Textual does nothing.
+`_xterm_parser.py:319-323` resolves the name through the module at parse time.
+
+In Textual 8.2.8, that flag has exactly one use site: accepting the
+`mode_id == "2048"` in-band window-resize report.
+Clearing it restores the `SIGWINCH` fallback, which
+`drivers/linux_driver.py:246-248` makes a no-op after in-band resize negotiation.
+
+**Resize tradeoffs**
+
+`App.supports_smooth_scrolling` is assigned only from the resulting
+`InBandWindowResize` message at `app.py:5016-5019`. It is read only at `scrollbar.py:395`.
+A scrollbar drag therefore animates towards the pointer instead of tracking it.
+
+`LinuxDriver._enable_mouse_pixels` is reachable only from that same branch.
+It writes `\x1b[?1016h`; see `linux_driver.py:474-482` and `:145-150`.
+Without that branch, mouse coordinates stay cell-granular.
+
+Both losses are Textual's own behaviour on iTerm2 and Terminal.app, which never
+negotiate 2048. They also apply on Windows, whose driver has no in-band resize path.
+
+**Stale resize modes and mouse coordinates**
+
+The in-band resize report handler at `_xterm_parser.py:271-283` sets `mouse_pixels`
+unconditionally. Neither `SMOOTH_SCROLL` nor `IS_ITERM` gates it.
+
+Mode 2048 left set by an earlier app would otherwise switch the parser to pixel
+coordinates without mode 1016 negotiation.
+This divides every SGR click by the pixel/cell ratio.
+`CellMouseXTermParser.parse_mouse_code` keeps the two halves in step.
+
 
 ## 9. Known model gaps
 
@@ -441,7 +530,7 @@ VMx and the other runtime packages use public facades or documented module paths
 Textual remains pinned to `8.2.8` because the application isolates several private
 compatibility hooks.
 
-The unchanged [Textual contracts in section 8](#8-2026-09-26-dependency-maintenance-pass)
+The unchanged [Textual contracts in section 8.1](#81-runtime-and-textual-compatibility-contracts)
 cover dynamic bindings, lifecycle error recovery, tooltip and mouse cleanup,
 bracketed-paste parsing, and in-band resize behavior. Local regression tests
 verify those adapters against the installed source. Runtime floors retain the
