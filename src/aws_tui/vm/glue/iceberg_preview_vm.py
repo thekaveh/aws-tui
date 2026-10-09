@@ -81,7 +81,7 @@ _OUTCOME_TABLE: dict[DuckDbOutcome, tuple[PaneState, str | None]] = {
     DuckDbOutcome.NOT_ICEBERG: (PaneState.ERROR, "not a readable Iceberg table"),
     DuckDbOutcome.ENGINE_MISSING: (
         PaneState.ERROR,
-        "local preview needs DuckDB: pip install aws-tui[duckdb]",
+        'local preview needs DuckDB: pip install "aws-tui[duckdb] @ git+https://github.com/thekaveh/aws-tui.git"',
     ),
     DuckDbOutcome.FAILED: (PaneState.ERROR, "local preview failed"),
 }

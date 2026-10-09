@@ -132,6 +132,7 @@ from aws_tui.vm.emr_serverless.page_vm import EmrServerlessPageVM
 from aws_tui.vm.file_manager.dual_pane_vm import DualPaneVM, FocusedPane
 from aws_tui.vm.file_manager.pane_vm import PaneState
 from aws_tui.vm.file_manager.s3_object_details_vm import S3ObjectDetailsVM
+from aws_tui.vm.glue.catalog_vm import GlueSelectionSuperseded
 from aws_tui.vm.glue.iceberg_vm import IcebergView
 from aws_tui.vm.glue.page_vm import GluePageVM, GlueView
 from aws_tui.vm.messages import (
@@ -174,6 +175,7 @@ class _StagedServiceRecovery:
     vm: object = field(repr=False)
     commit_selection: Callable[[], None] = field(repr=False)
     diagnostics: tuple[CapturedServiceDiagnostic, ...] = field(repr=False)
+    live_state_is_current: Callable[[], bool] = field(repr=False)
 
 
 @dataclass(frozen=True, slots=True)
@@ -810,6 +812,7 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
             Widget, tuple[Container, tuple[str, int] | None]
         ] = weakref.WeakKeyDictionary()
         self._content_mount_recovering: weakref.WeakSet[Widget] = weakref.WeakSet()
+        self._recovery_mount_errors: dict[Widget, list[Exception]] = {}
         self._shutdown_task: asyncio.Task[None] | None = None
         self._shutdown_complete = False
         self._shutdown_errors: tuple[tuple[str, str], ...] = ()
@@ -3434,7 +3437,7 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
             focused = self.focused
             if isinstance(focused, TextArea):
                 if not focused.read_only:
-                    focused.insert("\n")
+                    focused.replace("\n", *focused.selection, maintain_selection_offset=False)
                 return
             if isinstance(self.screen, CrashModal):
                 self.screen.action_default()
@@ -3607,6 +3610,8 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
 
     async def action_authenticate(self) -> None:
         """Retry the active source after credentials are repaired externally."""
+        if self._shutdown_task is not None or self._service_navigation_closed:
+            return
         self.record_action("auth.authenticate")
         task = self._auth_recovery_task
         if task is None or task.done():
@@ -3671,6 +3676,7 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
         service_id = root.content_host.current_id
         hosted = root.content_host.current
         revision = self._source_revision
+        navigation_owner = self._service_navigation_owner
         if connection is None or service_id not in _SOURCE_SERVICE_IDS or hosted is None:
             notifications.advise(
                 root.chrome.toast_stack,
@@ -3772,11 +3778,31 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
 
         if isinstance(recovery, _StagedServiceRecovery):
             try:
-                await self._commit_staged_service_recovery(
-                    recovery,
-                    connection=resolved,
-                    service_id=service_id,
-                )
+
+                def is_current() -> bool:
+                    return (
+                        not self._service_navigation_closed
+                        and self._service_navigation_owner == navigation_owner
+                        and recovery.live_state_is_current()
+                        and self._credential_recovery_is_current(
+                            connection=connection,
+                            revision=revision,
+                            service_id=service_id,
+                            hosted=hosted,
+                        )
+                    )
+
+                async with self._service_navigation_lock:
+                    if not is_current():
+                        await self._discard_staged_service_recovery(recovery.vm)
+                        return
+                    if not await self._commit_staged_service_recovery(
+                        recovery,
+                        connection=resolved,
+                        service_id=service_id,
+                        is_current=is_current,
+                    ):
+                        return
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
@@ -3851,6 +3877,23 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
         ):
             return None
 
+        try:
+            retained_state = self._service_recovery_retained_state(hosted)
+        except ValueError:
+            notifications.advise(
+                self._app_ctx.root_vm.chrome.toast_stack,
+                subject="Auth",
+                message="Wait for the active operation to finish before retrying credentials.",
+                toast_id="credential-recovery-busy",
+            )
+            return None
+
+        def live_state_is_current() -> bool:
+            try:
+                return self._service_recovery_retained_state(hosted) == retained_state
+            except ValueError:
+                return False
+
         athena_snapshot: AthenaPageSnapshot | None = None
         athena_fallback_sql: str | None = None
         if isinstance(hosted, AthenaPageVM):
@@ -3919,7 +3962,50 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
             vm=candidate,
             commit_selection=recovery_vm.commit_selection,
             diagnostics=tuple(diagnostics),
+            live_state_is_current=live_state_is_current,
         )
+
+    @staticmethod
+    def _service_recovery_retained_state(hosted: object) -> object:
+        """Fence user state and active writes while an off-screen read awaits."""
+        if isinstance(hosted, AthenaPageVM):
+            query = hosted.query
+            if (
+                query.is_executing
+                or query.is_submitting
+                or query.owns_active_query
+                or query.is_context_resolving
+                or query.execute_command.is_executing
+            ):
+                raise ValueError("Athena recovery is unavailable during query work")
+            try:
+                return hosted.export_snapshot()
+            except ValueError:
+                # Initial reads can leave incomplete context. Retain the
+                # still-editable SQL and selection instead of treating busy
+                # execution as an incomplete page.
+                return (
+                    hosted.context,
+                    query.sql,
+                    hosted.active_view,
+                    hosted.history.selected_execution_id,
+                    hosted.saved.selected_kind,
+                    hosted.saved.selected_query_id,
+                    hosted.results.execution_id,
+                    query.snapshot_generation,
+                )
+        if isinstance(hosted, GluePageVM):
+            preview = hosted.catalog.iceberg.preview
+            return (
+                AwsTuiApp._capture_glue_page_snapshot(hosted),
+                preview.limit,
+                preview.snapshot_id,
+            )
+        if isinstance(hosted, EmrServerlessPageVM):
+            if hosted.cancel_busy:
+                raise ValueError("EMR recovery is unavailable during cancellation")
+            return (hosted.export_credential_recovery_snapshot(), hosted.job_run_logs.following)
+        raise TypeError("unsupported credential recovery page")
 
     async def _discard_staged_service_recovery(self, candidate: object) -> None:
         """Drain and dispose an off-screen candidate that was not adopted."""
@@ -3938,7 +4024,8 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
         *,
         connection: Connection,
         service_id: str,
-    ) -> None:
+        is_current: Callable[[], bool] | None = None,
+    ) -> bool:
         """Adopt a verified candidate and mount its matching view."""
         ctx = self._app_ctx
         replacement: Widget | None = None
@@ -3963,13 +4050,24 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
             staging_host.styles.width = "100%"
             staging_host.styles.height = "100%"
             staging_host.display = False
+            errors: list[Exception] = []
+            self._recovery_mount_errors[staging_host] = errors
             await host.mount(staging_host)
+            if errors:
+                raise errors[0]
+            if is_current is not None and not is_current():
+                await staging_host.remove()
+                await self._discard_staged_service_recovery(recovery.vm)
+                return False
         except BaseException:
-            if staging_host is not None and staging_host.is_mounted:
+            if staging_host is not None and staging_host.parent is not None:
                 with contextlib.suppress(Exception):
                     await staging_host.remove()
             await self._discard_staged_service_recovery(recovery.vm)
             raise
+        finally:
+            if staging_host is not None:
+                self._recovery_mount_errors.pop(staging_host, None)
 
         prior_children = tuple(child for child in host.children if child is not staging_host)
         try:
@@ -3999,6 +4097,7 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
                 )
         if service_id in {"glue", "athena", "emr-serverless"}:
             self._recompute_hint_disables()
+        return True
 
     async def _recover_s3_credentials(
         self,
@@ -5774,6 +5873,9 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
                 await target.open_table(ref)
             await self.wait_for_refresh()
             await self._restore_superseded_table_handoff(generation, snapshot)
+        except GlueSelectionSuperseded:
+            # A newer catalog choice owns the mounted destination.
+            return
         except asyncio.CancelledError:
             if primed_athena is not None:
                 primed_athena.abandon_table_query_prime()
@@ -6924,15 +7026,32 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
         if hosts is None:
             return None
         recovering = getattr(self, "_content_mount_recovering", ())
+        replacement = self._lifecycle_mount_widget(
+            error, tuple(widget for widget in hosts if widget not in recovering)
+        )
+        if replacement is None:
+            return None
+        host, navigation_owner = hosts[replacement]
+        return replacement, host, navigation_owner
+
+    @staticmethod
+    def _lifecycle_mount_widget(error: Exception, candidates: tuple[Widget, ...]) -> Widget | None:
+        """Find the registered ancestor of a failing Textual lifecycle widget."""
         frames: list[Any] = []
         traceback = error.__traceback__
-        saw_pre_process = False
+        saw_lifecycle = False
         while traceback is not None:
             frame = traceback.tb_frame
             frames.append(frame)
-            saw_pre_process |= frame.f_code.co_name == "_pre_process"
+            saw_lifecycle |= (
+                frame.f_globals.get("__name__") == "textual.message_pump"
+                and frame.f_code.co_name == "_pre_process"
+            ) or (
+                frame.f_globals.get("__name__") == "textual.widget"
+                and frame.f_code.co_name == "_compose"
+            )
             traceback = traceback.tb_next
-        if not saw_pre_process:
+        if not saw_lifecycle:
             return None
         for frame in reversed(frames):
             widget = frame.f_locals.get("self")
@@ -6940,10 +7059,8 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
                 continue
             current: Widget | None = widget
             while current is not None:
-                registration = hosts.get(current)
-                if registration is not None and current not in recovering:
-                    host, navigation_owner = registration
-                    return current, host, navigation_owner
+                if current in candidates:
+                    return current
                 parent = current.parent
                 current = parent if isinstance(parent, Widget) else None
         return None
@@ -7098,6 +7215,11 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
         and tears down) — the dump and report are the only thing we add
         before the app exits.
         """
+        recovery_errors = getattr(self, "_recovery_mount_errors", {})
+        recovery_widget = self._lifecycle_mount_widget(error, tuple(recovery_errors))
+        if recovery_widget is not None:
+            recovery_errors[recovery_widget].append(error)
+            return
         mount_owner = self._content_mount_owner(error)
         if mount_owner is not None:
             replacement, host, navigation_owner = mount_owner

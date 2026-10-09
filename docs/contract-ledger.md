@@ -403,10 +403,7 @@ in-memory reads, not evidence of permissions or live AWS execution.
 
 ## 15. 2026-10-08 dependency maintenance pass
 
-Carries §8 forward after review of the eight pending Dependabot PRs:
-SQLGlot 30.21.0, Hatchling 1.32.4, Markdown 3.11, fontTools 4.66.0, mypy
-2.4.0, Ruff 0.16.10, setup-uv v10.2.0, and S3Mock 5.2.3 are accepted.
-The Ruff hook matches the locked Ruff version. Both the Compose services
+Carries §8 forward after review of the eight pending Dependabot PRs. SQLGlot 30.21.0, Hatchling 1.32.4, Markdown 3.11, and fontTools 4.66.0 are accepted. The other accepted updates are mypy 2.4.0, Ruff 0.16.10, setup-uv v10.2.0, and S3Mock 5.2.3. The Ruff hook matches the locked Ruff version. Both the Compose services
 and the integration fixture use the same immutable S3Mock image.
 
 The grouped #337 proposal is accepted only for Ruff and mypy. Its
@@ -415,29 +412,118 @@ pytest below 9. The resulting pytest 8.4.2 downgrade is rejected because
 [PYSEC-2026-1845](https://github.com/pypa/advisory-database/blob/main/vulns/pytest/PYSEC-2026-1845.yaml)
 fixes vulnerable temporary-directory handling in 9.0.3. Development
 requirements now require `pytest>=9.0.3`; the lock retains pytest 9.1.1,
-pytest-textual-snapshot 1.0.0, and Syrupy 6.0.0. The rejected stack also
-looks for `.svg` snapshots instead of the committed `.raw` snapshots.
-A standalone Athena comparison rendered the same normalized SVG, so
+pytest-textual-snapshot 1.0.0, and Syrupy 6.0.0.
+
+The rejected stack also
+looks for `.svg` snapshots instead of the committed `.raw` snapshots. A standalone Athena comparison rendered the same normalized SVG, so
 this is a storage-format incompatibility rather than a UI regression.
 
-Verification runs locally on macOS, including SQL-policy and Iceberg
-contracts, application and snapshot tests, Docker S3-compatible tests,
-pre-commit, documentation generation and a strict build, and wheel/sdist
-validation. GitHub Actions remain manual-only and are not dispatched.
-These checks do not establish Linux or Windows verification or publish the
-generated documentation. The following table records the current pins and
+Verification runs locally on macOS, including SQL-policy and Iceberg contracts, application and snapshot tests, and Docker S3-compatible tests. It also includes pre-commit, documentation generation and a strict build, and wheel/sdist validation. GitHub Actions remain manual-only and are not dispatched. These checks do not establish Linux or Windows verification or publish the
+generated documentation.
+
+The following sections record the current pins and
 consumed contracts; dated earlier passes retain their historical pins.
 
-| Integration point | Pinned version / ref | Consumed contract | Verification method |
-|---|---:|---|---|
-| Python runtime and AWS SDK graph | `aioboto3==15.5.0`, `aiobotocore==2.25.1`, `botocore==1.40.61`, `textual==8.2.8`, `vmx==3.23.0`, `reactivex==5.1.0`, `rich==15.0.0`, `keyring==25.7.0`, `tomli-w==1.2.0`, `platformdirs==4.11.10`, `sqlglot==30.21.0`, `anyio==4.15.1`, and `aiofiles==25.1.0` from `uv.lock` | VMx and the other runtime packages use public facades or documented module paths. The Textual compatibility adapter uses exact-version private hooks (`_bindings`, `_pre_process`, `_handle_exception`, `Screen._clear_tooltip`, and `_xterm_parser.XTermParser`) because Textual 8.2.8 has no equivalent public binding-replacement, lifecycle-recovery, tooltip-dismissal, or input-parser surface; `Screen._clear_tooltip` is the routine Textual itself calls from `Screen._on_screen_suspend`, and it is invoked here on `AppBlur`, which Textual 8.2.8 leaves uncovered. The same `AppBlur` handler releases a held mouse capture through the public `App.capture_mouse(None)`: `App._watch_app_focus` drops focus without it, and `ScrollBar._on_mouse_capture` pairs `App._realtime_animation_begin` — which calls `gc.disable()` under `PAUSE_GC_ON_SCROLL` — only with a `MouseRelease`. `XTermParser` is subclassed for the bracketed-paste guard: `XTermParser.parse` strands `bracketed_paste` set forever when the closing `\x1b[201~` is split by more than `constants.ESCAPE_DELAY`, because the `ParseTimeout` path abandons the partial sequence without returning its bytes to `paste_buffer`, so the app keeps repainting while every key is swallowed. `App.get_driver_class` therefore wraps the selected driver, and the wrapper rebinds the module-level `XTermParser` name each Textual driver builds its parser from (`linux_driver.py:426`, `linux_inline_driver.py:129`, `web_driver.py:187`, `win32.py:230`) rather than forking an input loop; only `feed`, `tick` and `parse_mouse_code` are overridden. Bracketed paste stays enabled. `textual.constants.SMOOTH_SCROLL` is additionally rebound to `False` in `main()` before `App.run` whenever the user has not exported `TEXTUAL_SMOOTH_SCROLL`: `constants` reads the environment once at import time so setting the variable after `aws_tui.app` has imported Textual does nothing, while `_xterm_parser.py:319-323` resolves the name through the module at parse time. That flag has exactly one use site in Textual 8.2.8 — acceptance of the `mode_id == "2048"` in-band window-resize report — so clearing it restores the `SIGWINCH` fallback that `drivers/linux_driver.py:246-248` makes a no-op once in-band resize is negotiated. The branch it gates reaches one hop further, and the cost is named rather than assumed to be nil: `App.supports_smooth_scrolling` is assigned only from the resulting `InBandWindowResize` message (`app.py:5016-5019`) and read only at `scrollbar.py:395`, so a scrollbar drag animates towards the pointer instead of tracking it; and `LinuxDriver._enable_mouse_pixels` (`linux_driver.py:474-482`, writing `\x1b[?1016h` at `:145-150`) is reachable only from that branch, so mouse coordinates stay cell-granular. Both losses are Textual's own behaviour on iTerm2 and Terminal.app, which never negotiate 2048, and on Windows, whose driver has no in-band resize path. The in-band resize *report* handler (`_xterm_parser.py:271-283`) sets `mouse_pixels` unconditionally — gated on neither `SMOOTH_SCROLL` nor `IS_ITERM` — so a mode 2048 left set by an earlier app would otherwise flip the parser into pixel coordinates that mode 1016 never negotiated, dividing every SGR click by the pixel/cell ratio; `CellMouseXTermParser.parse_mouse_code` keeps the two halves in step. An explicit `TEXTUAL_SMOOTH_SCROLL` wins in either direction. The exact Textual pin prevents unreviewed drift, and is the runtime requirement `pyproject.toml` declares, not merely a development constraint: `uv pip install --resolution lowest-direct .` resolves `textual==8.2.8`, so the shipped floor and the tested version are the same. VMx owns command admission/cancellation, modal focus restoration, immutable form construction, observable state, component lifecycle, filtering, and paging. AWS operations and request members are validated against the locked Botocore models. | Full unit, integration, snapshot, and E2E tiers; minimum-direct-dependency tests; import/layer checks; `tests/integration/test_app_blur_cleanup.py` pins the tooltip and mouse-capture teardown on `AppBlur` and the balanced realtime-animation count; `tests/unit/ui/test_paste_guard.py` reproduces the upstream wedge against the stock parser and pins the module-level parser name the swap depends on, and `tests/integration/test_paste_guard_recovery.py` drives split-marker bytes into a live app and asserts it still answers a key; `tests/unit/ui/test_terminal_protocol.py` reproduces both the upstream 2048 negotiation and the stale-mode pixel-coordinate collapse against the stock parser, pins the `SIGWINCH` gate, the single `SMOOTH_SCROLL` use site and the two indirect consumers of the branch it gates (`app.py` → `scrollbar.py`, and `_enable_mouse_pixels` → `\x1b[?1016h`) in the installed package, and asserts the default is settled before `App.run`; VMx compatibility regressions for command cancellation, retired pager generations, form validation, and modal restoration; source-derived Botocore operation and input-member tests. |
-| VMx 3.23 compatibility and specialization | `vmx==3.23.0` from `uv.lock`; runtime requirement `vmx>=3.23.0,<4.0.0` | `FocusCoordinatorVM` delegates modal save/restore behavior to public `DiscriminatorVM.modal_open()` / `modal_close()`. `S3ConnectionFormVM` supplies complete field and model validation through `FormVMBuilder` at construction time. Athena drains public `AsyncRelayCommand.is_executing` admission state after cancellation and tracks the provider task behind nested command execution so shutdown waits for cancellation-resistant I/O. No VM reaches into VMx private fields. | Focus, Settings form, Athena query/results, VMx smoke, mypy, and lifecycle tests run against the locked package. The dated VMx 3.23 maintenance report records adopted and rejected candidates plus production-line metrics. |
-| Bounded AWS operational state | Botocore service contracts above plus internal provider-error taxonomy | EMR requests at most 50 applications or job runs per page; application discovery stops above 100 pages or 1,000 records, and bulk job-run discovery stops above 100 pages. User-driven Glue Catalog, Glue Jobs, Glue Crawlers, and EMR job-run collections stop at 1,000 items through a bounded VMx token-pager specialization. Athena history, saved-query, and context collections stop at 1,000 items, while result rows stop at 10,000, through an app-owned bounded snapshot pager that retains VMx commands. A visible, snapshot-stable safety-limit state replaces the ordinary load-more affordance when a ceiling ends pagination. Log discovery classifies only the run-relative suffix so user prefixes cannot impersonate worker markers. Recursive S3 deletion stops above 100 listing pages or 10,000 objects and reports how many objects were already removed. S3 `SlowDown` and `RequestLimitExceeded` responses map to `ThrottledError`; service availability and transport failures map to `ProviderUnreachableError`. | Exact request-shape and pager tests assert page size, page ceilings, collection ceilings, final-page clipping, refresh and snapshot preservation, visible truncation state, partial-delete diagnostics, repeated-token rejection, run-relative log classification, and throttling versus reachability behavior. |
-| Bounded local and cross-provider state | Internal `InMemoryFS` and `CrossFs` contracts | Demo objects are limited to 100 MiB each and 256 MiB in aggregate, and a directory listing fails closed above 10,000 entries. Recursive cross-provider copy and move traversals stop above 10,000 entries or 128 levels; owned staging data is cleaned after a limit failure. | In-memory filesystem boundary tests cover known-size and streamed writes, overwrite accounting, and listing ceilings. Cross-filesystem tests cover entry/depth rejection and stage cleanup. |
-| Packaging and developer tooling | `hatchling==1.32.4`, `testcontainers==4.15.0`, and `textual-dev==1.8.0` from `uv.lock`; `build-system.requires` constrained to `hatchling>=1.31.0,<2` | CI, release, Pages, and bootstrap sync/export with `--locked`, so a stale lock fails instead of silently installing it. Bootstrap installs all dependency groups. The Textual development CLI used by `scripts/dev.sh` is declared explicitly. Wheel and sdist members must exclude repository metadata, tests, local caches, and traversal paths; both artifacts must contain every source Python module, `py.typed`, and packaged theme stylesheet, while the sdist must also retain its build metadata and PyPI readme. | `uv lock --check`, script/workflow guard tests, real wheel/sdist builds, `scripts.check_dist`, Twine metadata checks, isolated wheel and sdist install smoke, and a Textual CLI invocation. |
-| GitHub Actions and pre-commit toolchain | `astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7` (`v10.2.0`), `ruff-pre-commit@f12be1ebaa5351c1fc76472de98db2c3446c8253` (`v0.16.10`), `pre-commit-hooks@3e8a8703264a2f4a69428a0aa4dcb512790b2c8c` (`v6.0.0`), `taplo-pre-commit@ade0f95ddcf661c697d4670d2cfcbe95d0048a0a` (`v0.9.3`), and the other immutable action refs listed in §4 | Workflow jobs retain least-privilege permissions and bounded timeouts. CI and release export every locked dependency group before pip-audit. Pages and wiki publication run only from `main`, including manual dispatch, so a branch-controlled checkout cannot receive the wiki deploy key. The wiki deploy key is checked before it is written. The Homebrew checkout does not persist its cross-repository token. Artifact contents are checked before upload or publication. | Official tag/ref verification, YAML guard tests, pre-commit, shellcheck, and local workflow-equivalent package/docs commands. |
-| Local S3-compatible harness | Docker image `adobe/s3mock:5.2.3@sha256:ab01a6946750f451ca215a47e91030695b260e4003b8a5a6201d25029b8fca92`; `testcontainers==4.15.0` from `uv.lock` | Independent S3-compatible endpoint, readiness probe, seeded buckets/objects, path-style config, arbitrary test credentials, and host port exposure. | The former MinIO community image was removed because every usable community release is affected by [GHSA-hv4r-mvr4-25vw](https://github.com/advisories/GHSA-hv4r-mvr4-25vw), while the nominally fixed AIStor image requires a commercial license and rejects writes without one. Adobe S3Mock 5.2.3 is license-free, digest-pinned, exposed only on `127.0.0.1`, and passes the same nine strict S3FS/CrossFs protocol tests through the public `testcontainers.core.container.DockerContainer` API. Manual trace also covers `scripts/test-services/s3/docker-compose.yml`, `seed.py`, and `config-snippet.toml`. |
-| Local DuckDB Iceberg preview | `duckdb==1.5.5` from `uv.lock`, optional extra `duckdb` | Extensions `httpfs`, `aws`, `iceberg` loaded per connection. `iceberg_scan(path)` with the named parameter `snapshot_from_id`. `CREATE OR REPLACE SECRET (TYPE s3, PROVIDER credential_chain, PROFILE, REGION)`. The setting `unsafe_enable_version_guessing`. `DuckDBPyConnection.interrupt()` for cancellation. Errors consumed as `duckdb.HTTPException` with `.status_code`, and `duckdb.InterruptException`. Eager credential validation is a 1.4+ refinement, not a floor guarantee: at 1.3 `CREATE OR REPLACE SECRET` accepts a nonexistent profile, so a bad profile degrades to a later, less precise outcome instead of `AUTH_REQUIRED`. | Port unit tests drive an injected fake connection; no test spawns a real engine. A floor test under `tests/minimum_runtime/` exercises the real package when the extra is installed. |
+**Python runtime and AWS SDK graph**
+
+`aioboto3==15.5.0`, `aiobotocore==2.25.1`, `botocore==1.40.61`, `textual==8.2.8`, `vmx==3.23.0`, `reactivex==5.1.0`, `rich==15.0.0`, `keyring==25.7.0`, `tomli-w==1.2.0`, `platformdirs==4.11.10`, `sqlglot==30.21.0`, `anyio==4.15.1`, and `aiofiles==25.1.0` from `uv.lock`
+
+VMx and the other runtime packages use public facades or documented module paths.
+Textual remains pinned to `8.2.8` because the application isolates several private
+compatibility hooks.
+
+The unchanged [Textual contracts in section 8](#8-2026-09-26-dependency-maintenance-pass)
+cover dynamic bindings, lifecycle error recovery, tooltip and mouse cleanup,
+bracketed-paste parsing, and in-band resize behavior. Local regression tests
+verify those adapters against the installed source. Runtime floors retain the
+same exact Textual pin.
+
+Log filtering uses `regex==2026.7.19`, the existing locked release, as a runtime
+dependency. Native search deadlines contain expensive patterns. Patterns must pass validation in both engines. VERSION0 matching follows
+the timeout engine, including its Unicode case folding and brace syntax. The EMR guide records the filter limits and recovery controls.
+
+Verification covers unit, integration, snapshot, E2E, and minimum-direct-dependency
+contracts. Import and layer checks verify the boundaries.
+
+`tests/integration/test_app_blur_cleanup.py` verifies tooltip teardown, mouse
+capture release, and balanced realtime animation after `AppBlur`.
+`tests/unit/ui/test_paste_guard.py` reproduces the stock parser's wedge and
+checks the module-level parser replacement. `tests/integration/test_paste_guard_recovery.py`
+verifies that a live app answers keys after split-marker recovery.
+
+`tests/unit/ui/test_terminal_protocol.py` checks stock 2048 negotiation and
+pixel-coordinate behavior against installed Textual source. It verifies the
+`SIGWINCH` gate, `SMOOTH_SCROLL` consumers, and the default before `App.run`.
+
+VMx regressions verify command cancellation, retired pager generations, form
+validation, and modal restoration. Botocore tests derive operations and input
+members from the installed service models.
+
+**VMx 3.23 compatibility and specialization**
+
+`vmx==3.23.0` from `uv.lock`; runtime requirement `vmx>=3.23.0,<4.0.0`
+
+`FocusCoordinatorVM` delegates modal save/restore behavior to public `DiscriminatorVM.modal_open()` / `modal_close()`. `S3ConnectionFormVM` supplies complete field and model validation through `FormVMBuilder` at construction time. Athena drains public `AsyncRelayCommand.is_executing` admission state after cancellation and tracks the provider task behind nested command execution so shutdown waits for cancellation-resistant I/O. No VM reaches into VMx private fields.
+
+Verification: Focus, Settings form, Athena query/results, VMx smoke, mypy, and lifecycle tests run against the locked package. The dated VMx 3.23 maintenance report records adopted and rejected candidates plus production-line metrics.
+
+**Bounded AWS operational state**
+
+Botocore service contracts above plus internal provider-error taxonomy
+
+EMR requests at most 50 applications or job runs per page. Application discovery stops above 100 pages or 1,000 records. Bulk job-run discovery stops above 100 pages. User-driven Glue Catalog, Glue Jobs, Glue Crawlers, and EMR job-run collections stop at 1,000 items through a bounded VMx token-pager specialization.
+
+Athena history, saved-query, and context collections stop at 1,000 items, while result rows stop at 10,000. Both limits apply through an app-owned bounded snapshot pager that retains VMx commands. A visible, snapshot-stable safety-limit state replaces the ordinary load-more affordance when a ceiling ends pagination. Log discovery classifies only the run-relative suffix so user prefixes cannot impersonate worker markers.
+
+Recursive S3 deletion stops above 100 listing pages or 10,000 objects and reports how many objects were already removed. S3 `SlowDown` and `RequestLimitExceeded` responses map to `ThrottledError`; service availability and transport failures map to `ProviderUnreachableError`.
+
+Verification: Exact request-shape and pager tests assert page size, page ceilings, collection ceilings, final-page clipping, refresh and snapshot preservation, and visible truncation state. They also assert partial-delete diagnostics, repeated-token rejection, run-relative log classification, and throttling versus reachability behavior.
+
+**Bounded local and cross-provider state**
+
+Internal `InMemoryFS` and `CrossFs` contracts
+
+Demo objects are limited to 100 MiB each and 256 MiB in aggregate, and a directory listing fails closed above 10,000 entries. Recursive cross-provider copy and move traversals stop above 10,000 entries or 128 levels; owned staging data is cleaned after a limit failure.
+
+Verification: In-memory filesystem boundary tests cover known-size and streamed writes, overwrite accounting, and listing ceilings. Cross-filesystem tests cover entry/depth rejection and stage cleanup.
+
+**Packaging and developer tooling**
+
+`hatchling==1.32.4`, `testcontainers==4.15.0`, and `textual-dev==1.8.0` from `uv.lock`; `build-system.requires` constrained to `hatchling>=1.31.0,<2`
+
+CI, release, Pages, and bootstrap sync/export with `--locked`, so a stale lock fails instead of silently installing it. Bootstrap installs all dependency groups. The Textual development CLI used by `scripts/dev.sh` is declared explicitly.
+
+Wheel and sdist members must exclude repository metadata, tests, local caches, and traversal paths. Both artifacts must contain every source Python module, `py.typed`, and packaged theme stylesheet. The sdist must also retain its build metadata and PyPI readme.
+
+Verification: `uv lock --check`, script/workflow guard tests, real wheel/sdist builds, `scripts.check_dist`, Twine metadata checks, isolated wheel and sdist install smoke, and a Textual CLI invocation.
+
+**GitHub Actions and pre-commit toolchain**
+
+`astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7` (`v10.2.0`), `ruff-pre-commit@f12be1ebaa5351c1fc76472de98db2c3446c8253` (`v0.16.10`), `pre-commit-hooks@3e8a8703264a2f4a69428a0aa4dcb512790b2c8c` (`v6.0.0`), `taplo-pre-commit@ade0f95ddcf661c697d4670d2cfcbe95d0048a0a` (`v0.9.3`), and the other immutable action refs listed in §4
+
+Workflow jobs retain least-privilege permissions and bounded timeouts. CI and release export every locked dependency group before pip-audit. Pages and wiki publication run only from `main`, including manual dispatch, so a branch-controlled checkout cannot receive the wiki deploy key. The wiki deploy key is checked before it is written. The Homebrew checkout does not persist its cross-repository token.
+
+Artifact contents are checked before upload or publication.
+
+Verification: Official tag/ref verification, YAML guard tests, pre-commit, shellcheck, and local workflow-equivalent package/docs commands.
+
+**Local S3-compatible harness**
+
+Docker image `adobe/s3mock:5.2.3@sha256:ab01a6946750f451ca215a47e91030695b260e4003b8a5a6201d25029b8fca92`; `testcontainers==4.15.0` from `uv.lock`
+
+Independent S3-compatible endpoint, readiness probe, seeded buckets/objects, path-style config, arbitrary test credentials, and host port exposure.
+
+Verification: The former MinIO community image was removed because every usable community release is affected by [GHSA-hv4r-mvr4-25vw](https://github.com/advisories/GHSA-hv4r-mvr4-25vw). The nominally fixed AIStor image requires a commercial license and rejects writes without one. Adobe S3Mock 5.2.3 is license-free, digest-pinned, exposed only on `127.0.0.1`, and passes the same nine strict S3FS/CrossFs protocol tests through the public `testcontainers.core.container.DockerContainer` API. Manual trace also covers `scripts/test-services/s3/docker-compose.yml`, `seed.py`, and `config-snippet.toml`.
+
+**Local DuckDB Iceberg preview**
+
+`duckdb==1.5.5` from `uv.lock`, optional extra `duckdb`
+
+Extensions `httpfs`, `aws`, `iceberg` loaded per connection. `iceberg_scan(path)` with the named parameter `snapshot_from_id`. `CREATE OR REPLACE SECRET (TYPE s3, PROVIDER credential_chain, PROFILE, REGION)`. The setting `unsafe_enable_version_guessing`. `DuckDBPyConnection.interrupt()` for cancellation.
+
+Errors consumed as `duckdb.HTTPException` with `.status_code`, and `duckdb.InterruptException`. Eager credential validation is a 1.4+ refinement, not a floor guarantee. At 1.3, `CREATE OR REPLACE SECRET` accepts a nonexistent profile. Thus, a bad profile degrades to a later, less precise outcome instead of `AUTH_REQUIRED`.
+
+Verification: Port unit tests drive an injected fake connection; no test spawns a real engine. A floor test under `tests/minimum_runtime/` exercises the real package when the extra is installed.
 
 Exact S3 boto operation ledger (16):
 

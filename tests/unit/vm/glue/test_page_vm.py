@@ -1152,3 +1152,272 @@ async def test_an_injected_duckdb_port_reaches_the_preview_through_the_real_page
     await page.catalog.iceberg.preview.load()
 
     assert port.queries, "the injected port was not used"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("view", ["jobs", "crawlers"])
+@pytest.mark.parametrize("overlap", ["refresh", "newer_filter"])
+async def test_filter_intent_survives_overlapping_reads(monkeypatch, view, overlap):
+    fake = seeded_glue()
+    store = ServiceSelectionStore()
+    scope = SelectionScope("glue", "dev", "us-east-1")
+    page = make_page_vm(fake, selection_store=store)
+    await page.select_view(view)
+    started = asyncio.Event()
+    release = asyncio.Event()
+    blocked = False
+    if view == "jobs":
+        await page.set_job_run_states(frozenset({"FAILED"}))
+        original = fake.list_job_runs_page
+
+        async def read(*args, **kwargs):
+            nonlocal blocked
+            if kwargs.get("states") == ("RUNNING",) and not blocked:
+                blocked = True
+                started.set()
+                await release.wait()
+            return await original(*args, **kwargs)
+
+        monkeypatch.setattr(fake, "list_job_runs_page", read)
+
+        async def set_filter(value):
+            await page.set_job_run_states(frozenset({value}))
+
+        def live_filter():
+            return ",".join(sorted(page.jobs.run_state_filter))
+
+        key = "job_run_states"
+        latest = "SUCCEEDED"
+    else:
+        await page.set_crawler_state("READY")
+        original = fake.list_crawlers_page
+
+        async def read(*args, **kwargs):
+            nonlocal blocked
+            if kwargs.get("state") == "RUNNING" and not blocked:
+                blocked = True
+                started.set()
+                await release.wait()
+            return await original(*args, **kwargs)
+
+        monkeypatch.setattr(fake, "list_crawlers_page", read)
+
+        async def set_filter(value):
+            await page.set_crawler_state(value)
+
+        def live_filter():
+            return page.crawlers.state_filter
+
+        key = "crawler_state"
+        latest = "STOPPING"
+    task = asyncio.create_task(set_filter("RUNNING"))
+    try:
+        await asyncio.wait_for(started.wait(), timeout=2)
+        if overlap == "refresh":
+            await page.refresh_active()
+            expected = "RUNNING"
+        else:
+            await set_filter(latest)
+            expected = latest
+        release.set()
+        await task
+        assert live_filter() == expected
+        assert store.get(scope, key) == expected
+    finally:
+        release.set()
+        await task
+        await page.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_old_crawler_filter_cannot_restore_previous_selection(monkeypatch):
+    fake = seeded_glue()
+    fake.add_crawler("new-running-crawler", "RUNNING")
+    store = ServiceSelectionStore()
+    scope = SelectionScope("glue", "dev", "us-east-1")
+    page = make_page_vm(fake, selection_store=store)
+    await page.select_view("crawlers")
+    await page.select_crawler("running-crawler")
+    filter_started, filter_release = asyncio.Event(), asyncio.Event()
+    detail_started, detail_release = asyncio.Event(), asyncio.Event()
+    original_list, original_detail = fake.list_crawlers_page, fake.get_crawler
+    blocked = False
+
+    async def list_crawlers(*args, **kwargs):
+        nonlocal blocked
+        if kwargs.get("state") == "RUNNING" and not blocked:
+            blocked = True
+            filter_started.set()
+            await filter_release.wait()
+        return await original_list(*args, **kwargs)
+
+    async def get_crawler(name):
+        if name == "new-running-crawler":
+            detail_started.set()
+            await detail_release.wait()
+        return await original_detail(name)
+
+    monkeypatch.setattr(fake, "list_crawlers_page", list_crawlers)
+    monkeypatch.setattr(fake, "get_crawler", get_crawler)
+    filtering = asyncio.create_task(page.set_crawler_state("RUNNING"))
+    selecting = None
+    try:
+        await asyncio.wait_for(filter_started.wait(), timeout=2)
+        await page.refresh_active()
+        selecting = asyncio.create_task(page.select_crawler("new-running-crawler"))
+        await asyncio.wait_for(detail_started.wait(), timeout=2)
+        filter_release.set()
+        await filtering
+        detail_release.set()
+        await selecting
+        assert page.crawlers.selected_crawler_name == "new-running-crawler"
+        assert page.crawlers.crawler_detail.summary.name == "new-running-crawler"
+        assert store.get(scope, "crawler_name") == "new-running-crawler"
+    finally:
+        filter_release.set()
+        detail_release.set()
+        await filtering
+        if selecting is not None:
+            await selecting
+        await page.shutdown()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("selection", ["crawler", "job", "database", "table"])
+async def test_refresh_preserves_pending_selection_intent(monkeypatch, selection):
+    fake = seeded_glue()
+    fake.add_job("new-job")
+    fake.add_crawler("new-crawler")
+    fake.add_table("warehouse", "orders")
+    store = ServiceSelectionStore()
+    scope = SelectionScope("glue", "dev", "us-east-1")
+    page = make_page_vm(fake, selection_store=store)
+    started, release = asyncio.Event(), asyncio.Event()
+    if selection == "crawler":
+        await page.select_view("crawlers")
+        operation, method, target, key = (
+            page.select_crawler,
+            "get_crawler",
+            "new-crawler",
+            "crawler_name",
+        )
+
+        def live():
+            return page.crawlers.selected_crawler_name
+    elif selection == "job":
+        await page.select_view("jobs")
+        operation, method, target, key = (
+            page.select_job,
+            "list_job_runs_page",
+            "new-job",
+            "job_name",
+        )
+
+        def live():
+            return page.jobs.selected_job_name
+    elif selection == "database":
+        await page.setup()
+        operation, method, target, key = (
+            page.select_database,
+            "list_tables_page",
+            "warehouse",
+            "database_name",
+        )
+
+        def live():
+            return page.catalog.selected_database_name
+    else:
+        await page.setup()
+        operation, method, target, key = page.select_table, "get_table", "sessions", "table_name"
+
+        def live():
+            return page.catalog.selected_table_name
+
+    original = getattr(fake, method)
+    blocked = False
+
+    async def read(first, *args, **kwargs):
+        nonlocal blocked
+        identity = first.table_name if isinstance(first, TableRef) else first
+        if identity == target and not blocked:
+            blocked = True
+            started.set()
+            await release.wait()
+        return await original(first, *args, **kwargs)
+
+    monkeypatch.setattr(fake, method, read)
+    choosing = asyncio.create_task(operation(target))
+    try:
+        await asyncio.wait_for(started.wait(), timeout=2)
+        assert live() == target
+        await page.refresh_active()
+        release.set()
+        await choosing
+        assert live() == target
+        assert store.get(scope, key) == target
+    finally:
+        release.set()
+        await choosing
+        await page.shutdown()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("selection", ["crawler", "job", "database", "table"])
+async def test_unavailable_selection_does_not_replace_retained_intent(selection):
+    store = ServiceSelectionStore()
+    scope = SelectionScope("glue", "dev", "us-east-1")
+    page = make_page_vm(seeded_glue(), selection_store=store)
+    await page.setup()
+    await page.select_view("jobs")
+    await page.select_view("crawlers")
+    before = {
+        key: store.get(scope, key)
+        for key in ("crawler_name", "job_name", "database_name", "table_name")
+    }
+    operation = {
+        "crawler": page.select_crawler,
+        "job": page.select_job,
+        "database": page.select_database,
+        "table": page.select_table,
+    }[selection]
+    await operation("unavailable-name")
+    assert {key: store.get(scope, key) for key in before} == before
+    await page.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_exact_table_handoff_cannot_commit_after_same_name_database_switch(monkeypatch):
+    fake = seeded_glue()
+    fake.add_table("warehouse", "events")
+    store = ServiceSelectionStore()
+    scope = SelectionScope("glue", "dev", "us-east-1")
+    page = make_page_vm(fake, selection_store=store)
+    await page.setup()
+    ref = fake.tables["analytics"][0].ref
+    started, release = asyncio.Event(), asyncio.Event()
+    original = fake.get_table
+
+    async def read(target):
+        if target == ref:
+            started.set()
+            await release.wait()
+        return await original(target)
+
+    monkeypatch.setattr(fake, "get_table", read)
+    opening = asyncio.create_task(page.open_table(ref))
+    try:
+        await asyncio.wait_for(started.wait(), timeout=2)
+        await page.select_database("warehouse")
+        assert page.catalog.selected_table_name == ref.table_name
+        release.set()
+        with pytest.raises(ValueError, match="superseded"):
+            await opening
+        assert page.catalog.selected_database_name == "warehouse"
+        assert page.catalog.table_detail.summary.ref.database_name == "warehouse"
+        assert store.get(scope, "database_name") == "warehouse"
+        assert store.get(scope, "table_name") == "events"
+    finally:
+        release.set()
+        with contextlib.suppress(ValueError):
+            await opening
+        await page.shutdown()

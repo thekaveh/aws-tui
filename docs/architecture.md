@@ -22,11 +22,12 @@ VMs to build service pages, but it cannot import Textual widgets.
   notifications. The S3 root is the code-backed `DualPane` from
   `src/aws_tui/ui/widgets/dual_pane.py`, mounted through
   `src/aws_tui/ui/widgets/service_view_factory.py`; there is no `S3Page` class.
+
   `ContextPicker` provides bordered keyboard-focusable context selection, and
   EMR's specialized `ApplicationPicker` preserves its Rich application-state
-  rendering. Both compose the shared `OverlayOptionList`: the trigger keeps its
-  compact footprint while the choices use Textual's screen overlay, so opening
-  or closing a picker does not resize adjacent regions. Overlay geometry and
+  rendering. Both compose the shared `OverlayOptionList`. The trigger keeps its compact footprint while the choices use Textual's screen overlay. Thus, opening or closing a picker does not resize adjacent regions.
+
+  Overlay geometry and
   dismissal remain view state rather than entering VMx. `ServiceTabStrip`
   renders a persistent segmented frame while providing one predictable focus
   stop for service-local views.
@@ -40,10 +41,7 @@ VMs to build service pages, but it cannot import Textual widgets.
     Transfer journals are diagnostic-only; no startup recovery VM or UI ships.
     `HintLegendVM` owns service-scoped action
     membership, configured shortcut labels, complete effect/prerequisite
-    tooltips, availability, and fitting priority. The `HintLegend` view performs
-    terminal-width measurement and centers a fitted one-line command row;
-    lower-priority hints still yield to `[:] more` and `[q] quit` rather than
-    wrapping, without changing shortcut bindings.
+    tooltips, availability, and fitting priority. The `HintLegend` view performs terminal-width measurement and centers a fitted one-line command row. Lower-priority hints still yield to `[:] more` and `[q] quit` rather than wrapping, without changing shortcut bindings.
   - `vm/file_manager/` — `DualPaneVM`, two `PaneVM` children, entry VMs, and
     transfer state. `DualPaneVM` owns cross-provider copy/move orchestration;
     each `PaneVM` owns one provider-backed projection and cursor.
@@ -53,9 +51,8 @@ VMs to build service pages, but it cannot import Textual widgets.
     `ApplicationsVM` / `JobRunsVM` / `JobRunDetailVM` / `JobRunLogsVM` children
     (the read-mostly EMR Serverless browser with logs streaming and focused
     clone submission).
-    Its immutable `ServiceSourceContext` carries the active connection name,
-    optional distinct AWS profile, and region to the service view; the shared
-    `ServiceSourceHeader` renders that identity above the EMR application picker.
+    Its immutable `ServiceSourceContext` carries the active connection name, optional distinct AWS profile, and region to the service view. The shared `ServiceSourceHeader` renders that identity above the EMR application picker.
+
     `ServiceSelectionStore` scopes remembered service selections by
     `(service_id, connection_name, region)`.
     `JobRunCloneVM` backs the clone-job-run modal — a
@@ -67,7 +64,9 @@ VMs to build service pages, but it cannot import Textual widgets.
     History, Manifests, Files, Partitions, and References independently.
     The page shares `ServiceSourceContext` and
     connection/region-scoped selection memory with the other
-    single-context AWS services. `GluePageVM` owns page-scoped table and snapshot
+    single-context AWS services.
+
+    `GluePageVM` owns page-scoped table and snapshot
     handoff capability checks. `GlueCatalogVM` publishes immutable,
     service-neutral `OpenS3LocationRequest` and table `OpenAthenaTableRequest`
     messages from the selected table; `GlueIcebergVM` publishes snapshot
@@ -78,7 +77,9 @@ VMs to build service pages, but it cannot import Textual widgets.
     individually framed selectors in an unframed row, followed by the tabs and
     active view. Its context and remembered selections are scoped by connection
     name and region; changing workgroup, catalog, or database invalidates the
-    query context. Query work stays in the VM layer, while `domain/athena.py`
+    query context.
+
+    Query work stays in the VM layer, while `domain/athena.py`
     owns boto mapping and `domain/sql_policy.py` fails closed before dispatch.
     `AthenaPageVM.open_table(...)` sets exact catalog/database context and
     prefills a quoted, context-relative `LIMIT 5` starter without executing it.
@@ -95,9 +96,10 @@ VMs to build service pages, but it cannot import Textual widgets.
   (`src/aws_tui/services/`). The current tree ships `s3`,
   `emr-serverless` (read-only browser + clone-job-run plus job-run
   logs — applications listing, job-runs master-detail, state-filter
-  chips, clone-and-edit modal via `c`; cancel / vanilla submit are
-  still deferred), `glue` (read-only Catalog, Jobs, and Crawlers), and
+  chips, clone-and-edit modal via `c`, and confirmed cancellation via `x`;
+  vanilla submit remains deferred), `glue` (read-only Catalog, Jobs, and Crawlers), and
   `athena` (read-only query, history, results, and saved-query views).
+
   `GlueService` composes both `GlueClient` and an Athena-backed
   `IcebergInspector`; `AthenaService` composes the query page.
   Each service implements the `Service` protocol (declared in
@@ -105,26 +107,30 @@ VMs to build service pages, but it cannot import Textual widgets.
 - **Domain** — `FileSystemProvider` protocol with `LocalFS` and `S3FS`
   implementations + the cross-FS copy/move engine + the transfer
   journal (`src/aws_tui/domain/`). The Norton-Commander unifier; the
-  pane VMs treat both sides as the same protocol. Domain adapters perform the
-  runtime AWS and filesystem I/O: `LocalFS` and `TransferJournal` access host
-  storage, while `S3FS`, `EmrServerlessClient`, `GlueClient`, and
-  `AthenaClient` issue service operations and map external responses/errors
-  into domain values. `TableRef` and `QueryContext` carry immutable table and
+  pane VMs treat both sides as the same protocol. Domain adapters perform the runtime AWS and filesystem I/O. `LocalFS` and `TransferJournal` access host storage. `S3FS`, `EmrServerlessClient`, `GlueClient`, and `AthenaClient` issue service operations and map external responses/errors into domain values.
+
+  `TableRef` and `QueryContext` carry immutable table and
   execution identity. User-driven Glue and EMR lists use VMx token paging
   through the app's bounded composition specialization. Athena uses an
   app-owned bounded snapshot pager because VMx does not expose public snapshot
-  hydration, while retaining VMx commands for execution and enablement. Both
+  hydration, while retaining VMx commands for execution and enablement.
+
+  Both
   stop at explicit cumulative collection ceilings, and the UI distinguishes a
   safety-limit stop from an ordinary continuation. `IcebergInspector` uses
   `AthenaQueryRunner` to read bounded Iceberg metadata tables; Athena history
-  hydrates each bounded page with one batch request. `ReadOnlySqlPolicy`
+  hydrates each bounded page with one batch request.
+
+  `ReadOnlySqlPolicy`
   validates both user and generated SQL. Raw AWS responses remain below VMs.
 - **Infrastructure** — Infrastructure owns sessions, credentials,
   configuration, SDK client construction, and OS-backed stores.
   `AwsSession` and `ConnectionResolver` provide configured AWS identities and
   client contexts to the domain adapters. Resolver order drives `Shift+S`;
   the VM-layer `ServiceSelectionStore` scopes workgroup and resource
-  selections by service, connection name, and region. `ConfigStore`, `ThemeStore`,
+  selections by service, connection name, and region.
+
+  `ConfigStore`, `ThemeStore`,
   `KeymapStore`, `LogSink`, `CrashDump`, and `KeychainBackend` persist
   application and platform state. `ConfigStore` and Settings share endpoint
   and credential-source validation for S3-compatible connections.
@@ -143,22 +149,14 @@ is the Textual `App` subclass that mounts widgets and wires action
 handlers.
 
 `composition.py` also constructs the app-lifetime `TableClipboardVM` and the
-`infra` clipboard port. `app.py` owns the single clipboard writer that every
-copy goes through, including the one that follows the typed request: it writes
-OSC 52 and asks the port, then reports the port's result — the OS clipboard
-took it, a helper was there and failed, or there was no helper and only the
-terminal was written. The VM remains the authoritative in-app clipboard.
-`ActionRegistry` is also rooted in `app.py`: `Shift+Q`, `Shift+V`,
-command-palette entries, and the Iceberg arrow button dispatch the same
-registered Glue actions before the Glue VMs publish a single typed Athena
-request path.
+`infra` clipboard port.
+
+`app.py` owns the single clipboard writer that every copy goes through, including the one that follows the typed request. It writes OSC 52 and asks the port. It then reports the port's result. The OS clipboard took it, a helper was there and failed, or there was no helper and only the terminal was written. The VM remains the authoritative in-app clipboard.
+
+`ActionRegistry` is also rooted in `app.py`. `Shift+Q`, `Shift+V`, command-palette entries, and the Iceberg arrow button dispatch the same registered Glue actions. The Glue VMs then publish a single typed Athena request path.
 
 `AwsTuiApp` remains a large composition-root adapter that coordinates navigation,
-cross-service rollback, action routing, and shutdown. Extracting those transaction
-coordinators into dedicated mediators is deferred to a focused architecture change:
-the move spans cancellation ownership and complete rollback state across all four
-services, so treating it as a mechanical maintenance refactor would carry more risk
-than the line-count reduction justifies.
+cross-service rollback, action routing, and shutdown. Extracting those transaction coordinators into dedicated mediators is deferred to a focused architecture change. The move spans cancellation ownership and complete rollback state across all four services. Treating it as a mechanical maintenance refactor would carry more risk than the line-count reduction justifies.
 
 At startup, automatic connection attempts consume one shared 90-second budget;
 untried sources remain available for explicit selection after the local fallback
@@ -170,29 +168,20 @@ mounts.
 
 ![aws-tui operation states: the query, transfer, EMR job run, and log-pane lifecycle enums, each shown from its initial state through its terminal states, with the transitions the app owns distinguished from the ones AWS owns.](diagrams/img/operation-states.png)
 
-Those four enums are independent. A transfer cancelled mid-flight says
-nothing about the query that produced its source, and the app never drives
-an EMR job run's state — it only observes what the poller reports.
+Those four enums are independent. A transfer cancelled mid-flight says nothing about the query that produced its source. The app requests EMR cancellation or cloning through service APIs. AWS owns job-run transitions; the app observes the reported state.
 
-Disposal order is the part that cannot be read off the code: a widget's
-workers must drain before its view model is disposed, or a late callback
-resumes against a disposed VM.
+Disposal order is the part that cannot be read off the code. A widget's workers must drain before its view model is disposed. Otherwise, a late callback resumes against a disposed VM.
 
 VMx components implement `construct → destruct → dispose`. Hosted service VMs
 may additionally expose app-owned asynchronous `setup` and `shutdown` hooks;
-those hooks are not a VMx lifecycle phase.
-The `RootVM` constructs the chrome and content-host children
+those hooks are not a VMx lifecycle phase. The `RootVM` constructs the chrome and content-host children
 depth-first; `ContentHostVM.set_content(new)` disposes the previous
-content via the same cascade. When outgoing content exposes `shutdown`,
-`ContentHostVM.set_content(...)` awaits it before calling `dispose`; hosted VM
-shutdown is awaited before disposal, and the host owns disposal of a candidate
-that is never adopted. Every hosted service's owned operations drain before
-teardown. App shutdown is task-owned and idempotent. Explicit quit and Textual
-unmount (including fatal teardown) await the same sequence: stop navigation
-intake, drain transfers, setup, queries, and preview workers, close every
-aioboto3 client, dispose subscriptions and the VM tree, then flush and close
-logs last so teardown diagnostics remain available
-(spec §6.4).
+content via the same cascade.
+
+When outgoing content exposes `shutdown`, `ContentHostVM.set_content(...)` awaits it before calling `dispose`. Hosted VM shutdown is awaited before disposal. The host owns disposal of a candidate that is never adopted. Every hosted service's owned operations drain before
+teardown. App shutdown is task-owned and idempotent.
+
+Explicit quit and Textual unmount (including fatal teardown) await the same sequence. First, stop navigation intake and drain transfers, setup, queries, and preview workers. Then close every aioboto3 client and dispose subscriptions and the VM tree. Finally, flush and close logs so teardown diagnostics remain available (spec §6.4).
 
 ## 4. Messaging
 
@@ -200,10 +189,8 @@ logs last so teardown diagnostics remain available
 
 ![aws-tui table handoff sequence from a Glue catalog selection through identity validation, Athena page adoption, prefill without execution, an explicit user run, and the result handoff to the S3 pane, with a rollback path back to the composition root.](diagrams/img/table-handoff.png)
 
-The sequence above carries what the flow boxes cannot: the ordering, the
-await points, and the fact that a generated statement waits for an explicit
-run. A failure at any step restores the snapshot rather than leaving a
-half-switched service.
+The sequence above carries what the flow boxes cannot: the ordering and the await points. It also shows that a generated statement waits for an explicit run. A failure during handoff adoption restores the outgoing snapshot. A later
+query failure stays in Athena and does not restore the outgoing Glue page.
 
 Cross-service and shell-wide event communication goes through the session's
 single `MessageHub`. Parent VMs orchestrate their owned children directly when
@@ -224,30 +211,28 @@ Cross-service navigation stays service-neutral. `OpenAthenaTableRequest` and
 connection name, and region; the Athena request may add a validated snapshot
 ID. `app.py` serializes table handoffs, resolves the exact connection, rejects
 region drift, snapshots the outgoing Glue/Athena state for rollback, and
-mounts the destination through `RootVM`. For an Athena destination, the
-`AthenaPageVM` publishes the exact quoted
-`SELECT * FROM "database"."table" LIMIT 5` immediately after mount
-and before awaiting remote Athena setup; a snapshot request adds
-`FOR VERSION AS OF <snapshot-id>` before the limit. The query VM keeps its VMx
+mounts the destination through `RootVM`.
+
+For an Athena destination, the `AthenaPageVM` publishes the exact quoted `SELECT * FROM "database"."table" LIMIT 5` immediately after mount. This happens before awaiting remote Athena setup. A snapshot request adds `FOR VERSION AS OF <snapshot-id>` before the limit. The query VM keeps its VMx
 Run command disabled while the exact workgroup, catalog, and database context
-is resolving. `AthenaClient` sends that selected catalog and database through
+is resolving.
+
+`AthenaClient` sends that selected catalog and database through
 `QueryExecutionContext`, and categorized start-query validation failures cross
 the runner as fixed redacted domain errors. Athena receives the generated SQL
 in the editor but does not execute it automatically. For S3,
 `OpenS3LocationRequest` carries the
-exact connection, region, URI, pane, and reveal-object intent. The Results VM
+exact connection, region, URI, pane, and reveal-object intent.
+
+The Results VM
 reloads an execution and publishes only when it succeeded, belongs to the
 active context, and has a valid `s3://` output location. Missing, malformed,
 ambiguous, or stale identities stop at an advisory; VMs never import UI code.
-`CopyTableReferenceRequest` carries one exact `TableRef` to the composition
-root, which updates `TableClipboardVM` and hands the identifier to the app's
-clipboard writer, whose toast states which channel actually accepted it.
-Palette eligibility is VM-owned state: the palette projects global commands
+
+`CopyTableReferenceRequest` carries one exact `TableRef` to the composition root. The root updates `TableClipboardVM` and hands the identifier to the app's clipboard writer. The writer's toast states which channel actually accepted it. Palette eligibility is VM-owned state: the palette projects global commands
 and only commands whose declared service IDs include the active service.
 
-Cross-service and shared-chrome messages use the `MessageHub`: VMs subscribe
-directly where they own the reaction, while widgets use `HubSubscriberMixin`
-when a view must consume hub traffic. Local VM-to-view updates use each VM's
+Cross-service and shared-chrome messages use the `MessageHub`. VMs subscribe directly where they own the reaction. Widgets use `HubSubscriberMixin` when a view must consume hub traffic. Local VM-to-view updates use each VM's
 `on_property_changed` observable instead of the global hub. Widget-owned
 subscriptions are disposed on unmount, and VM-owned subscriptions are disposed
 with the VM lifecycle.
@@ -277,9 +262,7 @@ with `uv run pytest`. Opt into the S3-compatible tier with
 default `addopts` filter excludes (`-m 'not integration'`).
 
 ## 6. Layer-rule check
-`scripts/check-layers.sh` parses Python imports with `ast` across the
-five layer subtrees, resolves relative imports to absolute module names,
-and matches them against the banned-import rules inlined in the script.
+`scripts/check-layers.sh` parses Python imports with `ast` across the five layer subtrees. It resolves relative imports to absolute module names and matches them against the banned-import rules inlined in the script.
 The composition root and `app.py` are deliberately excluded — they live
 at `src/aws_tui/` top-level so the check never inspects them.
 
@@ -301,12 +284,13 @@ at `src/aws_tui/` top-level so the check never inspects them.
    `src/aws_tui/services/glue/service.py` follows the same factory
    lifecycle for an AWS-only, read-only three-view page and retains
    validated selection identifiers per connection name and region.
-   S3 owns independent sources for each pane, while single-context AWS services
-   use `RootVM`'s active connection and are rebuilt as a whole when their source
-   changes.
+
+   S3 owns independent sources for each pane. Single-context AWS services use `RootVM`'s active connection and are rebuilt as a whole when their source changes.
    `src/aws_tui/services/athena/service.py` is the corresponding query-service
    reference: it composes an Athena client, read-only SQL policy, and a fresh
-   `AthenaPageVM` per AWS connection. Glue composes its own contextual Athena
+   `AthenaPageVM` per AWS connection.
+
+   Glue composes its own contextual Athena
    client for `IcebergInspector`; it does not reuse the mounted Athena VM.
 5. `src/aws_tui/domain/cross_fs.py` — the engine that moves bytes
    between any pair of `FileSystemProvider`s.
@@ -314,7 +298,7 @@ at `src/aws_tui/` top-level so the check never inspects them.
    tests in `tests/unit/ui/`.
 7. `src/aws_tui/vm/nav_menu_vm.py` + `src/aws_tui/ui/widgets/nav_menu.py` —
    the left-rail nav: services list on top, Settings docked at the
-   bottom (split into two `OptionList`s in the widget).
+   bottom (`NavRow` widgets in two `Vertical` containers).
 8. `src/aws_tui/vm/settings/settings_vm.py` +
    `src/aws_tui/ui/widgets/settings_view.py` — the in-app Settings
    page (built per-mount, not as an `AppContext` singleton — see the

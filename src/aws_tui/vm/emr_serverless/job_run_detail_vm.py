@@ -43,6 +43,7 @@ class JobRunDetailVM:
         self._state: PaneState = PaneState.EMPTY
         self._error_text: str | None = None
         self._disposed: bool = False
+        self._read_revision = 0
         self._inner: ComponentVMOf[None] = (
             ComponentVMOf[None]
             .builder()
@@ -84,6 +85,7 @@ class JobRunDetailVM:
         None, clears."""
         if (application_id, job_run_id) == (self._application_id, self._job_run_id):
             return
+        self._read_revision += 1
         self._application_id = application_id
         self._job_run_id = job_run_id
         self._detail = None
@@ -108,23 +110,17 @@ class JobRunDetailVM:
         if self._application_id is None or self._job_run_id is None:
             self._set_state(PaneState.EMPTY)
             return
-        # Capture target identity BEFORE the await — a concurrent
-        # ``set_target(new_app, new_run)`` (from picker / cycle /
-        # row click) landing during the get_job_run round trip must
-        # not let the prior run's detail clobber the new target's
-        # state. The detail poller and user actions run in different
-        # Textual worker groups, so ``exclusive=True`` doesn't
-        # prevent cross-group interleaving.
+        # Poll and selection run in independent worker groups. A fresh read
+        # or target change invalidates older responses, including A -> B -> A.
         target_app_id = self._application_id
         target_run_id = self._job_run_id
+        self._read_revision += 1
+        read_revision = self._read_revision
         self._set_state(PaneState.LOADING)
         try:
             d = await self._client.get_job_run(target_app_id, target_run_id)
         except ProviderError as exc:
-            if self._disposed or (self._application_id, self._job_run_id) != (
-                target_app_id,
-                target_run_id,
-            ):
+            if self._disposed or self._read_revision != read_revision:
                 return  # target changed mid-flight; drop the stale error
             new_state, self._error_text = map_provider_error(exc)
             self._set_state(new_state)
@@ -134,10 +130,7 @@ class JobRunDetailVM:
             # has. Without this the worker exception is swallowed
             # by Textual's run_worker and the detail pane stays
             # stuck on LOADING.
-            if self._disposed or (self._application_id, self._job_run_id) != (
-                target_app_id,
-                target_run_id,
-            ):
+            if self._disposed or self._read_revision != read_revision:
                 return
             self._error_text = redact_text(f"unexpected error: {exc}")
             report_unexpected_service_error(
@@ -145,10 +138,7 @@ class JobRunDetailVM:
             )
             self._set_state(PaneState.ERROR)
             return
-        if self._disposed or (self._application_id, self._job_run_id) != (
-            target_app_id,
-            target_run_id,
-        ):
+        if self._disposed or self._read_revision != read_revision:
             return  # target changed mid-flight; drop the stale detail
         # Success path — drop any error text carried forward from
         # a prior failed poll (sibling parity with PaneVM._reload).

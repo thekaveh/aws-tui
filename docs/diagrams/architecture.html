@@ -63,7 +63,7 @@
       <g id="textual-views"><desc>DualPane mounted by service_view_factory.py; ContextPicker and ServiceTabStrip serve GluePage and AthenaPage.</desc></g>
       <g id="viewmodels"><desc>ServiceSelectionStore and TableClipboardVM support GluePageVM with GlueCatalogVM, GlueJobsVM, and GlueCrawlersVM; AthenaPageVM owns AthenaQueryVM, AthenaHistoryVM, AthenaResultsVM, and AthenaSavedVM.</desc></g>
       <g id="domain-models"><desc>S3FS + LocalFS feed CrossFsCopy / Move and TransferJournal. EMR Serverless Client uses an S3 log adapter. Glue uses IcebergInspector and AthenaQueryRunner with TableRef and QueryContext.</desc></g>
-      <g id="infrastructure"><desc>ConnectionResolver resolves exact connection + region selection and constructs SDK client contexts.</desc></g>
+      <g id="infrastructure"><desc>ConnectionResolver resolves exact connection + region identity. AwsSessionFactory constructs SDK client contexts.</desc></g>
       <g id="cross-service-handoffs"><desc>Glue-to-Athena uses OpenAthenaTableRequest; Athena uses OpenGlueTableRequest and OpenS3LocationRequest. Snapshot time travel follows the same app transaction. TableClipboardVM handles CopyTableReferenceRequest for copy quoted table ref and same-source insert.</desc></g>
 
       <g font-family="Fira Code Embedded" text-anchor="middle">

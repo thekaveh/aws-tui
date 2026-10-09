@@ -164,8 +164,7 @@ To discover and select an exact source:
 3. Reopen the palette and type a configured connection name or region. Select
    **Use &lt;name&gt; · &lt;region&gt; for &lt;service&gt;** with the arrow keys, then press
    `Enter`. For example, **Use prod · us-west-2 for Glue** selects that exact
-   configured source. On S3, focus the pane to change before opening the palette;
-   Athena, Glue and EMR Serverless change the whole page's source.
+   configured source. On S3, focus the pane to change before opening the palette. Athena, Glue and EMR Serverless change the whole page's source.
 
 Names and regions display literally. Unavailable commands are omitted, and
 Settings has no source choices. Opening the palette reads local configuration;
@@ -203,21 +202,17 @@ In-app:
 - Shift+S → `aws s3 · staging · us-east-1`.
 - Shift+S → `aws s3 · prod · us-west-2`.
 
-Per-pane independence: put `dev` on the left and `prod` on the right,
-then `c` to copy an object between them — `CrossFsCopy` streams S3→S3
-without an intermediate local hop.
+Per-pane independence: put `dev` on the left and `prod` on the right. Then press `c` to copy an object between them. `CrossFsCopy` streams S3→S3 without an intermediate local hop.
 
 The cycle also includes any `s3-compatible` entries from
 `config.toml` and the local filesystem. Add MinIO / R2 / B2 / Wasabi
 connections via the in-app **Settings** nav page (`,`) — they join
 the cycle immediately, no relaunch.
 
-> Expired SSO tokens are detected offline at launch via the SSO
-> cache freshness probe (see
-> [connections.md §3](connections.md#3-auto-discovery-and-sso-cache-probe));
-> expired or missing SSO profiles are skipped by the boot chain,
-> marked unreachable for the session, and surfaced through a recovery
-> toast while the app mounts local panes instead of hanging. Run
+> Expired SSO tokens are detected offline at launch via the SSO cache freshness probe.
+> See [connections.md §3](connections.md#3-auto-discovery-and-sso-cache-probe).
+> The boot chain skips expired or missing SSO profiles and marks them unreachable for the session.
+> A recovery toast surfaces them while the app mounts local panes instead of hanging. Run
 > `aws sso login --profile <name>` externally, then press `a` or choose
 > **Retry active source credentials** from the command palette.
 
@@ -263,10 +258,7 @@ force_path_style = false
 ```
 
 Then `Shift+S` cycles through all three (plus your AWS profiles and
-local) on the focused pane. If you'd rather edit interactively, open
-**Settings** (`,`) → "S3-Compatible Connections" section → "+ Add"
-to enter the same data through the inline form, or use the per-row
-Edit / Delete chips to manage entries already there. Saves are
+local) on the focused pane. For interactive editing, open **Settings** (`,`) → "S3-Compatible Connections" section → "+ Add" to enter the same data through the inline form. Use the per-row Edit / Delete chips to manage entries already there. Saves are
 atomic (`tempfile` + `os.replace`) so the config can't end up
 half-written.
 
@@ -283,12 +275,13 @@ aws-tui --profile analytics --location 's3://reports-bucket/daily/'
 aws-tui --location './downloads'
 ```
 
-These selectors apply to this session only; no configuration is saved.
-`--connection NAME` selects an exact known connection, including an AWS alias
+These selectors apply to this session only; no configuration is saved. `--connection NAME` selects an exact known connection, including an AWS alias
 or S3-compatible source. `--profile NAME` selects an exact locally discoverable
 AWS profile and ignores configured name collisions. These identity flags are
 mutually exclusive and take precedence over `[defaults].connection`,
-`AWS_DEFAULT_PROFILE`, and `AWS_PROFILE`. Without them, other explicit selectors
+`AWS_DEFAULT_PROFILE`, and `AWS_PROFILE`.
+
+Without them, other explicit selectors
 use the ordinary startup precedence: a resolvable configured default, then an
 AWS environment profile (including an AWS connection alias), then the first
 available connection. The resolved source is pinned for startup.
@@ -299,20 +292,22 @@ letters/digits separated by hyphens and ending in digits, for example
 `emr-serverless`; S3-compatible sources support `s3` only. With no service flag,
 S3 is the default.
 
-`--location LOCATION` implies S3 and cannot be combined with another service.
-Use `s3://BUCKET[/PREFIX]` to initialize and focus the left pane at the literal
+`--location LOCATION` implies S3 and cannot be combined with another service. Use `s3://BUCKET[/PREFIX]` to initialize and focus the left pane at the literal
 bucket/prefix before its first listing. Percent escapes, spaces, repeated
-slashes, and other literal key characters are preserved. Use an existing native
-directory to initialize and focus the right pane; relative paths resolve from
-CWD and `~` expands to your home. If no remote source is available, a local
+slashes, and other literal key characters are preserved. Use an existing native directory to initialize and focus the right pane. Relative paths resolve from CWD and `~` expands to your home.
+
+If no remote source is available, a local
 location opens local-only panes. Startup lists/reads only and does not copy,
 delete, upload, submit SQL, or start jobs.
 
 All five flags conflict with `--demo`, effective `AWS_TUI_DEMO`, and `doctor`.
 Unknown sources, unsupported service/source pairs, malformed regions, missing
-local directories, file paths, missing S3 buckets, control characters, and
-unsupported URI/ARN forms fail before UI startup with a nonzero status and a
-one-line error. Parser errors use argparse's usage output. Runtime failure of
+local directories, and file paths fail before UI startup. Control characters
+and unsupported URI/ARN forms also fail before startup. Each failure returns a
+nonzero status with a one-line error. Missing S3 buckets fail during the
+application's startup read. Parser errors use argparse's usage output.
+
+Runtime failure of
 the selected source exits nonzero without trying another account or silently
 mounting local fallback. `--help` and `--version` exit before source discovery
 or UI startup.
@@ -324,12 +319,9 @@ stylesheet instantly without a restart:
 
 - Press `t` to open the theme picker modal, arrow to the theme you
   want, hit Enter.
-- Press `Shift+T` (`T`) to cycle straight to the next theme without
-  the modal — handy when you just want to flip carbon ↔ voidline.
+- Press `Shift+T` (`T`) to cycle straight to the next theme without the modal. This is handy when you just want to flip carbon ↔ voidline.
 
-The command palette has two working global theme commands: `:` then
-**Theme picker** opens the same picker as `t`, and `:` then **Cycle theme**
-has the same effect as `Shift+T`. Per-theme dynamic entries such as
+The command palette has two working global theme commands. `:` then **Theme picker** opens the same picker as `t`. `:` then **Cycle theme** has the same effect as `Shift+T`. Per-theme dynamic entries such as
 `theme switch ▸ voidline` remain deferred and are not registered, so use
 **Theme picker** to select a specific built-in or custom theme.
 
@@ -346,9 +338,7 @@ Theme names: `carbon` (default), `voidline`, `lattice`, `amber`,
 the full per-theme palette breakdown.
 
 ### 2.3. Add a custom theme
-A full replacement bypasses the built-in composition, so a repository checkout
-must combine the raw built-in theme, then the shared operational layer, before
-installing a custom file:
+A full replacement bypasses the built-in composition. Before installing a custom file, a repository checkout must combine the raw built-in theme, then the shared operational layer:
 
 ```bash
 # Substitute your platform's config directory (see docs/platforms.md).
@@ -436,10 +426,9 @@ expire. `Ctrl+T` works with an empty overlay too. Startup scans current-schema
 metadata in a background worker; it never starts a transfer automatically.
 
 ### 4.1. What gets saved
-Each transfer has a private durable summary containing its operation, original
-connection names and fingerprints, literal source and effective destination,
-UTC timestamps, observed bytes, outcome, publication certainty, and a fixed
-failure category. Zero bytes and an unknown total remain distinct. Credentials,
+Each transfer has a private durable summary. It contains the operation, original connection names and fingerprints, literal source and effective destination, and UTC timestamps. It also contains observed bytes, outcome, publication certainty, and a fixed failure category. Zero bytes and an unknown total remain distinct.
+
+Credentials,
 raw provider errors, client objects, multipart IDs, and raw endpoint settings
 are excluded. Begin and attempted-publication metadata are saved before
 provider mutation; terminal summaries are saved before the worker settles.
@@ -516,9 +505,7 @@ exception: TypeError: unsupported operand type(s) for +: ...
 ... (last 1000 lines of aws-tui.log)
 ```
 
-The writer reads backward across the active log and numbered rotations. It
-retains up to 1,000 lines while reading at most 1 MiB in total, so producing a
-crash report does not load every retained log into memory.
+The writer reads backward across the active log and numbered rotations. It retains up to 1,000 lines while reading at most 1 MiB in total. Thus, producing a crash report does not load every retained log into memory.
 
 The crash dump writer is live in v0.8.x. The interactive crash modal
 below exists as UI scaffolding but is not wired into the unhandled
@@ -621,10 +608,7 @@ other services.
 2. Open the command palette with `:` or `Ctrl+K`.
 3. Choose **Open table location in S3**.
 
-aws-tui validates that the selected table has an `s3://` location,
-resolves the exact Glue connection name, verifies its region still
-matches, rebuilds S3 through the normal service factory, and navigates
-the left pane to `/<bucket>/<prefix>`. Missing/malformed locations,
+aws-tui validates that the selected table has an `s3://` location and resolves the exact Glue connection name. It verifies that the region still matches, rebuilds S3 through the normal service factory, and navigates the left pane to `/<bucket>/<prefix>`. Missing/malformed locations,
 removed connections, and region mismatches produce an advisory and do
 not navigate. The advisory and logs omit the full URI.
 
@@ -643,14 +627,9 @@ and never makes a real AWS call.
 ## 6. Run Athena queries safely
 
 Athena is an AWS-only, read-only query service. Select **Athena** in the
-nav rail and choose a workgroup, catalog, and database in the page header.
-Each is a bordered, keyboard-focusable selector; use `Shift+W`, `Shift+C`,
-or `Shift+D` to focus the corresponding control and commit or cancel it with
-the shared picker workflow above.
-The four views are Query (`1`), History (`2`), Results (`3`), and Saved (`4`).
-`Shift+S` rebuilds the whole Athena page for the next supported AWS connection;
-the old page is disposed, so rows, selections, loaders, result fetches, and any
-app-owned active query do not cross profiles or regions. Selections may be
+nav rail and choose a workgroup, catalog, and database in the page header. Each is a bordered, keyboard-focusable selector. Use `Shift+W`, `Shift+C`, or `Shift+D` to focus the corresponding control. Commit or cancel it with the shared picker workflow above. The four views are Query (`1`), History (`2`), Results (`3`), and Saved (`4`).
+
+`Shift+S` rebuilds the whole Athena page for the next supported AWS connection. The old page is disposed. Thus, rows, selections, loaders, result fetches, and any app-owned active query do not cross profiles or regions. Selections may be
 remembered only within the same connection name and region and are revalidated
 when the page returns.
 
@@ -658,9 +637,7 @@ when the page returns.
 
 Start with the least privilege required for the views in use. The
 [AWS Service Authorization Reference](https://docs.aws.amazon.com/service-authorization/latest/reference/list_athena.html)
-defines each Athena action and its resource types. This is the minimum Athena
-API policy used by aws-tui; scope workgroup and data-catalog resources where
-the action supports resource-level permissions:
+defines each Athena action and its resource types. This is the minimum Athena API policy used by aws-tui. Scope workgroup and data-catalog resources where the action supports resource-level permissions:
 
 ```json
 {
@@ -700,9 +677,7 @@ documents this pass-through model in
 For Lake Formation-governed data, grant the required Lake Formation
 `DESCRIBE` and `SELECT` permissions and IAM
 `lakeformation:GetDataAccess`. Lake Formation uses that IAM action to vend
-temporary credentials to Athena. `DATA_LOCATION_ACCESS` permits creating or
-altering Data Catalog resources that point at a registered location; it is not
-a query permission and is not required merely to read an existing table. See
+temporary credentials to Athena. `DATA_LOCATION_ACCESS` permits creating or altering Data Catalog resources that point at a registered location. It is not a query permission and is not required merely to read an existing table. See
 [Manage Lake Formation and Athena user permissions](https://docs.aws.amazon.com/athena/latest/ug/lf-athena-user-permissions.html)
 and
 [Underlying data access control](https://docs.aws.amazon.com/lake-formation/latest/dg/access-control-underlying-data.html).
@@ -717,9 +692,7 @@ catalog requirements in
 
 ### 6.2. Customer S3 output versus managed results
 
-The shipped Query view sends the selected workgroup and query execution
-context without a caller-side `ResultConfiguration`; its
-`AthenaQueryVM` runner does not pass `output_location` to the domain client.
+The shipped Query view sends the selected workgroup and query execution context without a caller-side `ResultConfiguration`. Its `AthenaQueryVM` runner does not pass `output_location` to the domain client.
 The lower-level `AthenaClient.start_query(...)` contract is broader: callers
 may pass an optional `output_location`, in which case the client sends exactly
 `ResultConfiguration.OutputLocation`. The shipped query path intentionally
@@ -732,7 +705,9 @@ modes:
   `s3:ListBucketMultipartUploads` on the result bucket, plus `s3:PutObject`,
   `s3:AbortMultipartUpload`, `s3:ListMultipartUploadParts`, and
   `s3:GetObject` on the result prefix. Athena uses multipart uploads for query
-  results, including partial failed or cancelled output. `s3:GetObject` is
+  results, including partial failed or cancelled output.
+
+  `s3:GetObject` is
   also required to retrieve output and to browse the artifact through S3.
   See
   [Work with query results and recent queries](https://docs.aws.amazon.com/athena/latest/ug/querying.html)
@@ -741,10 +716,7 @@ modes:
 - **Athena managed results.** Managed results do not create a customer S3
   result artifact. They remain available through Athena for 24 hours and
   managed results do not support result reuse. aws-tui continues to page rows
-  with `GetQueryResults`; no S3 output location is required. If the workgroup
-  uses a customer managed KMS key, both the query principal and the managed
-  results key policy need the documented KMS access, including
-  `kms:Decrypt`, `kms:GenerateDataKey`, and `kms:DescribeKey`. See
+  with `GetQueryResults`; no S3 output location is required. If the workgroup uses a customer managed KMS key, both the query principal and the managed results key policy need the documented KMS access. This includes `kms:Decrypt`, `kms:GenerateDataKey`, and `kms:DescribeKey`. See
   [Managed query results](https://docs.aws.amazon.com/athena/latest/ug/managed-results.html).
 
 The Query view labels the workgroup mode as managed results or S3 output. If
@@ -780,11 +752,10 @@ accepted by the current parser are:
 
 `ALL` or `DISTINCT` must appear immediately after the operation and before the
 matching modifier; forms such as `UNION BY NAME ALL` and `UNION CORRESPONDING
-DISTINCT` are rejected. The local policy does not resolve or validate matching
-column names, compare them to either operand, or impose extra semantic rules on
-the parser-accepted parenthesized column list. A standalone `VALUES` root is
-rejected; it becomes allowed only below a `SELECT` or a root set operation.
-Nested DDL, DML, commands, `INTO`, locks, analysis, execution, or transaction
+DISTINCT` are rejected. The local policy does not resolve or validate matching column names or compare them to either operand. It imposes no extra semantic rules on the parser-accepted parenthesized column list.
+
+A standalone `VALUES` root is
+rejected; it becomes allowed only below a `SELECT` or a root set operation. Nested DDL, DML, commands, `INTO`, locks, analysis, execution, or transaction
 nodes are rejected.
 
 **SHOW**
@@ -888,9 +859,7 @@ UNLOAD (SELECT 1) TO 's3://example/results/'
 CALL system.runtime.kill_query()
 ```
 
-Empty or unparsable input, multiple statements, all other DDL and DML, CTAS,
-and every form outside the grammar above are also rejected before any
-`start_query_execution` call. The editor retains the rejection as validation
+Empty or unparsable input, multiple statements, all other DDL and DML, CTAS, and every form outside the grammar above are rejected. This happens before any `start_query_execution` call. The editor retains the rejection as validation
 feedback and does not dispatch the SQL. IAM, Lake Formation, workgroup, S3,
 bucket, and KMS policies remain the authorization boundary.
 
@@ -919,12 +888,10 @@ its SQL. **Open in query editor** copies SQL without executing or bypassing the
 read-only policy.
 
 For customer S3 output, choose **Open Athena result in S3** from the command
-palette. The Results VM does not trust History hydrated detail for navigation:
-it performs an authoritative reload with `GetQueryExecution`, requires a
-succeeded execution, exact execution ID, active connection, region and query
-context, and a valid `s3://` output location. It then rebuilds S3 under the
-exact connection and region, reveals that result artifact, and selects it.
-Missing, managed, malformed, non-S3, foreign-context, or unsucceeded output
+palette. The Results VM does not trust History hydrated detail for navigation: it performs an authoritative reload with `GetQueryExecution`. It requires a succeeded execution, exact execution ID, active connection, region and query context, and a valid `s3://` output location.
+
+It then rebuilds S3 under the
+exact connection and region, reveals that result artifact, and selects it. Missing, managed, malformed, non-S3, foreign-context, or unsucceeded output
 leaves the user on Athena with a redacted advisory; no fallback profile is
 substituted.
 
@@ -1004,8 +971,7 @@ fresh context validation and same-name credential-account limitations.
 
 1. Open Results with `3` after a successful query or a History selection.
    Use arrow keys to select a row and column, including either column when
-   labels are duplicated. Press Enter or click the current cell to select it,
-   including the first cell or a result containing only one cell.
+   labels are duplicated. Press Enter or click the current cell to select it. This includes the first cell or a result containing only one cell.
 2. Press `Alt+Enter` to read the full original value. Scroll the read-only
    inspector; Escape or Close returns to the same cell if it is still current.
 3. Press `Alt+C` for one cell or `Alt+Shift+C` for a row. The payload is JSON:
@@ -1037,9 +1003,7 @@ Athena palette show configured keys; customize the six `athena.*` actions in
 
 ## 7. Inspect and query Glue tables through Athena
 
-Glue → Athena navigation is an explicit, read-only handoff. It carries the
-selected table's catalog, database, table, connection name, and region in an
-immutable `TableRef`; it does not pass a client or reuse a different profile.
+Glue → Athena navigation is an explicit, read-only handoff. It carries the selected table's catalog, database, table, connection name, and region in an immutable `TableRef`. It does not pass a client or reuse a different profile.
 
 1. Select **Glue**, then choose a Catalog database and table.
 2. Open `:` or `Ctrl+K` and choose **Query table in Athena**.
@@ -1051,16 +1015,13 @@ immutable `TableRef`; it does not pass a client or reuse a different profile.
 
 4. Edit it if needed, then press `Ctrl+Enter` to execute.
 
-aws-tui quotes the database and table identifiers independently, discovers the
-destination catalog/database through bounded pagination, sends both through
-Athena's query execution context, and selects an enabled workgroup for the same
-source. The editor shows the starter statement as soon as Athena
-mounts, even while remote context discovery is still in progress. Run remains
+aws-tui quotes the database and table identifiers independently and discovers the destination catalog/database through bounded pagination. It sends both through Athena's query execution context and selects an enabled workgroup for the same source. The editor shows the starter statement as soon as Athena
+mounts, even while remote context discovery is still in progress.
+
+Run remains
 disabled and the query controls report `RESOLVING TABLE CONTEXT` until that
 exact context is ready. aws-tui never executes generated queries
-automatically. If the handoff is cancelled, superseded, or cannot mount the
-destination, the composition root restores the prior Glue/Athena state instead
-of leaving a partially switched page.
+automatically. If the handoff is cancelled, superseded, or cannot mount the destination, the composition root restores the prior Glue/Athena state. This avoids leaving a partially switched page.
 
 From an Athena Query view, **Open query table in Glue** is available through
 the command palette when the read-only SQL resolves to exactly one visible
@@ -1068,10 +1029,7 @@ table. Queries with zero or multiple table references remain on Athena.
 
 ### 7.1. Iceberg detection and metadata views
 
-Glue table detail classifies a table as Iceberg when normalized Glue
-parameters such as `table_type`, `tableType`, `classification`, `provider`, or
-`spark.sql.sources.provider`, or the Glue `TableType`, contains the exact
-`iceberg` marker. Only then does the Catalog detail surface show Iceberg
+Glue table detail classifies a table as Iceberg when normalized Glue parameters or the Glue `TableType` contain the exact `iceberg` marker. Parameters include `table_type`, `tableType`, `classification`, `provider`, and `spark.sql.sources.provider`. Only then does the Catalog detail surface show Iceberg
 metadata.
 
 The tabs are:
@@ -1101,17 +1059,17 @@ and the metadata row limit. The UI reveals 50 cached rows at a time;
 **Load more** exposes cached rows without issuing another Athena query. A
 truncation warning remains after every fetched row is visible, and failed
 refreshes retain prior coverage and fetched rows.
-**Retry** reruns only the active tab. A permission, throttling, shape, or
+**Retry** reruns only the active tab.
+
+A permission, throttling, shape, or
 network error is a partial failure of that metadata pane and does not erase
 successful sibling tabs.
 
-Metadata row limits do not bound bytes scanned or Athena costs.
-These are real Athena queries, not free Glue lookups. Account for
+Metadata row limits do not bound bytes scanned or Athena costs. These are real Athena queries, not free Glue lookups. Account for
 metadata-query costs, workgroup limits, bytes scanned, result storage, and
-concurrency exactly as for other Athena statements. The selected profile needs
-the Glue read operations in §5.1, the Athena operations in §6.1, source
-data/catalog authorization where Athena requires it, and result-location
-permissions for its workgroup. Lake Formation-governed tables additionally
+concurrency exactly as for other Athena statements.
+
+The selected profile needs the Glue read operations in §5.1 and the Athena operations in §6.1. It also needs source data/catalog authorization where Athena requires it, and result-location permissions for its workgroup. Lake Formation-governed tables additionally
 need `lakeformation:GetDataAccess` plus the relevant `DESCRIBE`/`SELECT`
 grants. A denied metadata table is reported generically; raw SQL, table
 metadata values, and provider exception text are not written to UI errors or
@@ -1130,9 +1088,7 @@ FOR VERSION AS OF 4201 LIMIT 5
 
 The snapshot ID must be a non-negative integer present in the visible snapshot
 page. Switching to another metadata tab clears the actionable snapshot
-selection. As with an ordinary table handoff, generated SQL remains
-unexecuted until `Ctrl+Enter`; review the catalog, database, table, workgroup,
-snapshot ID, and expected scan before running it.
+selection. As with an ordinary table handoff, generated SQL remains unexecuted until `Ctrl+Enter`. Review the catalog, database, table, workgroup, snapshot ID, and expected scan before running it.
 
 After a successful customer-S3 execution, **Open Athena result in S3**
 authoritatively reloads the execution and reveals its exact CSV artifact under
@@ -1152,22 +1108,17 @@ Launch `aws-tui --demo` and follow this no-network path:
 5. Use `Shift+S` to compare the disjoint `demo-prod` data and the scoped
    `demo-shared` access state.
 
-Current scope is read-only operational visibility. aws-tui does not create,
-alter, optimize, expire, rollback, branch, tag, or delete Iceberg resources;
-it does not create/edit/delete Glue or Athena resources; and it does not infer
-a write workflow from metadata. Large metadata tables remain bounded by the
+Current scope is read-only operational visibility. aws-tui does not create, alter, optimize, expire, rollback, branch, tag, or delete Iceberg resources. It does not create/edit/delete Glue or Athena resources or infer a write workflow from metadata. Large metadata tables remain bounded by the
 limits above, so the UI is an operational inspection surface rather than a
 complete metadata export tool.
 
 ### 7.4. Local row preview with DuckDB (Peek)
 
-The **Peek** tab previews rows of the selected Iceberg table by querying its
-S3 location directly with a local DuckDB engine — no Athena workgroup, no
-query execution, no AWS query bill. It needs the optional `duckdb` extra
-(`pip install aws-tui[duckdb]`) and an AWS profile connection; it is not
-available on `s3-compatible` connections. Without the extra installed, the
-tab is still present and selectable; choosing it reports the missing engine
-and states the install command instead of disappearing silently.
+The **Peek** tab previews rows of the selected Iceberg table by querying its S3 location directly with a local DuckDB engine. There is no Athena workgroup, query execution, or AWS query bill. It needs the optional `duckdb` extra
+(the [Git installation with the DuckDB extra](install.md#2-optional-extras)) and an AWS profile connection; it is not
+available on `s3-compatible` connections.
+
+Without the extra installed, the tab is still present and selectable. Choosing it reports the missing engine and states the install command instead of disappearing silently.
 
 1. Select **Glue**, open an Iceberg table, and switch to the **Peek** tab
    (it sits after **Refs** in the Iceberg tab strip).
@@ -1177,27 +1128,18 @@ and states the install command instead of disappearing silently.
    contains the four-character string `"NULL"`) render in the same table
    widget the six metadata tabs use.
 3. The footer reports the exact row count and the row-limit ceiling, e.g.
-   `100 rows · limit 100`. Unlike the six metadata tabs' load-more control,
-   which only widens an already-capped local window over rows already in
-   hand, Peek's `↓` issues a genuinely new query at the next row-limit step
-   (100 → 1,000 → 10,000); it disables once the top step is reached or a
-   page comes back short of the limit.
+   `100 rows · limit 100`. The six metadata tabs' load-more control only widens an already-capped local window over rows already in hand. Peek's `↓` issues a genuinely new query at the next row-limit step (100 → 1,000 → 10,000). It disables once the top step is reached or a page comes back short of the limit.
 4. `↻` retries the current query, honoring the active snapshot pin and row
    limit.
 
-DuckDB resolves AWS credentials itself, through a fresh `credential_chain`
-secret bound to the connection's exact profile and region on every query —
-never the ambient default credential chain, and never a cached token, so an
-`aws sso login` run in another terminal is picked up on the next `↻` the same
-way an Athena query already is. Queries run entirely on your machine: the
-engine reads S3 objects directly with whatever permissions your profile
-already grants on that bucket, and it never touches Athena, a workgroup, or a
-query-result location, so it incurs none of the costs or setup in §6 and
-§7.1. The one exception is setup, not querying: the first Peek query on a
-machine downloads DuckDB's `httpfs`, `aws`, and `iceberg` extensions from
-`extensions.duckdb.org` and caches them under `~/.duckdb/`, so on a host
-without egress to that domain the first query fails until the cache is
-populated (see [Installation](install.md)). Forbidden, not-found, not-Iceberg, and expired-credential failures
+DuckDB resolves AWS credentials through a new `credential_chain` secret for every query.
+The secret specifies the selected connection's profile and region.
+DuckDB can read cached SSO credentials supplied by that profile.
+After `aws sso login` in another terminal, press `↻` to query with refreshed credentials.
+
+Queries run entirely on your machine. The engine reads S3 objects directly with whatever permissions your profile already grants on that bucket. It never touches Athena, a workgroup, or a query-result location. Thus, it incurs none of the costs or setup in §6 and §7.1.
+
+The one exception is setup, not querying. The first Peek query on a machine downloads DuckDB's `httpfs`, `aws`, and `iceberg` extensions from `extensions.duckdb.org`. It caches them under `~/.duckdb/`. On a host without egress to that domain, the first query fails until the cache is populated (see [Installation](install.md)). Forbidden, not-found, not-Iceberg, and expired-credential failures
 surface through the same placeholder styling as the six metadata tabs.
 
 ## 8. Diagnose local setup and source access
@@ -1248,18 +1190,17 @@ and success confirms only that operation. An explicitly selected
 S3-compatible source may read its configured keychain credentials.
 
 Probes use the standard SDK credential chain with connect and read timeouts
-of 5 seconds and `total_max_attempts=1`, including credential-provider clients.
-These are per-request limits, not a total deadline for a multi-step chain.
-No credentials or SSO tokens are persisted. Cached SSO is used without OIDC
-refresh or rotation. Expired SSO, `credential_process`, and interactive MFA
+of 5 seconds and `total_max_attempts=1`, including credential-provider clients. These are per-request limits, not a total deadline for a multi-step chain. No credentials or SSO tokens are persisted. Cached SSO is used without OIDC
+refresh or rotation.
+
+Expired SSO, `credential_process`, and interactive MFA
 require authentication in another terminal; the probe does not launch a
 process or prompt for MFA. Dynamic providers may require network requests
 only after an explicit probe request.
 
 ### 8.3. Locate runtime evidence
 
-Press `?` in the running TUI and scroll down to **Diagnostics** for the
-doctor command, active log file, and crash directory. Those locations come
+Press `?` in the running TUI and scroll down to **Diagnostics**. This shows the doctor command, active log file, and crash directory. Those locations come
 from the running app's log and crash path selection, including custom
 context paths and legacy/platform-native cache resolution. Diagnostic path
 text displays brackets literally and escapes control characters. Doctor
@@ -1268,10 +1209,7 @@ also reports effective local paths without creating them.
 
 ## 9. Preview files with Quick Look
 
-Select a local or S3 file in the file pane and press `Space`. For example,
-open `measurements.csv` to inspect its header and complete records,
-`events.json` or `events.jsonl` to inspect JSON values, or `sample.parquet`
-to inspect column names, types and a capped row sample. Filename and MIME
+Select a local or S3 file in the file pane and press `Space`. For example, open `measurements.csv` to inspect its header and complete records. Open `events.json` or `events.jsonl` to inspect JSON values. Open `sample.parquet` to inspect column names, types and a capped row sample. Filename and MIME
 hints are checked against the bounded content sniff. Other content displays
 as raw text.
 
@@ -1282,20 +1220,17 @@ Use `Up` / `Down` and `Left` / `Right` to reach rows and wide columns. Press
 (`— (missing)`), nested JSON and shortened (`… [truncated]`) cells remain
 distinct. Brackets and escaped control characters display literally.
 
-Raw previews retain at most 64 KiB (65,536 bytes). Structured previews share
-a budget of 32 physical file requests and 8 MiB of requested bytes, with
-ranges of at most 1 MiB, at most 50 rows and 24 columns, and a five-second
-work deadline. Decoder cleanup has a separate one-second allowance. CSV
+Raw previews retain at most 64 KiB (65,536 bytes). Structured previews share a budget of 32 physical file requests and 8 MiB of requested bytes. Ranges are at most 1 MiB. Previews show at most 50 rows and 24 columns, with a five-second work deadline. Decoder cleanup has a separate one-second allowance. CSV
 shows complete records from the prefix, including quoted multiline values.
-JSON and JSONL require the captured document to be complete and valid;
-malformed or truncated documents fall back to raw, even when their prefix
-looks valid. This is a bounded preview, not full-file sampling.
+
+JSON and JSONL require the captured document to be complete and valid. Malformed or truncated documents fall back to raw, even when their prefix looks valid. This is a bounded preview, not full-file sampling.
 
 Parquet uses bounded footer and column-range reads. Its footer is capped at
 512 KiB and selected chunks at 32 MiB of declared uncompressed data. These
 declarations do not impose a hard native-memory limit; decoding runs in a
 process that can be terminated on cancellation or deadline. Nested columns
 are sampled only when all their physical leaves fit the column cap.
+
 Encrypted metadata and external column files are unsupported. Large valid
 samples may show schema with a budget note. Named failures include
 `Unsupported Parquet codec: <name>`,

@@ -37,7 +37,9 @@ state. `Esc` interrupts query submission or stops the active app-owned execution
 1,000 rows per Athena page and retain the continuation token for `l` to load
 more. History hydrates selected execution detail, including bytes scanned and
 result reuse, with one `BatchGetQueryExecution` request per bounded 50-row
-history page. Saved independently pages named queries and prepared statements;
+history page.
+
+Saved independently pages named queries and prepared statements;
 opening either copies SQL into the editor without executing it.
 
 Workgroup configuration determines customer-S3 output or Athena managed
@@ -45,17 +47,14 @@ results. Only a successful customer-S3 execution has an artifact that can be
 opened in the S3 service.
 
 The Query view orders Query controls, Query editor, then Execution detail. Run,
-Stop, and query status participate in keyboard focus traversal when available.
-At the minimum supported terminal size of 80×24, the app uses a one-line banner
+Stop, and query status participate in keyboard focus traversal when available. At the minimum supported terminal size of 80×24, the app uses a one-line banner
 that names the service, source, region, and demo status. Compact controls and a
 scrollable Execution detail pane leave at least three rows for the SQL editor.
-Tab to Execution detail and use the Up and Down arrows to read additional rows.
-Resizing keeps typed SQL, context selections, and keyboard focus; taller terminals
+
+Tab to Execution detail and use the Up and Down arrows to read additional rows. Resizing keeps typed SQL, context selections, and keyboard focus; taller terminals
 restore the spacious banner and query layout.
 
-Glue table and Iceberg snapshot handoffs prefill a quoted
-`SELECT *` starter ending in `LIMIT 5`; the transaction explicitly projects the
-starter into the mounted editor and never executes it.
+Glue table and Iceberg snapshot handoffs prefill a quoted `SELECT *` starter ending in `LIMIT 5`. The transaction explicitly projects the starter into the mounted editor and never executes it.
 
 ## 4. Cross-service handoffs
 
@@ -68,11 +67,10 @@ artifact in S3. None of these handoffs substitutes another profile.
 ## 5. Architecture and verification
 
 `AthenaService` composes `AthenaPageVM` from query, history, results, and saved
-VMs. VMx owns commands, observable state, and lifecycle. Athena's app-owned
-snapshot pager retains VMx commands while adding immutable hydration and
-cumulative ceilings: 1,000 context, history, and saved-query items, and 10,000
-result rows. Reaching a ceiling replaces load-more with a visible safety-limit
-state that survives refresh and snapshot rollback. SQLGlot owns parsing; the
+VMs. VMx owns commands, observable state, and lifecycle. Athena's app-owned snapshot pager retains VMx commands while adding immutable hydration. Cumulative ceilings are 1,000 context, history, and saved-query items, and 10,000 result rows. Reaching a ceiling replaces load-more with a visible safety-limit
+state that survives refresh and snapshot rollback.
+
+SQLGlot owns parsing; the
 domain client owns public Athena API calls and response mapping. Generation
 and execution identity guards prevent retired async work from publishing into
 a replacement context.
@@ -89,7 +87,9 @@ Enable **Local SQL drafts** in Settings's **Athena SQL drafts** section using
 **Enable local SQL drafts**. Persistence defaults to off and is unavailable in
 demo mode. The editor border shows **Draft pending**, **Draft saved**, or
 **Draft not saved** from the acknowledged save state. Pending text has not been
-confirmed saved. Read the full fixed error or context explanation in Execution
+confirmed saved.
+
+Read the full fixed error or context explanation in Execution
 detail; edit again to retry a failed save. **No saved draft** means no current
 saved SQL. See [Configuration](../configuration.md#5-local-athena-sql-drafts)
 for the plaintext storage location, retention, and deletion behavior.
@@ -104,7 +104,9 @@ detail. **Restore** is a separate action. Close or Escape returns focus to
 Before restoring, select the exact original connection name and region, then
 its workgroup, catalog, and database. Recovery validates the current source and
 context afresh and refuses a missing, changed, or inaccessible context. It does
-not choose another connection or context. If the editor has unsaved text,
+not choose another connection or context.
+
+If the editor has unsaved text,
 **Replace unsaved SQL?** asks before replacement. **Keep current editor** clears
 only a failed recovery decision; it does not bypass the original-context guard
 on recovered SQL. Recovery never automatically executes SQL, loads result rows,
@@ -119,8 +121,8 @@ for restart and shutdown details.
 
 ## 7. Inspect and control loaded results
 
-On Results, arrow keys select individual cells. Press Enter or click the current
-cell to select it, including the first cell or a result containing only one cell.
+On Results, arrow keys select individual cells. Press Enter or click the current cell to select it. This includes the first cell or a result containing only one cell.
+
 `Alt+Enter` opens the complete
 original value in a read-only, scrollable inspector. Escape or Close returns
 to the same original row and column when that execution and cell remain
@@ -132,6 +134,7 @@ JSON array in column order. Null becomes `null`, an empty string becomes `""`,
 and the literal string `NULL` becomes `"NULL"`. JSON escapes newlines and quotes;
 Unicode remains readable. Duplicate column labels remain separate array
 positions. Copy uses original values, including complete multiline strings.
+
 Clipboard delivery depends on the terminal and platform clipboard helper; a
 failed or unacknowledged terminal write is not a confirmed native copy. Check
 the app's clipboard outcome message.
@@ -152,9 +155,10 @@ Only explicit **Load more** or `l` fetches the next page. New rows enter the
 current filter and order. The 10,000-row safety ceiling can leave unfetched
 results: `more available` and `safety limit` are scope warnings, including when
 no loaded rows match. Local controls never rewrite or rerun SQL or fetch all
-pages. Source/context changes, execution replacement or reload, and page
-shutdown reset selection, filter, and sort and invalidate an open inspector.
-These settings are transient. Full-execution export is separate scope in
+pages.
+
+Source/context changes, execution replacement or reload, and page
+shutdown reset selection, filter, and sort and invalidate an open inspector. These settings are transient. Full-execution export is separate scope in
 [#254](https://github.com/thekaveh/aws-tui/issues/254).
 
 These six actions can be remapped in `[keybindings]`; Help and the Athena

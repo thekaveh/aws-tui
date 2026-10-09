@@ -27,6 +27,7 @@ from __future__ import annotations
 from contextlib import suppress
 
 from reactivex.abc import DisposableBase
+from rich.cells import cell_len, set_cell_size
 from rich.markup import escape as _markup_escape
 from rich.text import Text
 from textual.app import ComposeResult
@@ -43,15 +44,12 @@ from aws_tui.vm.file_manager.pane_vm import PaneVM
 
 
 def _truncate(text: str, max_width: int) -> str:
-    """Right-trim with an ellipsis when ``text`` overflows ``max_width``.
-
-    Duplicates the small helper in :mod:`entry_vm` so the view layer
-    doesn't reach into a private symbol of the VM module."""
-    if len(text) <= max_width:
+    """Trim names to terminal cells without splitting wide or combining glyphs."""
+    if cell_len(text) <= max_width:
         return text
     if max_width <= 1:
-        return text[:max_width]
-    return text[: max_width - 1] + "…"
+        return set_cell_size(text, max_width)
+    return set_cell_size(text, max_width - 1) + "…"
 
 
 # Fixed-width columns. NAME is adaptive (fills remaining space); these
@@ -163,7 +161,7 @@ class EntryRow(Widget):
         if text == self._tooltip_text:
             return
         self._tooltip_text = text
-        self.tooltip = text
+        self.tooltip = Text(text) if text is not None else None
 
     def render(self) -> Text:
         vm = self._entry_vm
@@ -179,7 +177,7 @@ class EntryRow(Widget):
             vm.display_name if shown != vm.display_name else None,
             host.vm.entry_tooltip_hint if host is not None else None,
         )
-        name_str = f"{shown:<{name_width}}"
+        name_str = set_cell_size(shown, name_width)
         size_str = f"{vm.size_display:>{_SIZE_COL_WIDTH}}"
         modified_str = f"{vm.modified_display:<{_MODIFIED_COL_WIDTH}}"
         text = Text()
@@ -513,7 +511,7 @@ class Pane(Widget):
         text = f"{vm.copy_path}\n\n{self._vm.path_tooltip_hint}" if on_border else None
         if text != self._path_tooltip_text:
             self._path_tooltip_text = text
-            self.tooltip = text
+            self.tooltip = Text(text) if text is not None else None
 
     def on_leave(self, _event: object) -> None:
         """Withdraw the path tooltip when the pointer leaves the pane.

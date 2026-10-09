@@ -12,7 +12,7 @@ from aws_tui.infra.duckdb import DuckDbPort
 from aws_tui.vm._observable import send_value_free
 from aws_tui.vm.file_manager.pane_vm import PaneState
 from aws_tui.vm.glue._lifecycle import GlueOperationOwner
-from aws_tui.vm.glue.catalog_vm import GlueCatalogVM
+from aws_tui.vm.glue.catalog_vm import GlueCatalogVM, GlueSelectionSuperseded
 from aws_tui.vm.glue.crawlers_vm import GlueCrawlersVM
 from aws_tui.vm.glue.iceberg_vm import IcebergInspectorProtocol
 from aws_tui.vm.glue.jobs_vm import GlueJobsVM
@@ -61,6 +61,7 @@ class GluePageVM:
         self._shutdown_complete = False
         self._shutdown_lock = asyncio.Lock()
         self._lifecycle_generation = 0
+        self._catalog_selection_revision = 0
         self._operations = GlueOperationOwner()
         self._provider_tasks = self._operations.tasks
         self._inner: ComponentVMOf[None] = (
@@ -206,7 +207,10 @@ class GluePageVM:
         await self.select_view("catalog")
         if not self._is_current(generation):
             raise ValueError("table is unavailable in the active Glue source")
+        revision = self._catalog_selection_revision
         await self.catalog.open_table(table_ref)
+        if revision != self._catalog_selection_revision:
+            raise GlueSelectionSuperseded("table selection was superseded")
         if not self._is_current(generation):
             raise ValueError("table is unavailable in the active Glue source")
         self._selection_store.set(
@@ -221,11 +225,13 @@ class GluePageVM:
         )
 
     async def _select_table(self, table_name: str, generation: int) -> None:
-        await self.catalog.select_table(table_name)
-        if not self._is_current(generation):
+        if not self._is_current(generation) or not any(
+            row.ref.table_name == table_name for row in self.catalog.tables
+        ):
             return
-        if self.catalog.selected_table_name == table_name:
-            self._selection_store.set(self._selection_scope, "table_name", table_name)
+        self._catalog_selection_revision += 1
+        self._selection_store.set(self._selection_scope, "table_name", table_name)
+        await self.catalog.select_table(table_name)
 
     async def select_job(self, job_name: str) -> None:
         if not self._is_alive():
@@ -234,24 +240,23 @@ class GluePageVM:
         await self._select_job(job_name, generation)
 
     async def _select_job(self, job_name: str, generation: int) -> None:
-        await self.jobs.select_job(job_name)
-        if not self._is_current(generation):
+        if not self._is_current(generation) or not any(
+            job.name == job_name for job in self.jobs.jobs
+        ):
             return
-        if self.jobs.selected_job_name == job_name:
-            self._selection_store.set(self._selection_scope, "job_name", job_name)
+        self._selection_store.set(self._selection_scope, "job_name", job_name)
+        await self.jobs.select_job(job_name)
 
     async def set_job_run_states(self, states: frozenset[str]) -> None:
         if not self._is_alive():
             return
-        generation = self._lifecycle_generation
-        await self.jobs.set_run_state_filter(states)
-        if not self._is_current(generation):
-            return
+        # Refresh workers must see this choice before provider reads suspend.
         self._selection_store.set(
             self._selection_scope,
             "job_run_states",
             ",".join(sorted(states)),
         )
+        await self.jobs.set_run_state_filter(states)
 
     def select_job_run(self, run_id: str) -> None:
         if not self._is_alive():
@@ -265,23 +270,24 @@ class GluePageVM:
         await self._select_crawler(name, generation)
 
     async def _select_crawler(self, name: str, generation: int) -> None:
-        await self.crawlers.select_crawler(name)
-        if not self._is_current(generation):
+        if not self._is_current(generation) or not any(
+            crawler.name == name for crawler in self.crawlers.crawlers
+        ):
             return
-        if self.crawlers.selected_crawler_name == name:
-            self._selection_store.set(self._selection_scope, "crawler_name", name)
+        self._selection_store.set(self._selection_scope, "crawler_name", name)
+        await self.crawlers.select_crawler(name)
 
     async def set_crawler_state(self, state: str | None) -> None:
         if not self._is_alive():
             return
         generation = self._lifecycle_generation
-        await self.crawlers.set_state_filter(state)
-        if not self._is_current(generation):
-            return
         if state is None:
             self._selection_store.discard(self._selection_scope, "crawler_state")
         else:
             self._selection_store.set(self._selection_scope, "crawler_state", state)
+        await self.crawlers.set_state_filter(state)
+        if not self._is_current(generation):
+            return
         if self.crawlers.state not in _SUCCESS_STATES:
             return
         stored_name = self._selection_store.get(self._selection_scope, "crawler_name")
@@ -424,12 +430,20 @@ class GluePageVM:
         preferred_table: str | None,
         generation: int,
     ) -> None:
+        if not self._is_current(generation) or not any(
+            row.ref.database_name == database_name for row in self.catalog.databases
+        ):
+            return
+        self._catalog_selection_revision += 1
+        revision = self._catalog_selection_revision
+        self._selection_store.set(self._selection_scope, "database_name", database_name)
+        if preferred_table is None:
+            self._selection_store.discard(self._selection_scope, "table_name")
         await self.catalog.select_database(database_name)
-        if not self._is_current(generation):
+        if not self._is_current(generation) or revision != self._catalog_selection_revision:
             return
         if self.catalog.selected_database_name != database_name:
             return
-        self._selection_store.set(self._selection_scope, "database_name", database_name)
         if self.catalog.tables_state not in _SUCCESS_STATES:
             return
         table_names = tuple(row.ref.table_name for row in self.catalog.tables)

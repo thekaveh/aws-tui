@@ -25,9 +25,8 @@ aws-tui --version
 
 ## 2. Optional extras
 
-`pip install aws-tui` installs everything the application needs. One feature
-ships as an extra because its wheel is large relative to the rest of the
-install:
+The Git installation includes the application's required dependencies. The optional
+DuckDB extra adds the larger engine needed for one feature:
 
 | Extra | Installs | Enables |
 | --- | --- | --- |
@@ -47,9 +46,8 @@ engine and the install command rather than disappearing.
 The first Peek query on a machine downloads DuckDB's `httpfs`, `aws`, and
 `iceberg` extensions from `extensions.duckdb.org` and caches them under
 `~/.duckdb/`. Queries after that need no connection beyond S3 itself. On a
-host without egress to that domain the first query fails; pre-populating the
-cache on a connected machine, or installing the extensions into the same
-DuckDB version yourself, avoids it.
+host without egress to that domain the first query fails.
+Populate the cache on a connected machine, or install the extensions for the same DuckDB version.
 
 ## 3. Development install
 

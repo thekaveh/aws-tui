@@ -71,22 +71,14 @@ gh pr create --base main --head develop \
     --title "chore(release): promote vX.Y.Z to main" --fill
 ```
 
-Merge the promotion PR with a **merge commit, never squash** and never rebase:
-`main` must contain `develop`'s exact commits so the two branches stay
-semantically identical and the next back-merge is a no-op. Verify the final
+Merge the promotion PR with a **merge commit, never squash** and never rebase. `main` must contain `develop`'s exact commits. This keeps the two branches semantically identical and makes the next back-merge a no-op. Verify the final
 promotion source locally and record its commit and results in the PR. If
 `develop` changes after verification, rerun the affected local checks.
 
 ### 1.1. Pre-tag checklist
 
-- **PyPI project status.** Confirm the public project page is reachable, note
-  the latest published version, and verify that the intended new version is
-  still available on both PyPI and TestPyPI before creating a tag.
-- **Clean install smoke.** Build the release artifacts, validate them with
-  `uv run python -m scripts.check_dist dist/` and `uv run twine check dist/*`,
-  confirming that both the wheel and sdist contain the complete source module,
-  `py.typed`, and packaged theme payload and that the sdist retains its build
-  metadata and PyPI readme. Install each artifact into its own fresh temporary
+- **PyPI project status.** Confirm the public project page is reachable and note the latest published version. Before creating a tag, verify that the intended new version is still available on both PyPI and TestPyPI.
+- **Clean install smoke.** Build the release artifacts and validate them with `uv run python -m scripts.check_dist dist/` and `uv run twine check dist/*`. Confirm that both the wheel and sdist contain the complete source module, `py.typed`, and packaged theme payload. Confirm that the sdist retains its build metadata and PyPI readme. Install each artifact into its own fresh temporary
   environment and run `aws-tui --version`, `aws-tui --help`, and
   `python -m aws_tui --version` in both.
 - **Supported-platform status.** Obtain passing verification evidence on
@@ -99,86 +91,69 @@ promotion source locally and record its commit and results in the PR. If
   or included in a v0.8.1 patch. Do not change `src/aws_tui/version.py` while
   verifying Unreleased work.
 - **Demo-mode smoke.** Run `AWS_TUI_DEMO=1 uv run aws-tui` from the release-PR
-  branch. Verify the **DEMO MODE** chip appears in the banner, the four demo
-  connections (`demo-dev`, `demo-prod`, `demo-shared`, `demo-minio`) cycle
-  through Shift+S, the S3 pane shows demo objects, the EMR pane shows two
-  applications plus about 10 job runs across states, and clone-from-detail
-  visibly walks SUBMITTED→SCHEDULED→RUNNING→SUCCESS within about 5 seconds.
+  branch. Verify that the **DEMO MODE** chip appears in the banner. Verify that the four demo connections (`demo-dev`, `demo-prod`, `demo-shared`, `demo-minio`) cycle through Shift+S. Verify that the S3 pane shows demo objects. Verify that the EMR pane shows two applications plus about 10 job runs across states. Verify that clone-from-detail visibly walks SUBMITTED→SCHEDULED→RUNNING→SUCCESS within about 5 seconds.
 - **Interaction-surface smoke.** With at least two demo profiles, start on
   `demo-dev` (`us-east-1`). Use `Tab` / `Shift+Tab` to focus the bordered
   source selector and verify the forward focus ring and reverse focus ring.
   Press `Enter` or `Space` to open it, choose another demo profile such as `demo-shared`
-  (`us-west-2`), and press `Enter` to commit. Verify the exact connection name
+  (`us-west-2`), and press `Enter` to commit.
+
+  Verify the exact connection name
   and region changed as selected: the active source must now read `demo-shared`
   and `us-west-2`. Check Glue `Shift+F` / `Shift+G` filter commands and Athena
   `Shift+W` / `Shift+C` / `Shift+D` selector commands. Open the contextual
   command palette on Glue and Athena and confirm wrong-service commands are
-  absent. Copy the selected table reference to the typed clipboard, then
-  insert the copied table reference in Athena under the same source. Refuse a
+  absent.
+
+  Copy the selected table reference to the typed clipboard. Then insert the copied table reference in Athena under the same source. Refuse a
   copied reference from another source and confirm the editor, typed clipboard,
   and active profile are unchanged.
-- **Clipboard smoke (per OS).** The clipboard port is covered only by unit
-  tests with injected fakes — nothing in CI ever spawns `pbcopy`, `xclip`,
-  `wl-copy`, `xsel` or `clip.exe`, so delivery itself is unverified by the
-  suite. On each supported OS, copy a path (`P`) and paste it somewhere
-  outside the terminal, and read the toast while doing it: it may say
-  `copied path` only when the paste actually produces that path. On a
+- **Clipboard smoke (per OS).** The clipboard port is covered only by unit tests with injected fakes. Nothing in CI ever spawns `pbcopy`, `xclip`, `wl-copy`, `xsel` or `clip.exe`. Thus, delivery itself is unverified by the suite. On each supported OS, copy a path (`P`) and paste it somewhere outside the terminal. Read the toast while doing it. It may say `copied path` only when the paste actually produces that path.
+
+  On a
   terminal with no clipboard helper on `PATH` it must name OSC 52 instead
-  of claiming a copy. On **Windows** this is the only check that exists:
-  copy a path containing non-ASCII characters, paste it into Notepad, and
-  confirm the **whole** string arrives — `clip.exe` is fed BOM-prefixed
-  UTF-16LE and a wrong guess there truncates at the first character while
-  still exiting 0. On macOS and Linux also confirm a path whose name is not
+  of claiming a copy. On **Windows**, this is the only check that exists. Copy a path containing non-ASCII characters, paste it into Notepad, and confirm that the **whole** string arrives. `clip.exe` is fed BOM-prefixed UTF-16LE. A wrong guess there truncates at the first character while still exiting 0.
+
+  On macOS and Linux also confirm a path whose name is not
   valid UTF-8 pastes byte-for-byte.
 - **Athena release smoke.** On `demo-dev`, execute a valid bounded query and
   observe QUEUED/RUNNING/SUCCEEDED lifecycle state. Enter `DELETE FROM events`
   and verify that aws-tui will reject an unsafe statement before dispatch.
   During submission, confirm `Esc` interrupts query submission before an
-  execution is available. Start the demo running query, confirm `Esc` stops
-  only the active app-owned execution started by this page, and confirm a
-  History-only execution is not cancellable. Open Results, page results when a
+  execution is available.
+
+  Start the demo running query. Confirm that `Esc` stops only the active app-owned execution started by this page. Confirm that a History-only execution is not cancellable. Open Results, page results when a
   continuation is available,
-  and verify null/empty rendering. Inspect bytes scanned and reuse in the
-  actual Query and History surfaces: Query shows bytes scanned, while History
-  shows both bytes scanned and reused-result state. From the successful
-  execution, hand off the exact S3 artifact and verify S3 opens under the same
-  connection and region at `s3://athena-results/dev/q-dev-succeeded.csv`.
+  and verify null/empty rendering.
+
+  Inspect bytes scanned and reuse in the actual Query and History surfaces. Query shows bytes scanned, while History shows both bytes scanned and reused-result state. From the successful execution, hand off the exact S3 artifact. Verify S3 opens under the same connection and region at `s3://athena-results/dev/q-dev-succeeded.csv`.
+
   Confirm named and prepared query detail load, `demo-prod` is disjoint, and
   `demo-shared` remains a scoped access-denied state.
 - **Glue/Athena/Iceberg release smoke.** On `demo-dev`, open
   `dev_analytics.dev_events_iceberg` in Glue. Inspect Snapshots, History,
-  Manifests, Files, Partitions, and References. Select snapshot `4201`, press
-  `Shift+V`, and verify Athena is mounted under the same connection and region
-  with `FOR VERSION AS OF 4201 LIMIT 5` in the editor, while no query starts
-  automatically. Execute explicitly with `Ctrl+Enter`, compare displayed rows
+  Manifests, Files, Partitions, and References. Select snapshot `4201` and press `Shift+V`. Verify Athena is mounted under the same connection and region with `FOR VERSION AS OF 4201 LIMIT 5` in the editor. Verify that no query starts automatically.
+
+  Execute explicitly with `Ctrl+Enter`, compare displayed rows
   with the downloaded CSV, and hand the artifact to S3. Verify **Open query table in
   Glue** returns only for one unambiguous table. Repeat enough of the flow on
   `demo-prod` to prove disjoint content, then confirm `demo-shared` stays a
-  scoped access state. Review bytes scanned and remember that every metadata
-  tab is an Athena query with metadata-query costs; no create/edit/delete
-  operation is in scope.
+  scoped access state.
+
+  Review bytes scanned. Remember that every metadata tab is an Athena query with metadata-query costs. No create/edit/delete operation is in scope.
 - **Automated-only Iceberg states.** Stock `demo-dev` does not seed metadata
   continuation, retry, or isolated-tab-failure states, so they are not manual
-  smoke requirements. Keep them in automated release verification:
-  `tests/integration/test_demo_mode.py` covers metadata continuation and retry,
-  `tests/unit/vm/glue/test_iceberg_vm.py` covers pagination plus isolated pane
-  failure/recovery, and `tests/unit/ui/glue/test_iceberg_view.py` covers the
-  reachable Retry and Load more controls.
+  smoke requirements. Keep them in automated release verification. `tests/integration/test_demo_mode.py` covers metadata continuation and retry. `tests/unit/vm/glue/test_iceberg_vm.py` covers pagination plus isolated pane failure/recovery. `tests/unit/ui/glue/test_iceberg_view.py` covers the reachable Retry and Load more controls.
 
 If any smoke step breaks, fix forward; do **not** tag the release.
 
 The release commit must contain a dated changelog heading for the exact package
-version. The workflow rejects `Pending` headings. Because the current tree
-contains v0.9 feature work while package metadata still reads `0.8.0`, prepare
-v0.9 by bumping the version and cutting its changelog section in the release PR;
-do not tag the current tree as v0.8.0.
+version. The workflow rejects `Pending` headings. The current tree contains v0.9 feature work while package metadata still reads `0.8.0`. Prepare v0.9 by bumping the version and cutting its changelog section in the release PR. Do not tag the current tree as v0.8.0.
 
 The v0.9.0 release PR must also dispose of the undated `## [0.8.0] - Pending`
-heading. `scripts/cut-changelog.sh` inserts the new section *above* it and has
-no branch that dates an already-declared heading, so left alone it stays in the
-file forever as a released-looking entry for a build that was never published.
-Fold its body into the new `[0.9.0]` section and delete the heading together
-with its `[0.8.0]:` reference link at the bottom of the file. Nothing downstream
+heading. `scripts/cut-changelog.sh` inserts the new section *above* it and has no branch that dates an already-declared heading. Left alone, it stays in the file forever as a released-looking entry for a build that was never published.
+
+Fold its body into the new `[0.9.0]` section. Delete the heading together with its `[0.8.0]:` reference link at the bottom of the file. Nothing downstream
 depends on it: `0.8.0` was never tagged and never reached PyPI.
 
 Then tag the promotion merge commit on `main` and push the tag:
@@ -202,17 +177,11 @@ click **Approve** in the Actions UI. This is the final manual stop after all
 mandatory release gates have passed.
 
 After approval the pipeline:
-1. Publishes only after `verify` builds and checks the artifacts, the mandatory
-   `platform-tests` gate passes behavioral tests on macOS and Windows, and
-   `smoke-install` clean-installs the built wheel on macOS, Linux, and Windows
-   across Python 3.11, 3.12, and 3.13. The same gate clean-installs the sdist on
+1. Publishes only after `verify` builds and checks the artifacts and the mandatory `platform-tests` gate passes behavioral tests on macOS and Windows. The `smoke-install` gate must also clean-install the built wheel on macOS, Linux, and Windows across Python 3.11, 3.12, and 3.13. The same gate clean-installs the sdist on
    Linux with Python 3.12, covering the artifact consumed by Homebrew.
 2. Requires `lowest-supported-dependencies` to install every declared direct
    dependency at its minimum compatible version with `--resolution
-   lowest-direct`. It validates the S3 request-model members aws-tui uses and
-   exercises representative runtime surfaces for Textual/app construction,
-   aioboto3 client creation, LocalFS/AnyIO/aiofiles, SQLGlot, VMx reactive
-   state, keyring/resolver behavior, and tomli-w configuration round trips.
+   lowest-direct`. It validates the S3 request-model members aws-tui uses. It exercises representative runtime surfaces for Textual/app construction, aioboto3 client creation, LocalFS/AnyIO/aiofiles, SQLGlot, VMx reactive state, and keyring/resolver behavior. It also exercises tomli-w configuration round trips.
 3. Exports and audits every locked dependency group for Python 3.11, 3.12, and
    3.13 before publishing to PyPI via Trusted Publisher (sigstore attestation).
 4. Creates the GitHub Release with the changelog section as body
@@ -226,9 +195,7 @@ Skim the Homebrew PR and merge it when one is created.
 
 ## 2. Rehearsing the TestPyPI Pipeline
 
-Use this whenever the release machinery itself changes — a new
-job, a tweaked artifact layout, anything that risks burning a
-real version number.
+Use this whenever the release machinery itself changes. This includes a new job, a tweaked artifact layout, or anything that risks burning a real version number.
 
 ```bash
 gh workflow run release.yml --ref <branch-or-tag-with-workflow-changes> -f target=testpypi
@@ -237,9 +204,7 @@ gh workflow run release.yml --ref <branch-or-tag-with-workflow-changes> -f targe
 The dry-run skips the GitHub Release + Homebrew steps and pushes
 the wheel to test.pypi.org instead. The workflow rewrites the package
 version to `X.Y.Z.dev<run_number>` for this lane so rehearsals are
-repeatable despite TestPyPI's immutable versions. Use `--ref` to point
-at the branch or tag containing the release-workflow changes you are
-rehearsing; otherwise GitHub runs the workflow from the default branch.
+repeatable despite TestPyPI's immutable versions. Use `--ref` to point at the branch or tag containing the release-workflow changes you are rehearsing. Otherwise, GitHub runs the workflow from the default branch.
 Verify the install end-to-end:
 
 ```bash
@@ -276,19 +241,12 @@ is always "fix forward, never overwrite":
   keeps existing `aws-tui==X.Y.Z` pins working. Then cut a patch
   version (for example, `0.9.1` after `0.9.0`) with the fix.
 - **GitHub Release wrong / missing after PyPI succeeded.** Do **not**
-  re-run the PyPI publish path for the same version. Create or repair
-  the release manually from the existing tag and checked artifacts
-  (`gh release create vX.Y.Z --target <tag-sha> dist/*`, or
-  `gh release upload` for missing assets), using the matching
-  changelog section as notes.
+  re-run the PyPI publish path for the same version. Create or repair the release manually from the existing tag and checked artifacts. Use `gh release create vX.Y.Z --target <tag-sha> dist/*`, or `gh release upload` for missing assets. Use the matching changelog section as notes.
 - **Homebrew bump PR has wrong sha256.** Don't merge it. Close the PR
   and hand-edit the formula against the PyPI sdist sha256 once PyPI is
   serving the final artifact.
 - **Smoke install fails on one OS.** No PyPI artifact has shipped yet;
-  the gate caught the problem before the approval step. Fix forward on
-  `develop`, promote to `main` with a merge commit, move or recreate
-  the tag on the promotion merge commit before any PyPI approval, and
-  re-run the workflow. Do not yank or retag a published version because
+  the gate caught the problem before the approval step. Fix forward on `develop` and promote to `main` with a merge commit. Before any PyPI approval, move or recreate the tag on the promotion merge commit. Then re-run the workflow. Do not yank or retag a published version because
   nothing has been published yet.
 - **Tag/version mismatch.** The `verify` job fails fast and
   publishes nothing. Fix `version.py`, retag.

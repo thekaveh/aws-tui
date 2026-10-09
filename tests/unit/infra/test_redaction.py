@@ -181,3 +181,27 @@ def test_redact_text_does_not_redact_ordinary_prose_after_a_safe_word() -> None:
     assert redact_text("connection established") == "connection established"
     assert redact_text("listing 5 objects") == "listing 5 objects"
     assert "us-east-1" in redact_text("region us-east-1 selected")
+
+
+def test_redaction_hides_sensitive_components_in_malformed_and_uppercase_urls() -> None:
+    urls = (
+        "https://name:synthetic-password@[broken/?opaque=synthetic-query#synthetic-fragment",
+        "HTTPS://name:synthetic-password@example.test/?opaque=synthetic-query#synthetic-fragment",
+        "https://name:synthetic-password'tail@example.test/path",
+        'https://name:synthetic-password"tail@[broken/?opaque=synthetic-query',
+        "https://name:synthetic-password<tail@[broken/#synthetic-fragment",
+    )
+    for url in urls:
+        for text in (redact_text(f"provider failed at {url}"), safe_endpoint_display(url)):
+            assert text is not None
+            for secret in ("synthetic-password", "synthetic-query", "synthetic-fragment"):
+                assert secret not in text
+
+
+def test_redaction_preserves_whitespace_separated_neighbor_of_quoted_url() -> None:
+    text = redact_text(
+        "url='https://name:synthetic-password@example.test/?opaque=synthetic-query' safe=visible"
+    )
+    assert "synthetic-password" not in text
+    assert "synthetic-query" not in text
+    assert "safe=visible" in text

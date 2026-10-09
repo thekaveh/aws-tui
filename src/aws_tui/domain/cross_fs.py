@@ -1351,6 +1351,10 @@ class CrossFsCopy:
         return source_identity is not None and source_identity == destination_identity
 
     def _same_storage_path(self, src: PathRef, dst: PathRef) -> bool:
+        source = self._canonical_storage_path(self._source, src)
+        destination = self._canonical_storage_path(self._destination, dst)
+        if source is not None and destination is not None:
+            return source == destination
         return src == dst and self._same_storage()
 
     def _validate_same_storage_destination(
@@ -1367,7 +1371,13 @@ class CrossFsCopy:
             if source_kind == EntryKind.DIRECTORY and destination_host.is_relative_to(source_host):
                 raise ConflictError(f"destination is inside source directory: {dst.as_posix()}")
             return
-        if not self._same_storage():
+        source = self._canonical_storage_path(self._source, src)
+        destination = self._canonical_storage_path(self._destination, dst)
+        if source is not None and destination is not None:
+            if source[0] != destination[0]:
+                return
+            src, dst = source[1], destination[1]
+        elif not self._same_storage():
             return
         if src == dst:
             raise ConflictError(f"source and destination are the same path: {src.as_posix()}")
@@ -1377,6 +1387,21 @@ class CrossFsCopy:
             and dst.segments[: len(src.segments)] == src.segments
         ):
             raise ConflictError(f"destination is inside source directory: {dst.as_posix()}")
+
+    @staticmethod
+    def _canonical_storage_path(
+        provider: FileSystemProvider, path: PathRef
+    ) -> tuple[object, PathRef] | None:
+        resolver = getattr(provider, "canonical_storage_path", None)
+        if not callable(resolver):
+            return None
+        resolved = resolver(path)
+        if resolved is None:
+            return None
+        identity, canonical_path = resolved
+        if not isinstance(canonical_path, PathRef):
+            raise ProviderError("provider returned an invalid canonical storage path")
+        return identity, canonical_path
 
     @staticmethod
     def _canonical_host_path(provider: FileSystemProvider, path: PathRef) -> Path | None:

@@ -1,9 +1,7 @@
 # Homebrew Bootstrap
 
 Run this **once**, immediately after the first PyPI release lands.
-The v0.9.0 development work is present in the repository, but the tag and PyPI
-publish are still pending; do not run this bootstrap until the wheel and sdist
-are visible on PyPI. After that, the `bump-homebrew` job in
+The v0.9.0 development work is present in the repository, but the tag and PyPI publish are still pending. Do not run this bootstrap until the wheel and sdist are visible on PyPI. After that, the `bump-homebrew` job in
 `.github/workflows/release.yml` opens PRs against the tap
 automatically — bootstrapping just gets the first formula in
 place.
@@ -109,7 +107,5 @@ Enable that job in `thekaveh/aws-tui` under **Settings** →
 the repository variable `HOMEBREW_TAP_ENABLED` to `true`. The workflow
 intentionally skips Homebrew updates until this switch is enabled.
 
-Tag v0.9.1 in the main repo (whenever the next patch ships) and
-confirm the `bump-homebrew` job opens a PR against the tap
-within a few minutes of the PyPI publish. From here it's
+Tag v0.9.1 in the main repo (whenever the next patch ships). Confirm the `bump-homebrew` job opens a PR against the tap within a few minutes of the PyPI publish. From here it's
 fully automated; you just merge the PR.

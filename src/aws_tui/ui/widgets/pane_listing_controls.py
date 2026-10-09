@@ -83,6 +83,17 @@ class ListingModal(ModalScreen[None]):
             else:
                 self.action_apply()
 
+    def _selected_index(self, event: OptionList.OptionSelected) -> int | None:
+        choices = self.query_one(OptionList)
+        index = event.option_index
+        if (
+            event.option_list is choices
+            and 0 <= index < choices.option_count
+            and choices.get_option_at_index(index) is event.option
+        ):
+            return index
+        return None
+
     def clear_filter(self) -> None:
         pass
 
@@ -162,15 +173,17 @@ class FindPaneModal(ListingModal):
     def action_move_down(self) -> None:
         self.query_one(OptionList).action_cursor_down()
 
-    def on_option_list_option_selected(self, _: OptionList.OptionSelected) -> None:
-        self.action_apply()
+    def on_option_list_option_selected(self, event: OptionList.OptionSelected) -> None:
+        self._apply_index(self._selected_index(event))
 
     def action_apply(self) -> None:
-        index = self.query_one(OptionList).highlighted
+        self._apply_index(self.query_one(OptionList).highlighted)
+
+    def _apply_index(self, index: int | None) -> None:
         if (
             self.valid()
             and index is not None
-            and index < len(self.results)
+            and 0 <= index < len(self.results)
             and self.pane.select_found_entry(self.results[index], revision=self.revision)
         ):
             self.action_cancel()
@@ -201,12 +214,14 @@ class SortPaneModal(ListingModal):
     def action_move_down(self) -> None:
         self.query_one(OptionList).action_cursor_down()
 
-    def on_option_list_option_selected(self, _: OptionList.OptionSelected) -> None:
-        self.action_apply()
+    def on_option_list_option_selected(self, event: OptionList.OptionSelected) -> None:
+        self._apply_index(self._selected_index(event))
 
     def action_apply(self) -> None:
-        index = self.query_one(OptionList).highlighted
-        if self.valid() and index is not None:
+        self._apply_index(self.query_one(OptionList).highlighted)
+
+    def _apply_index(self, index: int | None) -> None:
+        if self.valid() and index is not None and 0 <= index < len(self.CHOICES):
             field, descending = self.CHOICES[index]
             self.pane.set_sort(field, descending=descending)
-            self.dismiss()
+            self.action_cancel()

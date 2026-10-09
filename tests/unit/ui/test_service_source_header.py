@@ -4,7 +4,8 @@ from __future__ import annotations
 
 import pytest
 from textual.app import App, ComposeResult
-from textual.widgets import Static
+from textual.content import Content
+from textual.widgets import Static, Tooltip
 
 from aws_tui.ui.widgets.context_picker import ContextPicker
 from aws_tui.ui.widgets.service_source_header import ServiceSourceHeader
@@ -13,6 +14,21 @@ from tests.helpers import focus_and_settle, wait_until
 
 _DEV = ServiceSourceContext("analytics-dev", "dev-sso", "us-east-1")
 _PROD = ServiceSourceContext("analytics-prod", "prod-sso", "us-west-2")
+
+
+@pytest.mark.asyncio
+async def test_source_header_rendered_tooltip_preserves_literal_connection_name() -> None:
+    source = ServiceSourceContext("[bold]analytics", "dev-sso", "us-east-1")
+    header = ServiceSourceHeader(source, selectable=False)
+    app = _SourceHost(header)
+    app.TOOLTIP_DELAY = 0.01
+    async with app.run_test(tooltips=True) as pilot:
+        await pilot.hover(".service-source-value")
+        tooltip = app.screen.query_one(Tooltip)
+        await wait_until(lambda: tooltip.display, what="source tooltip displayed")
+        rendered = tooltip.render()
+        assert isinstance(rendered, Content)
+        assert rendered.plain == source.label
 
 
 class _SourceHost(App[None]):

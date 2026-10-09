@@ -234,6 +234,99 @@ def test_legacy_service_is_kept_until_all_colliding_references_migrate(tmp_path:
     vm.dispose()
 
 
+@pytest.mark.parametrize("fail_persistence", [False, True])
+def test_update_refuses_to_reuse_a_revision_shared_by_another_connection(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, fail_persistence: bool
+) -> None:
+    store = ConfigStore(path=tmp_path / "config.toml")
+    keychain = InMemoryKeychain()
+    resolver = ConnectionResolver(config_store=store, keychain=keychain)
+    hub = _hub()
+    vm = S3ConnectionsVM(
+        resolver=resolver,
+        config_store=store,
+        keychain=keychain,
+        hub=hub,
+        dispatcher=NULL_DISPATCHER,
+    )
+    vm.construct()
+    try:
+        vm.add(_entry("secure"))
+        vm.update("secure", _entry("secure", region="us-west-1"))
+        shared = app_keychain_revision_service("secure", 0)
+        store.add_connection(
+            replace(
+                _entry("other"),
+                credentials=f"keychain:{shared}",
+                access_key_id=None,
+                secret_access_key=None,
+            )
+        )
+        vm.update("secure", replace(_entry("secure"), access_key_id="SECONDKEY"))
+        before_config = store.load()
+        before_secrets = dict(keychain._store)
+        persisted = []
+        update = store.update_connection
+
+        def record_update(name: str, entry: ConnectionEntry) -> None:
+            persisted.append(name)
+            if fail_persistence:
+                raise ConfigError("injected config failure")
+            update(name, entry)
+
+        monkeypatch.setattr(store, "update_connection", record_update)
+        with pytest.raises(ConfigError, match="referenced by another connection"):
+            vm.update("secure", replace(_entry("secure"), access_key_id="THIRDKEY"))
+
+        assert persisted == []
+        assert store.load() == before_config
+        assert keychain._store == before_secrets
+        assert resolver.resolve("other").access_key_id == "AKIATEST"
+    finally:
+        vm.dispose()
+        hub.dispose()
+
+
+def test_add_refuses_to_reuse_a_primary_service_shared_by_another_connection(
+    tmp_path: Path,
+) -> None:
+    store = ConfigStore(path=tmp_path / "config.toml")
+    keychain = InMemoryKeychain()
+    resolver = ConnectionResolver(config_store=store, keychain=keychain)
+    hub = _hub()
+    vm = S3ConnectionsVM(
+        resolver=resolver,
+        config_store=store,
+        keychain=keychain,
+        hub=hub,
+        dispatcher=NULL_DISPATCHER,
+    )
+    vm.construct()
+    try:
+        vm.add(_entry("secure"))
+        shared = app_keychain_service("secure")
+        store.add_connection(
+            replace(
+                _entry("other"),
+                credentials=f"keychain:{shared}",
+                access_key_id=None,
+                secret_access_key=None,
+            )
+        )
+        vm.remove("secure")
+        before_secrets = dict(keychain._store)
+
+        with pytest.raises(ConfigError, match="referenced by another connection"):
+            vm.add(replace(_entry("secure"), access_key_id="NEWKEY"))
+
+        assert "secure" not in store.load().connections
+        assert keychain._store == before_secrets
+        assert resolver.resolve("other").access_key_id == "AKIATEST"
+    finally:
+        vm.dispose()
+        hub.dispose()
+
+
 def test_keychain_updates_reuse_two_bounded_revision_slots(tmp_path: Path) -> None:
     hub = _hub()
     store = ConfigStore(path=tmp_path / "config.toml")

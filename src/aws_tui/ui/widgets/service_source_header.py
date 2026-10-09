@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import ClassVar
 
+from rich.text import Text
 from textual.app import ComposeResult
 from textual.binding import Binding, BindingType
 from textual.message import Message
@@ -74,7 +75,7 @@ class ServiceSourceHeader(Widget, can_focus=True):
         self._open_intent = open_intent
         ordered = dict.fromkeys((*candidates, source))
         self._source = source
-        self.tooltip = source.label
+        self.tooltip = Text(source.label)
         self._candidates = tuple(ordered)
         self._candidate_values = {
             str(index): candidate for index, candidate in enumerate(self._candidates)

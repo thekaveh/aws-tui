@@ -10,6 +10,7 @@ from aws_tui.domain.filesystem import (
     EntryKind,
     NotFoundError,
     PathRef,
+    PermissionDeniedError,
     ProviderError,
 )
 from aws_tui.domain.s3_fs import S3FS
@@ -289,4 +290,139 @@ async def test_file_operations_refuse_directory_only_keys(
     with pytest.raises(ProviderError, match=r"file path|root|object path"):
         await invoke()
     assert not client.calls
+    assert not client.mutations
+
+
+@pytest.mark.parametrize("operation", ["stat", "copy", "move", "rename"])
+async def test_ambiguous_object_and_prefix_never_resolve_to_wrong_source(tmp_path, operation):
+    from aws_tui.domain.cross_fs import CrossFsCopy, CrossFsMove
+    from aws_tui.domain.local_fs import LocalFS
+
+    original = {"k": '"file"', "k/child": '"child"'}
+    client = DirectoryClient(original)
+    fs = S3FS(session=client, bucket="b")
+    path = PathRef(("k",))
+    destination = LocalFS(root=tmp_path)
+
+    async def invoke():
+        if operation == "stat":
+            await fs.stat(path)
+        elif operation == "rename":
+            await fs.rename(path, PathRef(("renamed",)))
+        elif operation == "copy":
+            await CrossFsCopy(source=fs, destination=destination).copy(path, path)
+        else:
+            await CrossFsMove(source=fs, destination=destination).move(path, path)
+
+    with pytest.raises(ProviderError, match="ambiguous S3 name"):
+        await invoke()
+    assert client.objects == original
+    assert not client.mutations
+    assert not list(tmp_path.iterdir())
+
+
+async def test_stat_denied_ambiguity_probe_stays_fail_closed():
+    class RestrictedClient(DirectoryClient):
+        async def list_objects_v2(self, **kwargs):
+            self.calls.append(("list", kwargs))
+            raise ClientError({"Error": {"Code": "AccessDenied"}}, "ListObjectsV2")
+
+    client = RestrictedClient({"k": '"file"'})
+    fs = S3FS(session=client, bucket="b")
+    with pytest.raises(PermissionDeniedError):
+        await fs.stat(PathRef(("k",)))
+    assert client.calls == [
+        ("head", {"Bucket": "b", "Key": "k"}),
+        ("list", {"Bucket": "b", "Prefix": "k/", "MaxKeys": 1}),
+    ]
+    assert not client.mutations
+
+
+@pytest.mark.parametrize("operation", ["list", "copy", "move"])
+async def test_empty_common_prefix_component_cannot_publish_incomplete_transfer(
+    tmp_path, operation
+):
+    from aws_tui.domain.cross_fs import CrossFsCopy, CrossFsMove
+    from aws_tui.domain.local_fs import LocalFS
+
+    class DelimitedClient(DirectoryClient):
+        async def list_objects_v2(self, **kwargs):
+            if "Delimiter" in kwargs:
+                self.calls.append(("list", kwargs))
+                # Real S3 collapses the empty child of daily/ to daily//.
+                return {"CommonPrefixes": [{"Prefix": "daily//"}], "Contents": []}
+            return await super().list_objects_v2(**kwargs)
+
+    original = {"daily//child": '"child"'}
+    client = DelimitedClient(original)
+    fs = S3FS(session=client, bucket="b")
+    path = PathRef(("daily",))
+    destination = LocalFS(root=tmp_path)
+
+    async def invoke():
+        if operation == "list":
+            await fs.list(path)
+        elif operation == "copy":
+            await CrossFsCopy(source=fs, destination=destination).copy(path, path)
+        else:
+            await CrossFsMove(source=fs, destination=destination).move(path, path)
+
+    with pytest.raises(ProviderError, match=r"empty.*component"):
+        await invoke()
+    assert client.objects == original
+    assert not client.mutations
+    assert not list(tmp_path.iterdir())
+
+
+@pytest.mark.parametrize("operation", ["copy", "move"])
+@pytest.mark.parametrize(
+    "alias", ["bucketless", "configured-prefix", "endpoint-slash", "endpoint-authority"]
+)
+async def test_s3_path_aliases_are_refused_before_read_or_mutation(operation, alias):
+    from aws_tui.domain.cross_fs import ConflictResolution, CrossFsCopy, CrossFsMove
+
+    client = DirectoryClient({"k": '"empty"', "base/k": '"empty"'})
+    source = S3FS(session=client, bucket="b", endpoint_url="https://s3.example.test")
+    source_path = PathRef(("k",))
+    if alias == "bucketless":
+        destination = S3FS(session=client, bucket=None, endpoint_url="https://s3.example.test")
+        target = PathRef(("b", "k"))
+    elif alias == "configured-prefix":
+        source = S3FS(
+            session=client, bucket="b", prefix="base", endpoint_url="https://s3.example.test"
+        )
+        destination = S3FS(session=client, bucket="b", endpoint_url="https://s3.example.test")
+        target = PathRef(("base", "k"))
+    elif alias == "endpoint-authority":
+        destination = S3FS(session=client, bucket="b", endpoint_url="https://S3.EXAMPLE.TEST:443")
+        target = source_path
+    else:
+        destination = S3FS(session=client, bucket="b", endpoint_url="https://s3.example.test/")
+        target = source_path
+    transfer = (CrossFsCopy if operation == "copy" else CrossFsMove)(
+        source=source, destination=destination
+    )
+
+    async def invoke():
+        if operation == "copy":
+            await transfer.copy(source_path, target, on_conflict=ConflictResolution.OVERWRITE)
+        else:
+            await transfer.move(source_path, target, on_conflict=ConflictResolution.OVERWRITE)
+
+    with pytest.raises(ConflictError, match="same path"):
+        await invoke()
+    assert not client.mutations
+    assert not any(op == "get" for op, _ in client.calls)
+
+
+async def test_s3_alias_descendant_directory_is_refused_before_staging():
+    from aws_tui.domain.cross_fs import CrossFsCopy
+
+    client = DirectoryClient({"root/a": '"a"'})
+    source = S3FS(session=client, bucket="b")
+    destination = S3FS(session=client, bucket=None)
+    with pytest.raises(ConflictError, match="inside source"):
+        await CrossFsCopy(source=source, destination=destination).copy(
+            PathRef(("root",)), PathRef(("b", "root", "child"))
+        )
     assert not client.mutations

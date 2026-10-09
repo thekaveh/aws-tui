@@ -20,15 +20,19 @@ state distinction that every other EMR pane gets for free.
 
 from __future__ import annotations
 
+import asyncio
 import inspect
 import re
 import zlib
 from collections.abc import AsyncGenerator
 from contextlib import aclosing, suppress
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import StrEnum
+from time import monotonic
 from typing import TYPE_CHECKING, Any, Protocol
 from urllib.parse import urlparse
+
+import regex  # type: ignore[import-untyped]
 
 from aws_tui.domain.emr_cloudwatch_logs import (
     CloudWatchLogSnapshot,
@@ -49,13 +53,21 @@ class FilterMode(StrEnum):
     PASSTHROUGH = "passthrough"
 
 
+class LogFilterTimeoutError(ValidationError):
+    def __init__(self) -> None:
+        super().__init__("log filter time limit exceeded; simplify patterns or use Show all")
+
+
 @dataclass(frozen=True, slots=True)
 class LogFilter:
     patterns: tuple[str, ...]
     mode: FilterMode = FilterMode.MATCH
     case_insensitive: bool = True
+    _compiled: tuple[Any, ...] = field(init=False, repr=False, compare=False)
 
     def __post_init__(self) -> None:
+        if len(self.patterns) > 64 or any(len(pattern) > 4096 for pattern in self.patterns):
+            raise ValueError("log filter permits at most 64 patterns of 4096 characters each")
         # Validate every pattern eagerly so an invalid regex (a
         # stray ``(``, ``[abc``, ``*foo`` etc. in the user's filter
         # text) surfaces as a typed ValueError the modal can catch
@@ -66,14 +78,31 @@ class LogFilter:
         for pattern in self.patterns:
             try:
                 re.compile(pattern)
-            except re.error as exc:
+            except (re.error, RecursionError, OverflowError) as exc:
                 raise ValueError(f"invalid regex pattern {pattern!r}: {exc}") from exc
+        flags = regex.VERSION0 | (regex.IGNORECASE if self.case_insensitive else 0)
+        try:
+            compiled = tuple(regex.compile(p, flags) for p in self.patterns)
+        except (regex.error, RecursionError, OverflowError) as exc:
+            raise ValueError(f"invalid regex pattern: {exc}") from exc
+        object.__setattr__(self, "_compiled", compiled)
 
-    def matches(self, line: str) -> bool:
+    def matches(self, line: str, *, deadline: float | None = None) -> bool:
         if self.mode is FilterMode.PASSTHROUGH:
             return True
-        flags = re.IGNORECASE if self.case_insensitive else 0
-        return any(re.search(p, line, flags) for p in self.patterns)
+        end = monotonic() + 0.05
+        if deadline is not None:
+            end = min(end, deadline)
+        for pattern in self._compiled:
+            remaining = end - monotonic()
+            if remaining <= 0:
+                raise LogFilterTimeoutError
+            try:
+                if pattern.search(line, timeout=remaining):
+                    return True
+            except TimeoutError:
+                raise LogFilterTimeoutError from None
+        return False
 
     def with_(
         self,
@@ -235,6 +264,7 @@ async def list_log_files(
     if boto_config is not None:
         kwargs["config"] = boto_config
     files: list[tuple[int, LogFile]] = []
+    prefix = f"{run_prefix.rstrip('/')}/"
     try:
         async with session.client("s3", **kwargs) as s3:
             next_token: str | None = None
@@ -244,14 +274,15 @@ async def list_log_files(
                 if page_count >= _MAX_LOG_DISCOVERY_PAGES:
                     raise ProviderError("EMR log discovery exceeded the pagination safety limit")
                 page_count += 1
-                list_kwargs: dict[str, object] = {"Bucket": bucket, "Prefix": run_prefix}
+                list_kwargs: dict[str, object] = {"Bucket": bucket, "Prefix": prefix}
                 if next_token is not None:
                     list_kwargs["ContinuationToken"] = next_token
                 resp = await s3.list_objects_v2(**list_kwargs)
                 for obj in resp.get("Contents", []):
                     key = obj["Key"]
-                    prefix = f"{run_prefix.rstrip('/')}/"
-                    relative_key = key[len(prefix) :] if key.startswith(prefix) else key
+                    if not key.startswith(prefix):
+                        continue
+                    relative_key = key[len(prefix) :]
                     kind, sort_idx = _classify_key(relative_key)
                     if kind is None:
                         continue
@@ -300,6 +331,7 @@ async def stream_log(
         async with session.client("s3", **kwargs) as s3:
             resp = await s3.get_object(Bucket=bucket, Key=log_file.key)
             body = resp["Body"]
+            content_length = resp.get("ContentLength")
             bytes_read = 0
             decompressed_bytes = 0
             truncated = False
@@ -310,7 +342,11 @@ async def stream_log(
             while True:
                 remaining_compressed = max_bytes - bytes_read
                 if remaining_compressed <= 0:
-                    truncated = not decompressor.eof
+                    truncated = not (
+                        decompressor.eof
+                        and type(content_length) is int
+                        and bytes_read == content_length
+                    )
                     break
                 chunk = await body.read(min(_STREAM_CHUNK_BYTES, remaining_compressed))
                 if not chunk:
@@ -321,7 +357,24 @@ async def stream_log(
                     truncated = True
                     break
                 try:
-                    raw_output = decompressor.decompress(chunk, remaining_decompressed + 1)
+                    output = bytearray()
+                    member_chunk = chunk
+                    while member_chunk:
+                        if decompressor.eof:
+                            member_chunk = member_chunk.lstrip(b"\0")
+                            if not member_chunk:
+                                break
+                            decompressor = zlib.decompressobj(wbits=31)
+                        output.extend(
+                            decompressor.decompress(
+                                member_chunk,
+                                remaining_decompressed + 1 - len(output),
+                            )
+                        )
+                        if len(output) > remaining_decompressed or not decompressor.eof:
+                            break
+                        member_chunk = decompressor.unused_data
+                    raw_output = bytes(output)
                 except zlib.error:
                     raise ValidationError("corrupt EMR log gzip stream") from None
                 if len(raw_output) > remaining_decompressed:
@@ -329,6 +382,7 @@ async def stream_log(
                     truncated = True
                 decompressed_bytes += len(raw_output)
                 pending.extend(raw_output)
+                filter_slice_end = monotonic() + 0.1
 
                 while True:
                     newline = pending.find(b"\n")
@@ -341,8 +395,21 @@ async def stream_log(
                         break
                     line = raw_line.decode("utf-8", errors="replace").rstrip("\r")
                     lines_scanned += 1
-                    if filter_.matches(line):
-                        matched.append(line)
+                    if monotonic() >= filter_slice_end:
+                        await asyncio.sleep(0)
+                        filter_slice_end = monotonic() + 0.1
+                    try:
+                        if filter_.matches(line):
+                            matched.append(line)
+                    except LogFilterTimeoutError:
+                        yield LogChunk(
+                            lines=tuple(matched),
+                            bytes_read=bytes_read,
+                            lines_scanned=lines_scanned,
+                            matched_count=len(matched),
+                            truncated=True,
+                        )
+                        raise
                     if len(matched) >= _LINE_BUFFER_BATCH:
                         yield LogChunk(
                             lines=tuple(matched),
@@ -352,6 +419,9 @@ async def stream_log(
                             truncated=False,
                         )
                         matched = []
+                    if lines_scanned % _LINE_BUFFER_BATCH == 0:
+                        # Nonmatching lines also need a cancellation checkpoint.
+                        await asyncio.sleep(0)
                 if truncated:
                     break
                 if len(pending) > _MAX_LINE_BYTES:
@@ -380,8 +450,18 @@ async def stream_log(
                 else:
                     line = bytes(pending).decode("utf-8", errors="replace").rstrip("\r")
                     lines_scanned += 1
-                    if filter_.matches(line):
-                        matched.append(line)
+                    try:
+                        if filter_.matches(line):
+                            matched.append(line)
+                    except LogFilterTimeoutError:
+                        yield LogChunk(
+                            lines=tuple(matched),
+                            bytes_read=bytes_read,
+                            lines_scanned=lines_scanned,
+                            matched_count=len(matched),
+                            truncated=True,
+                        )
+                        raise
             if not decompressor.eof:
                 truncated = True
             yield LogChunk(

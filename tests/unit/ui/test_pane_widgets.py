@@ -8,22 +8,24 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from rich.cells import cell_len
 from textual.app import App, ComposeResult
 from textual.color import Color
 from textual.containers import VerticalScroll
 from textual.content import Content
 from textual.screen import Screen
-from textual.widgets import Static
+from textual.widgets import Static, Tooltip
 from vmx import Message, MessageHub, RxDispatcher
 
 from aws_tui.demo.in_memory_fs import InMemoryFS
-from aws_tui.domain.filesystem import PathRef
+from aws_tui.domain.filesystem import EntryKind, FileEntry, PathRef
 from aws_tui.domain.transfer_journal import TransferJournal
 from aws_tui.infra.theme_store import ThemeStore
 from aws_tui.ui.widgets.dual_pane import DualPane
 from aws_tui.ui.widgets.pane import _BODY_REFRESH_PROPS, EntryRow, Pane
 from aws_tui.vm._observable import ObserverSafeSubject
 from aws_tui.vm.file_manager.dual_pane_vm import DualPaneVM, FocusedPane
+from aws_tui.vm.file_manager.entry_vm import EntryVM
 from aws_tui.vm.file_manager.pane_vm import PaneVM
 from tests.helpers import wait_until
 
@@ -40,6 +42,34 @@ async def _seed() -> InMemoryFS:
     await fs.write_stream(PathRef(("gamma.json",)), _astream(b'{"x":1}'))
     await fs.write_stream(PathRef(("delta.log",)), _astream(b"log"))
     return fs
+
+
+@pytest.mark.parametrize(
+    ("name", "truncated"),
+    [("ascii.txt", False), ("雪" * 18, True), ("e\N{COMBINING ACUTE ACCENT}" * 18, False)],
+)
+def test_filename_rows_keep_metadata_in_fixed_terminal_columns(name: str, truncated: bool) -> None:
+    hub: MessageHub[Message] = MessageHub()
+    vm = EntryVM(
+        entry=FileEntry(name=name, kind=EntryKind.FILE, size=1, modified=None),
+        hub=hub,
+        dispatcher=RxDispatcher.immediate(),
+    )
+    vm.construct()
+    try:
+        row = EntryRow(vm)
+        rendered = row.render().plain
+        metadata = f"{vm.size_display:>10}  {vm.modified_display:<16}"
+
+        assert rendered.endswith(metadata)
+        assert cell_len(rendered.removesuffix(metadata)) == 28
+        assert (row.tooltip is not None) is truncated
+        if truncated:
+            assert name in str(row.tooltip)
+        assert vm.name == name
+    finally:
+        vm.dispose()
+        hub.dispose()
 
 
 @pytest.mark.asyncio
@@ -209,7 +239,6 @@ async def test_pane_dynamic_mount_with_unreachable_state_does_not_crash() -> Non
     from textual.containers import Container
 
     from aws_tui.domain.filesystem import (
-        FileEntry,
         FileSystemProvider,
         ProgressCallback,
         ProviderUnreachableError,
@@ -403,6 +432,51 @@ async def test_dual_pane_mounts_with_two_panes(tmp_path: Path) -> None:
 
 
 # ── Truncated-name tooltips and path copying ──────────────────────────────
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("target", ["entry", "border"])
+async def test_rendered_tooltips_preserve_brackets_in_file_and_path_names(target: str) -> None:
+    hub: MessageHub[Message] = MessageHub()
+    fs = InMemoryFS()
+    folder = "[bold]folder"
+    name = "a-long-prefix-[bold]report.csv"
+    await fs.mkdir(PathRef((folder,)))
+    await fs.write_stream(PathRef((folder, name)), _astream(b"x"))
+    vm = PaneVM(provider=fs, hub=hub, dispatcher=RxDispatcher.immediate(), id_prefix="pane.test")
+    vm.construct()
+    await vm.setup()
+    try:
+
+        class _App(App[None]):
+            TOOLTIP_DELAY = 0.01
+
+            def compose(self) -> ComposeResult:
+                yield Pane(vm, hub=hub, id="pane")
+
+        app = _App()
+        async with app.run_test(size=(60, 20), tooltips=True) as pilot:
+            await vm.navigate_to(PathRef((folder,)))
+            await wait_until(
+                lambda: any(row.entry_vm.name == name for row in app.query(EntryRow)),
+                what="bracketed row mounted",
+            )
+            if target == "entry":
+                row = next(row for row in app.query(EntryRow) if row.entry_vm.name == name)
+                await wait_until(lambda: row.tooltip is not None, what="truncated name tooltip")
+                await pilot.hover(row, offset=(4, 0))
+                expected = f"{name}\n\n{vm.entry_tooltip_hint}"
+            else:
+                await pilot.hover(Pane, offset=(4, 0))
+                expected = f"{vm.viewmodel.copy_path}\n\n{vm.path_tooltip_hint}"
+            tooltip = app.screen.query_one(Tooltip)
+            await wait_until(lambda: tooltip.display, what="actual tooltip displayed")
+            rendered = tooltip.render()
+            assert isinstance(rendered, Content)
+            assert rendered.plain == expected
+    finally:
+        vm.dispose()
+        hub.dispose()
 
 
 @pytest.mark.asyncio

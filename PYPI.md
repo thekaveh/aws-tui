@@ -13,9 +13,11 @@ aws-tui provides a dual-pane S3/local file manager plus operational views for
 EMR Serverless, AWS Glue, Amazon Athena, and Apache Iceberg metadata. The EMR
 view is read-mostly, with focused clone submission for an existing job run.
 It supports multiple AWS profiles and S3-compatible connections, keyboard-first
-navigation, deterministic demo mode, and built-in themes. One optional extra,
-`pip install aws-tui[duckdb]`, adds a local row preview for Iceberg tables that
-reads S3 directly instead of running an Athena query.
+navigation, deterministic demo mode, and built-in themes.
+
+The optional DuckDB extra adds a local row preview for Iceberg tables that
+reads S3 directly instead of running an Athena query. Use the
+[Git installation with the DuckDB extra](https://github.com/thekaveh/aws-tui/blob/main/docs/install.md#2-optional-extras) to install it.
 
 Quick Look previews CSV, JSON and JSONL as bounded tables and Parquet as
 schema with a capped row sample. Press `Space` on a file, `r` to toggle its

@@ -150,13 +150,7 @@ class HelpModal(ModalScreen[None]):
                     classes="help-dim",
                     markup=False,
                 )
-            help_row = next((row for row in self._actions if row.id == "app.help"), None)
-            help_keys = format_effective_keys(
-                help_row.effective_keys
-                if help_row is not None
-                else self._keymap.resolve("app.help")
-            )
-            yield Static(Text(f"press {help_keys} / Esc to close"), id="help-footer")
+            yield Static(Text("press ? / Esc to close"), id="help-footer")
 
     def action_move_up(self) -> None:
         self._scroll_body(-1)

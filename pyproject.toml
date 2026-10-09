@@ -49,6 +49,8 @@ dependencies = [
   "botocore>=1.40.61,<2",
   "reactivex>=4,<6",
   "rich>=14,<16",
+  # Native search deadlines contain user-supplied log filter patterns.
+  "regex==2026.7.19",
   "anyio>=4.14.2,<5",
   "aiofiles>=23,<26",
   "tomli-w>=1.0,<2",

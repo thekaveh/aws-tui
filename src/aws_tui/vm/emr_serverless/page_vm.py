@@ -398,7 +398,7 @@ class EmrServerlessPageVM:
             return
         selected = self.applications.selected_id
         if selected is not None:
-            if selected != previous_selected or self.job_runs.application_id != selected:
+            if self.job_runs.application_id != selected:
                 await self.select_application(selected)
             return
 
