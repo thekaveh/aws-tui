@@ -58,6 +58,14 @@ def _read_ini(parser: configparser.RawConfigParser, path: Path, *, quiet: bool =
         with path.open(encoding="utf-8-sig") as file:
             parser.read_file(file)
     except (configparser.Error, OSError, UnicodeDecodeError) as exc:
+        # Early Python 3.11 exits before joining multiline values on a parse
+        # error. Normalize the retained prefix through public APIs, defaults
+        # first so inherited options remain inherited rather than copied.
+        for section in (parser.default_section, *parser.sections()):
+            for option, value in parser.items(section, raw=True):
+                partial_value: object = value
+                if isinstance(partial_value, list):
+                    parser.set(section, option, "\n".join(partial_value).rstrip())
         if not quiet:
             _logger.warning(
                 "ignoring unreadable AWS ini file",

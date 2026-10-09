@@ -671,7 +671,7 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
         self._actions.register("pane.modal_left", self.action_modal_left_or_ascend)
         self._actions.register("pane.modal_right", self.action_modal_right)
         self._actions.register("pane.refresh", self.action_refresh)
-        self._actions.register("auth.authenticate", self.action_authenticate)
+        self._actions.register("auth.authenticate", self._handle_authenticate)
         self._actions.register("app.help", self.action_help)
         self._actions.register("app.themes", self.action_themes)
         self._actions.register("app.transfer_history", self.action_transfer_history)
@@ -685,32 +685,35 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
         self._actions.register("pane.copy_entry_path", self.action_copy_entry_path)
         self._actions.register("pane.copy_path", self.action_copy_path)
         self._actions.register("pane.delete", self.action_delete)
-        self._actions.register("app.swap_source", self.action_swap_source)
+        self._actions.register("app.swap_source", self._handle_swap_source)
         self._actions.register("emr.next_application", self.action_next_emr_application)
         self._actions.register("emr.clone", self.action_clone_emr_run)
         self._actions.register("emr.cancel", self.action_cancel_emr_run)
         self._actions.register("emr.logs.filter", self.action_filter_emr_logs)
         self._actions.register("emr.logs.source", self.action_cycle_emr_log_source)
         self._actions.register("emr.logs.follow", self.action_toggle_emr_log_follow)
-        self._actions.register(
-            "glue.catalog",
-            partial(self.action_select_glue_view, "catalog"),
-        )
-        self._actions.register(
-            "glue.jobs",
-            partial(self.action_select_glue_view, "jobs"),
-        )
-        self._actions.register(
-            "glue.crawlers",
-            partial(self.action_select_glue_view, "crawlers"),
-        )
+        for view in ("catalog", "jobs", "crawlers"):
+            self._actions.register(
+                f"glue.{view}",
+                partial(
+                    self._handle_service_read,
+                    partial(self.action_select_glue_view, view),
+                    group="service-view",
+                ),
+            )
         self._actions.register(
             "glue.choose_run_state",
-            self.action_choose_glue_run_state,
+            partial(
+                self._handle_service_read, self.action_choose_glue_run_state, group="service-view"
+            ),
         )
         self._actions.register(
             "glue.choose_crawler_state",
-            self.action_choose_glue_crawler_state,
+            partial(
+                self._handle_service_read,
+                self.action_choose_glue_crawler_state,
+                group="service-view",
+            ),
         )
         self._actions.register("glue.compare_tables", self.action_glue_compare_tables)
         self._actions.register(
@@ -724,22 +727,15 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
             "glue.time_travel_in_athena",
             self.action_time_travel_glue_table_in_athena,
         )
-        self._actions.register(
-            "athena.query",
-            partial(self.action_select_athena_view, "query"),
-        )
-        self._actions.register(
-            "athena.history",
-            partial(self.action_select_athena_view, "history"),
-        )
-        self._actions.register(
-            "athena.results",
-            partial(self.action_select_athena_view, "results"),
-        )
-        self._actions.register(
-            "athena.saved",
-            partial(self.action_select_athena_view, "saved"),
-        )
+        for view in ("query", "history", "results", "saved"):
+            self._actions.register(
+                f"athena.{view}",
+                partial(
+                    self._handle_service_read,
+                    partial(self.action_select_athena_view, view),
+                    group="service-view",
+                ),
+            )
         self._actions.register(
             "athena.choose_workgroup",
             self.action_choose_athena_workgroup,
@@ -758,7 +754,15 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
         )
         self._actions.register("athena.execute", self.action_execute_athena)
         self._actions.register("athena.cancel", self.action_cancel_athena)
-        self._actions.register("athena.load_more", self.action_load_more_athena)
+        self._actions.register(
+            "athena.load_more",
+            partial(
+                self._handle_service_read,
+                self.action_load_more_athena,
+                group="athena-load-more",
+                require_focus=True,
+            ),
+        )
         for action in (
             "inspect_cell",
             "copy_cell",
@@ -3499,7 +3503,7 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
         if dual is None:
             return
         pane = getattr(dual, "focused_pane", None)
-        if pane is None:
+        if pane is None or pane.state is PaneState.LOADING:
             return
         target = pane.selected_entry
         if target is None:
@@ -3507,11 +3511,11 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
         # ".." synthetic entry — ascend to parent.
         if target.entry.name == "..":
             if not pane.path.is_root:
-                await pane.navigate_to(pane.path.parent())
+                dual.schedule_listing(pane, path=pane.path.parent())
             return
         # Descend only into directories; files trigger Quick Look later.
         if str(target.entry.kind) == "directory":
-            await pane.navigate_to(pane.path.join(target.entry.name))
+            dual.schedule_listing(pane, path=pane.path.join(target.entry.name))
 
     async def action_ascend(self) -> None:
         self.record_action("pane.ascend")
@@ -3540,7 +3544,7 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
         pane = getattr(dual, "focused_pane", None)
         if pane is None or pane.path.is_root:
             return
-        await pane.navigate_to(pane.path.parent())
+        dual.schedule_listing(pane, path=pane.path.parent())
 
     async def action_modal_left_or_ascend(self) -> None:
         """In modals, move focus to the previous button; in panes, ascend to parent."""
@@ -3606,7 +3610,13 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
             return
         pane = getattr(dual, "focused_pane", None)
         if pane is not None:
-            await pane.refresh()
+            dual.schedule_listing(pane)
+
+    def _handle_authenticate(self) -> None:
+        if self._shutdown_task is None and not self._service_navigation_closed:
+            self._run_lifecycle_worker(
+                self.action_authenticate, group="credential-recovery", exclusive=False
+            )
 
     async def action_authenticate(self) -> None:
         """Retry the active source after credentials are repaired externally."""
@@ -4640,7 +4650,19 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
         if move is not None:
             move.execute(delta)
 
-    async def action_swap_source(self) -> None:
+    def _handle_swap_source(self) -> None:
+        if self._shutdown_task is not None or self._service_navigation_closed:
+            return
+        origin = self._capture_discovery_origin()
+        dual = self._dual_pane()
+        pane = dual.focused_pane if dual is not None else None
+        self._run_lifecycle_worker(
+            partial(self.action_swap_source, origin=origin, pane=pane), group="content-mount"
+        )
+
+    async def action_swap_source(
+        self, *, origin: _DiscoveryOrigin | None = None, pane: PaneVM | None = None
+    ) -> None:
         """Cycle the current service's source.
 
         S3 retains independent source rings for its two panes. Other AWS
@@ -4649,30 +4671,64 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
         self.record_action("app.swap_source")
         generation = self._supersede_table_navigation()
         async with self._service_navigation_lock:
-            if not self._service_navigation_is_owned_by("external", generation):
+            if (
+                self._shutdown_task is not None
+                or self._service_navigation_closed
+                or not self._service_navigation_is_owned_by("external", generation)
+            ):
+                return
+            if origin is not None and not self._discovery_origin_owned(origin):
+                return
+            dual = self._dual_pane()
+            if pane is not None and (dual is None or dual.focused_pane is not pane):
                 return
             await self._swap_source_transaction()
 
-    async def on_service_source_header_source_selected(
+    def on_service_source_header_source_selected(
         self,
         event: ServiceSourceHeader.SourceSelected,
     ) -> None:
         """Switch to the exact source committed by a Glue/Athena picker."""
         event.stop()
+        if self._shutdown_task is not None or self._service_navigation_closed:
+            return
+        origin = self._capture_discovery_origin()
+        if not event.header.is_attached or not any(
+            getattr(node, "vm", None) is origin.vm for node in event.header.ancestors
+        ):
+            return
         service_id = self._app_ctx.root_vm.services_menu.selected_id
         if service_id is None or service_id == SETTINGS_NAV_ID:
             return
         self.record_action("app.swap_source")
         generation = self._supersede_table_navigation()
+        self._run_lifecycle_worker(
+            partial(self._select_header_source, event, origin, service_id, generation),
+            group="content-mount",
+        )
+
+    async def _select_header_source(
+        self,
+        event: ServiceSourceHeader.SourceSelected,
+        origin: _DiscoveryOrigin,
+        service_id: str,
+        generation: int,
+    ) -> None:
         async with self._service_navigation_lock:
-            if not self._service_navigation_is_owned_by("external", generation):
+            if (
+                self._shutdown_task is not None
+                or self._service_navigation_closed
+                or not self._service_navigation_is_owned_by("external", generation)
+                or not self._discovery_origin_owned(origin)
+                or not event.header.is_attached
+            ):
                 return
             accepted = await self._switch_single_context_source_to(
                 service_id,
                 event.connection_name,
                 event.region,
             )
-            if not accepted:
+            if not accepted and event.header.is_attached and self._discovery_origin_owned(origin):
                 event.header.restore_source()
 
     async def _swap_source_transaction(self) -> None:
@@ -4757,6 +4813,7 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
             assert not isinstance(payload, str)  # narrows payload to Connection
             new_conn_key = (payload.kind, payload.name)
         ctx.log_sink.info("pane.swap_source", to=next_label)
+        await dual.cancel_listings(focused)
         await swap(
             new_provider,
             identity_label=next_label,
@@ -4771,7 +4828,7 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
         self.record_action("emr.next_application")
         page = self._emr_page()
         if page is not None:
-            await page.vm.cycle_application(1)
+            page.action_next_application()
 
     async def action_clone_emr_run(self) -> None:
         page = self._emr_page()
@@ -4804,6 +4861,29 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
         page = self._emr_page()
         if page is not None and page.toggle_focused_log_follow():
             self.record_action("emr.logs.follow")
+
+    def _handle_service_read(
+        self,
+        read: Callable[[], Awaitable[None]],
+        *,
+        group: str,
+        require_focus: bool = False,
+    ) -> None:
+        page = self._athena_page() or self._glue_page()
+        if page is None or self._shutdown_task is not None or self._service_navigation_closed:
+            return
+        origin = self._capture_discovery_origin()
+
+        async def read_owned() -> None:
+            if (
+                self._shutdown_task is not None
+                or not self._discovery_origin_owned(origin)
+                or (require_focus and self.focused is not origin.focus)
+            ):
+                return
+            await read()
+
+        page._run_lifecycle_worker(read_owned, group=group)
 
     async def action_select_glue_view(self, view: str) -> None:
         self.record_action(f"glue.{view}")
@@ -5790,6 +5870,14 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
         destination = "athena" if isinstance(request, OpenAthenaTableRequest) else "glue"
         mutation_started = False
         primed_athena: AthenaPageVM | None = None
+        primed_athena_token: object | None = None
+
+        def destination_input_is_owned() -> bool:
+            return primed_athena is None or (
+                primed_athena_token is not None
+                and primed_athena.owns_table_query_input(primed_athena_token)
+            )
+
         try:
             try:
                 auth_state = ctx.aws_session.probe_token(connection).state
@@ -5809,10 +5897,10 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
             if isinstance(request, OpenAthenaTableRequest):
 
                 def prime_athena_candidate(candidate: object) -> None:
-                    nonlocal primed_athena
+                    nonlocal primed_athena, primed_athena_token
                     if not isinstance(candidate, AthenaPageVM):
                         raise RuntimeError("Athena destination is unavailable")
-                    candidate.prime_table_query(ref, request.snapshot_id)
+                    primed_athena_token = candidate.prime_table_query(ref, request.snapshot_id)
                     primed_athena = candidate
 
                 prepare_candidate = prime_athena_candidate
@@ -5830,7 +5918,7 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
                     self._service_navigation_suppressed_selection = None
             if await self._restore_superseded_table_handoff(generation, snapshot):
                 if primed_athena is not None:
-                    primed_athena.abandon_table_query_prime()
+                    primed_athena.abandon_table_query_prime(prime_token=primed_athena_token)
                     primed_athena = None
                 return
             if not await self._mount_service_view(
@@ -5850,7 +5938,7 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
                 page.refresh_from_vm()
                 await self.wait_for_refresh()
                 if await self._restore_superseded_table_handoff(generation, snapshot):
-                    primed_athena.abandon_table_query_prime()
+                    primed_athena.abandon_table_query_prime(prime_token=primed_athena_token)
                     primed_athena = None
                     return
             await self._wait_for_current_service_setup()
@@ -5862,7 +5950,6 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
                 if not isinstance(target, AthenaPageVM):
                     raise RuntimeError("Athena destination is unavailable")
                 await target.open_table(ref, request.snapshot_id)
-                primed_athena = None
                 page = self._athena_page()
                 if page is None or page.vm is not target:
                     raise RuntimeError("Athena destination view is unavailable")
@@ -5877,22 +5964,34 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
             # A newer catalog choice owns the mounted destination.
             return
         except asyncio.CancelledError:
+            restore_owned_destination = destination_input_is_owned()
             if primed_athena is not None:
-                primed_athena.abandon_table_query_prime()
-            if mutation_started and self._table_handoff_should_restore(generation):
+                primed_athena.abandon_table_query_prime(prime_token=primed_athena_token)
+            if (
+                mutation_started
+                and restore_owned_destination
+                and self._table_handoff_should_restore(generation)
+            ):
                 await self._restore_table_handoff_durably(
                     snapshot,
                     generation,
+                    input_is_owned=destination_input_is_owned,
                 )
             raise
         except Exception as exc:
+            restore_owned_destination = destination_input_is_owned()
             if primed_athena is not None:
-                primed_athena.abandon_table_query_prime()
+                primed_athena.abandon_table_query_prime(prime_token=primed_athena_token)
             rollback_cancelled = False
-            if mutation_started and self._table_handoff_should_restore(generation):
+            if (
+                mutation_started
+                and restore_owned_destination
+                and self._table_handoff_should_restore(generation)
+            ):
                 _, rollback_cancelled = await self._restore_table_handoff_durably(
                     snapshot,
                     generation,
+                    input_is_owned=destination_input_is_owned,
                 )
             if rollback_cancelled:
                 raise asyncio.CancelledError from None
@@ -6021,9 +6120,11 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
         self,
         snapshot: _TableHandoffSnapshot,
         generation: int,
+        *,
+        input_is_owned: Callable[[], bool] | None = None,
     ) -> tuple[bool, bool]:
         rollback = asyncio.create_task(
-            self._restore_table_handoff(snapshot, generation),
+            self._restore_table_handoff(snapshot, generation, input_is_owned=input_is_owned),
             name="table-handoff-rollback",
         )
         self._table_handoff_rollbacks.add(rollback)
@@ -6063,8 +6164,12 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
         self,
         snapshot: _TableHandoffSnapshot,
         generation: int,
+        *,
+        input_is_owned: Callable[[], bool] | None = None,
     ) -> bool:
         async with self._service_navigation_lock:
+            if input_is_owned is not None and not input_is_owned():
+                return False
             return await self._restore_table_handoff_transaction(
                 snapshot,
                 generation,

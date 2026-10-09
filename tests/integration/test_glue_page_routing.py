@@ -7,18 +7,17 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
 import pytest
-from textual.containers import Container
 from textual.widgets import OptionList
-from vmx import NULL_DISPATCHER
 
 from aws_tui.app import AwsTuiApp
-from aws_tui.infra.connection_resolver import Connection
 from aws_tui.infra.keymap_store import KeymapStore
+from aws_tui.services.glue.service import GlueService
 from aws_tui.ui.widgets.context_picker import ContextPicker
 from aws_tui.ui.widgets.glue.page import GluePage
 from aws_tui.ui.widgets.service_tab_strip import ServiceTabStrip
 from aws_tui.vm.glue.page_vm import GluePageVM
 from tests.helpers import focus_and_settle, wait_until
+from tests.integration.test_glue_athena_navigation import _wait_for_service_setup
 from tests.unit.vm.glue._fake_glue import InMemoryGlue, seeded_glue
 
 
@@ -32,38 +31,31 @@ async def _mounted_glue_app(
     if keymap is not None:
         ctx.keymap_store = keymap
     fake = seeded_glue()
-    vm = GluePageVM(
-        client=fake,
-        connection=Connection(
-            name="analytics-dev",
-            kind="aws",
-            region="us-east-1",
-            source="test",
-            profile="analytics-dev",
-        ),
-        hub=ctx.hub,
-        dispatcher=NULL_DISPATCHER,
+    ctx.config_store.path.write_text(
+        '[defaults]\nconnection = "analytics-dev"\n\n'
+        '[connections.analytics-dev]\nkind = "aws"\n'
+        'profile = "analytics-dev"\nregion = "us-east-1"\n'
     )
-    vm.construct()
-    await vm.setup()
+    ctx.registry.register(
+        GlueService(
+            hub=ctx.hub,
+            dispatcher=ctx.dispatcher,
+            aws_session=ctx.aws_session,
+            glue_client_factory=lambda _connection: fake,
+        )
+    )
     app = AwsTuiApp(ctx)
     try:
         async with app.run_test(size=(120, 40)) as pilot:
             await app.workers.wait_for_complete(list(app.workers._workers))  # type: ignore[attr-defined]
-            host = app.query_one("#content-host", Container)
-            await host.remove_children()
-            await host.mount(
-                GluePage(
-                    vm,
-                    hub=ctx.hub,
-                    focus_coordinator=ctx.focus_coordinator,
-                    id="content-glue-page",
-                )
-            )
-            await pilot.pause()
+            ctx.root_vm.services_menu.switch_service_command.execute("glue")
+            await _wait_for_service_setup(ctx, app, pilot)
+            vm = ctx.root_vm.content_host.current
+            assert isinstance(vm, GluePageVM)
+            assert ctx.root_vm.services_menu.selected_id == "glue"
+            assert app.query_one(GluePage).vm is vm
             yield app, vm, fake, pilot
     finally:
-        vm.dispose()
         with contextlib.suppress(Exception):
             ctx.root_vm.dispose()
 

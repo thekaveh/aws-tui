@@ -26,7 +26,7 @@ from vmx.lifecycle.status import ConstructionStatus
 from vmx.services.dispatcher import Dispatcher
 
 from aws_tui.domain.cross_fs import ConflictResolution, CrossFsCopy, CrossFsMove
-from aws_tui.domain.filesystem import EntryKind, ProviderError
+from aws_tui.domain.filesystem import EntryKind, PathRef, ProviderError
 from aws_tui.domain.transfer_history import TransferHistoryDescriptor
 from aws_tui.domain.transfer_journal import TransferJournal
 from aws_tui.vm._observable import ObserverSafeSubject, send_value_free
@@ -117,6 +117,7 @@ class DualPaneVM:
         self._active_transfer_ids: set[str] = set()
         self._cancel_sub: DisposableBase | None = None
         self._refresh_tasks: set[asyncio.Task[None]] = set()
+        self._listing_tasks: dict[asyncio.Task[None], PaneVM] = {}
         self._shutdown_started = False
         self._disposed = False
 
@@ -279,7 +280,29 @@ class DualPaneVM:
         await self.transfer_runtime.shutdown()
         await self._cancel_and_drain_refreshes()
 
-    def _schedule_owned_refresh(self, pane: PaneVM) -> asyncio.Task[None] | None:
+    def schedule_listing(self, pane: PaneVM, *, path: PathRef | None = None) -> None:
+        """Keep interactive listing I/O outside the Textual input handler."""
+        if self._shutdown_started:
+            return
+        for pending, owner in tuple(self._listing_tasks.items()):
+            if owner is pane and not pending.done() and not pending.cancelling():
+                pending.cancel()
+        task = self._schedule_owned_refresh(pane, path=path)
+        if task is not None:
+            self._listing_tasks[task] = pane
+            task.add_done_callback(lambda done: self._listing_tasks.pop(done, None))
+
+    async def cancel_listings(self, pane: PaneVM | None = None) -> None:
+        """Drain interactive reads before an in-place provider replacement."""
+        await self._cancel_and_drain_refreshes(
+            tuple(
+                task for task, owner in self._listing_tasks.items() if pane is None or owner is pane
+            )
+        )
+
+    def _schedule_owned_refresh(
+        self, pane: PaneVM, *, path: PathRef | None = None
+    ) -> asyncio.Task[None] | None:
         """Schedule ``pane.refresh()`` and tie it to this VM's lifecycle.
 
         Copy/move cleanup detaches refreshes so worker cancellation does
@@ -293,7 +316,17 @@ class DualPaneVM:
             loop = asyncio.get_running_loop()
         except RuntimeError:
             return None  # No running loop (sync-driven tests); caller can refresh manually.
-        task = loop.create_task(pane.refresh())
+        provider = pane.provider
+
+        async def refresh() -> None:
+            if self._shutdown_started or pane.provider is not provider:
+                return
+            if path is None:
+                await pane.refresh()
+            else:
+                await pane.navigate_to(path)
+
+        task = loop.create_task(refresh())
         self._refresh_tasks.add(task)
 
         def _done(done: asyncio.Task[None]) -> None:
@@ -311,16 +344,20 @@ class DualPaneVM:
 
     def _cancel_detached_refreshes(self) -> None:
         for task in tuple(self._refresh_tasks):
-            task.cancel()
-        self._refresh_tasks.clear()
+            if not task.done() and not task.cancelling():
+                task.cancel()
 
-    async def _cancel_and_drain_refreshes(self) -> None:
-        tasks = tuple(self._refresh_tasks)
+    async def _cancel_and_drain_refreshes(
+        self, tasks: tuple[asyncio.Task[None], ...] | None = None
+    ) -> None:
+        if tasks is None:
+            tasks = tuple(self._refresh_tasks)
         current = asyncio.current_task()
         cancellation_count = current.cancelling() if current is not None else 0
         cancelled = False
         for task in tasks:
-            task.cancel()
+            if not task.done() and not task.cancelling():
+                task.cancel()
         for task in tasks:
             while not task.done():
                 try:
@@ -331,6 +368,8 @@ class DualPaneVM:
                         cancelled = True
                         cancellation_count = current_count
                     continue
+                except Exception:
+                    break
             if not task.cancelled():
                 with contextlib.suppress(Exception):
                     task.result()

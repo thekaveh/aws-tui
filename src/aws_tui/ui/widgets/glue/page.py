@@ -222,8 +222,10 @@ class GluePage(DeferredWorkerMixin, HubSubscriberMixin, Widget):
             subscription.dispose()
         self._focus_subscriptions.clear()
 
-    async def on_service_tab_strip_changed(self, event: ServiceTabStrip.Changed) -> None:
-        await self.action_select_view(event.value)
+    def on_service_tab_strip_changed(self, event: ServiceTabStrip.Changed) -> None:
+        self._run_lifecycle_worker(
+            partial(self.action_select_view, event.value), group="service-view"
+        )
 
     def on_descendant_focus(self, event: events.DescendantFocus) -> None:
         if event.widget is self.app.focused:

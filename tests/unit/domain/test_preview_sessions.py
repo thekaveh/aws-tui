@@ -89,7 +89,10 @@ async def test_local_final_identity_change(tmp_path, mutation):
         other.write_bytes(host.read_bytes())
         other.replace(host)
     elif mutation == "inplace":
+        original = host.stat()
         host.write_bytes(b"c,d\n3,4\n")
+        # Make the revision change observable on filesystems with coarse clocks.
+        os.utime(host, ns=(original.st_atime_ns, original.st_mtime_ns + 2_000_000_000))
     else:
         host.unlink()
     try:
