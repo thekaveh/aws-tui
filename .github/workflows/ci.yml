@@ -249,7 +249,7 @@ jobs:
       - name: exercise minimum dependency runtime
         run: |
           lowest-supported-venv/bin/python -m pytest \
-            tests/minimum_runtime/test_dependency_floors.py \
+            tests/minimum_runtime \
             tests/unit/infra/test_connection_resolver.py \
             tests/unit/infra/test_keychain.py \
             tests/unit/test_app_sanity.py \

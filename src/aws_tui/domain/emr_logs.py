@@ -337,21 +337,25 @@ async def stream_log(
             truncated = False
             decompressor = zlib.decompressobj(wbits=31)
             pending = bytearray()
+            compressed_pending = b""
             lines_scanned = 0
             matched: list[str] = []
             while True:
                 remaining_compressed = max_bytes - bytes_read
-                if remaining_compressed <= 0:
+                if remaining_compressed <= 0 and not compressed_pending:
                     truncated = not (
                         decompressor.eof
                         and type(content_length) is int
                         and bytes_read == content_length
                     )
                     break
-                chunk = await body.read(min(_STREAM_CHUNK_BYTES, remaining_compressed))
+                chunk = compressed_pending
+                compressed_pending = b""
+                if not chunk:
+                    chunk = await body.read(min(_STREAM_CHUNK_BYTES, remaining_compressed))
+                    bytes_read += len(chunk)
                 if not chunk:
                     break
-                bytes_read += len(chunk)
                 remaining_decompressed = _MAX_DECOMPRESSED_BYTES - decompressed_bytes
                 if remaining_decompressed <= 0:
                     truncated = True
@@ -359,6 +363,7 @@ async def stream_log(
                 try:
                     output = bytearray()
                     member_chunk = chunk
+                    output_limit = min(_STREAM_CHUNK_BYTES, remaining_decompressed + 1)
                     while member_chunk:
                         if decompressor.eof:
                             member_chunk = member_chunk.lstrip(b"\0")
@@ -368,10 +373,13 @@ async def stream_log(
                         output.extend(
                             decompressor.decompress(
                                 member_chunk,
-                                remaining_decompressed + 1 - len(output),
+                                output_limit - len(output),
                             )
                         )
-                        if len(output) > remaining_decompressed or not decompressor.eof:
+                        if len(output) >= output_limit or not decompressor.eof:
+                            compressed_pending = (
+                                decompressor.unconsumed_tail or decompressor.unused_data
+                            )
                             break
                         member_chunk = decompressor.unused_data
                     raw_output = bytes(output)
@@ -431,13 +439,15 @@ async def stream_log(
                 if decompressed_bytes >= _MAX_DECOMPRESSED_BYTES:
                     truncated = True
                     break
-                if bytes_read >= max_bytes and not decompressor.eof:
+                if bytes_read >= max_bytes and not compressed_pending and not decompressor.eof:
                     truncated = True
                     break
 
             if not truncated:
                 try:
-                    tail = decompressor.flush(_MAX_DECOMPRESSED_BYTES - decompressed_bytes)
+                    # flush() takes an initial allocation size, not an output cap.
+                    # All compressed input was drained in bounded chunks above.
+                    tail = decompressor.flush(_STREAM_CHUNK_BYTES)
                 except zlib.error:
                     raise ValidationError("corrupt EMR log gzip stream") from None
                 else:

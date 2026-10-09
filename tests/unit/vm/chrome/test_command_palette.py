@@ -160,6 +160,66 @@ async def test_shutdown_cancels_and_drains_pending_actions() -> None:
     vm.dispose()
 
 
+@pytest.mark.parametrize("cleanup", ["shutdown", "dispose"])
+async def test_palette_cleanup_closes_an_action_cancelled_before_it_starts(cleanup: str) -> None:
+    import asyncio
+    import inspect
+
+    vm = _build()
+    started = False
+
+    async def action() -> None:
+        nonlocal started
+        started = True
+        await asyncio.Event().wait()
+
+    coroutine = action()
+    vm.register_entry(_entry("pending", "Pending"), lambda: coroutine)
+    vm.open_command.execute()
+    vm.execute_selected_command.execute()
+    try:
+        # Cleanup runs before the task's first event-loop turn.
+        if cleanup == "shutdown":
+            await vm.shutdown()
+        else:
+            vm.dispose()
+            await asyncio.sleep(0)
+            await asyncio.sleep(0)
+        assert not started
+        assert inspect.getcoroutinestate(coroutine) == inspect.CORO_CLOSED
+        assert vm._pending_tasks == {}
+    finally:
+        coroutine.close()
+        vm.dispose()
+
+
+@pytest.mark.parametrize("kind", ["task", "future"])
+async def test_shutdown_owns_an_action_returning_an_existing_awaitable(kind: str) -> None:
+    import asyncio
+
+    vm = _build()
+
+    async def action() -> None:
+        await asyncio.Event().wait()
+
+    awaitable: asyncio.Future[None] = (
+        asyncio.create_task(action())
+        if kind == "task"
+        else asyncio.get_running_loop().create_future()
+    )
+    vm.register_entry(_entry("pending", "Pending"), lambda: awaitable)
+    vm.open_command.execute()
+    vm.execute_selected_command.execute()
+    try:
+        await vm.shutdown()
+        assert awaitable.cancelled()
+        assert vm._pending_tasks == {}
+    finally:
+        awaitable.cancel()
+        await asyncio.gather(awaitable, return_exceptions=True)
+        vm.dispose()
+
+
 @pytest.mark.parametrize("async_action", [False, True])
 async def test_execute_failure_publishes_entry_identity(async_action: bool) -> None:
     hub = _hub()

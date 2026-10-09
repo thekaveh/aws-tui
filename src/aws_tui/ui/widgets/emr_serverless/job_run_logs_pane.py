@@ -6,7 +6,7 @@ Renders the state-machine of ``JobRunLogsVM``:
     IDLE           →  ``(press Enter to load logs)``
     LOADING        →  ``loading <log_file>: N bytes read, M lines scanned`` + spinner
     READY          →  scrollable line list
-    TRUNCATED      →  same, with banner ``(truncated at byte cap — press r to reload)``
+    TRUNCATED      →  same, with banner ``(log read truncated — press r to reload)``
     NO_LOG_CONFIG  →  ``(no log monitoring configured for this job)``
     NO_FILES       →  ``(no log files yet — try again once the run starts logging)``
     ERROR          →  red placeholder + error text
@@ -45,10 +45,10 @@ class _LogFileChip(Static):
 
 
 def _match_label(vm: JobRunLogsVM) -> str:
-    """Describe matches, distinguishing the display cap from the byte cap.
+    """Describe matches, distinguishing the display cap from an incomplete read.
 
     The line cap keeps only the most recent ``_MAX_MATCHED_LINES`` matches. It
-    is not the same condition as ``LogsState.TRUNCATED`` (the 100 MB byte cap),
+    is not the same condition as ``LogsState.TRUNCATED`` (a capped or torn read),
     so reporting the retained length as the match count told the user their
     filter matched far fewer lines than it did — and for an error-first filter
     the dropped head is the originating stack trace.
@@ -484,7 +484,7 @@ class JobRunLogsPane(Widget, can_focus=True):
             # untrusted log content.
             text = "\n".join(self._vm.lines)
             if state is LogsState.TRUNCATED:
-                text = (f"{text}\n" if text else "") + "(truncated at 100 MB — press r to reload)"
+                text = (f"{text}\n" if text else "") + "(log read truncated — press r to reload)"
             self._update_body(
                 body,
                 text,

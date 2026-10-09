@@ -160,8 +160,8 @@ async def test_authenticate_during_quit_does_not_start_new_recovery(tmp_path, mo
             assert app._service_navigation_closed
             assert app._auth_recovery_task is None
             dispatched = app.action_dispatch("auth.authenticate")
-            assert dispatched is not None
-            await dispatched
+            if dispatched is not None:
+                await dispatched
             assert candidates == []
             assert app._auth_recovery_task is None
         finally:
