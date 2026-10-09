@@ -194,6 +194,7 @@ Glue's forward focus order is:
 
 - **Crawlers:** Source, Crawler state, view tabs, crawlers, crawler detail, and
     the navigation rail.
+
 Disabled Iceberg load-more/retry/time-travel controls are omitted. `Shift+Tab`
 walks the same active ring in reverse.
 

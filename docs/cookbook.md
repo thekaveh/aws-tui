@@ -719,6 +719,7 @@ modes:
     managed results do not support result reuse. aws-tui continues to page rows
     with `GetQueryResults`; no S3 output location is required. If the workgroup uses a customer managed KMS key, both the query principal and the managed results key policy need the documented KMS access. This includes `kms:Decrypt`, `kms:GenerateDataKey`, and `kms:DescribeKey`. See
     [Managed query results](https://docs.aws.amazon.com/athena/latest/ug/managed-results.html).
+
 The Query view labels the workgroup mode as managed results or S3 output. If
 neither mode is configured, aws-tui shows the typed result-configuration error
 instead of choosing a bucket. With managed results, **Open Athena result in
