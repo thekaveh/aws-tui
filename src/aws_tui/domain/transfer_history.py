@@ -303,7 +303,13 @@ def open_regular_metadata(path: Path, *, flags: int = os.O_RDONLY, create: bool 
 def read_metadata(path: Path) -> str:
     """Read a bounded regular file without following its final symlink."""
     fd = open_regular_metadata(path)
-    with os.fdopen(fd, "rb") as stream:
+    try:
+        stream = os.fdopen(fd, "rb")
+    except BaseException:
+        with contextlib.suppress(OSError):
+            os.close(fd)
+        raise
+    with stream:
         info = os.fstat(stream.fileno())
         if (
             not stat.S_ISREG(info.st_mode)
@@ -386,7 +392,13 @@ class TransferHistoryStore:
             fd, temporary = tempfile.mkstemp(prefix=".history-", suffix=".tmp", dir=self.base_dir)
             staging = Path(temporary)
             try:
-                with os.fdopen(fd, "wb") as stream:
+                try:
+                    stream = os.fdopen(fd, "wb")
+                except BaseException:
+                    with contextlib.suppress(OSError):
+                        os.close(fd)
+                    raise
+                with stream:
                     stream.write(encoded)
                     stream.flush()
                     os.fsync(stream.fileno())

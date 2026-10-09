@@ -151,6 +151,7 @@ class AthenaPageVM:
         self._selection_store = selection_store or ServiceSelectionStore()
         self._disposed = False
         self._shutdown_started = False
+        self._input_admission_closed = False
         self._shutdown_complete = False
         self._active_view: AthenaView = "query"
         self._loaded_views: set[AthenaView] = set()
@@ -1464,6 +1465,11 @@ class AthenaPageVM:
         self._notify_workgroup_detail()
         await self.query.set_context(self._context)
 
+    def close_input_admission(self) -> None:
+        """Reserve this outgoing page against queued editor/selector actions."""
+        self._input_admission_closed = True
+        self.query.close_input_admission()
+
     async def shutdown(self) -> None:
         async with self._shutdown_lock:
             if self._disposed or self._shutdown_complete:
@@ -2116,7 +2122,9 @@ class AthenaPageVM:
         return generation == self._context_generation and self._is_alive()
 
     def _is_alive(self) -> bool:
-        return not self._disposed and not self._shutdown_started
+        return (
+            not self._disposed and not self._shutdown_started and not self._input_admission_closed
+        )
 
     async def _drain_page_tasks(self) -> None:
         current = asyncio.current_task()

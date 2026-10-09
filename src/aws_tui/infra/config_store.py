@@ -112,24 +112,31 @@ def _acquire_os_file_lock(path: Path, timeout: float) -> BinaryIO:
         path.parent.chmod(0o700)
     flags = os.O_RDWR | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0)
     fd = os.open(path, flags, 0o600)
-    with contextlib.suppress(OSError, NotImplementedError):
-        path.chmod(0o600)
-    file = os.fdopen(fd, "r+b", buffering=0)
-    if os.fstat(fd).st_size == 0:
-        file.write(b"\0")
-    deadline = time.monotonic() + timeout
-    while True:
-        try:
-            _try_os_file_lock(file)
-            return file
-        except OSError as exc:
-            if exc.errno not in {errno.EACCES, errno.EAGAIN, errno.EDEADLK}:
-                file.close()
-                raise
-            if time.monotonic() >= deadline:
-                file.close()
-                raise _ConfigLockTimeout from exc
-            time.sleep(min(_LOCK_POLL_INTERVAL, max(0.0, deadline - time.monotonic())))
+    try:
+        with contextlib.suppress(OSError, NotImplementedError):
+            path.chmod(0o600)
+        file = os.fdopen(fd, "r+b", buffering=0)
+    except BaseException:
+        with contextlib.suppress(OSError):
+            os.close(fd)
+        raise
+    try:
+        if os.fstat(fd).st_size == 0:
+            file.write(b"\0")
+        deadline = time.monotonic() + timeout
+        while True:
+            try:
+                _try_os_file_lock(file)
+                return file
+            except OSError as exc:
+                if exc.errno not in {errno.EACCES, errno.EAGAIN, errno.EDEADLK}:
+                    raise
+                if time.monotonic() >= deadline:
+                    raise _ConfigLockTimeout from exc
+                time.sleep(min(_LOCK_POLL_INTERVAL, max(0.0, deadline - time.monotonic())))
+    except BaseException:
+        file.close()
+        raise
 
 
 def _try_os_file_lock(file: BinaryIO) -> None:
@@ -457,7 +464,13 @@ class ConfigStore:
         )
         tmp_path = Path(tmp_name)
         try:
-            with os.fdopen(tmp_fd, "wb") as fh:
+            try:
+                file = os.fdopen(tmp_fd, "wb")
+            except BaseException:
+                with contextlib.suppress(OSError):
+                    os.close(tmp_fd)
+                raise
+            with file as fh:
                 tomli_w.dump(payload, fh)
                 fh.flush()
                 os.fsync(fh.fileno())
