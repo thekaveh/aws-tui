@@ -181,7 +181,7 @@ class CommandPaletteVM:
         self._filtered: tuple[PaletteEntry, ...] = ()
         self._selected_index: int = 0
         self._is_open: bool = False
-        self._pending_tasks: dict[asyncio.Task[None], str] = {}
+        self._pending_tasks: dict[asyncio.Future[None], str] = {}
 
         self._inner: ComponentVM = (
             ComponentVM.builder().name("command_palette").services(hub, dispatcher).build()
@@ -392,11 +392,13 @@ class CommandPaletteVM:
                 close()
             self._publish_action_failure(entry_id, RuntimeError("no running event loop"))
             return
-        task = loop.create_task(self._await_action(awaitable))
+        # Own the returned awaitable itself. A wrapper cancelled before its
+        # first turn can strand a coroutine or leave an existing task running.
+        task = asyncio.ensure_future(awaitable, loop=loop)
         self._pending_tasks[task] = entry_id
         task.add_done_callback(self._on_action_done)
 
-    def _on_action_done(self, task: asyncio.Task[None]) -> None:
+    def _on_action_done(self, task: asyncio.Future[None]) -> None:
         """Done-callback for spawned palette actions. Drains the
         task's exception (if any) so asyncio's destructor doesn't
         emit a silent ``Task exception was never retrieved`` to
@@ -420,9 +422,6 @@ class CommandPaletteVM:
                 error_type=type(exc).__name__,
             )
         )
-
-    async def _await_action(self, awaitable: Awaitable[None]) -> None:
-        await awaitable
 
     def _move_selection(self, delta: int | None) -> None:
         if delta is None or not self._filtered:

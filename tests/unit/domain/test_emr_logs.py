@@ -582,6 +582,65 @@ async def test_stream_log_bounds_unterminated_line(
     assert all(len(line.encode()) <= 128 for chunk in chunks for line in chunk.lines)
 
 
+@pytest.mark.asyncio
+async def test_stream_log_rejects_large_line_without_expanding_the_whole_body() -> None:
+    import tracemalloc
+
+    import aws_tui.domain.emr_logs as emr_logs
+
+    payload = gzip.compress(b"x" * (16 * 1024 * 1024))
+    stub = _StubS3(payload)
+    tracemalloc.start()
+    try:
+        chunks = [
+            chunk
+            async for chunk in emr_logs.stream_log(
+                session=_StubSession(stub),  # type: ignore[arg-type]
+                region_name="us-east-1",
+                log_file=emr_logs.LogFile("fixture.gz", emr_logs.LogFileKind.DRIVER_STDERR),
+                bucket="fixture",
+                max_bytes=1024 * 1024,
+                filter_=emr_logs.DEFAULT_LOG_FILTER,
+            )
+        ]
+        peak = tracemalloc.get_traced_memory()[1]
+    finally:
+        tracemalloc.stop()
+
+    assert chunks[-1].truncated
+    assert peak < 4 * 1024 * 1024
+
+
+@pytest.mark.asyncio
+async def test_stream_log_finishes_small_healthy_log_without_reserving_the_read_cap() -> None:
+    import tracemalloc
+
+    import aws_tui.domain.emr_logs as emr_logs
+
+    stub = _StubS3(gzip.compress(b"ERROR retained\n"))
+    tracemalloc.start()
+    try:
+        chunks = [
+            chunk
+            async for chunk in emr_logs.stream_log(
+                session=_StubSession(stub),  # type: ignore[arg-type]
+                region_name="us-east-1",
+                log_file=emr_logs.LogFile("fixture.gz", emr_logs.LogFileKind.DRIVER_STDERR),
+                bucket="fixture",
+                max_bytes=1024 * 1024,
+                filter_=emr_logs.DEFAULT_LOG_FILTER,
+            )
+        ]
+        peak = tracemalloc.get_traced_memory()[1]
+    finally:
+        tracemalloc.stop()
+
+    assert [line for chunk in chunks for line in chunk.lines] == ["ERROR retained"]
+    assert not chunks[-1].truncated
+    assert stub.body.closed
+    assert peak < 4 * 1024 * 1024
+
+
 # ── boto-error mapping (regression-guard for the silent-swallow audit) ────
 
 

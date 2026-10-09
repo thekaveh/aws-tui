@@ -224,6 +224,8 @@ class DetailRows(Widget):
         empty_text: str,
     ) -> None:
         body = self.query_one(VerticalScroll)
+        if not body.is_attached:
+            return
         body.remove_children()
         placeholder = state_placeholder(
             state,

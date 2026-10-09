@@ -338,6 +338,9 @@ class EmrServerlessPage(DeferredWorkerMixin, Widget):
     def _picker_coordination_available(self) -> bool:
         return self.is_running and self.is_attached and self.display
 
+    def action_next_application(self) -> None:
+        self._run_lifecycle_worker(partial(self._vm.cycle_application, 1), group="emr-select-app")
+
     def on_application_picker_application_committed(
         self, event: ApplicationPicker.ApplicationCommitted
     ) -> None:

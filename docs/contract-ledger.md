@@ -523,7 +523,7 @@ Extensions `httpfs`, `aws`, `iceberg` loaded per connection. `iceberg_scan(path)
 
 Errors consumed as `duckdb.HTTPException` with `.status_code`, and `duckdb.InterruptException`. Eager credential validation is a 1.4+ refinement, not a floor guarantee. At 1.3, `CREATE OR REPLACE SECRET` accepts a nonexistent profile. Thus, a bad profile degrades to a later, less precise outcome instead of `AUTH_REQUIRED`.
 
-Verification: Port unit tests drive an injected fake connection; no test spawns a real engine. A floor test under `tests/minimum_runtime/` exercises the real package when the extra is installed.
+Verification: Port unit tests use injected fake connections. The optional floor test under `tests/minimum_runtime/` uses a real engine for extension loading, settings, credential-secret preparation, and `SELECT 1`. It does not scan a real Iceberg table.
 
 Exact S3 boto operation ledger (16):
 

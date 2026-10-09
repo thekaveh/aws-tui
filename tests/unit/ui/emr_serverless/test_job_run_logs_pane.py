@@ -145,6 +145,27 @@ async def test_ready_logs_render_with_a_bounded_widget_count() -> None:
         assert "line-49" in rendered
 
 
+@pytest.mark.parametrize("bytes_read", [1024, 100 * 1024 * 1024])
+async def test_truncation_banner_does_not_claim_a_specific_limit(bytes_read: int) -> None:
+    vm, hub, _fake = _make_vm()
+    try:
+        vm._lines = ("ERROR retained",)
+        vm._bytes_read = bytes_read
+        vm._set_state(LogsState.TRUNCATED)
+        async with _PaneApp(vm, hub).run_test() as pilot:
+            await pilot.pause()
+            pane = pilot.app.query_one(JobRunLogsPane)
+            body = pane.query_one("#logs-body", VerticalScroll)
+            rendered = str(body.children[0].render())
+            assert "ERROR retained" in rendered
+            assert "log read truncated" in rendered
+            assert "press r to reload" in rendered
+            assert "100 MB" not in rendered
+    finally:
+        await vm.shutdown()
+        vm.dispose()
+
+
 async def test_progress_change_does_not_schedule_body_rebuild(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

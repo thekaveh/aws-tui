@@ -226,6 +226,11 @@ class AthenaPageVM:
         )
         self.tables = AthenaTablesVM(client=client, context=self._context, hub=hub)
         self._selected_table_ref: TableRef | None = None
+        self._table_query_prime: tuple[TableRef, int | None] | None = None
+        self._table_query_prime_token: object | None = None
+        self._table_query_prime_sql = ""
+        self._context_choice_revision = 0
+        self._table_query_prime_choice_revision = 0
 
     @property
     def selected_table_ref(self) -> TableRef | None:
@@ -1017,6 +1022,7 @@ class AthenaPageVM:
             return
         if not any(row.name == workgroup for row in self.workgroups):
             return
+        self._context_choice_revision += 1
         await self._select_workgroup(
             workgroup,
             preferred_catalog=self._selection_store.get(
@@ -1035,6 +1041,7 @@ class AthenaPageVM:
             return
         if not any(row.name == catalog for row in self.catalogs):
             return
+        self._context_choice_revision += 1
         await self._select_catalog(
             catalog,
             preferred_database=self._selection_store.get(
@@ -1049,6 +1056,10 @@ class AthenaPageVM:
             return
         if not any(row.ref.database_name == database for row in self.databases):
             return
+        self._context_choice_revision += 1
+        await self._select_database(database)
+
+    async def _select_database(self, database: str) -> None:
         generation = self._begin_context_change(
             self._context.workgroup,
             self._context.catalog,
@@ -1067,30 +1078,59 @@ class AthenaPageVM:
         snapshot_id: int | None = None,
     ) -> None:
         """Prefill one exact table in the editor without executing it."""
-        starter_sql = select_starter_sql(table_ref, snapshot_id)
+        prime_identity = (table_ref, snapshot_id)
         already_primed = (
-            self._active_view == "query"
-            and self.query.is_context_resolving
-            and self.query.sql == starter_sql
+            self.query.is_context_resolving and self._table_query_prime == prime_identity
         )
         previous_view = self._active_view
         previous_sql = self.query.sql
-        self.prime_table_query(table_ref, snapshot_id)
-        try:
-            await self._resolve_table_context(table_ref)
-        except BaseException:
-            if not already_primed and self._is_alive():
+        if not already_primed:
+            self.prime_table_query(table_ref, snapshot_id)
+        prime_token = self._table_query_prime_token
+        choice_revision = self._table_query_prime_choice_revision
+        primed_sql = select_starter_sql(table_ref, snapshot_id)
+
+        def owns_resolution() -> bool:
+            return (
+                self._is_alive()
+                and self._table_query_prime_token is prime_token
+                and self._context_choice_revision == choice_revision
+            )
+
+        def restore_previous_editor() -> None:
+            if (
+                not already_primed
+                and owns_resolution()
+                and self._active_view == "query"
+                and self.query.sql == primed_sql
+            ):
                 self._select_view_state(previous_view)
                 self.query.set_sql(previous_sql)
+
+        try:
+            await self._resolve_table_context(
+                table_ref, choice_revision=choice_revision, prime_token=prime_token
+            )
+        except asyncio.CancelledError:
+            restore_previous_editor()
+            raise
+        except Exception:
+            # A superseded discovery failure belongs to the old choice. Let
+            # it retire without asking the app to roll back the newer page.
+            if not owns_resolution() or self.query.sql != primed_sql:
+                return
+            restore_previous_editor()
             raise
         finally:
-            self.query.end_context_resolution()
+            if self._table_query_prime_token is prime_token:
+                self._table_query_prime = None
+                self.query.end_context_resolution()
 
     def prime_table_query(
         self,
         table_ref: TableRef,
         snapshot_id: int | None = None,
-    ) -> None:
+    ) -> object:
         """Publish local handoff state before remote Athena discovery."""
         if (
             not self._is_alive()
@@ -1099,27 +1139,71 @@ class AthenaPageVM:
             or table_ref.region != self._connection.region
         ):
             raise ValueError("table is unavailable in the active Athena source")
+        starter_sql = select_starter_sql(table_ref, snapshot_id)
         self._select_view_state("query")
         self.query.begin_context_resolution()
-        self.query.set_sql(select_starter_sql(table_ref, snapshot_id))
+        self.query.set_sql(starter_sql)
+        self._table_query_prime = (table_ref, snapshot_id)
+        self._table_query_prime_token = object()
+        self._table_query_prime_sql = starter_sql
+        self._table_query_prime_choice_revision = self._context_choice_revision
         self._selected_table_ref = table_ref
         self._notify("selected_table_ref")
+        return self._table_query_prime_token
 
-    def abandon_table_query_prime(self) -> None:
+    def owns_table_query_input(self, prime_token: object) -> bool:
+        """Check whether a transaction still owns its published editor/context."""
+        return (
+            self._is_alive()
+            and self._table_query_prime_token is not None
+            and self._table_query_prime_token is prime_token
+            and self._context_choice_revision == self._table_query_prime_choice_revision
+            and self._active_view == "query"
+            and self.query.sql == self._table_query_prime_sql
+        )
+
+    def abandon_table_query_prime(self, *, prime_token: object | None = None) -> None:
+        if prime_token is not None and self._table_query_prime_token is not prime_token:
+            return
+        self._table_query_prime = None
         self.query.end_context_resolution()
 
-    async def _resolve_table_context(self, table_ref: TableRef) -> None:
+    async def _resolve_table_context(
+        self, table_ref: TableRef, *, choice_revision: int, prime_token: object | None
+    ) -> None:
+        def choice_is_current() -> bool:
+            return (
+                choice_revision == self._context_choice_revision
+                and self._table_query_prime_token is prime_token
+            )
+
+        if not choice_is_current():
+            return
         if not self._context.workgroup:
             raise ValueError("table is unavailable in the active Athena source")
-        if not await self._ensure_catalog_loaded(table_ref):
+        catalog_available = await self._ensure_catalog_loaded(table_ref)
+        if not choice_is_current():
+            return
+        if not catalog_available:
             raise ValueError("table is unavailable in the active Athena source")
 
         if self._context.catalog != table_ref.catalog_name:
-            await self.select_catalog(table_ref.catalog_name)
-        if not await self._ensure_database_loaded(table_ref):
+            await self._select_catalog(
+                table_ref.catalog_name,
+                preferred_database=self._selection_store.get(self._selection_scope, "database"),
+                setup_active=True,
+            )
+            if not choice_is_current():
+                return
+        database_available = await self._ensure_database_loaded(table_ref)
+        if not choice_is_current():
+            return
+        if not database_available:
             raise ValueError("table is unavailable in the active Athena source")
         if self._context.database != table_ref.database_name:
-            await self.select_database(table_ref.database_name)
+            await self._select_database(table_ref.database_name)
+            if not choice_is_current():
+                return
         if (
             not self._is_alive()
             or self._context.catalog != table_ref.catalog_name

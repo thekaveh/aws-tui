@@ -53,9 +53,8 @@ def _is_callback_cancellation(error: BaseException) -> bool:
 def _isolated(callback: Callable[P, None], channel: str) -> Callable[P, None]:
     """Wrap one observer callback so its failure cannot reach the publisher.
 
-    ``on_next``/``on_error``/``on_completed`` previously carried three verbatim
-    copies of this try/except pair. Cancellation still propagates -- only a
-    genuine subscriber fault is isolated.
+    Callback-raised cancellation is isolated with other subscriber failures.
+    Ambient task cancellation still propagates.
 
     The record carries the exception *type* and the channel, never the exception
     message and never ``exc_info``. That is deliberate: a subscriber raising over

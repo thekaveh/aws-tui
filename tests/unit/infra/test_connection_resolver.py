@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import configparser
 import os
 from dataclasses import FrozenInstanceError
 from pathlib import Path
@@ -14,6 +15,7 @@ from aws_tui.infra.connection_resolver import (
     Connection,
     ConnectionNotFound,
     ConnectionResolver,
+    _read_ini,
 )
 from aws_tui.infra.keychain import InMemoryKeychain
 
@@ -622,6 +624,36 @@ def test_malformed_aws_config_is_tolerated(tmp_path: Path, store: ConfigStore) -
 
     assert [connection.name for connection in connections] == ["broken"]
     assert connections[0].region == "us-east-1"
+
+
+@pytest.mark.parametrize(
+    "malformed_tail",
+    ["region = us-west-2\n", "[profile explicit]\n", "malformed option line\n"],
+    ids=["duplicate-option", "duplicate-section", "invalid-option"],
+)
+def test_partial_ini_values_preserve_defaults_and_multiline_text(
+    tmp_path: Path, malformed_tail: str
+) -> None:
+    path = tmp_path / "config"
+    path.write_text(
+        "[DEFAULT]\nregion = us-east-1\nnotes = first\n    continued\n\n"
+        "[profile inherited]\noutput = json\n"
+        "[profile explicit]\nregion = eu-west-1\n" + malformed_tail,
+        encoding="utf-8",
+    )
+    before = path.read_bytes()
+    parser = configparser.RawConfigParser()
+
+    assert not _read_ini(parser, path)
+
+    assert parser.get("profile inherited", "region") == "us-east-1"
+    assert parser.get("profile explicit", "region") == "eu-west-1"
+    assert parser.defaults()["notes"] == "first\ncontinued"
+    assert parser.get("profile inherited", "notes") == "first\ncontinued"
+    # Normalizing inherited values must not turn them into explicit overrides.
+    parser.set(parser.default_section, "notes", "changed default")
+    assert parser.get("profile inherited", "notes") == "changed default"
+    assert path.read_bytes() == before
 
 
 def test_explicit_aws_entry_without_a_region_inherits_the_profile_region(

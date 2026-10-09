@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import shlex
 import tomllib
 from pathlib import Path
 from typing import Any
@@ -173,8 +174,20 @@ def test_ci_gates_minimum_supported_dependencies() -> None:
     assert "--resolution lowest-direct" in install
     assert '"moto[server,s3]>=5"' in install
     assert '"pytest-timeout>=2.4"' in install
-    assert "tests/minimum_runtime/test_dependency_floors.py" in exercise
+    assert "tests/minimum_runtime" in exercise
     assert "tests/unit/vm/test_vmx_smoke.py" in exercise
+
+
+def test_minimum_dependency_jobs_collect_all_runtime_fixtures() -> None:
+    """Native decoder fixtures must run alongside dependency-floor smoke tests."""
+    for workflow_path in (".github/workflows/ci.yml", ".github/workflows/release.yml"):
+        exercise = _step(
+            _workflow(workflow_path),
+            "lowest-supported-dependencies",
+            "exercise minimum dependency runtime",
+        )["run"]
+        arguments = shlex.split(exercise.replace("\\\n", ""))
+        assert "tests/minimum_runtime" in arguments, workflow_path
 
 
 def test_integration_marker_is_reserved_for_s3_compat_tier() -> None:
@@ -399,7 +412,7 @@ def test_release_checks_declared_minimum_s3_dependency_models_before_publish() -
         workflow, "lowest-supported-dependencies", "exercise minimum dependency runtime"
     )["run"]
     assert "tests/unit/infra/test_connection_resolver.py" in exercise
-    assert "tests/minimum_runtime/test_dependency_floors.py" in exercise
+    assert "tests/minimum_runtime" in exercise
     assert "tests/unit/infra/test_keychain.py" in exercise
     assert "tests/unit/test_app_sanity.py" in exercise
     assert "tests/unit/vm/test_vmx_smoke.py" in exercise
