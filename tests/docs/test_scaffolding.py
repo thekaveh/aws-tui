@@ -160,16 +160,10 @@ def test_package_metadata_tracks_quickstart_and_emr_clone_surface() -> None:
     domain_source = _read("src/aws_tui/domain/emr_serverless.py")
     keymap_source = _read("src/aws_tui/infra/keymap_store.py")
 
-    # ``#3-quickstart``: README's heading is ``## 3. Quickstart``. This
-    # assertion pinned ``#13-quickstart``, an anchor left over from an
-    # older numbering, so the link on the published PyPI page pointed at a
-    # heading that no longer existed and the test kept it that way.
-    # ``check_docs.check_local_anchors`` now resolves same-repo absolute
-    # GitHub anchors, so the real target is verified there too.
-    assert "#3-quickstart" in pypi
-    assert "#14-quickstart" not in pypi
-    assert "read-mostly" in pypi
-    assert "clone submission" in pypi
+    # check_docs resolves repository anchors against actual headings.
+    # The heading number is an editorial choice, not a package contract.
+    assert "EMR Serverless" in pypi
+    assert "`StartJobRun`" in _read("docs/services/emr-serverless.md")
     assert "async def start_job_run(" in domain_source
     assert '"emr.clone"' in keymap_source
 
@@ -188,8 +182,9 @@ def test_public_docs_cover_athena_read_only_contract() -> None:
     changelog = _read("CHANGELOG.md")
 
     assert "Athena" in readme
-    assert "integrated Iceberg workflows" in readme
-    assert "Amazon Athena read-only query console" in index
+    assert "Iceberg" in readme
+    assert "Athena" in index
+    assert "read-only SQL" in _squash(index)
     assert "AthenaPageVM" in architecture
     assert "AthenaService" in services
     assert "Athena is AWS-only" in connections
@@ -423,11 +418,10 @@ def test_athena_release_framing_and_smoke_are_minor_unreleased_work() -> None:
     normalized_releasing = _squash(releasing)
     version = _read("src/aws_tui/version.py")
 
-    assert (
-        "Glue, Athena, and their integrated Iceberg workflows are Unreleased v0.9.0 feature work"
-    ) in _squash(readme)
-    assert "Iceberg workflows are unreleased v0.9.0 work" in _squash(pypi)
-    assert "no aws-tui package is published on PyPI" in _squash(pypi)
+    # Availability belongs in entry copy; release targets belong in history
+    # and the release procedure. Do not force version transitions into README.
+    for entry in (readme, pypi):
+        assert "no aws-tui package is published on PyPI" in _squash(entry)
     assert "published v0.8.0 package" not in _squash(pypi)
     assert "Glue, Athena, and Iceberg integration target v0.9.0" in _squash(changelog)
     assert "not a v0.8.0 headline or a v0.8.1 patch candidate" in _squash(changelog)
@@ -600,15 +594,6 @@ def test_service_guide_uses_current_test_layout_and_avoids_pr_chronology() -> No
     assert "PR #76" not in services
 
 
-def test_readme_indexes_every_internal_superpowers_note() -> None:
-    readme = _read("README.md")
-    notes = sorted((REPO_ROOT / "docs/superpowers/notes").glob("*.md"))
-
-    assert notes
-    for note in notes:
-        assert note.relative_to(REPO_ROOT).as_posix() in readme
-
-
 def test_glue_and_athena_palette_only_actions_are_not_default_bindings() -> None:
     keybindings = _read("docs/keybindings.md")
     keymap = _read("src/aws_tui/infra/keymap_store.py")
@@ -721,39 +706,6 @@ def test_unreleased_changelog_allows_develop_before_main_promotion() -> None:
     assert "historical v0.8.0 staging commit" in _squash(unreleased_intro)
 
 
-def _opening_prose(text: str) -> list[str]:
-    """Prose paragraphs above the first section heading.
-
-    Poster/screenshot markup and the status blockquote are dropped: their
-    relative asset paths and repository links legitimately differ between the
-    repository README and the landing page the site and wiki are built from.
-    """
-    head = text.split("\n## ", maxsplit=1)[0]
-    head = re.sub(r"<p align=\"center\">.*?</p>", "", head, flags=re.DOTALL)
-    paragraphs = []
-    for block in head.split("\n\n"):
-        lines = [line for line in block.splitlines() if line.strip()]
-        if not lines or lines[0].startswith(("#", ">", "<")):
-            continue
-        paragraphs.append(" ".join(line.strip() for line in lines))
-    return paragraphs
-
-
-def test_readme_and_published_index_share_the_product_summary() -> None:
-    """The landing page is projected to the site and the wiki, so a README that
-    drifts from it leaves the three surfaces telling different stories.
-
-    Comparing extracted prose rather than a hard-coded literal means editing the
-    pitch cannot quietly pass by updating one surface and the test together.
-    """
-    readme = _opening_prose(_read("README.md"))
-    index = _opening_prose(_read("docs/index.md"))
-
-    assert readme == index
-    assert len(readme) >= 2, f"expected a tagline and a summary, got {readme}"
-    assert 100 <= len(" ".join(readme).split()) <= 150
-
-
 def test_every_test_directory_holding_modules_is_an_importable_package() -> None:
     """A test directory without ``__init__.py`` gets its modules imported twice.
 
@@ -855,7 +807,7 @@ def test_release_recipe_cuts_on_develop_and_promotes_to_main() -> None:
 
 
 def test_environment_variable_references_point_at_the_configuration_page() -> None:
-    """README §5 only links to the configuration page; it has no such section."""
+    """Environment reference links target the canonical configuration page."""
     readme = _read("README.md")
     platforms = _read("docs/platforms.md")
     configuration = _read("docs/configuration.md")

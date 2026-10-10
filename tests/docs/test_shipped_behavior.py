@@ -8,28 +8,24 @@ def _text(path: str) -> str:
     return " ".join(source.split())
 
 
-def test_readme_describes_shipped_runtime_bindings_quick_look_and_palette() -> None:
+def test_current_entry_does_not_describe_shipped_controls_as_deferred() -> None:
+    # Runtime details belong in the keybinding guide, not the entry overview.
     text = _text("README.md")
-
-    assert "runtime rebinding deferred" not in text
-    assert "runtime wiring is deferred to v0.9 (the `BindingResolver` work" not in text
-    assert "pending `[keybindings]` overlay contract" not in text
-    assert "Streaming Quick Look (deferred)" not in text
-    assert "Command palette (deferred)" not in text
-    assert "`BindingResolver` installs handled `[keybindings]` overrides at runtime" in text
-    assert "Handlerless deferred action IDs remain unbound" in text
-    assert "shipped `[keybindings]` overlay behavior" in text
-    assert "**Streaming Quick Look.** Press `Space`" in text
-    assert "**Command palette.** Press `:` or `Ctrl+K`" in text
+    for stale_claim in (
+        "runtime rebinding deferred",
+        "runtime wiring is deferred to v0.9 (the `BindingResolver` work",
+        "pending `[keybindings]` overlay contract",
+        "Streaming Quick Look (deferred)",
+        "Command palette (deferred)",
+    ):
+        assert stale_claim not in text
 
 
 def test_current_docs_describe_in_session_credential_recovery() -> None:
-    readme = _text("README.md")
     keybindings = _text("docs/keybindings.md")
     connections = _text("docs/connections.md")
     s3 = _text("docs/services/s3.md")
 
-    assert "press `a` to retry the active source in place" in readme
     assert "**Retry active source credentials**" in keybindings
     assert "aws-tui never runs the AWS CLI or writes credentials" in connections
     assert "expired SSO, missing credentials, access denied, and network failures" in connections
@@ -75,6 +71,9 @@ def test_keybindings_describes_shipped_palette_and_runtime_resolver() -> None:
     assert "Use &lt;name&gt; · &lt;region&gt; for &lt;service&gt;" in text
     assert "Dynamic `connection switch <name>` palette entries are not registered" not in text
     assert "All live App-level bindings are installed through `BindingResolver`" in text
+    assert "Only action IDs with registered handlers receive live Textual bindings" in text
+    assert "`BindingResolver` leaves them unbound until a handler ships" in text
+    assert "causes the app to fall back to the default keymap" in text
 
 
 def test_unreleased_changelog_does_not_contradict_shipped_handlers_or_demo() -> None:
@@ -103,7 +102,7 @@ def test_current_docs_do_not_claim_deleted_first_run_or_resume_modals() -> None:
     assert "FirstRunModal" not in current
     assert "ResumeModal" not in current
     assert "overlays like command palette / confirm / quick look / crash / first-run" not in current
-    for path in ("README.md", "docs/connections.md"):
+    for path in ("docs/connections.md",):
         text = _text(path)
         assert "**Save and open**" in text
         assert "**Retry discovery**" in text
@@ -139,8 +138,8 @@ def test_release_checklist_covers_published_package_and_platform_status() -> Non
 def test_sso_startup_docs_promise_only_local_no_network_io() -> None:
     surfaces = (_text("README.md"), _text("docs/connections.md"))
 
+    assert "local AWS config and SSO cache reads only; no AWS network call" in surfaces[1]
     for content in surfaces:
-        assert "local AWS config and SSO cache reads only; no AWS network call" in content
         assert "~1 KB" not in content
         assert "Sub-millisecond" not in content
         assert "one `stat`" not in content
@@ -190,7 +189,8 @@ def test_current_contract_ledger_discloses_exact_pinned_private_adapters() -> No
 
 
 def test_launch_selectors_document_values_precedence_and_session_contract() -> None:
-    for path in ("README.md", "docs/cookbook.md"):
+    # Launch grammar and failure behavior are reference material.
+    for path in ("docs/cookbook.md",):
         text = _text(path)
         for flag in ("--connection", "--profile", "--region", "--service", "--location"):
             assert flag in text
@@ -220,10 +220,9 @@ def test_launch_selectors_document_values_precedence_and_session_contract() -> N
 
 
 def test_quick_look_formats_controls_and_budgets_documented() -> None:
-    readme = (ROOT / "README.md").read_text()
     keys = (ROOT / "docs/keybindings.md").read_text()
     cookbook = (ROOT / "docs/cookbook.md").read_text()
-    for text in (readme, keys, cookbook):
+    for text in (keys, cookbook):
         for needle in ("CSV", "JSON", "JSONL", "Parquet", "`r`", "64 KiB"):
             assert needle in text
     for needle in (

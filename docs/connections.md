@@ -1,7 +1,7 @@
 # Connections
 
-> Mirror of spec §7.1–7.3 and §7.6. See also the
-> [cookbook](cookbook.md) for the "connect to local S3Mock" walkthrough.
+Use connections to select an AWS profile or an S3-compatible endpoint.
+See the [cookbook](cookbook.md) for a local S3Mock setup example.
 
 A **Connection** is the unit aws-tui authenticates as. Two kinds:
 
@@ -103,6 +103,16 @@ path. Startup selection follows `[defaults].connection`,
 order. That order is every explicit `[connections.*]` entry — s3-compatible
 entries included — followed by auto-discovered AWS profiles, so an explicit
 connection wins the fallback over any profile.
+
+If access differs from your shell, compare the selected connection, profile
+and region. A known `[defaults].connection` wins over both environment profile
+variables; changing those variables alone cannot override it.
+
+Use `aws-tui --profile NAME` to select an existing AWS profile explicitly.
+Use `aws-tui --connection NAME` to select an exact configured connection.
+These flags are mutually exclusive and override ordinary default selection.
+See [launch selectors](cookbook.md#18-open-a-source-service-or-directory-from-the-cli)
+for session overrides and failure behavior.
 
 For AWS connections, region resolution follows the explicit connection
 region, the selected profile's configured region, `AWS_DEFAULT_REGION`, then

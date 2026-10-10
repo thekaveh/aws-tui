@@ -1,35 +1,46 @@
 # aws-tui
 
-Cross-platform terminal UI for AWS and S3-compatible services, powered by
-Textual and the VMx MVVM framework.
+aws-tui is a terminal interface for AWS and S3-compatible storage on macOS,
+Linux and Windows. It supports Python 3.11, 3.12 and 3.13.
 
-> **Development status:** AWS Glue, Amazon Athena, and their integrated
-> Iceberg workflows are unreleased v0.9.0 work. Package metadata remains at
-> v0.8.0 until release preparation, and no aws-tui package is published on
-> PyPI. Install the current development tree from Git rather than treating
-> these features as part of a released package.
+## 1. Capabilities
 
-aws-tui provides a dual-pane S3/local file manager plus operational views for
-EMR Serverless, AWS Glue, Amazon Athena, and Apache Iceberg metadata. The EMR
-view is read-mostly, with focused clone submission for an existing job run.
-It supports multiple AWS profiles and S3-compatible connections, keyboard-first
-navigation, deterministic demo mode, and built-in themes.
+- Manage S3 and local files in two panes, including copy, delete and previews.
+- Inspect EMR Serverless applications, job runs and logs; clone an existing
+  Spark run or cancel an active run.
+- Browse AWS Glue resources and Iceberg metadata.
+- Review and execute allowed read-only SQL in Athena, then inspect results and history.
 
-The optional DuckDB extra adds a local row preview for Iceberg tables that
-reads S3 directly instead of running an Athena query. Use the
-[Git installation with the DuckDB extra](https://github.com/thekaveh/aws-tui/blob/main/docs/install.md#2-optional-extras) to install it.
+Glue-to-Athena handoffs prefill queries without executing them. Athena execution
+can incur AWS charges and write results. S3 copy/delete and EMR clone/cancel
+operations modify resources.
 
-Quick Look previews CSV, JSON and JSONL as bounded tables and Parquet as
-schema with a capped row sample. Press `Space` on a file, `r` to toggle its
-cached raw 64 KiB prefix, and arrow keys to scroll both axes. Samples use
-at most 50 rows and 24 columns within a five-second, 32-request, 8 MiB
-read budget. Malformed or truncated JSON falls back to raw.
+## 2. Installation
 
-![aws-tui Glue and Iceberg demo](https://raw.githubusercontent.com/thekaveh/aws-tui/main/assets/screenshots/aws-tui-running.png)
+Development build: no aws-tui package is published on PyPI.
+Install `pipx`, a supported Python and Git first, with Git available on `PATH`.
+Then install the application:
 
+```bash
+pipx install git+https://github.com/thekaveh/aws-tui.git
+```
+
+To explore the interface, run `aws-tui --demo`. AWS data is synthetic and no
+AWS requests are sent. The local pane uses real files; local copy and delete
+affect your filesystem.
+
+The optional DuckDB extra enables Glue Iceberg **Peek**, which reads rows
+from S3 without Athena. See the
+[installation guide](https://github.com/thekaveh/aws-tui/blob/main/docs/install.md#2-optional-extras)
+for that extra and alternative installs.
+
+## 3. Documentation and support
+
+- [Quickstart](https://github.com/thekaveh/aws-tui#4-quickstart)
 - [Project documentation](https://thekaveh.github.io/aws-tui/)
-- [Canonical documentation source](https://github.com/thekaveh/aws-tui/tree/main/docs)
-- [Installation and quickstart](https://github.com/thekaveh/aws-tui#3-quickstart)
 - [Connection configuration](https://github.com/thekaveh/aws-tui/blob/main/docs/connections.md)
 - [Security policy](https://github.com/thekaveh/aws-tui/blob/main/SECURITY.md)
 - [Source and issue tracker](https://github.com/thekaveh/aws-tui)
+
+Licensed under [Apache License 2.0](https://github.com/thekaveh/aws-tui/blob/main/LICENSE),
+with attribution in [NOTICE](https://github.com/thekaveh/aws-tui/blob/main/NOTICE).

@@ -27,6 +27,11 @@ closed above 100 pages or 1,000 applications. The retained bulk job-run helper
 also requests at most 50 rows per page and stops above 100 pages. `r` refreshes
 the focused surface.
 
+Applications refresh every 60 seconds. Runs refresh every 60 seconds while
+active, or every sixth tick when none are active. Selected nonterminal run
+detail refreshes every 30 seconds. Demo intervals are 30, 30 and 5 seconds,
+respectively.
+
 The logs pane loads only on demand. It discovers Spark or Hive log objects
 under the selected run's complete prefix. It streams all gzip members in bounded
 chunks and applies the configured regular-expression filter. Discovery fails closed if a
