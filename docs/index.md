@@ -1,79 +1,57 @@
 # aws-tui
 
-<p align="center">
-  <img src="../assets/aws-tui-poster.png" alt="A wireframe cloud of teal light anchored by golden tethers to a glowing point on a dark sea, the AWS-TUI wordmark seated at its luminous core." width="100%">
-</p>
+aws-tui lets you manage S3 and local files and inspect AWS services from a
+terminal. Its service consoles cover EMR Serverless, AWS Glue and Amazon Athena.
 
-<p align="center">
-  <img src="../assets/screenshots/aws-tui-running.png" alt="aws-tui in demo mode with the S3, EMR, Glue, and Athena service rail; the Glue catalog is showing an Iceberg table, its metadata tabs, and snapshot history." width="100%">
-</p>
+This guide explains installation, source configuration and everyday workflows.
+Start with the demo to explore sample resources without AWS credentials.
 
-<p align="center">
-  <img src="https://img.shields.io/badge/python-3.11%20%7C%203.12%20%7C%203.13-3776AB?logo=python&logoColor=white" alt="Python 3.11, 3.12, and 3.13">
-  <img src="https://img.shields.io/badge/platforms-macOS%20%7C%20Linux%20%7C%20Windows-4c566a" alt="Runs on macOS, Linux, and Windows">
-  <img src="https://img.shields.io/badge/built%20with-Textual%20%2B%20VMx-5a4fcf" alt="Built with Textual and the VMx MVVM framework">
-  <img src="https://img.shields.io/badge/license-Apache--2.0-3DA639" alt="Apache-2.0 licensed">
-</p>
+<img src="../assets/screenshots/aws-tui-running.png" alt="aws-tui showing a Glue Iceberg table and its metadata" width="100%">
 
-Cross-platform TUI for AWS and S3-compatible services — runs on macOS,
-Linux, and Windows. Powered by
-[Textual](https://textual.textualize.io/) and the
-[VMx](https://github.com/thekaveh/VMx) MVVM framework.
+## 1. What you can do
 
-aws-tui provides a dual-pane file manager for S3 and S3-compatible storage,
-an EMR Serverless console, and read-only consoles for AWS Glue and Amazon Athena.
-Glue tables generate Athena starter queries. Athena results can open their S3
-artifacts, and both services expose Iceberg metadata. The interface supports
-keyboard navigation throughout these services.
+- Browse S3 or S3-compatible storage alongside local files; copy, delete and
+  preview entries.
+- Inspect EMR applications, job runs and logs; clone existing Spark runs and
+  request cancellation of active runs.
+- Browse Glue databases, tables, jobs and crawlers, including Iceberg metadata.
+- Review and execute allowed read-only SQL in Athena, then inspect results
+  and query history.
 
-Destructive operations require confirmation. Transfers and service reads run in
-cancellable workers. `Shift+S` changes the focused S3 pane's source. In EMR,
-Glue, and Athena, it changes the active service's AWS connection.
+Glue table and Iceberg snapshot handoffs prefill Athena queries without
+executing them. Athena queries can incur AWS charges and write query results.
+S3 file operations and EMR clone or cancel actions can modify resources.
 
-> **Status: v0.9.0 development; no package release published** — install from Git
-> until the `aws-tui` project name is available on PyPI. Glue, Athena, and
-> their integrated Iceberg workflows are Unreleased v0.9.0 feature work.
->
-> The package metadata remains `0.8.0` until the release-preparation PR bumps it;
-> the current tree must not be tagged as v0.8.0. The per-release history lives in `CHANGELOG.md` in the repository. These surfaces cannot carry that document: its version headings resolve through `/compare/` links into the repository itself.
+## 2. Get started
 
-## 1. Features
+aws-tui supports Python 3.11, 3.12 and 3.13 on macOS, Linux and Windows.
+Install the development build from Git; no aws-tui package is published on PyPI.
 
-- **Dual-pane S3 ⇄ local file management** — copy, delete, and multi-select
-  across an S3 (or S3-compatible) source and your local filesystem.
-- **One-key source switching** across every configured AWS profile and
-  S3-compatible connection.
-- **EMR Serverless console** — application picker, job-runs master-detail
-  with state-filter chips, and on-demand log streaming with a grep filter.
-- **AWS Glue read-only operations console** — Catalog, Jobs, and Crawlers
-  views with an exact-source bordered picker, bordered job/crawler state
-  selectors, and a typed copied-table reference.
-- **Amazon Athena read-only query console** — Query, History, Results, and
-  Saved views with fail-closed SQL validation, app-owned cancellation,
-  paginated rows, exact-profile customer-S3 result handoff, keyboard-focusable
-  context selectors, and same-source copied-table insertion without execution.
-- **Integrated Iceberg operations** — bounded metadata views in Glue,
-  generated Glue → Athena table and snapshot queries with explicit execution,
-  Athena → Glue navigation for one unambiguous table, and S3 artifact handoff.
-- **Themable, keyboard-driven** — built-in themes and fully customizable
-  keybindings; valid overlays apply on the next launch while invalid overlays
-  fall back atomically. The command palette shows service commands only for
-  the active service.
+1. Follow [Installation](install.md) to install the application and launch the demo.
+2. Read [Connections](connections.md) to select your AWS profile or configure an S3-compatible endpoint.
+3. Use [Keybindings](keybindings.md) and the [Cookbook](cookbook.md) for navigation and common workflows.
 
-Glue, Athena, and Iceberg integration are Unreleased minor-version feature
-work targeting v0.9.0. They remain read-only: generated SQL is placed in the
-Athena editor for review and never executes automatically.
+The demo sends no AWS requests, but its local pane uses real files.
+Local copy and delete operations affect your filesystem.
 
-## 2. Where to start
+## 3. Service guides
 
-- New here? Start with [Installation](install.md), then
-  [Platforms](platforms.md) and [Connections](connections.md).
-- Daily use: [Keybindings](keybindings.md), the [Cookbook](cookbook.md), and
-  [Theming](theming.md).
-- Service behavior: [S3 and Local File Manager](services/s3.md),
-  [EMR Serverless](services/emr-serverless.md),
-  [AWS Glue and Iceberg Metadata](services/glue.md), and
-  [Amazon Athena](services/athena.md).
-- Contributing or extending: [Architecture](architecture.md),
-  [Adding a Service](adding-a-service.md), and the
-  [Contract Ledger](contract-ledger.md).
+| Task | Guide |
+| --- | --- |
+| Manage files, transfers and recovery | [S3 and local files](services/s3.md) |
+| Inspect jobs, logs, cloning and cancellation | [EMR Serverless](services/emr-serverless.md) |
+| Inspect tables and Iceberg metadata | [AWS Glue](services/glue.md) |
+| Configure query context and inspect results | [Amazon Athena](services/athena.md) |
+
+Glue, Athena and EMR require AWS connections. S3-compatible endpoints support
+the file manager only. Transfer recovery starts an explicit new copy;
+automatic replay and multipart resume are unsupported.
+
+## 4. Configuration and development
+
+Use [Configuration](configuration.md) for settings and file locations,
+[Theming](theming.md) for appearance, and [Platforms](platforms.md) for terminal guidance.
+
+For implementation and extension, read [Architecture](architecture.md) and
+[Adding a service](adding-a-service.md). The [Contract ledger](contract-ledger.md)
+records the external API and dependency contracts used by the project.

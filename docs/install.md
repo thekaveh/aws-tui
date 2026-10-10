@@ -6,8 +6,9 @@ from its Git repository.
 
 ## 1. Isolated application install
 
-Use either `pipx` or `uv tool` so aws-tui and its dependencies remain isolated
-from system Python packages:
+Install `pipx` or `uv` first, with a supported Python version available.
+Git must be installed and available on `PATH` for the repository URLs below.
+Use either tool to keep aws-tui isolated from system Python packages:
 
 ```bash
 pipx install git+https://github.com/thekaveh/aws-tui.git
@@ -65,16 +66,16 @@ endpoints.
 
 ## 4. Demo mode
 
-Launch the complete interface against deterministic in-memory providers when
-AWS credentials are unavailable:
+Demo mode sends no AWS requests and does not write aws-tui configuration.
+Its local pane uses your real filesystem; local copy and delete affect real files.
+
+Launch the interface with synthetic AWS resources:
 
 ```bash
 aws-tui --demo
 ```
 
-Demo mode does not write the user's aws-tui configuration and does not issue
-AWS requests. Its local filesystem pane still points at the real local
-filesystem.
+A **DEMO MODE** indicator identifies the session.
 
 ## 5. Release channels
 
