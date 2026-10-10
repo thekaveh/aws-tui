@@ -3,7 +3,7 @@
 ``rewrite_for_surface`` walks every ``[text](target)`` link and:
   * strips forbidden (cross-surface / GitHub-source) links to bare text,
   * strips ``.ipynb`` links to bare text,
-  * rewrites known published ``.md`` links to the surface's output filename,
+  * rewrites known published ``.md`` links to the surface's page route,
   * strips other relative ``.md`` links (non-manifest docs) to bare text,
   * leaves everything else (external URLs, ``#anchors``, images, ``../``) as-is.
 """
@@ -60,6 +60,10 @@ def rewrite_for_surface(md: str, surface: str, source_map: dict[str, str]) -> st
         if path.endswith(".md") and not path.startswith(("/", "http")):
             mapped = by_basename.get(Path(path).name)
             if mapped is not None:
+                # GitHub wiki routes omit the Markdown storage extension.
+                # Linking to Architecture.md does not open Architecture.
+                if surface == "wiki":
+                    mapped = mapped.removesuffix(".md")
                 return f"[{text}]({mapped}{anchor})"
             return text  # relative .md to a non-published/internal doc
         return m.group(0)  # external, anchor-only, or otherwise untouched
