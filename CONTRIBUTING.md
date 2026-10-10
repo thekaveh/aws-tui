@@ -52,6 +52,40 @@ run everything. If you sync the `dev` group alone, `uv run pytest` still
 collects `tests/docs` — which imports `markdown` and `Pillow` — and those
 surface as collection errors rather than skips.
 
+### 3.1. Local verification and publication
+
+Build and verify documentation locally before publication. Keep the generated
+site and wiki from the same reviewed source commit:
+
+```bash
+make docs-check
+uv run --group docs pytest tests/docs
+```
+
+Publish the generated wiki through its Git remote after reviewing the page and
+asset diff. Copy generated files into a fresh wiki checkout. Remove stale files
+only after confirming generator ownership; preserve other files and Git history.
+The existing `scripts.docs.push_wiki` helper replaces the whole wiki tree, so
+do not use it unchanged when handwritten files exist. Record the source and
+wiki commit IDs with the publication result.
+
+GitHub Pages requires a GitHub-managed deployment workflow, even when the site
+was built locally. An Actions-based publishing source cannot accept a local
+upload without that deployment. See the
+[GitHub Pages publishing-source documentation](https://docs.github.com/en/pages/getting-started-with-github-pages/configuring-a-publishing-source-for-your-github-pages-site).
+
+For local-only builds, an explicitly authorized alternative is branch
+publication. Commit the verified `site/` contents and a `.nojekyll` file to a
+dedicated `gh-pages` branch. Configure Pages to publish that branch's root.
+This still runs GitHub's managed deployment; it does not run project tests.
+Obtain authorization for that exception and the publishing-source change first.
+Push the reviewed publication branch before selecting it in Pages settings.
+
+After publication, check the public entry, task links and assets against the
+reviewed sources. Record the canonical revision, website address and wiki
+revision. A local build does not establish that the public documentation is
+current. Keep the issue open if publication remains blocked.
+
 ## 4. Commits
 
 We use [Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/):
