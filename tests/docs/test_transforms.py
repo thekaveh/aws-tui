@@ -64,7 +64,16 @@ def test_rewrite_strips_forbidden_link_to_bare_text():
 def test_rewrite_maps_known_md_link_wiki():
     md = "Read [arch](architecture.md#12-composition-root)."
     out = rewrite_for_surface(md, "wiki", build_source_map(MANIFEST, "wiki"))
-    assert out == "Read [arch](Architecture.md#12-composition-root)."
+    assert out == "Read [arch](Architecture#12-composition-root)."
+
+
+def test_wiki_page_routes_are_extensionless_but_files_keep_md():
+    source_map = build_source_map(MANIFEST, "wiki")
+    md = "[start](index.md) and [extend](adding-a-service.md#example)."
+    assert rewrite_for_surface(md, "wiki", source_map) == (
+        "[start](Home) and [extend](Adding-a-Service#example)."
+    )
+    assert source_map["docs/index.md"] == "Home.md"
 
 
 def test_rewrite_maps_known_md_link_site_keeps_name():
