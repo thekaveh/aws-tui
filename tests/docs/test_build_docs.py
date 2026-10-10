@@ -85,6 +85,8 @@ def test_render_wiki_emits_special_pages_and_images(tmp_path):
     assert (out / "img" / "architecture.png").is_file()
     body = (out / "Architecture.md").read_text()
     assert "img/architecture.png" in body
+    assert "[keys](Keybindings)" in body
+    assert "[keys](Keybindings.md)" not in body
     sidebar = (out / "_Sidebar.md").read_text()
     assert "[1. Overview](Home)" in sidebar
     assert "2. Development" in sidebar
