@@ -25,9 +25,10 @@ S3 file operations and EMR clone or cancel actions can modify resources.
 ## 2. Get started
 
 aws-tui supports Python 3.11, 3.12 and 3.13 on macOS, Linux and Windows.
-Install the development build from Git; no aws-tui package is published on PyPI.
+Run the development build from a checkout with `uv`, or install a standalone command from Git.
+No aws-tui package is published on PyPI.
 
-1. Follow [Installation](install.md) to install the application and launch the demo.
+1. Follow [Installation](install.md) to choose a checkout or standalone workflow and launch the demo.
 2. Read [Connections](connections.md) to select your AWS profile or configure an S3-compatible endpoint.
 3. Use [Keybindings](keybindings.md) and the [Cookbook](cookbook.md) for navigation and common workflows.
 
