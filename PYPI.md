@@ -18,14 +18,23 @@ operations modify resources.
 ## 2. Installation
 
 Development build: no aws-tui package is published on PyPI.
-Install `pipx`, a supported Python and Git first, with Git available on `PATH`.
-Then install the application:
+For a standalone command, install `uv`, a supported Python version and Git first.
+Git must be available on `PATH`. Then install the application:
 
 ```bash
-pipx install git+https://github.com/thekaveh/aws-tui.git
+uv tool install git+https://github.com/thekaveh/aws-tui.git
+aws-tui --version
 ```
 
-To explore the interface, run `aws-tui --demo`. AWS data is synthetic and no
+`pipx install git+https://github.com/thekaveh/aws-tui.git` is an optional alternative.
+Both installers use a separate application environment.
+
+If you run from a repository checkout, keep using `uv run aws-tui`. It uses your
+checkout's code and project environment. See the
+[checkout setup](https://github.com/thekaveh/aws-tui/blob/main/docs/install.md#1-run-from-a-checkout-with-uv).
+
+To explore a standalone installation, run `aws-tui --demo`.
+From a checkout, run `uv run aws-tui --demo`. AWS data is synthetic and no
 AWS requests are sent. The local pane uses real files; local copy and delete
 affect your filesystem.
 

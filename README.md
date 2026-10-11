@@ -35,8 +35,8 @@ See the [service guides](#6-documentation) for each operation's conditions.
 - Python 3.11, 3.12 or 3.13.
 - Git available on `PATH` for installation from the repository.
 - macOS, Linux or Windows with a supported terminal.
-- `pipx` for the installation command below, or `uv` for the alternative in
-  the [installation guide](docs/install.md).
+- `uv` for the checkout workflow. Standalone installation uses `uv` or
+  optional `pipx`.
 - Existing AWS profiles and service permissions for AWS access, or a configured
   S3-compatible endpoint. The demo needs no AWS credentials.
 
@@ -44,18 +44,30 @@ See [platform guidance](docs/platforms.md) for terminal and font recommendations
 
 ## 3. Installation
 
-Development build: no aws-tui package is published on PyPI. Install from Git:
+Development build: no aws-tui package is published on PyPI.
+Run the current checkout with `uv`:
 
 ```bash
-pipx install git+https://github.com/thekaveh/aws-tui.git
-aws-tui --version
+git clone https://github.com/thekaveh/aws-tui.git
+cd aws-tui
+uv sync --locked
+uv run aws-tui --version
 ```
 
-The [installation guide](docs/install.md) covers alternative installs and the
-optional DuckDB extra. That extra enables Glue Iceberg **Peek**, which reads
-rows directly from S3 without Athena.
+`uv run` uses the checkout's project environment and current code. Keep using
+this workflow when you want to run your local changes.
+
+For a separate `aws-tui` command, the [installation guide](docs/install.md#3-standalone-application-install)
+explains `uv tool install` and the optional `pipx` alternative. A standalone
+installation uses a separate environment and does not follow your working tree.
+
+The optional DuckDB extra enables Glue Iceberg **Peek**, which reads rows directly
+from S3 without Athena. See [optional extras](docs/install.md#2-optional-extras).
 
 ## 4. Quickstart
+
+These commands run from the checkout root. For a standalone installation,
+replace `uv run aws-tui` with `aws-tui`.
 
 ### 4.1. Explore the demo
 
@@ -63,7 +75,7 @@ The demo uses synthetic AWS data and sends no AWS requests. Its local pane
 uses your real filesystem; local copy and delete operations affect real files.
 
 ```bash
-aws-tui --demo
+uv run aws-tui --demo
 ```
 
 The interface opens with sample resources for S3, EMR, Glue and Athena.
@@ -75,7 +87,7 @@ Configure and authenticate your profile outside aws-tui first. Replace
 `analytics` with the name of an existing AWS profile:
 
 ```bash
-aws-tui --profile analytics
+uv run aws-tui --profile analytics
 ```
 
 The S3 view opens using that profile. Use the service rail or command palette
@@ -108,7 +120,7 @@ connection. These explicit choices override default source selection.
 
 Without those flags, a known `[defaults].connection` takes precedence over
 `AWS_DEFAULT_PROFILE` and `AWS_PROFILE`. Changing an environment profile alone
-does not override that configured default. Use `aws-tui doctor` for local
+does not override that configured default. Use `uv run aws-tui doctor` for local
 setup diagnostics; see the [connection selection rules](docs/connections.md#3-auto-discovery-and-sso-cache-probe).
 
 After renewing credentials outside the app, press `a` to retry the active

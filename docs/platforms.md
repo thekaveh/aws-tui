@@ -44,19 +44,14 @@ legacy `conhost.exe` (the console window you get if you launch
 
 1. Open Windows Terminal.
 2. Open a PowerShell tab (the default profile on Windows 11).
-3. Install aws-tui from Git until the first PyPI release lands:
+3. Install Git, a supported Python version and your chosen installer.
+4. Follow [Installation](install.md) for checkout setup or a standalone installation.
+5. From a checkout, run this command at the repository root:
    ```powershell
-   pipx install git+https://github.com/thekaveh/aws-tui.git
-   # or, if you have uv installed system-wide:
-   uv tool install git+https://github.com/thekaveh/aws-tui.git
+   uv run aws-tui
    ```
-   After aws-tui is visible on PyPI, the shorter
-   `pipx install aws-tui` / `uv tool install aws-tui` commands become
-   the preferred install path.
-4. Run:
-   ```powershell
-   aws-tui
-   ```
+   For a standalone installation, run `aws-tui` instead. The standalone installer
+   can be `uv tool install` or `pipx`; `pipx` is optional.
 
 ### 2.3. Font
 
