@@ -106,13 +106,15 @@ VMs to build service pages, but it cannot import Textual widgets.
         service selected while focus moves into its content. The same layer includes
         `vm/content_host_vm.py` and `vm/root_vm.py`.
 
-- **Service plugins** — One folder per top-level service
-    (`src/aws_tui/services/`). The current tree ships `s3`,
-    `emr-serverless` (read-only browser + clone-job-run plus job-run
-    logs — applications listing, job-runs master-detail, state-filter
-    chips, clone-and-edit modal via `c`, and confirmed cancellation via `x`;
-    vanilla submit remains deferred), `glue` (read-only Catalog, Jobs, and Crawlers), and
-    `athena` (read-only query, history, results, and saved-query views).
+- **Service plugins** — Each top-level service has one folder under
+    `src/aws_tui/services/`. S3 manages files and transfers.
+
+    EMR Serverless provides application listings, run details, state filters and logs.
+    Press `c` to clone and edit a run, or `x` to request confirmed cancellation.
+    Submission without an existing run remains unavailable.
+
+    Glue provides read-only Catalog, Jobs and Crawlers views.
+    Athena provides read-only queries, history, results and saved-query views.
 
     `GlueService` composes both `GlueClient` and an Athena-backed
     `IcebergInspector`; `AthenaService` composes the query page.

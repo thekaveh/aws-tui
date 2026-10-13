@@ -248,6 +248,58 @@ def test_windows_directory_handles_share_write_but_not_delete() -> None:
     ]
 
 
+def test_windows_stage_writer_can_query_its_original_handle_revision(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from aws_tui.domain import local_fs
+
+    access_requests: list[int] = []
+    queried_handles: list[int] = []
+
+    class FakeAPI:
+        def open(self, _path: str, *, access: int, disposition: int) -> int:
+            assert disposition == local_fs._WINDOWS_CREATE_NEW
+            access_requests.append(access)
+            return 22
+
+        def attributes(self, _handle: int, _path: str) -> int:
+            return 0
+
+        def final_path(self, _handle: int, path: str) -> str:
+            return path
+
+        def revision(self, handle: int, _path: str) -> str:
+            queried_handles.append(handle)
+            return "written-handle-revision"
+
+    @contextmanager
+    def locked_parent(_root: Path | None, _path: PathRef) -> Iterator[tuple[str, int, str, str]]:
+        yield r"C:\root", 11, "stage.txt", r"c:\root"
+
+    def to_fd(handle: int, flags: int) -> int:
+        assert handle == 22
+        assert flags & os.O_WRONLY
+        return 77
+
+    def to_handle(fd: int) -> int:
+        assert fd == 77
+        return 22
+
+    monkeypatch.setattr(local_fs, "_windows_api", FakeAPI)
+    monkeypatch.setattr(local_fs, "_windows_locked_parent", locked_parent)
+    monkeypatch.setitem(
+        sys.modules, "msvcrt", SimpleNamespace(open_osfhandle=to_fd, get_osfhandle=to_handle)
+    )
+    monkeypatch.setattr(local_fs, "_WINDOWS", True)
+
+    fd = local_fs._windows_open(None, PathRef(("C:", "stage.txt")), os.O_WRONLY | os.O_EXCL)
+    assert local_fs._open_file_revision(fd, r"C:\root\stage.txt") == "written-handle-revision"
+    assert queried_handles == [22]
+    assert access_requests[0] & local_fs._WINDOWS_GENERIC_WRITE
+    assert access_requests[0] & local_fs._WINDOWS_FILE_READ_ATTRIBUTES
+    assert not access_requests[0] & local_fs._WINDOWS_GENERIC_READ
+
+
 def test_windows_delete_claims_and_removes_the_same_open_handle(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1869,3 +1921,22 @@ async def test_unrooted_claimed_stage_directory_is_owner_only(tmp_path: Path) ->
     assert claimed.is_dir()
     mode = stat_module.S_IMODE(claimed.stat().st_mode)
     assert mode == 0o700, f"stage container is {mode:o}, not owner-only"
+
+
+@pytest.mark.skipif(os.name == "nt", reason="native POSIX directory permission failure")
+async def test_rooted_delete_restores_claim_on_permission_failure(tmp_path: Path) -> None:
+    directory = tmp_path / "payload"
+    locked = directory / "locked"
+    locked.mkdir(parents=True)
+    (locked / "file.txt").write_bytes(b"retained")
+    provider = LocalFS(root=tmp_path)
+    revision = (await provider.stat(PathRef(("payload",)))).etag
+    locked.chmod(0o500)
+    try:
+        with pytest.raises(PermissionDeniedError):
+            await provider.delete(PathRef(("payload",)), expected_etag=revision)
+        assert (locked / "file.txt").read_bytes() == b"retained"
+        assert not list(tmp_path.glob(".payload.aws-tui-delete-*"))
+    finally:
+        for path in tmp_path.rglob("locked"):
+            path.chmod(0o700)

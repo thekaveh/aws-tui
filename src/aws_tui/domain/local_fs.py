@@ -445,15 +445,23 @@ class LocalFS:
         except OSError as exc:
             raise _map_os_error(exc, host.as_posix()) from exc
 
-    async def delete_empty_directory(self, path: PathRef) -> None:
+    async def delete_empty_directory(
+        self, path: PathRef, *, expected_etag: str | None = None
+    ) -> None:
         if path.is_root:
             raise ProviderError("cannot delete the local filesystem provider root")
+        identity = (
+            expected_etag
+            if expected_etag is None or expected_etag.startswith(_STAGE_IDENTITY_PREFIX)
+            else _local_stage_identity_token(expected_etag)
+        )
         if _WINDOWS:
             try:
                 await anyio.to_thread.run_sync(
                     _windows_delete_empty_directory,
                     self._root,
                     path,
+                    identity,
                 )
                 return
             except FileNotFoundError as exc:
@@ -470,6 +478,7 @@ class LocalFS:
                     _rooted_delete_empty_directory,
                     self._root,
                     path,
+                    identity,
                 )
                 return
             except FileNotFoundError as exc:
@@ -489,6 +498,7 @@ class LocalFS:
                 _claim_and_remove_empty_directory,
                 host.as_posix(),
                 str(quarantine),
+                identity,
             )
         except FileNotFoundError as exc:
             raise NotFoundError(host.as_posix()) from exc
@@ -553,6 +563,21 @@ class LocalFS:
         if revision is None:
             raise ProviderError(f"local stage has no revision: {path.as_posix()}")
         return revision
+
+    async def capture_directory_revision(self, path: PathRef, revision: str) -> str:
+        observed = await self.stat(path)
+        expected = (
+            revision
+            if revision.startswith(_STAGE_IDENTITY_PREFIX)
+            else _local_stage_identity_token(revision)
+        )
+        if (
+            observed.kind != EntryKind.DIRECTORY
+            or observed.etag is None
+            or not _local_revision_matches(observed.etag, expected)
+        ):
+            raise ConflictError(f"stage changed: {path.as_posix()}")
+        return observed.etag
 
     async def atomic_publish_no_replace(
         self,
@@ -752,6 +777,7 @@ class LocalFS:
         total_size: int | None = None,
         progress: ProgressCallback | None = None,
         overwrite: bool = True,
+        stage_claim: Callable[[str], None] | None = None,
     ) -> None:
         host = self._resolve_leaf(path)
         flags = os.O_WRONLY | os.O_CREAT | (os.O_TRUNC if overwrite else os.O_EXCL)
@@ -764,7 +790,10 @@ class LocalFS:
                 opener = partial(_rooted_open, self._root, path, flags)
             else:
                 opener = partial(_open_nofollow, host.as_posix(), flags)
-            fd = await anyio.to_thread.run_sync(claim.open_with, opener)
+            if stage_claim is None:
+                fd = await anyio.to_thread.run_sync(claim.open_with, opener)
+            else:
+                fd = await _open_claimed_stage(claim, opener, stage_claim, str(host))
             async with _owned_async_file(claim, fd, "wb") as fh:
                 bytes_written = 0
                 async for chunk in source:
@@ -777,6 +806,9 @@ class LocalFS:
                                 bytes_total=total_size,
                             )
                         )
+                if stage_claim is not None:
+                    await fh.flush()
+                    stage_claim(_open_file_revision(fd, str(host)))
         except FileExistsError as exc:
             raise ConflictError(host.as_posix()) from exc
         except FileNotFoundError as exc:
@@ -796,6 +828,48 @@ class LocalFS:
 # ---------------------------------------------------------------------------
 # Internals
 # ---------------------------------------------------------------------------
+
+
+def _open_file_revision(fd: int, path: str) -> str:
+    if _WINDOWS:
+        import importlib
+
+        msvcrt = importlib.import_module("msvcrt")
+        return _windows_api().revision(msvcrt.get_osfhandle(fd), path)
+    return _local_etag(os.fstat(fd))
+
+
+async def _open_claimed_stage(
+    claim: _FdClaim, opener: Callable[[], int], receipt: Callable[[str], None], path: str
+) -> int:
+    """Drain the ownership-producing opener before transfer cancellation cleanup."""
+
+    def owned_opener() -> int:
+        fd = opener()
+        try:
+            receipt(_local_stage_identity_token(_open_file_revision(fd, path)))
+        except BaseException:
+            os.close(fd)
+            raise
+        return fd
+
+    opened = asyncio.create_task(anyio.to_thread.run_sync(claim.open_with, owned_opener))
+    cancellation: asyncio.CancelledError | None = None
+    while True:
+        try:
+            fd = await asyncio.shield(opened)
+            break
+        except asyncio.CancelledError as exc:
+            if opened.cancelled():
+                raise
+            cancellation = exc
+        except BaseException as exc:
+            if cancellation is not None:
+                raise cancellation from exc
+            raise
+    if cancellation is not None:
+        raise cancellation
+    return fd
 
 
 def _windows_path_ref(path: PathRef) -> PureWindowsPath:
@@ -1361,7 +1435,9 @@ def _windows_claim_directory(root: Path | None, path: PathRef) -> str:
 def _windows_open(root: Path | None, path: PathRef, flags: int) -> int:
     api = _windows_api()
     writing = bool(flags & (os.O_WRONLY | os.O_RDWR))
-    access = _WINDOWS_GENERIC_WRITE if writing else _WINDOWS_GENERIC_READ
+    access = (
+        _WINDOWS_GENERIC_WRITE | _WINDOWS_FILE_READ_ATTRIBUTES if writing else _WINDOWS_GENERIC_READ
+    )
     with _windows_locked_parent(root, path) as (parent, _parent_handle, name, anchor):
         host = ntpath.join(parent, name)
         if writing and flags & os.O_EXCL:
@@ -1464,12 +1540,18 @@ def _windows_delete(
             quarantine_name = f".{name}.aws-tui-delete-{uuid4().hex}"
             quarantine = ntpath.join(parent, quarantine_name)
             api.rename_handle(handle, parent_handle, quarantine_name, host)
-            _windows_remove_tree_handle(handle, quarantine, anchor)
+            try:
+                _windows_remove_tree_handle(handle, quarantine, anchor)
+            except BaseException:
+                _windows_restore_claim(handle, parent_handle, name, quarantine)
+                raise
         finally:
             api.close(handle)
 
 
-def _windows_delete_empty_directory(root: Path | None, path: PathRef) -> None:
+def _windows_delete_empty_directory(
+    root: Path | None, path: PathRef, expected_etag: str | None = None
+) -> None:
     api = _windows_api()
     with _windows_locked_parent(root, path) as (parent, parent_handle, name, anchor):
         host = ntpath.join(parent, name)
@@ -1483,6 +1565,10 @@ def _windows_delete_empty_directory(root: Path | None, path: PathRef) -> None:
             _windows_reject_reparse(attributes, host)
             _windows_require_directory(attributes, host)
             _windows_assert_contained(api, handle, host, anchor)
+            if expected_etag is not None and not _local_revision_matches(
+                api.revision(handle, host), expected_etag
+            ):
+                raise ConflictError(f"source changed: {path.as_posix()}")
             quarantine_name = f".{name}.aws-tui-rmdir-{uuid4().hex}"
             quarantine = ntpath.join(parent, quarantine_name)
             api.rename_handle(handle, parent_handle, quarantine_name, host)
@@ -2223,12 +2309,22 @@ def _rooted_delete(
         if _local_stable_identity(claimed) != _local_stable_identity(observed):
             _restore_claim(parent_fd, quarantine, name)
             raise ConflictError(f"source changed: {path.as_posix()}")
-        _remove_tree_at(parent_fd, quarantine, claimed)
+        try:
+            _remove_tree_at(parent_fd, quarantine, claimed)
+        except BaseException:
+            _restore_claim(parent_fd, quarantine, name)
+            raise
 
 
-def _rooted_delete_empty_directory(root: Path, path: PathRef) -> None:
+def _rooted_delete_empty_directory(
+    root: Path, path: PathRef, expected_etag: str | None = None
+) -> None:
     with _rooted_parent(root, path) as (parent_fd, name):
         observed = os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
+        if expected_etag is not None and not _local_revision_matches(
+            _local_etag(observed), expected_etag
+        ):
+            raise ConflictError(f"source changed: {path.as_posix()}")
         quarantine = f".{name}.aws-tui-rmdir-{uuid4().hex}"
         _rename_no_replace_at(parent_fd, name, parent_fd, quarantine)
         claimed = os.stat(quarantine, dir_fd=parent_fd, follow_symlinks=False)
@@ -2426,10 +2522,16 @@ def _supports_atomic_directory_publish(*, descriptor_relative: bool) -> bool:
     return hasattr(libc, "renamex_np") or hasattr(libc, "renameat2")
 
 
-def _claim_and_remove_empty_directory(src: str, quarantine: str) -> None:
+def _claim_and_remove_empty_directory(
+    src: str, quarantine: str, expected_etag: str | None = None
+) -> None:
     """Atomically claim ``src`` and remove it only when it is empty."""
     _rename_no_replace(src, quarantine)
     try:
+        if expected_etag is not None and not _local_revision_matches(
+            _local_etag(os.lstat(quarantine)), expected_etag
+        ):
+            raise ConflictError(f"source changed: {src}")
         Path(quarantine).rmdir()
     except BaseException as exc:
         try:

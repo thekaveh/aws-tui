@@ -137,8 +137,15 @@ class FileSystemProvider(Protocol):
         """Delete a path, optionally only if its revision is unchanged."""
         ...
 
-    async def delete_empty_directory(self, path: PathRef) -> None:
-        """Delete ``path`` only when it has no children."""
+    async def delete_empty_directory(
+        self, path: PathRef, *, expected_etag: str | None = None
+    ) -> None:
+        """Delete an empty directory, optionally guarding its entry identity.
+
+        A supplied revision must identify the same directory despite metadata
+        changes caused by removing its children. Providers without a directory
+        identity guarantee must reject conditional removal.
+        """
         ...
 
     async def rename(self, src: PathRef, dst: PathRef) -> None:
@@ -164,11 +171,16 @@ class FileSystemProvider(Protocol):
         total_size: int | None = None,
         progress: ProgressCallback | None = None,
         overwrite: bool = True,
+        stage_claim: Callable[[str], None] | None = None,
     ) -> None:
         """Consume ``source`` and write to ``path``.
 
         When ``overwrite`` is false, creation must be conditional and raise
         :class:`ConflictError` if the destination already exists.
+        When requested, ``stage_claim`` receives writer-owned opaque identity
+        before partial data can remain, then the completed revision. A provider
+        that cannot supply this ownership must reject the request before writing.
+        The callback may run on the I/O worker thread and must not access UI state.
         """
         ...
 
@@ -233,6 +245,19 @@ class ExclusiveDirectoryClaimer(Protocol):
 
     async def claim_directory(self, path: PathRef) -> str:
         """Create only ``path`` and return its opaque ownership revision."""
+        ...
+
+
+@runtime_checkable
+class DirectoryRevisionCapturer(Protocol):
+    """Capture a directory revision conditioned on its original entry identity."""
+
+    async def capture_directory_revision(self, path: PathRef, revision: str) -> str:
+        """Return the same observed revision whose identity was verified.
+
+        Child creation/removal may change metadata. A replacement directory must
+        fail; a separate validation followed by another lookup is insufficient.
+        """
         ...
 
 
@@ -329,6 +354,7 @@ __all__ = [
     "AuthRequiredError",
     "BoundedPreviewProvider",
     "ConflictError",
+    "DirectoryRevisionCapturer",
     "EntryKind",
     "ExclusiveDirectoryClaimer",
     "FileEntry",

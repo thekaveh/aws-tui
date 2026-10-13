@@ -17,7 +17,7 @@ action_swap_source) or Bug 2 (initial mount UNREACHABLE silently missed).
 
 from __future__ import annotations
 
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable
 from pathlib import Path
 
 import pytest
@@ -48,7 +48,9 @@ class _UnreachableFS(FileSystemProvider):
     async def delete(self, path: PathRef, *, expected_etag: str | None = None) -> None:
         raise ProviderUnreachableError("test endpoint down")
 
-    async def delete_empty_directory(self, path: PathRef) -> None:
+    async def delete_empty_directory(
+        self, path: PathRef, *, expected_etag: str | None = None
+    ) -> None:
         raise ProviderUnreachableError("test endpoint down")
 
     async def mkdir(self, path: PathRef) -> None:
@@ -70,6 +72,7 @@ class _UnreachableFS(FileSystemProvider):
         total_size: int | None = None,
         progress: ProgressCallback | None = None,
         overwrite: bool = False,
+        stage_claim: Callable[[str], None] | None = None,
     ) -> None:
         raise ProviderUnreachableError("test endpoint down")
 
@@ -86,7 +89,9 @@ class _ReachableFS(FileSystemProvider):
     async def delete(self, path: PathRef, *, expected_etag: str | None = None) -> None:
         pass
 
-    async def delete_empty_directory(self, path: PathRef) -> None:
+    async def delete_empty_directory(
+        self, path: PathRef, *, expected_etag: str | None = None
+    ) -> None:
         pass
 
     async def mkdir(self, path: PathRef) -> None:
@@ -112,6 +117,7 @@ class _ReachableFS(FileSystemProvider):
         total_size: int | None = None,
         progress: ProgressCallback | None = None,
         overwrite: bool = False,
+        stage_claim: Callable[[str], None] | None = None,
     ) -> None:
         pass
 

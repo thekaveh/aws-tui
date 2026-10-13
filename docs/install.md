@@ -60,7 +60,10 @@ engine and the install command rather than disappearing.
 
 The first Peek query on a machine downloads DuckDB's `httpfs`, `aws`, and
 `iceberg` extensions from `extensions.duckdb.org` and caches them under
-`~/.duckdb/`. Queries after that need no connection beyond S3 itself. On a
+`~/.duckdb/`. Cached extensions avoid repeated downloads.
+
+Queries still need S3 access and any network access required by the selected
+AWS profile's credential providers, such as SSO or role assumption. On a
 host without egress to that domain the first query fails.
 Populate the cache on a connected machine, or install the extensions for the same DuckDB version.
 

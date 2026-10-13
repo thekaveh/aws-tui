@@ -38,9 +38,16 @@ chunks and applies the configured regular-expression filter. Discovery fails clo
 provider exceeds 100 listing pages or 200 classified log files, preventing an
 unbounded object list from becoming VM state.
 
-Classification uses only the run-relative key suffix. Thus, a configured S3 prefix containing a reserved worker marker cannot change a log's role. Labels use the last retry/worker marker. Retry attempts and worker identity remain visible in the file choices. The pane
-updates one reusable text widget for the streamed body and updates progress
-separately, keeping mounted widget count bounded as logs grow.
+Classification uses only the run-relative key suffix. Thus, a configured S3 prefix containing a reserved worker marker cannot change a log's role. Labels use the last retry/worker marker. Retry attempts and worker identity remain visible in the file choices.
+
+The pane
+renders retained log lines through a virtualized viewport and updates progress
+separately. Long lines scroll horizontally instead of wrapping; rendering does
+not discard retained matches. Press `Ctrl+Left` or `Ctrl+Right` to scroll horizontally;
+ordinary Left/Right still selects log files or streams.
+
+Displayed lines are limited
+to 4,096 characters and marked when clipped. Filtering still uses the full retained lines.
 
 ### 2.1. CloudWatch source and loaded data
 

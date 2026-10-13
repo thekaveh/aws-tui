@@ -11,15 +11,19 @@ The Unreleased section is the promotion queue for the next package release.
 Entries may reside on ``develop`` before promotion to ``main``; inclusion here
 does not by itself claim that every entry has landed on ``main``. Changes
 already promoted to ``main`` are tracked relative to the historical v0.8.0
-staging commit (``cd2c9e8``). That staging build was not published. The PyPI
+staging commit (``cd2c9e8``). That staging build was not published.
+
+The PyPI
 project-name request remains gated on
 [pypi/support#11264](https://github.com/pypi/support/issues/11264)
-(name-similarity exception for ``aws-tui`` vs ``awstui``). Glue, Athena, and
+(name-similarity exception for ``aws-tui`` vs ``awstui``).
+
+Glue, Athena, and
 Iceberg integration target v0.9.0: they are new minor-version feature work
 under SemVer, not a v0.8.0
 headline or a v0.8.1 patch candidate. The package metadata remains ``0.8.0``
 until a v0.9.0 release-preparation PR bumps it and cuts a dated changelog
-section; the current tree must not be tagged as v0.8.0.
+section. The current tree must not be tagged as v0.8.0.
 
 ### Added
 
