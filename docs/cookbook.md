@@ -128,10 +128,9 @@ For **multiple** S3-compatible services, just add more
 `[connections.<name>]` blocks — the `<name>` (e.g. `s3mock-local`,
 `r2-prod`, `b2-archive`) becomes the source identifier shown in
 the pane's bottom border (`s3-compatible · s3mock-local · localhost:9000`).
-**Region is optional and intentionally not displayed** for
-`s3-compatible` connections — MinIO/R2/B2/etc. don't have a
-meaningful region, so the pane title shows `name · endpoint`
-instead.
+**Region is optional in app configuration and is not displayed** for
+`s3-compatible` connections. Set the signing region required by your provider.
+The pane title shows `name · endpoint` instead.
 
 ### 1.5. Use it
 ```bash

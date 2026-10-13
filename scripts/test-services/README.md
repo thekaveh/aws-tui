@@ -62,6 +62,6 @@ would pin the localstack image and seed.py would talk to
 - Lets each service evolve independently (different containers, different
   seed shapes, different healthchecks).
 - The repo's existing `tests/integration/` S3-compatible tier uses
-  `testcontainers` with the same digest-pinned S3Mock image; this harness is for **manual
+  `testcontainers` with the same digest-pinned S3Mock image. This harness is for **manual
   exploratory dev**, not the CI test suite. The two paths intentionally
   don't share runtime so a flaky harness can't break CI.

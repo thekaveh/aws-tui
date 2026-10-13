@@ -815,8 +815,25 @@ def test_environment_variable_references_point_at_the_configuration_page() -> No
     assert "## Environment variables" not in readme
     assert 'README\'s "Environment variables"' not in platforms
     assert "configuration.md#2-environment-variables" in platforms
-    assert "README carries" not in configuration
-    assert "links here" in configuration
+    assert "## 2. Environment variables" in configuration
+
+
+def test_emr_log_custom_keybinding_example_has_no_collisions() -> None:
+    """Copying the documented overlay must preserve its selected shortcuts."""
+    import tomllib
+
+    from aws_tui.infra.keymap_store import KeymapStore
+
+    section = (
+        _read("docs/keybindings.md")
+        .split("### 2.2. EMR log destination and follow bindings", 1)[1]
+        .split("\n## ", 1)[0]
+    )
+    for example in _fenced_blocks(section, "toml"):
+        overlay = tomllib.loads(example)["keybindings"]
+        keymap = KeymapStore(overlay=overlay)
+        for action, keys in overlay.items():
+            assert keymap.resolve(action) == tuple(keys)
 
 
 def test_source_cycle_example_states_the_resolver_order() -> None:

@@ -41,6 +41,7 @@ from aws_tui.domain.filesystem import (
     AtomicDirectoryPublisher,
     AtomicNoReplacePublisher,
     ConflictError,
+    DirectoryRevisionCapturer,
     EntryKind,
     ExclusiveDirectoryClaimer,
     FileEntry,
@@ -367,7 +368,9 @@ class CrossFsCopy:
         total_size: int | None,
         progress: ProgressCallback | None,
     ) -> _OwnedStage:
-        if not isinstance(self._destination, ExclusiveDirectoryClaimer):
+        if not isinstance(self._destination, ExclusiveDirectoryClaimer) or not isinstance(
+            self._destination, DirectoryRevisionCapturer
+        ):
             raise ProviderError(
                 "safe file publication requires an exclusive private stage container: "
                 f"{destination.as_posix()}"
@@ -394,6 +397,7 @@ class CrossFsCopy:
                 )
             await self._verify_stage_claim(publisher, container, claimed.value)
             staged = container.join("payload")
+            claims: list[str] = []
             try:
                 await self._copy_file(
                     src,
@@ -401,6 +405,7 @@ class CrossFsCopy:
                     total_size=total_size,
                     progress=progress,
                     overwrite=False,
+                    stage_claim=claims.append,
                 )
             # No ``except ConflictError`` retry branch here. It assumed the
             # container was still pristine, but ``LocalFS.write_stream`` creates
@@ -418,6 +423,8 @@ class CrossFsCopy:
                     publisher,
                     staged,
                     container=container,
+                    container_revision=claimed.value,
+                    written_revision=claims[-1] if claims else None,
                     failure=exc,
                 )
                 raise AssertionError("file stage failure should have been raised") from None
@@ -425,6 +432,8 @@ class CrossFsCopy:
                 publisher,
                 staged,
                 container=container,
+                container_revision=claimed.value,
+                written_revision=claims[-1] if claims else None,
             )
         raise ConflictError(f"no free staging path beside {destination.as_posix()}")
 
@@ -434,67 +443,38 @@ class CrossFsCopy:
         staged: PathRef,
         *,
         container: PathRef,
+        container_revision: str,
+        written_revision: str | None,
         failure: BaseException | None = None,
     ) -> _OwnedStage:
+        assert isinstance(self._destination, DirectoryRevisionCapturer)
+        verified = await _durably_run(
+            self._destination.capture_directory_revision(container, container_revision)
+        )
         captured = await _durably_run(publisher.capture_stage_revision(staged))
-        if captured.error is not None:
-            container_capture = await _durably_run(publisher.capture_stage_revision(container))
-            cleanup = (
-                await self._cleanup_empty_claim(container, container_capture.value)
-                if isinstance(container_capture.value, str)
-                else _DurableResult(cancelled=False, error=container_capture.error)
-            )
-            _finish_durable(
-                failure or captured.error,
-                context="file stage ownership capture",
-                outcomes=[captured, container_capture, cleanup],
-                ignore_not_found=failure is not None,
-            )
-            raise AssertionError("stage ownership capture should have failed")
-        if not isinstance(captured.value, str) or not captured.value:
-            missing = ProviderError(f"file stage has no ownership revision: {staged.as_posix()}")
-            _finish_durable(
-                failure or missing,
-                context="file stage ownership capture",
-                outcomes=[captured],
-            )
-            raise AssertionError("stage ownership revision should have been required")
-
-        container_capture = await _durably_run(publisher.capture_stage_revision(container))
-        if container_capture.error is not None:
-            _finish_durable(
-                failure or container_capture.error,
-                context="file stage container ownership capture",
-                outcomes=[captured, container_capture],
-            )
-            raise AssertionError("container ownership capture should have failed")
-        if not isinstance(container_capture.value, str) or not container_capture.value:
-            raise ProviderError(
-                f"file stage container has no ownership revision: {container.as_posix()}"
-            )
+        if failure is None:
+            failure = verified.error or captured.error
+            if failure is None and (written_revision is None or captured.value != written_revision):
+                failure = ConflictError(f"written stage changed: {staged.as_posix()}")
         owned = _OwnedStage(
             staged,
-            captured.value,
+            written_revision or container_revision,
             EntryKind.FILE,
             container=container,
-            container_revision=container_capture.value,
-            manifest=(StageManifestEntry(PathRef(()), EntryKind.FILE, captured.value),),
+            container_revision=container_revision,
+            manifest=(StageManifestEntry(PathRef(()), EntryKind.FILE, written_revision),)
+            if written_revision is not None
+            else (),
         )
-        # ``container_capture.cancelled`` belongs here too. ``_durably_run``
-        # deliberately never re-raises cancellation -- it records it so the
-        # caller can route it into ``_finish_durable`` -- so omitting this
-        # disjunct meant a cancel delivered during the container capture was
-        # swallowed: the stage was published and the transfer reported success
-        # for a copy the user had already interrupted.
-        if failure is not None or captured.cancelled or container_capture.cancelled:
+        if failure is not None or captured.cancelled or verified.cancelled:
             cleanup = await self._cleanup_owned_stage(owned)
             _finish_durable(
                 failure,
-                context="file stage cleanup",
-                outcomes=[captured, container_capture, cleanup],
+                context="file stage ownership capture",
+                outcomes=[captured, verified, cleanup],
                 ignore_not_found=True,
             )
-            raise AssertionError("file stage cleanup should have failed")
+            raise AssertionError("file stage capture should have failed")
         return owned
 
     async def _copy_file(
@@ -505,6 +485,7 @@ class CrossFsCopy:
         total_size: int | None,
         progress: ProgressCallback | None,
         overwrite: bool,
+        stage_claim: Callable[[str], None] | None = None,
     ) -> None:
         stream = await self._source.read_stream(src)
         if progress is not None and self._file_progress_transform is not None:
@@ -517,12 +498,14 @@ class CrossFsCopy:
             progress = transformed
         failure: BaseException | None = None
         try:
+            ownership: dict[str, Any] = {} if stage_claim is None else {"stage_claim": stage_claim}
             await self._destination.write_stream(
                 dst,
                 stream,
                 total_size=total_size,
                 progress=progress,
                 overwrite=overwrite,
+                **ownership,
             )
         except BaseException as exc:
             failure = exc
@@ -682,23 +665,9 @@ class CrossFsCopy:
             path = self._manifest_path(staged.path, entry.relative_path)
             try:
                 if entry.kind == EntryKind.DIRECTORY:
-                    observed = await self._destination.stat(path)
-                    # Kind only — NOT the revision. The manifest is walked
-                    # deepest-first, so this directory's own children have
-                    # already been removed by the iterations above, and a
-                    # local revision encodes size and mtime/ctime. Comparing
-                    # it here could therefore never succeed for a directory
-                    # that held anything: cleanup always raised "stage
-                    # changed", which surfaced as "overwrite committed but
-                    # backup cleanup failed" and orphaned the previous
-                    # destination in a hidden backup directory forever. An
-                    # empty-directory stage happened to pass, which is why no
-                    # test caught it. The emptiness guarantee does not depend
-                    # on the revision: ``delete_empty_directory`` refuses a
-                    # directory that still has entries and leaves it intact.
-                    if observed.kind != entry.kind:
-                        raise ConflictError(f"stage changed: {path.as_posix()}")
-                    await self._destination.delete_empty_directory(path)
+                    await self._destination.delete_empty_directory(
+                        path, expected_etag=entry.revision
+                    )
                 else:
                     await self._destination.delete(path, expected_etag=entry.revision)
             except NotFoundError:
@@ -707,7 +676,9 @@ class CrossFsCopy:
                 failures.append(exc)
         if staged.container is not None:
             try:
-                await self._destination.delete_empty_directory(staged.container)
+                await self._destination.delete_empty_directory(
+                    staged.container, expected_etag=staged.container_revision
+                )
             except NotFoundError:
                 pass
             except BaseException as exc:
@@ -730,14 +701,18 @@ class CrossFsCopy:
     async def _cleanup_published_container(self, staged: _OwnedStage) -> _DurableResult:
         if staged.container is None:
             return _DurableResult(cancelled=False, error=None)
-        return await _durably_run(self._destination.delete_empty_directory(staged.container))
+        return await _durably_run(
+            self._destination.delete_empty_directory(
+                staged.container, expected_etag=staged.container_revision
+            )
+        )
 
     async def _cleanup_empty_claim(self, path: PathRef, revision: str) -> _DurableResult:
         async def cleanup() -> None:
             observed = await self._destination.stat(path)
             if observed.etag != revision:
                 raise ConflictError(f"stage changed: {path.as_posix()}")
-            await self._destination.delete_empty_directory(path)
+            await self._destination.delete_empty_directory(path, expected_etag=revision)
 
         return await _durably_run(cleanup())
 
@@ -949,7 +924,9 @@ class CrossFsCopy:
                 "transactional directory publication requires manifest validation: "
                 f"{destination.as_posix()}"
             )
-        if not isinstance(self._destination, ExclusiveDirectoryClaimer):
+        if not isinstance(self._destination, ExclusiveDirectoryClaimer) or not isinstance(
+            self._destination, DirectoryRevisionCapturer
+        ):
             raise ProviderError(
                 "transactional directory publication requires exclusive directory claims: "
                 f"{destination.as_posix()}"
@@ -1077,7 +1054,8 @@ class CrossFsCopy:
                     budget=_TraversalBudget(),
                     depth=0,
                 )
-                container_revision = await publisher.capture_stage_revision(container)
+                assert isinstance(self._destination, DirectoryRevisionCapturer)
+                await self._destination.capture_directory_revision(container, claimed.value)
             except BaseException as exc:
                 partial = _OwnedStage(
                     payload,
@@ -1100,7 +1078,7 @@ class CrossFsCopy:
                 manifest[0].revision,
                 EntryKind.DIRECTORY,
                 container=container,
-                container_revision=container_revision,
+                container_revision=claimed.value,
                 manifest=tuple(manifest),
             )
             break
@@ -1234,6 +1212,7 @@ class CrossFsCopy:
                 continue
             budget.enter(source_path, depth=depth + 1)
             failure: BaseException | None = None
+            claims: list[str] = []
             try:
                 await self._copy_file(
                     source_path,
@@ -1241,22 +1220,24 @@ class CrossFsCopy:
                     total_size=source_entry.size,
                     progress=progress,
                     overwrite=False,
+                    stage_claim=claims.append,
                 )
             except BaseException as exc:
                 failure = exc
             captured = await _durably_run(publisher.capture_stage_revision(destination_path))
-            if captured.error is None and isinstance(captured.value, str):
+            if claims:
                 child_relative = PathRef(destination_path.segments[len(root.segments) :])
-                manifest.append(
-                    StageManifestEntry(child_relative, source_entry.kind, captured.value)
-                )
+                manifest.append(StageManifestEntry(child_relative, source_entry.kind, claims[-1]))
+            if failure is None and (not claims or captured.value != claims[-1]):
+                failure = ConflictError(f"written stage changed: {destination_path.as_posix()}")
             _finish_durable(
                 failure or captured.error,
                 context="directory child ownership capture",
                 outcomes=[captured],
                 ignore_not_found=failure is not None,
             )
-        refreshed = await publisher.capture_stage_revision(dst)
+        assert isinstance(self._destination, DirectoryRevisionCapturer)
+        refreshed = await self._destination.capture_directory_revision(dst, revision)
         for index, entry in enumerate(manifest):
             if entry.relative_path == relative:
                 manifest[index] = StageManifestEntry(relative, EntryKind.DIRECTORY, refreshed)
@@ -1495,7 +1476,7 @@ class CrossFsMove(CrossFsCopy):
                 )
                 moved_all = moved_all and moved
             if moved_all:
-                await self._source.delete_empty_directory(src)
+                await self._delete_observed_directory(src, src_entry.etag)
             return moved_all
 
         observed_tree = await self._observe_tree(
@@ -1566,7 +1547,7 @@ class CrossFsMove(CrossFsCopy):
     async def _delete_observed_tree(self, observed: list[tuple[PathRef, FileEntry]]) -> None:
         for path, entry in observed:
             if entry.kind == EntryKind.DIRECTORY:
-                await self._source.delete_empty_directory(path)
+                await self._delete_observed_directory(path, entry.etag)
             else:
                 await self._delete_observed_source(path, entry.etag)
 
@@ -1575,6 +1556,11 @@ class CrossFsMove(CrossFsCopy):
             await self._source.delete(path)
             return
         await self._source.delete(path, expected_etag=etag)
+
+    async def _delete_observed_directory(self, path: PathRef, etag: str | None) -> None:
+        # Object-store directory namespaces have no stable entry identity.
+        revision = etag if isinstance(self._source, DirectoryRevisionCapturer) else None
+        await self._source.delete_empty_directory(path, expected_etag=revision)
 
 
 __all__ = [

@@ -124,8 +124,9 @@ aws-tui
 
 Cleanup after recording: `rm "$CACHE_DIR/transfers/5eedabc05eedabc0.jsonl"`.
 
-Do not imply that an interactive resume modal exists; recovery remains a
-journal and cleanup contract until a new user-facing flow is designed.
+The current **History / Recovery** window opens with `Ctrl+T` and can start an
+explicit new copy from validated metadata. This legacy journal demonstrates
+diagnostics only; do not present it as resumable multipart work.
 
 ## 6. Crash dump (interactive modal deferred)
 
@@ -135,10 +136,13 @@ Recipe:
 
 The crash dump writer is live. The interactive crash modal exists as UI
 scaffolding but is not wired into the unhandled exception path. Do not record
-or claim the modal until that hosting integration ships. To capture the current
-behavior, trigger an unhandled exception only in a disposable local checkout,
-record the redacted dump path written under `<cache-dir>/crash/`, and revert the
-temporary exception before committing.
+or claim the modal until that hosting integration ships.
+
+To capture the current behavior:
+
+1. Trigger an unhandled exception only in a disposable local checkout.
+2. Record the redacted dump path under `<cache-dir>/crash/`.
+3. Revert the temporary exception before committing.
 
 Embed the resulting artifact below the "What gets dumped on a crash" section.
 

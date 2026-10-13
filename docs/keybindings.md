@@ -1,9 +1,8 @@
 # Keybindings
 
-> Mirror of spec §5.2. `[keybindings]` entries in
-> `<config-dir>/config.toml` are validated by `KeymapStore` and
-> installed at runtime through `BindingResolver`. Only action IDs with
-> registered handlers receive live Textual bindings.
+Use the default shortcuts below or customize them in
+`<config-dir>/config.toml`. Only actions with registered handlers receive live
+bindings; the reference identifies deferred actions.
 
 The cross-platform defaults avoid F-keys and terminal-specific command
 modifiers. They are letter-driven, with the command palette (`:` or `Ctrl+K`)
@@ -90,7 +89,7 @@ explicit meaning.
 
 | Action | Default | Notes |
 |---|---|---|
-| Retry active source credentials | `a` | Re-probes the same source in credential/error contexts and other AWS pages; a ready file pane selects all visible entries. **Retry active source credentials** in the palette always retries. |
+| Retry active source credentials | `a` | Re-probes the active source in file-pane credential/error contexts and Glue/Athena pages. A ready file pane selects all visible entries. EMR uses `a` for its application picker; use **Retry active source credentials** in the palette there. |
 | Exact configured source | `:` / `Ctrl+K`, then **Use &lt;name&gt; · &lt;region&gt; for &lt;service&gt;** | Search by connection name or region. On S3, changes the focused pane; on Athena, Glue and EMR Serverless, changes the page's source. |
 
 Help (`?`) and the command palette (`:` / `Ctrl+K`) show the same command
@@ -140,6 +139,7 @@ focused editable widget can consume text first.
 | Cycle pane focus | `Tab` / `Shift+Tab` | 6-slot cycle: nav rail → source selector → application selector → runs pane → detail pane → logs pane → nav rail. |
 | Backspace | `Backspace` | No-op on EMR (symmetric to `Descend` having an EMR branch). |
 | Load logs (on-demand) | `Enter` | Loads the selected S3/CloudWatch source into the RIGHT-logs pane (first press in the logs slot after Tab-focusing). File chips preserve exact retry attempt and Spark executor or Hive/Tez worker identity, including rotated stdout/stderr objects. |
+| Scroll log lines horizontally | `Ctrl+Left` / `Ctrl+Right` | With logs focused, view long lines without wrapping. Left/Right continues to select files or streams. |
 | Reload logs | `r` | Re-fetches the exact selected log source/stream, even on an S3 cache hit. |
 | Cycle log destination | `Ctrl+S` | `emr.logs.source`: cycles configured S3/CloudWatch destinations with logs focus. |
 | Start/stop CloudWatch follow | `Ctrl+Alt+L` | `emr.logs.follow`: explicit follow; stop works during pending reads. |
@@ -172,7 +172,7 @@ same size.
 | Cursor up / down | `↑` `↓` (also `k` / `j`) | Moves the focused resource list or scrolls detail. |
 | Cycle focus | `Tab` / `Shift+Tab` | Walks the complete deterministic Glue ring described below; reverse traversal is the exact inverse. |
 | Refresh active view | `r` | Reloads only the selected Catalog, Jobs, or Crawlers view. |
-| Load more rows in the focused list | `l`, or `:` / `Ctrl+K`, then **Load more Glue rows** | Runs `glue.load_more`. Fetches the next page for the focused Glue list (databases, tables, partitions, jobs, runs, crawlers, or the focused Iceberg metadata tab); clicking a list footer that reads `more available` does the same. Disabled when the list has no further page or hit its 1,000-item safety limit. On the Iceberg **Peek** tab the same control instead reruns a genuinely new local DuckDB query at the next row-limit step (100 → 1,000 → 10,000). Its ceiling is real, not a local-window widen, and its footer never reads `more available`. |
+| Load more rows in the focused list | `l`, or `:` / `Ctrl+K`, then **Load more Glue rows** | Loads the next focused resource or Iceberg metadata page; clicking `more available` does the same. Disabled at the list end or 1,000-item cap. **Peek** instead runs a new DuckDB query at each limit step: 100 → 1,000 → 10,000. See [paging and Peek limits](services/glue.md#3-iceberg-metadata). |
 | Switch AWS source | `Shift+S` | Runs `app.swap_source` and rebuilds Glue under the next resolver-ordered supported AWS profile and region. The bordered **Source** selector can instead choose an exact source. |
 | Compare table definitions | `Ctrl+G` | Runs `glue.compare_tables`. Opens independent Left/Right source, region and table selection; no counterpart is selected automatically. See the [comparison workflow](services/glue.md#5-compare-table-definitions) for modal keys, refresh and full-summary copy. |
 | Copy selected table reference | `y` | Runs `glue.copy_table_ref`. The canonical, fully quoted identifier and its source identity are retained in the authoritative typed in-app clipboard. The OS clipboard write then goes through the single app-level writer. Its toast names the channel that actually accepted the text and never reports an unacknowledged OSC 52 write as a copy. |
@@ -340,7 +340,7 @@ Custom keybindings replace defaults, for example:
 
 ```toml
 [keybindings]
-"emr.logs.source" = ["ctrl+g"]
+"emr.logs.source" = ["ctrl+alt+s"]
 "emr.logs.follow" = ["ctrl+h"]
 ```
 

@@ -13,7 +13,7 @@ placeholders during demo runs.
 from __future__ import annotations
 
 import asyncio
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable
 from datetime import UTC, datetime
 
 from aws_tui.domain.filesystem import (
@@ -178,7 +178,9 @@ class InMemoryFS:
             self._mtime.pop(path, None)
             self._revision.pop(path, None)
 
-    async def delete_empty_directory(self, path: PathRef) -> None:
+    async def delete_empty_directory(
+        self, path: PathRef, *, expected_etag: str | None = None
+    ) -> None:
         await asyncio.sleep(_DEMO_LATENCY_SEC)
         if path not in self._tree:
             raise NotFoundError(path.as_posix())
@@ -186,6 +188,8 @@ class InMemoryFS:
             raise ConflictError("cannot delete root")
         if self._tree[path] is not None:
             raise ConflictError(f"not a directory: {path.as_posix()}")
+        if expected_etag is not None and str(self._revision[path]) != expected_etag:
+            raise ConflictError(f"source changed: {path.as_posix()}")
         prefix = path.segments
         if any(
             candidate != path and candidate.segments[: len(prefix)] == prefix
@@ -210,6 +214,12 @@ class InMemoryFS:
         if path not in self._tree:
             raise NotFoundError(path.as_posix())
         return str(self._revision[path])
+
+    async def capture_directory_revision(self, path: PathRef, revision: str) -> str:
+        observed = await self.stat(path)
+        if observed.kind != EntryKind.DIRECTORY or observed.etag != revision:
+            raise ConflictError(f"stage changed: {path.as_posix()}")
+        return revision
 
     async def atomic_publish_no_replace(
         self,
@@ -338,6 +348,7 @@ class InMemoryFS:
         total_size: int | None = None,
         progress: ProgressCallback | None = None,
         overwrite: bool = True,
+        stage_claim: Callable[[str], None] | None = None,
     ) -> None:
         await asyncio.sleep(_DEMO_LATENCY_SEC)
         if path.is_root:
@@ -362,6 +373,7 @@ class InMemoryFS:
             self._check_write_budget(total_size, retained_size=retained_size)
 
         buf = bytearray()
+        parent_revision = self._revision.get(parent)
         bytes_written = 0
         async for chunk in source:
             bytes_written += len(chunk)
@@ -369,8 +381,14 @@ class InMemoryFS:
             buf.extend(chunk)
             if progress is not None:
                 progress(TransferProgress(bytes_transferred=bytes_written, bytes_total=total_size))
+        if self._revision.get(parent) != parent_revision:
+            raise ConflictError(f"parent changed: {parent.as_posix()}")
+        if not overwrite and path in self._tree:
+            raise ConflictError(path.as_posix())
         self._tree[path] = bytes(buf)
         self._touch(path)
+        if stage_claim is not None:
+            stage_claim(str(self._revision[path]))
 
     @staticmethod
     def _check_write_budget(object_size: int, *, retained_size: int) -> None:

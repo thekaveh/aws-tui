@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import re
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable
 from pathlib import Path
 from typing import Any
 
@@ -271,6 +271,7 @@ async def test_pane_dynamic_mount_with_unreachable_state_does_not_crash() -> Non
             total_size: int | None = None,
             progress: ProgressCallback | None = None,
             overwrite: bool = False,
+            stage_claim: Callable[[str], None] | None = None,
         ) -> None:  # pragma: no cover
             raise ProviderUnreachableError("Could not connect")
 
@@ -279,7 +280,9 @@ async def test_pane_dynamic_mount_with_unreachable_state_does_not_crash() -> Non
         ) -> None:  # pragma: no cover
             raise ProviderUnreachableError("Could not connect")
 
-        async def delete_empty_directory(self, _path: PathRef) -> None:  # pragma: no cover
+        async def delete_empty_directory(
+            self, _path: PathRef, *, expected_etag: str | None = None
+        ) -> None:  # pragma: no cover
             raise ProviderUnreachableError("Could not connect")
 
         async def mkdir(self, _path: PathRef) -> None:  # pragma: no cover

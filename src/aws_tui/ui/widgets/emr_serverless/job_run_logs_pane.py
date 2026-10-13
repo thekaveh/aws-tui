@@ -18,21 +18,25 @@ selector shows the currently-loaded LogFile and dispatches a
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from datetime import UTC, datetime
-from typing import ClassVar
+from typing import ClassVar, Final
 
 from reactivex.abc import DisposableBase
 from textual.app import ComposeResult
 from textual.binding import Binding, BindingType
 from textual.containers import Horizontal, VerticalScroll
 from textual.events import Click
+from textual.geometry import Size
 from textual.message import Message as TextualMessage
 from textual.widget import Widget
-from textual.widgets import Static
+from textual.widgets import Log, Static
 
 from aws_tui.domain.emr_logs import LogFile, LogFileKind
 from aws_tui.infra.keymap_store import KeymapStore
 from aws_tui.vm.emr_serverless.job_run_logs_vm import JobRunLogsVM, LogSource, LogsState
+
+_MAX_DISPLAY_LINE_CHARACTERS: Final[int] = 4096
 
 
 class _LogFileChip(Static):
@@ -42,6 +46,32 @@ class _LogFileChip(Static):
     def __init__(self, content: str, *, key: str, classes: str | None = None) -> None:
         super().__init__(content, classes=classes, markup=False)
         self.key = key
+
+
+class _LogContent(Log, can_focus=False):
+    """Viewport-rendered plain log lines; the containing pane owns keyboard focus."""
+
+    def __init__(self, *, id: str, classes: str, highlight: bool, auto_scroll: bool) -> None:
+        self.pending_scroll_x: float | None = None
+        self._scroll_revision = 0
+        super().__init__(id=id, classes=classes, highlight=highlight, auto_scroll=auto_scroll)
+
+    def cancel_scroll_restore(self) -> None:
+        self.pending_scroll_x = None
+        self._scroll_revision += 1
+
+    def watch_virtual_size(self, size: Size) -> None:
+        if not size.width or self.pending_scroll_x is None:
+            return
+        offset = self.pending_scroll_x
+        self.pending_scroll_x = None
+        revision = self._scroll_revision
+
+        def restore() -> None:
+            if revision == self._scroll_revision:
+                self.scroll_to(x=offset, animate=False, force=True)
+
+        self.call_after_refresh(restore)
 
 
 def _match_label(vm: JobRunLogsVM) -> str:
@@ -107,8 +137,11 @@ class JobRunLogsPane(Widget, can_focus=True):
         height: 1fr;
     }
     JobRunLogsPane .logs-line {
-        height: auto;
+        height: 1fr;
         padding: 0 1;
+        background: transparent;
+        overflow-x: auto;
+        overflow-y: auto;
     }
     JobRunLogsPane .logs-placeholder {
         height: auto;
@@ -130,6 +163,8 @@ class JobRunLogsPane(Widget, can_focus=True):
         Binding("k", "scroll_up", "Up", show=False),
         Binding("down", "scroll_down", "Down", show=False),
         Binding("j", "scroll_down", "Down", show=False),
+        Binding("ctrl+left", "scroll_left", "Scroll left", show=False),
+        Binding("ctrl+right", "scroll_right", "Scroll right", show=False),
     ]
 
     class LoadRequested(TextualMessage):
@@ -187,6 +222,8 @@ class JobRunLogsPane(Widget, can_focus=True):
         self._vm: JobRunLogsVM = vm
         self._keymap = keymap or KeymapStore()
         self._sub: DisposableBase | None = None
+        self._body_refresh_pending = False
+        self._body_lines: tuple[str, ...] | None = None
 
     def compose(self) -> ComposeResult:
         yield Horizontal(classes="logs-source-row", id="logs-sources")
@@ -201,7 +238,11 @@ class JobRunLogsPane(Widget, can_focus=True):
         # filter-row render. (The status Static is dev-controlled
         # text but gets the guard for parity.)
         yield Static("", classes="logs-filter-row", id="logs-filter", markup=False)
-        yield VerticalScroll(id="logs-body")
+        with VerticalScroll(id="logs-body"):
+            yield Static("", id="logs-placeholder", classes="logs-placeholder", markup=False)
+            yield _LogContent(
+                id="logs-content", classes="logs-line", highlight=False, auto_scroll=False
+            )
         yield Static("", classes="logs-status", id="logs-status", markup=False)
 
     def on_mount(self) -> None:
@@ -254,7 +295,7 @@ class JobRunLogsPane(Widget, can_focus=True):
     def action_scroll_up(self) -> None:
         """Scroll body up."""
         try:
-            body = self.query_one("#logs-body", VerticalScroll)
+            body = self.query_one("#logs-content", Log)
             body.scroll_up()
         except Exception:
             pass
@@ -262,12 +303,22 @@ class JobRunLogsPane(Widget, can_focus=True):
     def action_scroll_down(self) -> None:
         """Scroll body down."""
         try:
-            body = self.query_one("#logs-body", VerticalScroll)
+            body = self.query_one("#logs-content", Log)
             body.scroll_down()
         except Exception:
             pass
 
     # ── Mouse ───────────────────────────────────────────────────────────────
+
+    def action_scroll_left(self) -> None:
+        content = self.query_one("#logs-content", _LogContent)
+        content.cancel_scroll_restore()
+        content.scroll_left(animate=False)
+
+    def action_scroll_right(self) -> None:
+        content = self.query_one("#logs-content", _LogContent)
+        content.cancel_scroll_restore()
+        content.scroll_right(animate=False)
 
     def on_click(self, event: Click) -> None:
         """Click on a file chip → select that file."""
@@ -312,12 +363,22 @@ class JobRunLogsPane(Widget, can_focus=True):
         elif prop == "filter":
             self.call_after_refresh(self._refresh_filter_row)
         elif prop == "state":
-            self.call_after_refresh(self._refresh_body)
+            self._schedule_body_refresh()
             self.call_after_refresh(self._refresh_status)
         elif prop == "lines":
-            self.call_after_refresh(self._refresh_body)
+            self._schedule_body_refresh()
         elif prop == "progress":
             self.call_after_refresh(self._refresh_status)
+
+    def _schedule_body_refresh(self) -> None:
+        if self._body_refresh_pending:
+            return
+        self._body_refresh_pending = True
+        self.call_after_refresh(self._flush_body_refresh)
+
+    def _flush_body_refresh(self) -> None:
+        self._body_refresh_pending = False
+        self._refresh_body()
 
     def _refresh_filter_row(self) -> None:
         """Render the always-visible filter affordance:
@@ -431,10 +492,10 @@ class JobRunLogsPane(Widget, can_focus=True):
             and self._vm.lines
             and state in (LogsState.READY, LogsState.LOADING, LogsState.ERROR, LogsState.NO_FILES)
         ):
-            text = "\n".join(self._vm.lines)
+            lines = self._vm.lines
             if state in (LogsState.ERROR, LogsState.NO_FILES):
-                text = (self._vm.error_text or "CloudWatch logs not created yet") + "\n" + text
-            self._update_body(body, text, classes="logs-line -match")
+                lines = (self._vm.error_text or "CloudWatch logs not created yet", *lines)
+            self._update_body(body, lines, classes="logs-line -match")
             return
 
         if state is LogsState.EMPTY_TARGET:
@@ -482,34 +543,57 @@ class JobRunLogsPane(Widget, can_focus=True):
             # (``MarkupError``) or silently corrupts the displayed
             # line. ``markup=False`` is the only safe default for
             # untrusted log content.
-            text = "\n".join(self._vm.lines)
+            lines = self._vm.lines
             if state is LogsState.TRUNCATED:
-                text = (f"{text}\n" if text else "") + "(log read truncated — press r to reload)"
+                lines = (*lines, "(log read truncated — press r to reload)")
             self._update_body(
                 body,
-                text,
+                lines,
                 classes="logs-line -match",
             )
             return
 
-    @staticmethod
-    def _update_body(body: VerticalScroll, text: str, *, classes: str) -> None:
-        """Update one reusable text widget instead of remounting every log line."""
-        try:
-            content = body.query_one("#logs-content", Static)
-        except Exception:
-            body.remove_children()
-            body.mount(
-                Static(
-                    text,
-                    id="logs-content",
-                    classes=classes,
-                    markup=False,
-                )
+    def _update_body(
+        self, body: VerticalScroll, text: str | Iterable[str], *, classes: str
+    ) -> None:
+        """Keep placeholders and virtualized lines mounted across state changes."""
+        placeholder = body.query_one("#logs-placeholder", Static)
+        content = body.query_one("#logs-content", _LogContent)
+        showing_lines = "-match" in classes.split()
+        placeholder.display = not showing_lines
+        content.display = showing_lines
+        if showing_lines:
+            content.set_classes(classes)
+            lines = tuple(text.split("\n")) if isinstance(text, str) else tuple(text)
+            if lines == self._body_lines:
+                return
+            self._body_lines = lines
+            scroll_x = float(content.scroll_offset.x)
+            scroll_y = content.scroll_offset.y
+            if content.pending_scroll_x is not None:
+                scroll_x = content.pending_scroll_x
+            content.cancel_scroll_restore()
+            content.clear()
+            content.pending_scroll_x = scroll_x
+            display = tuple(
+                line[:_MAX_DISPLAY_LINE_CHARACTERS] + " … [display clipped]"
+                if len(line) > _MAX_DISPLAY_LINE_CHARACTERS
+                else line
+                for line in lines
             )
-            return
-        content.set_classes(classes)
-        content.update(text)
+            if any(len(line) > _MAX_DISPLAY_LINE_CHARACTERS for line in lines):
+                display = (
+                    "(long lines clipped at 4,096 characters; full lines retained for filtering)",
+                    *display,
+                )
+            content.write_lines((line if line else "\n" for line in display), scroll_end=False)
+            content.scroll_to(x=scroll_x, y=scroll_y, animate=False, force=True)
+        else:
+            self._body_lines = None
+            content.cancel_scroll_restore()
+            content.clear()
+            placeholder.set_classes(classes)
+            placeholder.update(text if isinstance(text, str) else "\n".join(text))
 
     def _refresh_status(self) -> None:
         """Update status footer."""

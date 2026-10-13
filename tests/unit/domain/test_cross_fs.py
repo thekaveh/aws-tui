@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import os
 import sys
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable
 from pathlib import Path
 
 import aioboto3
@@ -556,6 +556,7 @@ async def test_atomic_overwrite_failure_never_deletes_existing_destination() -> 
         total_size: int | None = None,
         progress: object | None = None,
         overwrite: bool = True,
+        stage_claim: Callable[[str], None] | None = None,
     ) -> None:
         del path, data, total_size, progress, overwrite
         raise RuntimeError("atomic upload failed")
@@ -588,6 +589,7 @@ async def test_atomic_failed_new_write_does_not_delete_concurrent_destination() 
         total_size: int | None = None,
         progress: object | None = None,
         overwrite: bool = True,
+        stage_claim: Callable[[str], None] | None = None,
     ) -> None:
         del data, total_size, progress, overwrite
         await original_write(path, _agen([b"concurrent"]))
@@ -827,10 +829,13 @@ async def test_cancelled_stage_cleanup_failure_keeps_cancellation_primary() -> N
             total_size: int | None = None,
             progress: object | None = None,
             overwrite: bool = True,
+            stage_claim: Callable[[str], None] | None = None,
         ) -> None:
             del total_size, progress, overwrite
             self._tree[path] = b"partial"
             self._touch(path)
+            if stage_claim is not None:
+                stage_claim(str(self._revision[path]))
             async for _chunk in source:
                 pass
 
@@ -886,10 +891,13 @@ async def test_self_cancelled_cleanup_is_primary_over_original_failure() -> None
             total_size: int | None = None,
             progress: object | None = None,
             overwrite: bool = True,
+            stage_claim: Callable[[str], None] | None = None,
         ) -> None:
             del total_size, progress, overwrite
             self._tree[path] = b"partial"
             self._touch(path)
+            if stage_claim is not None:
+                stage_claim(str(self._revision[path]))
             async for _chunk in source:
                 pass
 
@@ -940,10 +948,13 @@ async def test_repeated_cancellation_durably_removes_failed_file_write() -> None
             total_size: int | None = None,
             progress: object | None = None,
             overwrite: bool = True,
+            stage_claim: Callable[[str], None] | None = None,
         ) -> None:
             del source, total_size, progress, overwrite
             self._tree[path] = b"partial"
             self._touch(path)
+            if stage_claim is not None:
+                stage_claim(str(self._revision[path]))
             raise RuntimeError("write failed")
 
         async def delete(self, path: PathRef, *, expected_etag: str | None = None) -> None:
@@ -1263,6 +1274,7 @@ async def test_existing_directory_merge_preflights_mixed_tree_before_mutation() 
             total_size: int | None = None,
             progress: object | None = None,
             overwrite: bool = True,
+            stage_claim: Callable[[str], None] | None = None,
         ) -> None:
             self.mutations.append(path)
             await super().write_stream(
@@ -1271,6 +1283,7 @@ async def test_existing_directory_merge_preflights_mixed_tree_before_mutation() 
                 total_size=total_size,
                 progress=progress,  # type: ignore[arg-type]
                 overwrite=overwrite,
+                stage_claim=stage_claim,
             )
 
     src = _FileFirstSourceFS()
@@ -1314,9 +1327,11 @@ async def test_absent_directory_requires_transactional_publish_before_mutation()
             self.mutations.append("delete")
             await self.inner.delete(path, expected_etag=expected_etag)
 
-        async def delete_empty_directory(self, path: PathRef) -> None:
+        async def delete_empty_directory(
+            self, path: PathRef, *, expected_etag: str | None = None
+        ) -> None:
             self.mutations.append("delete_empty_directory")
-            await self.inner.delete_empty_directory(path)
+            await self.inner.delete_empty_directory(path, expected_etag=expected_etag)
 
         async def rename(self, src: PathRef, dst: PathRef) -> None:
             self.mutations.append("rename")
@@ -1335,6 +1350,7 @@ async def test_absent_directory_requires_transactional_publish_before_mutation()
             total_size: int | None = None,
             progress: object | None = None,
             overwrite: bool = True,
+            stage_claim: Callable[[str], None] | None = None,
         ) -> None:
             self.mutations.append("write")
             await self.inner.write_stream(
@@ -1343,6 +1359,7 @@ async def test_absent_directory_requires_transactional_publish_before_mutation()
                 total_size=total_size,
                 progress=progress,  # type: ignore[arg-type]
                 overwrite=overwrite,
+                stage_claim=stage_claim,
             )
 
     src = InMemoryFS()
@@ -1365,11 +1382,13 @@ async def test_repeated_cancellation_durably_removes_failed_directory_stage() ->
             self.cleanup_started = asyncio.Event()
             self.release_cleanup = asyncio.Event()
 
-        async def delete_empty_directory(self, path: PathRef) -> None:
+        async def delete_empty_directory(
+            self, path: PathRef, *, expected_etag: str | None = None
+        ) -> None:
             if ".aws-tui-stage-" in path.name:
                 self.cleanup_started.set()
                 await self.release_cleanup.wait()
-            await super().delete_empty_directory(path)
+            await super().delete_empty_directory(path, expected_etag=expected_etag)
 
     src = InMemoryFS()
     dst = _BlockingStageCleanupFS()
@@ -1450,6 +1469,7 @@ async def test_error_policy_preserves_destination_created_after_conflict_check()
             total_size: int | None = None,
             progress: object | None = None,
             overwrite: bool = True,
+            stage_claim: Callable[[str], None] | None = None,
         ) -> None:
             if not overwrite and path not in self._tree:
                 await super().write_stream(path, _agen([b"concurrent"]))
@@ -1459,6 +1479,7 @@ async def test_error_policy_preserves_destination_created_after_conflict_check()
                 total_size=total_size,
                 progress=progress,  # type: ignore[arg-type]
                 overwrite=overwrite,
+                stage_claim=stage_claim,
             )
 
     src = InMemoryFS()
@@ -1485,6 +1506,7 @@ async def test_rename_policy_retries_destination_created_after_conflict_check() 
             total_size: int | None = None,
             progress: object | None = None,
             overwrite: bool = True,
+            stage_claim: Callable[[str], None] | None = None,
         ) -> None:
             if not overwrite and not self.raced:
                 self.raced = True
@@ -1495,6 +1517,7 @@ async def test_rename_policy_retries_destination_created_after_conflict_check() 
                 total_size=total_size,
                 progress=progress,  # type: ignore[arg-type]
                 overwrite=overwrite,
+                stage_claim=stage_claim,
             )
 
     src = InMemoryFS()
@@ -1597,6 +1620,7 @@ async def test_actual_versioned_s3_move_fails_before_destination_mutation(
             total_size: int | None = None,
             progress: object | None = None,
             overwrite: bool = True,
+            stage_claim: Callable[[str], None] | None = None,
         ) -> None:
             self.mutations.append("write")
             await super().write_stream(
@@ -1605,6 +1629,7 @@ async def test_actual_versioned_s3_move_fails_before_destination_mutation(
                 total_size=total_size,
                 progress=progress,  # type: ignore[arg-type]
                 overwrite=overwrite,
+                stage_claim=stage_claim,
             )
 
     source = await _make_s3fs(s3_endpoint, "versioned-source")
@@ -1642,9 +1667,11 @@ async def test_local_directory_move_deletes_empty_source(tmp_path: Path) -> None
 
 async def test_directory_move_preserves_child_created_before_final_delete() -> None:
     class _LateChildFS(InMemoryFS):
-        async def delete_empty_directory(self, path: PathRef) -> None:
+        async def delete_empty_directory(
+            self, path: PathRef, *, expected_etag: str | None = None
+        ) -> None:
             await self.write_stream(path.join("late.txt"), _agen([b"late"]))
-            await super().delete_empty_directory(path)
+            await super().delete_empty_directory(path, expected_etag=expected_etag)
 
     src = _LateChildFS()
     dst = InMemoryFS()
@@ -2129,9 +2156,11 @@ async def test_nested_absent_directory_in_a_merge_is_preflighted_before_bytes_mo
             self.mutations.append(f"delete {path.as_posix()}")
             await self.inner.delete(path, expected_etag=expected_etag)
 
-        async def delete_empty_directory(self, path: PathRef) -> None:
+        async def delete_empty_directory(
+            self, path: PathRef, *, expected_etag: str | None = None
+        ) -> None:
             self.mutations.append(f"rmdir {path.as_posix()}")
-            await self.inner.delete_empty_directory(path)
+            await self.inner.delete_empty_directory(path, expected_etag=expected_etag)
 
         async def rename(self, src_path: PathRef, dst_path: PathRef) -> None:
             self.mutations.append(f"rename {src_path.as_posix()}")
@@ -2150,6 +2179,7 @@ async def test_nested_absent_directory_in_a_merge_is_preflighted_before_bytes_mo
             total_size: int | None = None,
             progress: object | None = None,
             overwrite: bool = True,
+            stage_claim: Callable[[str], None] | None = None,
         ) -> None:
             self.mutations.append(f"write {path.as_posix()}")
             await self.inner.write_stream(
@@ -2158,6 +2188,7 @@ async def test_nested_absent_directory_in_a_merge_is_preflighted_before_bytes_mo
                 total_size=total_size,
                 progress=progress,  # type: ignore[arg-type]
                 overwrite=overwrite,
+                stage_claim=stage_claim,
             )
 
     src = InMemoryFS()
@@ -2192,27 +2223,18 @@ async def test_cancel_during_container_capture_does_not_publish_the_copy(
     (``atomic_write_replaces = False``); ``InMemoryFS`` publishes directly and
     never reaches this code.
     """
-    # Capture order for a staged single-file copy: the stage container is
-    # claimed first, then the file inside it, then the container again for the
-    # ownership revision. It is that third call whose cancellation was dropped.
-    _CONTAINER_CAPTURE = 3
+    # Cancel the ownership verification performed after the writer completes.
     caller: list[asyncio.Task[None]] = []
 
     class _CancelOnContainerCapture(LocalFS):
-        def __init__(self, root: Path) -> None:
-            super().__init__(root=root)
-            self.captures: list[str] = []
-
-        async def capture_stage_revision(self, path: PathRef) -> str:
-            self.captures.append(path.as_posix())
-            revision = await super().capture_stage_revision(path)
-            if len(self.captures) == _CONTAINER_CAPTURE:
-                caller[0].cancel()
-                await asyncio.sleep(0)
-            return revision
+        async def capture_directory_revision(self, path: PathRef, revision: str) -> str:
+            observed = await super().capture_directory_revision(path, revision)
+            caller[0].cancel()
+            await asyncio.sleep(0)
+            return observed
 
     src = InMemoryFS()
-    dst = _CancelOnContainerCapture(tmp_path)
+    dst = _CancelOnContainerCapture(root=tmp_path)
     await _put_file(src, PathRef.from_posix("/source"), b"payload")
 
     async def _run() -> None:
@@ -2225,7 +2247,6 @@ async def test_cancel_during_container_capture_does_not_publish_the_copy(
     with pytest.raises(asyncio.CancelledError):
         await task
 
-    assert len(dst.captures) >= _CONTAINER_CAPTURE, f"container capture never ran: {dst.captures}"
     assert not (tmp_path / "target").exists(), "cancelled copy was published anyway"
 
 
@@ -2415,3 +2436,202 @@ async def test_failed_publication_hook_cleans_only_owned_stage():
         await copier.copy(PathRef(("source",)), PathRef(("target",)))
     assert await _read_file(source, PathRef(("source",))) == b"payload"
     assert {entry.name for entry in await destination.list(PathRef(()))} == {"unrelated"}
+
+
+@pytest.mark.parametrize("replace_container", [False, True])
+async def test_failed_directory_stage_preserves_replacement_directory(
+    tmp_path: Path, replace_container: bool
+) -> None:
+    """Failure cleanup must not remove another directory at an owned stage path."""
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src" / "payload.txt").write_bytes(b"source")
+    provider = LocalFS(root=tmp_path)
+    calls = 0
+    replacement: Path | None = None
+
+    async def refuse_publication(source: PathRef, destination: PathRef) -> None:
+        nonlocal calls, replacement
+        calls += 1
+        if calls != 2:
+            return
+        container = next(tmp_path.glob(".dst.aws-tui-stage-*"))
+        replacement = container if replace_container else container / "payload"
+        replacement.rename(tmp_path / "retained-stage")
+        replacement.mkdir()
+        raise ProviderError("controlled publication refusal")
+
+    with pytest.raises(ProviderError, match="controlled publication refusal"):
+        await CrossFsCopy(
+            source=provider, destination=provider, before_publication=refuse_publication
+        ).copy(PathRef(("src",)), PathRef(("dst",)))
+
+    assert replacement is not None
+    assert replacement.is_dir()
+    retained = tmp_path / "retained-stage"
+    if replace_container:
+        retained /= "payload"
+    assert (retained / "payload.txt").read_bytes() == b"source"
+    assert (tmp_path / "src" / "payload.txt").read_bytes() == b"source"
+    assert not (tmp_path / "dst").exists()
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX replacement while write descriptor remains open")
+@pytest.mark.parametrize("replace_container", [False, True])
+@pytest.mark.parametrize("foreign_payload", [False, True])
+async def test_file_stage_never_adopts_replacement_payload(
+    tmp_path: Path, replace_container: bool, foreign_payload: bool
+) -> None:
+    source_file = tmp_path / "source.txt"
+    source_file.write_bytes(b"source")
+    provider = LocalFS(root=tmp_path)
+    replacement: Path | None = None
+    retained = tmp_path / "retained-owned"
+
+    def replace_stage(progress: TransferProgress) -> None:
+        nonlocal replacement
+        container = next(tmp_path.glob(".target.txt.aws-tui-stage-*"))
+        original = container if replace_container else container / "payload"
+        original.rename(retained)
+        if replace_container:
+            original.mkdir()
+        replacement = container / "payload"
+        if foreign_payload:
+            replacement.write_bytes(b"foreign")
+
+    with pytest.raises(ProviderError):
+        await CrossFsCopy(source=provider, destination=provider).copy(
+            PathRef(("source.txt",)), PathRef(("target.txt",)), progress=replace_stage
+        )
+
+    assert not (tmp_path / "target.txt").exists()
+    owned_file = retained / "payload" if replace_container else retained
+    assert owned_file.read_bytes() == b"source"
+    if foreign_payload:
+        assert replacement is not None
+        assert replacement.read_bytes() == b"foreign"
+    if replace_container:
+        assert replacement is not None
+        assert replacement.parent.is_dir()
+
+
+async def test_directory_move_preserves_replaced_source(tmp_path: Path) -> None:
+    original = tmp_path / "source"
+    original.mkdir()
+    provider = LocalFS(root=tmp_path)
+    calls = 0
+
+    async def replace_source(source: PathRef, destination: PathRef) -> None:
+        nonlocal calls
+        calls += 1
+        if calls == 2:
+            original.rename(tmp_path / "retained-source")
+            original.mkdir()
+
+    with pytest.raises(ConflictError, match="changed"):
+        await CrossFsMove(
+            source=provider, destination=provider, before_publication=replace_source
+        ).move(PathRef(("source",)), PathRef(("target",)))
+    assert original.is_dir()
+    assert (tmp_path / "retained-source").is_dir()
+    assert (tmp_path / "target").is_dir()
+
+
+@pytest.mark.skipif(os.name == "nt", reason="native POSIX descriptor opener race")
+async def test_cancelled_late_stage_opener_drains_claim_before_cleanup(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import threading
+
+    from aws_tui.domain import local_fs
+
+    source_file = tmp_path / "source.txt"
+    source_file.write_bytes(b"source")
+    provider = LocalFS(root=tmp_path)
+    entered = threading.Event()
+    release = threading.Event()
+    original_open = local_fs._rooted_open
+    opened: list[int] = []
+
+    def slow_open(root: Path, path: PathRef, flags: int) -> int:
+        descriptor = original_open(root, path, flags)
+        if ".aws-tui-stage-" in path.as_posix():
+            opened.append(descriptor)
+            entered.set()
+            assert release.wait(5)
+        return descriptor
+
+    monkeypatch.setattr(local_fs, "_rooted_open", slow_open)
+    operation = asyncio.create_task(
+        CrossFsCopy(source=provider, destination=provider).copy(
+            PathRef(("source.txt",)), PathRef(("target.txt",))
+        )
+    )
+    try:
+        assert await asyncio.to_thread(entered.wait, 5)
+        operation.cancel()
+        await asyncio.sleep(0)
+        release.set()
+        with pytest.raises(asyncio.CancelledError):
+            await operation
+        assert not list(tmp_path.glob(".target.txt.aws-tui-stage-*"))
+        assert not (tmp_path / "target.txt").exists()
+        assert source_file.read_bytes() == b"source"
+        assert opened
+        with pytest.raises(OSError, match=r"[Bb]ad file descriptor"):
+            os.fstat(opened[0])
+    finally:
+        release.set()
+        if not operation.done():
+            operation.cancel()
+            await asyncio.gather(operation, return_exceptions=True)
+
+
+async def test_in_memory_exclusive_write_preserves_concurrent_destination() -> None:
+    provider = InMemoryFS()
+    entered = asyncio.Event()
+    release = asyncio.Event()
+
+    async def delayed_source() -> AsyncIterator[bytes]:
+        entered.set()
+        await release.wait()
+        yield b"late-writer"
+
+    pending = asyncio.create_task(
+        provider.write_stream(PathRef(("entry",)), delayed_source(), overwrite=False)
+    )
+    await entered.wait()
+    await provider.write_stream(PathRef(("entry",)), _agen([b"concurrent"]), overwrite=False)
+    release.set()
+    with pytest.raises(ConflictError):
+        await pending
+    assert await _read_file(provider, PathRef(("entry",))) == b"concurrent"
+
+
+@pytest.mark.parametrize("replace_container", [False, True])
+async def test_directory_stage_never_adopts_replacement_after_identity_check(
+    tmp_path: Path, replace_container: bool
+) -> None:
+    (tmp_path / "source").mkdir()
+    replaced: list[Path] = []
+
+    class ReplacedAfterCheck(LocalFS):
+        async def capture_directory_revision(self, path: PathRef, revision: str) -> str:
+            observed = await super().capture_directory_revision(path, revision)
+            is_container = path.name.startswith(".target.aws-tui-stage-")
+            if not replaced and is_container == replace_container:
+                host = tmp_path.joinpath(*path.segments)
+                host.rename(tmp_path / "retained-owned-stage")
+                host.mkdir()
+                replaced.append(host)
+            return observed
+
+    provider = ReplacedAfterCheck(root=tmp_path)
+    with pytest.raises(ProviderError):
+        await CrossFsCopy(source=provider, destination=provider).copy(
+            PathRef(("source",)), PathRef(("target",))
+        )
+    assert replaced, "the replacement race was not exercised"
+    assert replaced[0].is_dir(), "the foreign directory was published or removed"
+    assert (tmp_path / "retained-owned-stage").is_dir()
+    assert (tmp_path / "source").is_dir()
+    assert not (tmp_path / "target").exists()

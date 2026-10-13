@@ -1,13 +1,12 @@
 # Theming
 
-> Mirror of spec §5.5. Ten built-in themes ship (4 dark + 3 light +
-> 3 popular community palettes); the default is configurable; full
-> `.tcss` overrides are supported.
+aws-tui includes ten built-in themes: four dark, three light and three community
+palettes. Choose a default theme or customize its appearance with `.tcss` files.
 
 ## 1. Built-in themes
 | Theme | Vibe | Borders | Accent |
 |---|---|---|---|
-| `carbon` (default) | Near-monochrome, macOS-quietness | rounded | ice-blue (`#6fb8ff`) |
+| `carbon` (default) | Near-monochrome, macOS-quietness | solid | ice-blue (`#6fb8ff`) |
 | `voidline` | Neon cyan + magenta on near-black; Tron / Blade Runner | heavy double-line `╔══╗` | cyan + magenta |
 | `lattice` | Mint-teal + lavender on deep teal | rounded `╭─╮` | mint (`#4ce0d2`) |
 | `amber` | Retro phosphor monitor | thick block | amber (`#ffb000`) |
@@ -18,11 +17,9 @@
 | `dracula` | Zeno Rocha's purple-and-pink on deep blue | rounded `╭─╮` | purple (`#bd93f9`) |
 | `gruvbox-dark` | Pavel Pertsev's warm earth tones (mahogany → mustard) | rounded `╭─╮` | gold (`#fabd2f`) |
 
-Carbon's discipline: **one accent color**, **three-tier text
-hierarchy** (primary / secondary / label), semantic colors reserved
-for narrow, meaningful uses (`success` only on auth + transfer status;
-`danger` only on "cannot be undone" affordances; `warning` only on
-numerics in Quick Look).
+Carbon uses one primary accent color and three text levels: primary, secondary
+and label. Semantic colors distinguish success and status, warnings, and
+destructive or error states.
 
 ## 2. Selecting a theme
 In config:
@@ -94,7 +91,7 @@ such as `theme switch ▸ voidline` remain deferred and are not a way to select
 a custom theme.
 
 ## 4. Palette tokens
-The Carbon palette tokens (full spec table in §5.5):
+The Carbon palette uses these tokens:
 
 | Token | Hex | Use |
 |---|---|---|
@@ -146,5 +143,5 @@ find tests/snapshot/__snapshots__ -mindepth 1 -maxdepth 1 -type d | wc -l
 Every new widget snapshot is paired with a content-presence guard test so a
 visually plausible blank rendering cannot pass unnoticed. Updates:
 `uv run pytest tests/snapshot --snapshot-update`. Snapshots are
-CI-gated on Python 3.12 on Ubuntu and macOS to catch platform-specific
-rendering drift.
+checked on Python 3.12 on Ubuntu and macOS to detect platform-specific rendering
+drift. Hosted checks are manual-only; run applicable snapshot checks locally.
