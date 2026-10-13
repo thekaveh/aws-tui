@@ -42,9 +42,10 @@ scripts/cut-changelog.sh X.Y.Z
 sed -i.bak 's/__version__ = "[^"]*"/__version__ = "X.Y.Z"/' \
     src/aws_tui/version.py && rm src/aws_tui/version.py.bak
 
-# 3. Update the README "Status" line at the top of README.md to
-#    point at the new version. (Manual edit — paragraph is
-#    version-specific marketing copy.)
+# 3. Review installation and release availability in README.md section 3,
+#    docs/install.md section 5, and docs/package-readme.md.
+#    Keep Git-only guidance until the first package publication is confirmed.
+#    Regenerate PYPI.md with make docs-package after changing its source.
 
 # 4. Re-record the snapshot goldens. `__version__` is rendered into the
 #    brand banner subtitle (ui/widgets/brand_banner.py), so every demo-mode
@@ -57,6 +58,7 @@ uv run pytest tests/snapshot --snapshot-update
 make docs-hero
 
 git add CHANGELOG.md src/aws_tui/version.py README.md \
+        docs/install.md docs/package-readme.md PYPI.md \
         tests/snapshot/__snapshots__ assets/screenshots/aws-tui-running.png
 git commit -m "chore(release): cut vX.Y.Z"
 git push -u origin release/vX.Y.Z

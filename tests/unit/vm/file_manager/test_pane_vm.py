@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import inspect
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable
 from typing import cast
 
 import pytest
@@ -70,7 +70,9 @@ class _EndpointSecretFailureFS:
     async def delete(self, _path: PathRef, *, expected_etag: str | None = None) -> None:
         raise NotImplementedError
 
-    async def delete_empty_directory(self, _path: PathRef) -> None:
+    async def delete_empty_directory(
+        self, _path: PathRef, *, expected_etag: str | None = None
+    ) -> None:
         raise NotImplementedError
 
     async def rename(self, _src: PathRef, _dst: PathRef) -> None:
@@ -89,6 +91,7 @@ class _EndpointSecretFailureFS:
         total_size: int | None = None,
         progress: ProgressCallback | None = None,
         overwrite: bool = False,
+        stage_claim: Callable[[str], None] | None = None,
     ) -> None:
         raise NotImplementedError
 
@@ -591,7 +594,9 @@ class _UnreachableFS:
 
     async def mkdir(self, _path: PathRef) -> None: ...
     async def delete(self, _path: PathRef, *, expected_etag: str | None = None) -> None: ...
-    async def delete_empty_directory(self, _path: PathRef) -> None: ...
+    async def delete_empty_directory(
+        self, _path: PathRef, *, expected_etag: str | None = None
+    ) -> None: ...
     async def rename(self, _s: PathRef, _d: PathRef) -> None: ...
 
     async def read_stream(
@@ -607,6 +612,7 @@ class _UnreachableFS:
         total_size: int | None = None,
         progress: ProgressCallback | None = None,
         overwrite: bool = False,
+        stage_claim: Callable[[str], None] | None = None,
     ) -> None: ...
 
 

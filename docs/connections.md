@@ -144,8 +144,9 @@ are validated by the live boto path.
 
 ### 3.1. Recovering credentials without relaunching
 
-Repair credentials outside the application, then press **`a`** or choose
-**Retry active source credentials** from the command palette. For an expired
+Repair credentials outside the application, then choose **Retry active source
+credentials** from the command palette (`:`). In S3 credential/error contexts
+and Glue/Athena, `a` also retries; EMR uses it for the application picker. For an expired
 SSO session, run `aws sso login --profile <name>`. For missing non-SSO
 credentials, repair the shared credentials, `credential_process`, environment,
 or role source and verify it with `aws sts get-caller-identity --profile

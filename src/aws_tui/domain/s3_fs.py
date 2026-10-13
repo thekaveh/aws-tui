@@ -24,7 +24,7 @@ from __future__ import annotations
 
 import asyncio
 import json
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable
 from contextlib import AsyncExitStack
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -691,7 +691,11 @@ class S3FS:
             # ProviderError taxonomy DualPaneVM expects.
             raise _map_client_error(exc, key) from exc
 
-    async def delete_empty_directory(self, path: PathRef) -> None:
+    async def delete_empty_directory(
+        self, path: PathRef, *, expected_etag: str | None = None
+    ) -> None:
+        if expected_etag is not None:
+            raise ProviderError("S3 directory namespaces have no conditional entry identity")
         if path.is_root:
             raise ProviderError("cannot delete the S3 filesystem provider root")
         if self._bucket is None and len(path.segments) == 1:
@@ -1019,7 +1023,10 @@ class S3FS:
         total_size: int | None = None,
         progress: ProgressCallback | None = None,
         overwrite: bool = True,
+        stage_claim: Callable[[str], None] | None = None,
     ) -> None:
+        if stage_claim is not None:
+            raise ProviderError("S3 streaming writes do not support local stage ownership claims")
         if path.is_root:
             raise ConflictError("cannot write to root")
         bucket, key = self._resolve_file(path)

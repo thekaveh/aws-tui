@@ -10,6 +10,7 @@ from __future__ import annotations
 import pytest
 from textual.app import App, ComposeResult
 from textual.containers import VerticalScroll
+from textual.widgets import Log
 from vmx import NULL_DISPATCHER, MessageHub
 from vmx.messages.protocols import Message
 
@@ -139,10 +140,36 @@ async def test_ready_logs_render_with_a_bounded_widget_count() -> None:
         await pilot.pause()
 
         body = pane.query_one("#logs-body", VerticalScroll)
-        assert len(body.children) == 1
-        rendered = str(body.children[0].render())
+        assert len(body.children) == 2
+        rendered = "\n".join(body.query_one(Log).lines)
         assert "line-0" in rendered
         assert "line-49" in rendered
+
+
+async def test_log_scrollbars_appear_only_when_content_overflows() -> None:
+    vm, hub, _fake = _make_vm()
+    try:
+        async with _PaneApp(vm, hub).run_test(size=(80, 24)) as pilot:
+            pane = pilot.app.query_one(JobRunLogsPane)
+            vm._lines = ("short ERROR",)
+            vm._set_state(LogsState.READY)
+            await pilot.pause()
+            await pilot.app.workers.wait_for_complete()
+            await pilot.pause()
+            content = pane.query_one(Log)
+            assert not content.show_horizontal_scrollbar
+            assert not content.show_vertical_scrollbar
+
+            vm._lines = tuple(f"ERROR {index} " + "x" * 200 for index in range(100))
+            vm._notify("lines")
+            await pilot.pause()
+            await pilot.app.workers.wait_for_complete()
+            await pilot.pause()
+            assert content.show_horizontal_scrollbar
+            assert content.show_vertical_scrollbar
+    finally:
+        await vm.shutdown()
+        vm.dispose()
 
 
 @pytest.mark.parametrize("bytes_read", [1024, 100 * 1024 * 1024])
@@ -156,7 +183,7 @@ async def test_truncation_banner_does_not_claim_a_specific_limit(bytes_read: int
             await pilot.pause()
             pane = pilot.app.query_one(JobRunLogsPane)
             body = pane.query_one("#logs-body", VerticalScroll)
-            rendered = str(body.children[0].render())
+            rendered = "\n".join(body.query_one(Log).lines)
             assert "ERROR retained" in rendered
             assert "log read truncated" in rendered
             assert "press r to reload" in rendered
@@ -297,7 +324,7 @@ async def test_cloudwatch_literal_caption_selectors_freshness_and_clicks(monkeyp
         )
         assert "Stopped" in str(pane.query_one("#logs-status", Static).render())
         assert "Start follow" in str(pane.query_one("#logs-status", Static).render())
-        assert "ERROR CloudWatch 0" in str(pane.query_one("#logs-content", Static).render())
+        assert "ERROR CloudWatch 0" in "\n".join(pane.query_one("#logs-content", Log).lines)
         await focus_and_settle(pane)
         await pilot.press("right")
         await pilot.pause()
@@ -384,6 +411,129 @@ async def test_cloudwatch_chips_preserve_run_relative_attempt_worker_identity(pr
                 for message in app._messages
                 if isinstance(message, JobRunLogsPane.CloudWatchStreamSelected)
             ] == [names[1], names[0]]
+    finally:
+        await vm.shutdown()
+        vm.dispose()
+
+
+@pytest.mark.parametrize("wide_unicode", [False, True])
+async def test_large_log_load_keeps_event_loop_responsive(wide_unicode: bool) -> None:
+    """A permitted 10 MB load must leave input/cancellation dispatch responsive."""
+    import asyncio
+    import time
+    from types import SimpleNamespace
+
+    from aws_tui.domain.emr_logs import LogChunk
+
+    vm, hub, _fake = _make_vm()
+
+    async def listing(**kwargs):
+        return [LogFile("logs/SPARK_DRIVER/stderr.gz", LogFileKind.DRIVER_STDERR)]
+
+    async def stream(**kwargs):
+        for index in range(10):
+            lines = (
+                ("ERROR " + str(index) + "界" * 250_000,)
+                if wide_unicode
+                else tuple("ERROR " + "x" * 1994 for _ in range(500))
+            )
+            yield LogChunk(
+                lines,
+                (index + 1) * sum(len(line.encode("utf-8")) for line in lines),
+                (index + 1) * len(lines),
+                len(lines),
+                False,
+            )
+            await asyncio.sleep(0)
+
+    vm._client = SimpleNamespace(list_files=listing, stream=stream)
+    gaps: list[float] = []
+    finished = asyncio.Event()
+
+    async def heartbeat() -> None:
+        while not finished.is_set():
+            started = time.monotonic()
+            await asyncio.sleep(0.01)
+            gaps.append(time.monotonic() - started)
+
+    try:
+        async with _PaneApp(vm, hub).run_test(size=(120, 40)) as pilot:
+            vm.set_target("app", "run", "s3://synthetic/logs/")
+            await pilot.pause()
+            ticker = asyncio.create_task(heartbeat())
+            try:
+                await asyncio.sleep(0.05)
+                await vm.load()
+                await pilot.pause()
+                await pilot.app.workers.wait_for_complete()
+                await pilot.pause()
+            finally:
+                finished.set()
+                await ticker
+            assert vm.state is LogsState.READY
+            assert len(vm.lines) == (10 if wide_unicode else 5000)
+            if wide_unicode:
+                assert sum(len(line.encode("utf-8")) for line in vm.lines) > 7_500_000
+            else:
+                assert sum(map(len, vm.lines)) == 10_000_000
+            content = pilot.app.query_one("#logs-content", Log)
+            assert content.line_count >= len(vm.lines)
+            assert content.virtual_size.width > content.size.width
+            if wide_unicode:
+                assert "full lines retained for filtering" in content.lines[0]
+                assert all("[display clipped]" in line for line in content.lines[1:])
+                assert all(len(line) < 5000 for line in content.lines)
+            else:
+                assert content.lines == list(vm.lines)
+            assert max(gaps) < 0.5, f"log paint blocked the event loop for {max(gaps):.3f}s"
+    finally:
+        await vm.shutdown()
+        vm.dispose()
+
+
+async def test_log_view_preserves_blank_lines_and_supports_keyboard_horizontal_scroll() -> None:
+    vm, hub, _fake = _make_vm()
+    vm._lines = ("[ERROR] " + "x" * 2000, "", "final line")
+    vm._set_state(LogsState.READY)
+    try:
+        async with _PaneApp(vm, hub).run_test(size=(120, 40)) as pilot:
+            await pilot.pause()
+            await pilot.app.workers.wait_for_complete()
+            pane = pilot.app.query_one(JobRunLogsPane)
+            content = pane.query_one("#logs-content", Log)
+            assert content.lines == list(vm.lines)
+            assert content.virtual_size.width > content.size.width
+            await focus_and_settle(pane)
+            await pilot.press("ctrl+right")
+            await pilot.pause()
+            assert content.scroll_x > 0
+            await pilot.press("ctrl+left")
+            await pilot.pause()
+            assert content.scroll_x == 0
+    finally:
+        await vm.shutdown()
+        vm.dispose()
+
+
+async def test_log_append_preserves_horizontal_scroll_after_width_worker() -> None:
+    vm, hub, _fake = _make_vm()
+    vm._lines = tuple("x" * 2000 for _ in range(200))
+    vm._set_state(LogsState.READY)
+    try:
+        async with _PaneApp(vm, hub).run_test(size=(120, 40)) as pilot:
+            await pilot.pause()
+            await pilot.app.workers.wait_for_complete()
+            pane = pilot.app.query_one(JobRunLogsPane)
+            content = pane.query_one("#logs-content", Log)
+            content.scroll_to(x=100, y=100, animate=False, force=True)
+            await pilot.pause()
+            assert content.scroll_offset == (100, 100)
+            vm._lines = (*vm.lines, "appended")
+            pane._on_vm_property_changed("lines")
+            await pilot.pause()
+            await pilot.app.workers.wait_for_complete()
+            await pilot.pause()
+            assert content.scroll_offset == (100, 100)
     finally:
         await vm.shutdown()
         vm.dispose()

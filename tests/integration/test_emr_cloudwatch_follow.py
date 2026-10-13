@@ -83,7 +83,9 @@ async def test_compact_real_demo_load_attempt_filter_follow_stop(tmp_path: Path,
             assert logs.state is LogsState.READY
             assert logs.lines == ("ERROR CloudWatch demo failure",)
             pane = app.query_one(JobRunLogsPane)
-            assert "ERROR CloudWatch demo failure" in str(pane.query_one("#logs-content").render())
+            assert "ERROR CloudWatch demo failure" in "\n".join(
+                pane.query_one("#logs-content").lines
+            )
             await wait_until(
                 lambda: not app.query("Toast"), what="startup demo toast to expire", timeout=8
             )

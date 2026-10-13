@@ -1,8 +1,7 @@
 # Configuration Reference
 
-> Where aws-tui keeps its files, every environment variable it reads, and
-> the localization position. The repository README links here rather than
-> carrying its own copies, so the published surfaces serve one set of tables.
+This reference covers file locations, environment variables, localization,
+transfer history, keybindings and local SQL drafts.
 
 ## 1. File locations
 
@@ -38,8 +37,9 @@ preserved when present.
 | `TEXTUAL_SMOOTH_SCROLL` | `0` — aws-tui sets it at launch unless you already have | Textual's switch for the in-band window-resize protocol (DEC private mode 2048). aws-tui defaults it off so the `SIGWINCH` resize fallback stays live. The cost is that scrollbar drags animate instead of tracking the pointer and mouse coordinates stay whole cells — both already true on Terminal.app and iTerm2. Set it to `1` for Textual's own default. See [Window resize](platforms.md#31-window-resize). |
 
 aws-tui does not launch AWS CLI SSO setup or write credentials. Run `aws sso
-login --profile <name>` in a terminal when prompted, then press `a` to retry
-the active source without relaunching. The app does not read `$PAGER` or
+login --profile <name>` in a terminal when prompted. Then choose **Retry active
+source credentials** from the command palette (`:`) without relaunching.
+The app does not read `$PAGER` or
 `$EDITOR` in v0.8.x. The Quick Look full-file `$PAGER` shell-out is spec'd
 but not yet wired (see the
 `Deferred / v0.9 roadmap` block in the `[0.8.0]` section of
@@ -82,6 +82,7 @@ Drafts retain the latest SQL for each complete query context on this device.
 Schema version `1` stores only SQL, UTC creation/update timestamps, a stable
 identifier, and connection name, region, workgroup, catalog, and database.
 Results, execution state, credentials, and navigation state are not retained.
+
 SQL is stored as plaintext. The directory uses private `0700` permissions and
 record files use `0600` where POSIX permissions are supported; these are not
 encryption. Unsupported filesystems may not enforce those permissions.

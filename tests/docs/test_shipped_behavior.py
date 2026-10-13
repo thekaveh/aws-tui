@@ -71,7 +71,7 @@ def test_keybindings_describes_shipped_palette_and_runtime_resolver() -> None:
     assert "Use &lt;name&gt; · &lt;region&gt; for &lt;service&gt;" in text
     assert "Dynamic `connection switch <name>` palette entries are not registered" not in text
     assert "All live App-level bindings are installed through `BindingResolver`" in text
-    assert "Only action IDs with registered handlers receive live Textual bindings" in text
+    assert "Only actions with registered handlers receive live" in text
     assert "`BindingResolver` leaves them unbound until a handler ships" in text
     assert "causes the app to fall back to the default keymap" in text
 

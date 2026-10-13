@@ -738,6 +738,13 @@ JobRunLogsPane > VerticalScroll {
 }
 JobRunLogsPane .logs-line {
     color: $text-muted;
+    scrollbar-background: $bg-elev;
+    scrollbar-background-hover: $bg-elev;
+    scrollbar-background-active: $bg-elev;
+    scrollbar-color: $rule-dim;
+    scrollbar-color-hover: $text-muted;
+    scrollbar-color-active: $accent;
+    scrollbar-corner-color: $bg;
 }
 JobRunLogsPane .logs-line.-match {
     color: $text;

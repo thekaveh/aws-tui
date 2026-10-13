@@ -123,8 +123,8 @@ Without those flags, a known `[defaults].connection` takes precedence over
 does not override that configured default. Use `uv run aws-tui doctor` for local
 setup diagnostics; see the [connection selection rules](docs/connections.md#3-auto-discovery-and-sso-cache-probe).
 
-After renewing credentials outside the app, press `a` to retry the active
-source's reads. This action preserves the selected source and does not repeat
+After renewing credentials outside the app, choose **Retry active source credentials**
+from the command palette (`:`). This preserves the selected source and does not repeat
 queries, jobs or transfers.
 
 **History/Recovery** (`Ctrl+T`) shows durable transfer summaries and interrupted
