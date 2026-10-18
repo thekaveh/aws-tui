@@ -321,6 +321,26 @@ class LocalFS:
             raise _map_os_error(exc, host.as_posix()) from exc
 
     async def delete(self, path: PathRef, *, expected_etag: str | None = None) -> None:
+        """Drain an admitted filesystem mutation before reporting cancellation."""
+        deleting = asyncio.create_task(self._delete(path, expected_etag=expected_etag))
+        cancellation: asyncio.CancelledError | None = None
+        while True:
+            try:
+                await asyncio.shield(deleting)
+                break
+            except asyncio.CancelledError as exc:
+                if deleting.cancelled():
+                    raise
+                cancellation = exc
+            except BaseException as exc:
+                if cancellation is not None:
+                    cancellation.add_note(f"local deletion failed: {type(exc).__name__}: {exc}")
+                    raise cancellation from exc
+                raise
+        if cancellation is not None:
+            raise cancellation
+
+    async def _delete(self, path: PathRef, *, expected_etag: str | None = None) -> None:
         if path.is_root:
             raise ProviderError("cannot delete the local filesystem provider root")
         if _WINDOWS:
@@ -388,28 +408,13 @@ class LocalFS:
                     original.as_posix(),
                     quarantine.as_posix(),
                 )
-                quarantined_stat = await quarantine.lstat()
             except FileNotFoundError as exc:
                 raise NotFoundError(original.as_posix()) from exc
             except FileExistsError as exc:  # pragma: no cover - UUID collision
                 raise ConflictError(quarantine.as_posix()) from exc
             except OSError as exc:
                 raise _map_os_error(exc, original.as_posix()) from exc
-            if _local_stable_identity(quarantined_stat) != _local_stable_identity(host_stat):
-                try:
-                    await anyio.to_thread.run_sync(
-                        _rename_no_replace,
-                        quarantine.as_posix(),
-                        original.as_posix(),
-                    )
-                except OSError as restore_exc:
-                    raise ProviderError(
-                        "source changed during move and could not be restored from "
-                        f"{quarantine.as_posix()}: {restore_exc}"
-                    ) from restore_exc
-                raise ConflictError(f"source changed: {original.as_posix()}")
             host = quarantine
-            host_stat = quarantined_stat
 
         try:
             # The inner block restores the quarantine claim before the outer
@@ -420,6 +425,13 @@ class LocalFS:
             # does this; reachable in production through `CrossFsMove`, whose
             # source delete passes `expected_etag`.
             try:
+                if claimed_original is not None:
+                    quarantined_stat = await host.lstat()
+                    if _local_stable_identity(quarantined_stat) != _local_stable_identity(
+                        host_stat
+                    ):
+                        raise ConflictError(f"source changed: {claimed_original.as_posix()}")
+                    host_stat = quarantined_stat
                 if stat.S_ISDIR(host_stat.st_mode) and not stat.S_ISLNK(host_stat.st_mode):
                     await anyio.to_thread.run_sync(shutil.rmtree, str(host))
                 else:
@@ -2305,11 +2317,10 @@ def _rooted_delete(
             raise ConflictError(f"source changed: {path.as_posix()}")
         quarantine = f".{name}.aws-tui-delete-{uuid4().hex}"
         _rename_no_replace_at(parent_fd, name, parent_fd, quarantine)
-        claimed = os.stat(quarantine, dir_fd=parent_fd, follow_symlinks=False)
-        if _local_stable_identity(claimed) != _local_stable_identity(observed):
-            _restore_claim(parent_fd, quarantine, name)
-            raise ConflictError(f"source changed: {path.as_posix()}")
         try:
+            claimed = os.stat(quarantine, dir_fd=parent_fd, follow_symlinks=False)
+            if _local_stable_identity(claimed) != _local_stable_identity(observed):
+                raise ConflictError(f"source changed: {path.as_posix()}")
             _remove_tree_at(parent_fd, quarantine, claimed)
         except BaseException:
             _restore_claim(parent_fd, quarantine, name)
@@ -2327,11 +2338,10 @@ def _rooted_delete_empty_directory(
             raise ConflictError(f"source changed: {path.as_posix()}")
         quarantine = f".{name}.aws-tui-rmdir-{uuid4().hex}"
         _rename_no_replace_at(parent_fd, name, parent_fd, quarantine)
-        claimed = os.stat(quarantine, dir_fd=parent_fd, follow_symlinks=False)
-        if _local_stable_identity(claimed) != _local_stable_identity(observed):
-            _restore_claim(parent_fd, quarantine, name)
-            raise ConflictError(f"source changed: {path.as_posix()}")
         try:
+            claimed = os.stat(quarantine, dir_fd=parent_fd, follow_symlinks=False)
+            if _local_stable_identity(claimed) != _local_stable_identity(observed):
+                raise ConflictError(f"source changed: {path.as_posix()}")
             os.rmdir(quarantine, dir_fd=parent_fd)
         except BaseException:
             _restore_claim(parent_fd, quarantine, name)

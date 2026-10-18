@@ -477,21 +477,31 @@ async def test_athena_insert_hint_tracks_typed_clipboard_and_source(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("error_attribute", "state_attribute"),
+    [
+        ("workgroup_detail_error", "workgroup_detail_state"),
+        ("catalog_error", "catalogs_state"),
+        ("database_error", "databases_state"),
+    ],
+)
 async def test_query_refresh_recovers_detail_without_remounting_athena_page(
     tmp_path: Path,
+    error_attribute: str,
+    state_attribute: str,
 ) -> None:
     async with _mounted_athena_app(tmp_path) as (app, ctx, vm, client, _pilot):
         page = app.query_one("#content-athena-page", AthenaPage)
         source_header = page.query_one("#athena-source-header")
-        client.workgroup_detail_error = ProviderError("temporary failure")
+        setattr(client, error_attribute, ProviderError("temporary failure"))
 
         await vm.select_workgroup("analysts")
 
         assert vm.context.workgroup == "analysts"
-        assert vm.context.catalog == ""
-        assert vm.workgroup_detail_state.name == "ERROR"
+        assert vm.context.database == ""
+        assert getattr(vm, state_attribute).name == "ERROR"
 
-        client.workgroup_detail_error = None
+        setattr(client, error_attribute, None)
         await app.action_refresh()
         await wait_until(
             lambda: (

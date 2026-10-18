@@ -442,3 +442,21 @@ def test_local_anchors_still_flag_an_absolute_repository_link_to_a_missing_path(
     findings = check_local_anchors(tmp_path)
 
     assert any("points at a missing path" in finding.message for finding in findings)
+
+
+def test_titles_reject_an_issue_reference_rendered_as_an_extra_page_heading(tmp_path):
+    _write_docs(tmp_path)
+    path = tmp_path / "docs" / "architecture.md"
+    path.write_text(path.read_text() + "\nContinued in issue\n#218, pending review.\n")
+
+    findings = check_titles(MANIFEST, tmp_path)
+
+    assert any("architecture.md" in f.message and "2 rendered H1" in f.message for f in findings)
+
+
+def test_titles_allow_escaped_issue_references_and_fenced_heading_examples(tmp_path):
+    _write_docs(tmp_path)
+    path = tmp_path / "docs" / "architecture.md"
+    path.write_text(path.read_text() + "\nIssue \\#218.\n\n```md\n# Heading example\n```\n")
+
+    assert check_titles(MANIFEST, tmp_path) == []
