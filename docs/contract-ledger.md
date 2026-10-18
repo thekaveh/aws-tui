@@ -519,12 +519,31 @@ this is a storage-format incompatibility rather than a UI regression.
 Verification runs locally on macOS, including SQL-policy and Iceberg contracts, application and snapshot tests, and Docker S3-compatible tests. It also includes pre-commit, documentation generation and a strict build, and wheel/sdist validation. GitHub Actions remain manual-only and are not dispatched. These checks do not establish Linux or Windows verification or publish the
 generated documentation.
 
-The following sections record the current pins and
-consumed contracts; dated earlier passes retain their historical pins.
+## 16. 2026-10-17 dependency maintenance pass
+
+This pass accepts the nine Dependabot updates in PRs #381–#389.
+PyArrow moves to `26.0.0`; its declared range is now `>=25.0.1,<27`.
+The minimum remains `25.0.1`.
+The Parquet preview uses `ParquetFile`, metadata, batch iteration, types and codecs.
+Those interfaces remain available. PyArrow 26 requires Python 3.11 or later,
+which matches this project's Python floor.
+
+The other runtime updates are SQLGlot `30.22.0`, platformdirs `4.12.4` and
+regex `2026.9.29`. Local checks exercise read-only SQL validation, Iceberg types,
+native regex deadlines, Parquet previews and path selection. Ruff `0.17.0`
+uses the existing explicit Python 3.11 target and matches its pinned hook.
+
+Verification runs locally on macOS. Hosted Actions remain manual-only and
+are not dispatched. These checks do not establish native Windows/Linux or
+minimum-dependency runtime coverage. They do not publish the website.
+
+The following sections record current pins, consumed contracts and available
+regression checks. They do not claim that every listed check ran in this pass.
+Dated earlier passes retain their historical pins and evidence.
 
 **Python runtime and AWS SDK graph**
 
-`aioboto3==15.5.0`, `aiobotocore==2.25.1`, `botocore==1.40.61`, `textual==8.2.8`, `vmx==3.23.0`, `reactivex==5.1.0`, `rich==15.0.0`, `keyring==25.7.0`, `tomli-w==1.2.0`, `platformdirs==4.11.10`, `sqlglot==30.21.0`, `anyio==4.15.1`, and `aiofiles==25.1.0` from `uv.lock`
+`aioboto3==15.5.0`, `aiobotocore==2.25.1`, `botocore==1.40.61`, `textual==8.2.8`, `vmx==3.23.0`, `reactivex==5.1.0`, `rich==15.0.0`, `keyring==25.7.0`, `tomli-w==1.2.0`, `platformdirs==4.12.4`, `sqlglot==30.22.0`, `pyarrow==26.0.0`, `anyio==4.15.1`, and `aiofiles==25.1.0` from `uv.lock`
 
 VMx and the other runtime packages use public facades or documented module paths.
 Textual remains pinned to `8.2.8` because the application isolates several private
@@ -536,12 +555,13 @@ bracketed-paste parsing, and in-band resize behavior. Local regression tests
 verify those adapters against the installed source. Runtime floors retain the
 same exact Textual pin.
 
-Log filtering uses `regex==2026.7.19`, the existing locked release, as a runtime
+Log filtering uses `regex==2026.9.29`, the locked release, as a runtime
 dependency. Native search deadlines contain expensive patterns. Patterns must pass validation in both engines. VERSION0 matching follows
 the timeout engine, including its Unicode case folding and brace syntax. The EMR guide records the filter limits and recovery controls.
 
-Verification covers unit, integration, snapshot, E2E, and minimum-direct-dependency
-contracts. Import and layer checks verify the boundaries.
+Existing tests cover unit, integration, snapshot, E2E and minimum-direct-dependency
+contracts. This pass runs affected tests against the locked dependencies.
+Import and layer checks verify the boundaries.
 
 `tests/integration/test_app_blur_cleanup.py` verifies tooltip teardown, mouse
 capture release, and balanced realtime animation after `AppBlur`.
@@ -563,7 +583,7 @@ members from the installed service models.
 
 `FocusCoordinatorVM` delegates modal save/restore behavior to public `DiscriminatorVM.modal_open()` / `modal_close()`. `S3ConnectionFormVM` supplies complete field and model validation through `FormVMBuilder` at construction time. Athena drains public `AsyncRelayCommand.is_executing` admission state after cancellation and tracks the provider task behind nested command execution so shutdown waits for cancellation-resistant I/O. No VM reaches into VMx private fields.
 
-Verification: Focus, Settings form, Athena query/results, VMx smoke, mypy, and lifecycle tests run against the locked package. The dated VMx 3.23 maintenance report records adopted and rejected candidates plus production-line metrics.
+Existing checks: Focus, Settings form, Athena query/results, VMx smoke, mypy and lifecycle tests exercise the locked package. The dated VMx 3.23 maintenance report records adopted and rejected candidates plus production-line metrics.
 
 **Bounded AWS operational state**
 
@@ -575,7 +595,7 @@ Athena history, saved-query, and context collections stop at 1,000 items, while 
 
 Recursive S3 deletion stops above 100 listing pages or 10,000 objects and reports how many objects were already removed. S3 `SlowDown` and `RequestLimitExceeded` responses map to `ThrottledError`; service availability and transport failures map to `ProviderUnreachableError`.
 
-Verification: Exact request-shape and pager tests assert page size, page ceilings, collection ceilings, final-page clipping, refresh and snapshot preservation, and visible truncation state. They also assert partial-delete diagnostics, repeated-token rejection, run-relative log classification, and throttling versus reachability behavior.
+Existing checks: Exact request-shape and pager tests assert page size, page ceilings, collection ceilings, final-page clipping, refresh and snapshot preservation, and visible truncation state. They also assert partial-delete diagnostics, repeated-token rejection, run-relative log classification, and throttling versus reachability behavior.
 
 **Bounded local and cross-provider state**
 
@@ -583,7 +603,7 @@ Internal `InMemoryFS` and `CrossFs` contracts
 
 Demo objects are limited to 100 MiB each and 256 MiB in aggregate, and a directory listing fails closed above 10,000 entries. Recursive cross-provider copy and move traversals stop above 10,000 entries or 128 levels; owned staging data is cleaned after a limit failure.
 
-Verification: In-memory filesystem boundary tests cover known-size and streamed writes, overwrite accounting, and listing ceilings. Cross-filesystem tests cover entry/depth rejection and stage cleanup.
+Existing checks: In-memory filesystem boundary tests cover known-size and streamed writes, overwrite accounting and listing ceilings. Cross-filesystem tests cover entry/depth rejection and stage cleanup.
 
 **Packaging and developer tooling**
 
@@ -593,17 +613,25 @@ CI, release, Pages, and bootstrap sync/export with `--locked`, so a stale lock f
 
 Wheel and sdist members must exclude repository metadata, tests, local caches, and traversal paths. Both artifacts must contain every source Python module, `py.typed`, and packaged theme stylesheet. The sdist must also retain its build metadata and PyPI readme.
 
-Verification: `uv lock --check`, script/workflow guard tests, real wheel/sdist builds, `scripts.check_dist`, Twine metadata checks, isolated wheel and sdist install smoke, and a Textual CLI invocation.
+Available checks: `uv lock --check`, script/workflow guards, wheel/sdist builds,
+`scripts.check_dist`, Twine checks, isolated installation and Textual CLI invocation.
+This pass validates the lock, guards, builds, artifact contents and Twine metadata.
 
 **GitHub Actions and pre-commit toolchain**
 
-`astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7` (`v10.2.0`), `ruff-pre-commit@f12be1ebaa5351c1fc76472de98db2c3446c8253` (`v0.16.10`), `pre-commit-hooks@3e8a8703264a2f4a69428a0aa4dcb512790b2c8c` (`v6.0.0`), `taplo-pre-commit@ade0f95ddcf661c697d4670d2cfcbe95d0048a0a` (`v0.9.3`), and the other immutable action refs listed in §4
+`astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884` (`v10.3.0`), `actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9` (`v7.0.2`), `actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333` (`v8.0.2`), `ruff-pre-commit@44b5042edab9382aba712eed4f9c7bab7a3d6a3e` (`v0.17.0`), `pre-commit-hooks@3e8a8703264a2f4a69428a0aa4dcb512790b2c8c` (`v6.0.0`), `taplo-pre-commit@ade0f95ddcf661c697d4670d2cfcbe95d0048a0a` (`v0.9.3`), and the other immutable action refs listed in §4
+
+The locked formatter is `ruff==0.17.0`. Official upstream tags and PyPI
+artifact hashes are checked before integration. The setup-uv update adds an
+optional architecture input; these workflows keep their existing inputs and
+`uv==0.11.19`.
 
 Workflow jobs retain least-privilege permissions and bounded timeouts. CI and release export every locked dependency group before pip-audit. Pages and wiki publication run only from `main`, including manual dispatch, so a branch-controlled checkout cannot receive the wiki deploy key. The wiki deploy key is checked before it is written. The Homebrew checkout does not persist its cross-repository token.
 
 Artifact contents are checked before upload or publication.
 
-Verification: Official tag/ref verification, YAML guard tests, pre-commit, shellcheck, and local workflow-equivalent package/docs commands.
+This pass verifies official tags and artifact hashes, YAML guards, pre-commit,
+shellcheck, package builds and documentation locally.
 
 **Local S3-compatible harness**
 
@@ -611,7 +639,7 @@ Docker image `adobe/s3mock:5.2.3@sha256:ab01a6946750f451ca215a47e91030695b260e40
 
 Independent S3-compatible endpoint, readiness probe, seeded buckets/objects, path-style config, arbitrary test credentials, and host port exposure.
 
-Verification: The former MinIO community image was removed because every usable community release is affected by [GHSA-hv4r-mvr4-25vw](https://github.com/advisories/GHSA-hv4r-mvr4-25vw). The nominally fixed AIStor image requires a commercial license and rejects writes without one. Adobe S3Mock 5.2.3 is license-free, digest-pinned, exposed only on `127.0.0.1`, and passes the same nine strict S3FS/CrossFs protocol tests through the public `testcontainers.core.container.DockerContainer` API. Manual trace also covers `scripts/test-services/s3/docker-compose.yml`, `seed.py`, and `config-snippet.toml`.
+Prior validation: The former MinIO community image was removed because every usable community release is affected by [GHSA-hv4r-mvr4-25vw](https://github.com/advisories/GHSA-hv4r-mvr4-25vw). The nominally fixed AIStor image requires a commercial license and rejects writes without one. Adobe S3Mock 5.2.3 is license-free, digest-pinned and exposed only on `127.0.0.1`. It passed nine strict S3FS/CrossFs protocol tests through the public `testcontainers.core.container.DockerContainer` API. This pass changes neither that harness nor the S3 provider and does not rerun Docker tests.
 
 **Local DuckDB Iceberg preview**
 
@@ -621,7 +649,7 @@ Extensions `httpfs`, `aws`, `iceberg` loaded per connection. `iceberg_scan(path)
 
 Errors consumed as `duckdb.HTTPException` with `.status_code`, and `duckdb.InterruptException`. Eager credential validation is a 1.4+ refinement, not a floor guarantee. At 1.3, `CREATE OR REPLACE SECRET` accepts a nonexistent profile. Thus, a bad profile degrades to a later, less precise outcome instead of `AUTH_REQUIRED`.
 
-Verification: Port unit tests use injected fake connections. The optional floor test under `tests/minimum_runtime/` uses a real engine for extension loading, settings, credential-secret preparation, and `SELECT 1`. It does not scan a real Iceberg table.
+Existing checks: Port unit tests use injected fake connections. The optional floor test under `tests/minimum_runtime/` uses a real engine for extension loading, settings, credential-secret preparation, and `SELECT 1`. It does not scan a real Iceberg table.
 
 Exact S3 boto operation ledger (16):
 

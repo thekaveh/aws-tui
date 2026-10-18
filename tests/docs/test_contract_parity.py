@@ -288,7 +288,7 @@ def test_dependency_ledger_matches_locked_runtime_and_build_versions() -> None:
     project = tomllib.loads(_text("pyproject.toml"))
     ledger = _numbered_section(
         _text("docs/contract-ledger.md"),
-        "2026-10-08 dependency maintenance pass",
+        "2026-10-17 dependency maintenance pass",
     )
 
     for name in (
@@ -301,8 +301,11 @@ def test_dependency_ledger_matches_locked_runtime_and_build_versions() -> None:
         "hatchling",
         "keyring",
         "platformdirs",
+        "pyarrow",
         "reactivex",
+        "regex",
         "rich",
+        "ruff",
         "sqlglot",
         "testcontainers",
         "textual",
@@ -333,7 +336,7 @@ def test_pre_commit_revisions_are_recorded_in_the_current_ledger_pass() -> None:
     """
     ledger = _numbered_section(
         _text("docs/contract-ledger.md"),
-        "2026-10-08 dependency maintenance pass",
+        "2026-10-17 dependency maintenance pass",
     )
     config = _text(".pre-commit-config.yaml")
     revisions = re.findall(r"^\s*rev:\s*([0-9a-f]{40})\b", config, flags=re.MULTILINE)
