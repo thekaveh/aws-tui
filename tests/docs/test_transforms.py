@@ -98,3 +98,14 @@ def test_rewrite_leaves_external_and_anchor_links():
     md = "See [textual](https://textual.textualize.io/) and [top](#12-layers)."
     out = rewrite_for_surface(md, "site", build_source_map(MANIFEST, "site"))
     assert out == md
+
+
+def test_stripped_issue_reference_does_not_become_a_heading():
+    import markdown
+
+    source = "# Athena\n\nExport is tracked in\n[#254](https://github.com/thekaveh/aws-tui/issues/254).\n\n## Results\n"
+    for surface in ("site", "wiki"):
+        rendered = markdown.markdown(rewrite_for_surface(source, surface, {}))
+        assert rendered.count("<h1>") == 1
+        assert "#254." in rendered
+        assert "<h2>Results</h2>" in rendered

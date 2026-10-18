@@ -66,6 +66,7 @@ from aws_tui.ui import notifications
 from aws_tui.ui.actions import ActionRegistry
 from aws_tui.ui.bindings import BindingResolver
 from aws_tui.ui.paste_guard import guarded_driver_class
+from aws_tui.ui.query_cache import release_detached_query_results
 from aws_tui.ui.terminal_protocol import prefer_sigwinch_resize
 from aws_tui.ui.widgets._worker import DeferredWorkerMixin
 from aws_tui.ui.widgets.athena.page import AthenaPage
@@ -4132,6 +4133,7 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
                     service=service_id,
                     error_type=type(exc).__name__,
                 )
+        release_detached_query_results(host.ancestors_with_self)
         if service_id in {"glue", "athena", "emr-serverless"}:
             self._recompute_hint_disables()
         return True
@@ -6523,6 +6525,7 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
             with contextlib.suppress(Exception):
                 host = self.query_one("#content-host", Container)
                 await host.remove_children()
+                release_detached_query_results(host.ancestors_with_self)
             await self._app_ctx.root_vm.switch_connection_and_service(
                 connection,
                 auth_state,
@@ -7105,6 +7108,7 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
             ):
                 return
         await host.remove_children()
+        release_detached_query_results(host.ancestors_with_self)
         if self._service_navigation_closed or self._service_navigation_owner != navigation_owner:
             return
         self._content_mount_hosts[replacement] = (host, navigation_owner)
@@ -7143,7 +7147,9 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
         siblings = list(parent.children)
         index = siblings.index(host)
         next_sibling = siblings[index + 1] if index + 1 < len(siblings) else None
+        cache_owners = host.ancestors
         await host.remove()
+        release_detached_query_results(cache_owners)
         replacement = Container(id="content-host")
         if self._service_navigation_closed:
             return replacement

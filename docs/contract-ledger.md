@@ -222,7 +222,7 @@ manifest for the `5.2.2` tag. The hook ref was taken one patch past the
 dependabot proposal so it matches the locked `ruff==0.16.8` the lint tier runs.
 The same pass moved the unledgered development-only `cairosvg`, `fonttools`,
 and `ruff` lock entries. Supersedes dependabot #214, #215, #216, #217, and
-#218, which could not update this ledger themselves and so could never go
+\#218, which could not update this ledger themselves and so could never go
 green; #217 was additionally rejected because its grouped
 `pytest-textual-snapshot` 1.1.0 bump forces pytest 8 and syrupy 4, a downgrade.
 
@@ -398,12 +398,23 @@ This divides every SGR click by the pixel/cell ratio.
 `CellMouseXTermParser.parse_mouse_code` keeps the two halves in step.
 
 
+**Detached service widgets**
+
+Textual 8.2.8 keeps generation-keyed query results in ancestor `_query_one_cache` instances.
+Old entries retain removed pages and their VMs until eviction.
+After content removal, the app discards entries whose cached node is detached.
+It preserves cache capacities and attached entries.
+
+This adapter uses `DOMNode._query_one_cache` with `LRUCache.keys`, `get` and `discard`.
+Content lifecycle tests verify collection after replacement and host reset.
+
+
 ## 9. Known model gaps
 
 | Consumed contract | Pinned version | What the model does not offer | Consequence |
 |---|---:|---|---|
-| `glue:GetJobRuns` state filter | `botocore==1.40.61` service model, Glue API `2017-03-31` | `GetJobRunsRequest` models exactly `JobName`, `MaxResults`, `NextToken`. There is no `States` member, so the server-side run-state filter `GlueClient.list_job_runs_page` probes for is permanently unavailable. | Run-state filtering falls back to filtering one 200-run page locally, so a state with no match on the current page renders an empty list while matching runs may sit on the next one. The user can advance that pager: `l` (`glue.load_more`), the **Load more Glue rows** palette command, or clicking the runs footer that reads "· more available" fetches the next page, so matching older runs are reachable by paging rather than by filter. `tests/docs/test_contract_parity.py::test_glue_get_job_runs_still_has_no_modeled_states_filter` fails the moment AWS adds the member, at which point the probe goes live and this row can be removed. |
-| `emr-serverless:StartJobRun` idempotency | `botocore==1.40.61` service model, EMR Serverless API `2021-07-13` | `clientToken` is a required, `idempotencyToken: true` member; the SDK auto-fills a fresh UUID per call, not per user intent. | aws-tui supplies its own token: `JobRunCloneVM` mints one per form intent, reuses it across submit attempts that raise, and rotates it on a field edit or a successful submit, so a retry after an accepted-but-lost request, while the clone form stays open, returns the existing run instead of starting a second one; cancelling and reopening the form is a new intent with a new token. `tests/unit/vm/emr_serverless/test_clone_vm.py` covers reuse and rotation; `tests/unit/domain/test_emr_serverless.py` asserts the wire field. The Athena path supplies `ClientRequestToken` the same way. |
+| `glue:GetJobRuns` state filter | `botocore==1.40.61` service model, Glue API `2017-03-31` | `GetJobRunsRequest` models exactly `JobName`, `MaxResults`, `NextToken`. There is no `States` member, so the server-side run-state filter `GlueClient.list_job_runs_page` probes for is permanently unavailable. | Run-state filtering applies locally to one 200-run page. An empty filtered page can have matching runs on later pages. Press `l` (`glue.load_more`), choose **Load more Glue rows** in the palette, or click the runs footer marked "· more available". Each action fetches the next page. `tests/docs/test_contract_parity.py::test_glue_get_job_runs_still_has_no_modeled_states_filter` fails the moment AWS adds the member, at which point the probe goes live and this row can be removed. |
+| `emr-serverless:StartJobRun` idempotency | `botocore==1.40.61` service model, EMR Serverless API `2021-07-13` | `clientToken` is a required, `idempotencyToken: true` member; the SDK auto-fills a fresh UUID per call, not per user intent. | `JobRunCloneVM` creates one token per form intent and reuses it after submission errors. A field edit or successful submission rotates the token. If AWS accepts a request but its response is lost, retrying in the unchanged open form returns the existing run. Cancelling and reopening the form creates a new intent and token. `tests/unit/vm/emr_serverless/test_clone_vm.py` covers reuse and rotation; `tests/unit/domain/test_emr_serverless.py` asserts the wire field. The Athena path supplies `ClientRequestToken` the same way. |
 
 ## 10. Deferred contract checks
 
@@ -413,26 +424,29 @@ This divides every SGR click by the pixel/cell ratio.
 
 ## 11. EMR clone request fidelity
 
-Verified against installed `botocore==1.40.61`, EMR Serverless API `2021-07-13`,
-on 2026-09-30 by service-model inspection, exact request tests and live modal
-rendering tests. `GetJobRun` retains the full driver discriminator and optional
+The verification used installed `botocore==1.40.61` and EMR Serverless API `2021-07-13` on 2026-09-30.
+It included service-model inspection, exact request tests and live modal rendering tests.
+`GetJobRun` retains the full driver discriminator and optional
 `configurationOverrides` (application and monitoring configuration),
-`executionTimeoutMinutes`, `retryPolicy`, `mode`, `executionIamPolicy` and
-`tags`. The explicit `StartJobRun` builder forwards only modeled request fields,
-preserves supplied strings, omitted versus empty arguments, empty containers and zero separately from omission,
-and deep-copies nested values. Only Spark drivers and BATCH/STREAMING modes are
-accepted. Unknown or unsupported nested settings fail closed; newer AWS API
-fields absent from this installed model are not silently discarded.
+`executionTimeoutMinutes`, `retryPolicy`, `mode`, `executionIamPolicy` and `tags`.
+
+The explicit `StartJobRun` builder forwards only modeled request fields and deep-copies nested values.
+It preserves supplied strings and distinguishes omitted arguments from empty arguments, empty containers and zero.
+Only Spark drivers and BATCH/STREAMING modes are accepted.
+Unknown or unsupported nested settings fail closed.
+Newer AWS API fields absent from this installed model are not silently discarded.
 
 Source application release/network/image/worker values are review context only.
-The clone inherits current application settings and discloses unknown equality
-and hidden defaults; response identifiers, state and resource usage are never
-resubmitted. The review shows source identity and old/new values before Submit. JSON editors
-escape Unicode separators; arguments accept `null` for omission and Spark
-parameters use a JSON string or `null` to preserve mixed line endings.
-Every request-affecting edit rotates the intent token; equal reapplication and
-unchanged ambiguous retries retain it. Submission errors suppress raw SDK text
-and exception chains so diagnostics cannot echo request values.
+The clone inherits current application settings and discloses unknown equality and hidden defaults.
+Response identifiers, state and resource usage are never resubmitted.
+The review shows source identity and old/new values before Submit.
+
+JSON editors escape Unicode separators.
+Arguments accept `null` for omission.
+Spark parameters use a JSON string or `null` to preserve mixed line endings.
+Every request-affecting edit rotates the intent token.
+Equal reapplication and unchanged ambiguous retries retain it.
+Submission errors suppress raw SDK text and exception chains so diagnostics cannot echo request values.
 
 Evidence: `tests/unit/domain/test_emr_serverless.py`,
 `tests/unit/vm/emr_serverless/test_clone_vm.py`,
