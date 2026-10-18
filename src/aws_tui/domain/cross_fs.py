@@ -167,7 +167,9 @@ def _finish_durable(
         cause = failure if failure is not None and failure is not cancellation else None
         if cause is None and related:
             cause = related[0]
-        raise cancellation from cause
+        if cause is not None:
+            raise cancellation from cause
+        raise cancellation
     if related:
         reported = ([failure] if failure is not None else []) + related
         error_details = "; ".join(f"{type(error).__name__}: {error}" for error in reported)
@@ -531,6 +533,40 @@ class CrossFsCopy:
         destination_exists: bool,
         on_conflict: ConflictResolution,
     ) -> bool:
+        try:
+            return await self._publish_owned_stage(
+                source,
+                publisher,
+                staged,
+                destination,
+                requested_destination=requested_destination,
+                destination_exists=destination_exists,
+                on_conflict=on_conflict,
+            )
+        except BaseException as failure:
+            # Retry inspection can fail or be cancelled before another publish.
+            # Keep the stage owned across that entire interval, including
+            # overwrite setup. Cleanup only removes matching manifest entries.
+            cleanup = await self._cleanup_owned_stage(staged)
+            _finish_durable(
+                failure,
+                context="publication stage cleanup",
+                outcomes=[cleanup],
+                ignore_not_found=True,
+            )
+            raise AssertionError("publication failure should have been raised") from None
+
+    async def _publish_owned_stage(
+        self,
+        source: PathRef,
+        publisher: AtomicNoReplacePublisher,
+        staged: _OwnedStage,
+        destination: PathRef,
+        *,
+        requested_destination: PathRef,
+        destination_exists: bool,
+        on_conflict: ConflictResolution,
+    ) -> bool:
         current_destination = destination
         current_exists = destination_exists
         for _attempt in range(_MAX_RENAME_ATTEMPTS):
@@ -723,12 +759,11 @@ class CrossFsCopy:
         revision: str,
     ) -> None:
         captured = await _durably_run(publisher.capture_stage_revision(path))
-        if captured.error is None and captured.value == revision:
-            _finish_durable(None, context="stage claim verification", outcomes=[captured])
+        if captured.error is None and captured.value == revision and not captured.cancelled:
             return
-        failure = captured.error or ProviderError(
-            f"stage claim changed before use: {path.as_posix()}"
-        )
+        failure = captured.error
+        if failure is None and captured.value != revision:
+            failure = ProviderError(f"stage claim changed before use: {path.as_posix()}")
         cleanup = await self._cleanup_empty_claim(path, revision)
         _finish_durable(
             failure,
@@ -1189,10 +1224,16 @@ class CrossFsCopy:
         depth: int,
     ) -> None:
         budget.enter(src, depth=depth)
-        revision = await claimer.claim_directory(dst)
-        await self._verify_stage_claim(publisher, dst, revision)
+        claimed = await _durably_run(claimer.claim_directory(dst))
+        if claimed.error is not None:
+            _raise_durable(claimed, context="directory child claim")
+        revision = claimed.value
+        if not isinstance(revision, str) or not revision:
+            raise ProviderError(f"directory claim has no ownership revision: {dst.as_posix()}")
         relative = PathRef(dst.segments[len(root.segments) :])
         manifest.append(StageManifestEntry(relative, EntryKind.DIRECTORY, revision))
+        _finish_durable(None, context="directory child claim", outcomes=[claimed])
+        await self._verify_stage_claim(publisher, dst, revision)
         for child in await self._source.list(src):
             source_path = src.join(child.name)
             destination_path = dst.join(child.name)
@@ -1552,15 +1593,20 @@ class CrossFsMove(CrossFsCopy):
                 await self._delete_observed_source(path, entry.etag)
 
     async def _delete_observed_source(self, path: PathRef, etag: str | None) -> None:
-        if etag is None:
-            await self._source.delete(path)
-            return
-        await self._source.delete(path, expected_etag=etag)
+        deleted = await _durably_run(
+            self._source.delete(path)
+            if etag is None
+            else self._source.delete(path, expected_etag=etag)
+        )
+        _finish_durable(deleted.error, context="move source deletion", outcomes=[deleted])
 
     async def _delete_observed_directory(self, path: PathRef, etag: str | None) -> None:
         # Object-store directory namespaces have no stable entry identity.
         revision = etag if isinstance(self._source, DirectoryRevisionCapturer) else None
-        await self._source.delete_empty_directory(path, expected_etag=revision)
+        deleted = await _durably_run(
+            self._source.delete_empty_directory(path, expected_etag=revision)
+        )
+        _finish_durable(deleted.error, context="move source directory deletion", outcomes=[deleted])
 
 
 __all__ = [

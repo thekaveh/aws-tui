@@ -114,12 +114,15 @@ class AthenaQueryVM:
         draft_session: AthenaDraftSession | None = None,
         validate_draft_execution: Callable[[QueryContext], Awaitable[bool]] | None = None,
         drafts_enabled: Callable[[], bool] | None = None,
+        execution_context_available: Callable[[], bool] | None = None,
     ) -> None:
         self._draft_session = draft_session
         self._draft_recovery_guard = False
         self._draft_recovery_guard_revision = 0
         self._validate_draft_execution = validate_draft_execution
         self._drafts_enabled = drafts_enabled or (lambda: False)
+        self._execution_context_available = execution_context_available or (lambda: True)
+        self._last_execution_available = self._execution_context_available()
         self._client = client
         self._runner = runner or AthenaQueryRunner(
             client,
@@ -793,7 +796,15 @@ class AthenaQueryVM:
                 self._execution_task = None
             self._set_busy(False)
 
+    def refresh_execution_availability(self) -> None:
+        available = self._execution_context_available()
+        if available != self._last_execution_available:
+            self._last_execution_available = available
+            self._notify("execution_context_available")
+
     def _validate(self) -> str:
+        if not self._execution_context_available():
+            raise QueryRejectedError("Select an available enabled workgroup before running a query")
         try:
             return self._runner.validate(self._sql, self._context)
         except ProviderError as exc:

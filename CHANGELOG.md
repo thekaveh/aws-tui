@@ -233,6 +233,19 @@ section. The current tree must not be tagged as v0.8.0.
 
 ### Fixed
 
+- Release removed service widgets from cached queries after navigation.
+
+- Athena Refresh retries failed catalog and database discovery. It preserves
+  valid workgroups from later pages and newer context choices.
+- Disabled Athena workgroups remain available for History but cannot submit
+  queries. Glue handoffs discover an enabled workgroup before priming the table.
+- Cancelling transfers drains source deletion and cleans owned staging data
+  during directory creation, verification, conflict retries and overwrite setup.
+- Local deletion restores quarantined entries after metadata failures and preserves
+  concurrent replacements if restoration cannot complete.
+- Documentation issue references remain inline instead of becoming headings.
+  The contract ledger's complete navigation is restored and current prose clarified.
+
 - **Zebra striping is now actually visible in all ten themes.** The striping
   shipped in #227 derived every theme's `$bg-alt` as the midpoint between its
   `$bg` and `$bg-elev`. That construction guarantees the stripe stays weaker

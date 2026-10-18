@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import os
 import sys
+import threading
 from collections.abc import AsyncIterator, Callable
 from pathlib import Path
 
@@ -2635,3 +2636,164 @@ async def test_directory_stage_never_adopts_replacement_after_identity_check(
     assert (tmp_path / "retained-owned-stage").is_dir()
     assert (tmp_path / "source").is_dir()
     assert not (tmp_path / "target").exists()
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX quarantine rename")
+async def test_cancelled_move_drains_source_quarantine_before_returning(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = tmp_path / "source.txt"
+    source.write_bytes(b"original data")
+    destination = tmp_path / "dest"
+    destination.mkdir()
+    claimed, release = threading.Event(), threading.Event()
+    original = local_fs._rename_no_replace
+
+    def blocked_claim(src: str, dst: str) -> None:
+        original(src, dst)
+        if src == str(source):
+            claimed.set()
+            assert release.wait(5)
+
+    monkeypatch.setattr(local_fs, "_rename_no_replace", blocked_claim)
+    moving = asyncio.create_task(
+        CrossFsMove(source=LocalFS(), destination=LocalFS(root=destination)).move(
+            PathRef.from_posix(str(source)), PathRef(("copied.txt",))
+        )
+    )
+    try:
+        assert await asyncio.wait_for(asyncio.to_thread(claimed.wait, 2), 3)
+        moving.cancel()
+        await asyncio.sleep(0.02)
+        moving.cancel()
+        await asyncio.sleep(0.02)
+        assert not moving.done()
+    finally:
+        release.set()
+        with pytest.raises(asyncio.CancelledError):
+            await moving
+    assert (destination / "copied.txt").read_bytes() == b"original data"
+    assert not source.exists()
+    assert not list(tmp_path.glob(".*aws-tui-delete-*"))
+
+
+@pytest.mark.parametrize("phase", ["ownership", "rename-resolution", "overwrite-inspection"])
+async def test_failed_publication_retry_cleans_its_owned_stage(tmp_path: Path, phase: str) -> None:
+    class RetryFS(LocalFS):
+        def __init__(self) -> None:
+            super().__init__(root=tmp_path)
+            self.collided = False
+            self.started, self.release = asyncio.Event(), asyncio.Event()
+
+        async def atomic_publish_no_replace(self, src, dst, *, expected_source_revision):
+            if not self.collided and dst.name == "copied.txt":
+                (tmp_path / "copied.txt").write_bytes(b"concurrent destination")
+                self.collided = True
+                raise ConflictError("concurrent publication")
+            return await super().atomic_publish_no_replace(
+                src, dst, expected_source_revision=expected_source_revision
+            )
+
+        async def capture_stage_revision(self, path):
+            if self.collided and phase == "ownership":
+                self.started.set()
+                await self.release.wait()
+            return await super().capture_stage_revision(path)
+
+        async def stat(self, path):
+            if self.collided and phase != "ownership" and path.name == "copied.txt":
+                raise ProviderError("retry lookup failed")
+            return await super().stat(path)
+
+    source = InMemoryFS()
+    await _put_file(source, PathRef(("source.txt",)), b"original data")
+    destination = RetryFS()
+    copying = asyncio.create_task(
+        CrossFsCopy(source=source, destination=destination).copy(
+            PathRef(("source.txt",)),
+            PathRef(("copied.txt",)),
+            on_conflict=(
+                ConflictResolution.OVERWRITE
+                if phase == "overwrite-inspection"
+                else ConflictResolution.RENAME
+            ),
+        )
+    )
+    if phase == "ownership":
+        await asyncio.wait_for(destination.started.wait(), 2)
+        copying.cancel()
+        destination.release.set()
+        with pytest.raises(asyncio.CancelledError):
+            await copying
+    else:
+        with pytest.raises(ProviderError, match="retry lookup failed"):
+            await copying
+    assert (tmp_path / "copied.txt").read_bytes() == b"concurrent destination"
+    assert {p.name for p in tmp_path.iterdir()} == {"copied.txt"}
+
+
+@pytest.mark.parametrize("directory_copy", [False, True])
+async def test_cancelled_container_verification_removes_the_empty_claim(
+    tmp_path: Path, directory_copy: bool
+) -> None:
+    class BlockingFS(LocalFS):
+        def __init__(self) -> None:
+            super().__init__(root=tmp_path)
+            self.started, self.release = asyncio.Event(), asyncio.Event()
+
+        async def capture_stage_revision(self, path):
+            value = await super().capture_stage_revision(path)
+            if ".aws-tui-stage-" in path.name:
+                self.started.set()
+                await self.release.wait()
+            return value
+
+    source = InMemoryFS()
+    if directory_copy:
+        await source.mkdir(PathRef(("source",)))
+        await _put_file(source, PathRef(("source", "file")), b"data")
+    else:
+        await _put_file(source, PathRef(("source",)), b"data")
+    destination = BlockingFS()
+    copying = asyncio.create_task(
+        CrossFsCopy(source=source, destination=destination).copy(
+            PathRef(("source",)), PathRef(("copied",))
+        )
+    )
+    await asyncio.wait_for(destination.started.wait(), 2)
+    copying.cancel()
+    destination.release.set()
+    with pytest.raises(asyncio.CancelledError):
+        await copying
+    assert not list(tmp_path.iterdir())
+
+
+async def test_cancelled_directory_claim_is_registered_before_cleanup(tmp_path: Path) -> None:
+    class BlockingFS(LocalFS):
+        def __init__(self) -> None:
+            super().__init__(root=tmp_path)
+            self.started, self.release = asyncio.Event(), asyncio.Event()
+
+        async def claim_directory(self, path):
+            revision = await super().claim_directory(path)
+            if path.name == "payload":
+                self.started.set()
+                await self.release.wait()
+            return revision
+
+    source = InMemoryFS()
+    await source.mkdir(PathRef(("source",)))
+    await _put_file(source, PathRef(("source", "file")), b"data")
+    destination = BlockingFS()
+    copying = asyncio.create_task(
+        CrossFsCopy(source=source, destination=destination).copy(
+            PathRef(("source",)), PathRef(("copied",))
+        )
+    )
+    await asyncio.wait_for(destination.started.wait(), 2)
+    copying.cancel()
+    await asyncio.sleep(0)
+    destination.release.set()
+    with pytest.raises(asyncio.CancelledError):
+        await copying
+    assert not list(tmp_path.iterdir())

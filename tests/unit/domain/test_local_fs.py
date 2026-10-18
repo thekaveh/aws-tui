@@ -1940,3 +1940,127 @@ async def test_rooted_delete_restores_claim_on_permission_failure(tmp_path: Path
     finally:
         for path in tmp_path.rglob("locked"):
             path.chmod(0o700)
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX quarantine rename")
+async def test_direct_conditional_delete_drains_its_claim_before_cancellation_returns(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import asyncio
+    import threading
+
+    from aws_tui.domain import local_fs
+
+    source = tmp_path / "source.txt"
+    source.write_bytes(b"original data")
+    fs = LocalFS()
+    ref = PathRef.from_posix(str(source))
+    revision = (await fs.stat(ref)).etag
+    claimed, release = threading.Event(), threading.Event()
+    original = local_fs._rename_no_replace
+
+    def blocked_claim(src: str, dst: str) -> None:
+        original(src, dst)
+        if src == str(source):
+            claimed.set()
+            assert release.wait(5)
+
+    monkeypatch.setattr(local_fs, "_rename_no_replace", blocked_claim)
+    deleting = asyncio.create_task(fs.delete(ref, expected_etag=revision))
+    try:
+        assert await asyncio.wait_for(asyncio.to_thread(claimed.wait, 2), 3)
+        deleting.cancel()
+        await asyncio.sleep(0.02)
+        deleting.cancel()
+        await asyncio.sleep(0.02)
+        assert not deleting.done()
+    finally:
+        release.set()
+        with pytest.raises(asyncio.CancelledError):
+            await deleting
+    assert not list(tmp_path.iterdir())
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX quarantine metadata failure")
+@pytest.mark.parametrize("replacement", [False, True])
+@pytest.mark.parametrize(
+    ("rooted", "empty_directory", "conditional"),
+    [
+        (False, False, True),
+        (True, False, False),
+        (True, False, True),
+        (True, True, False),
+        (True, True, True),
+        (False, True, True),
+    ],
+)
+async def test_delete_restores_claim_when_post_rename_metadata_fails(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    rooted: bool,
+    empty_directory: bool,
+    conditional: bool,
+    replacement: bool,
+) -> None:
+    from aws_tui.domain import local_fs
+
+    source = tmp_path / "source"
+    if empty_directory:
+        source.mkdir()
+    else:
+        source.write_bytes(b"original bytes")
+    fs = LocalFS(root=tmp_path) if rooted else LocalFS()
+    ref = PathRef(("source",)) if rooted else PathRef.from_posix(str(source))
+    revision = (await fs.stat(ref)).etag if conditional else None
+    original_stat, original_lstat = os.stat, os.lstat
+    # Replacing os.stat must not change platform capability detection.
+    secure_dir_fd = local_fs._supports_secure_dir_fd()
+    monkeypatch.setattr(local_fs, "_supports_secure_dir_fd", lambda: secure_dir_fd)
+    replacement_created = False
+
+    def fail_claim_metadata(path) -> None:
+        nonlocal replacement_created
+        if isinstance(path, (str, Path)) and Path(path).name.startswith(".source.aws-tui-"):
+            if replacement and not replacement_created:
+                if empty_directory:
+                    source.mkdir()
+                    (source / "external.txt").write_bytes(b"external bytes")
+                else:
+                    source.write_bytes(b"external bytes")
+                replacement_created = True
+            raise OSError(errno.EIO, "post-rename metadata failure")
+
+    def failing_stat(path, *args, **kwargs):
+        fail_claim_metadata(path)
+        return original_stat(path, *args, **kwargs)
+
+    def failing_lstat(path, *args, **kwargs):
+        fail_claim_metadata(path)
+        return original_lstat(path, *args, **kwargs)
+
+    monkeypatch.setattr(os, "stat", failing_stat)
+    monkeypatch.setattr(os, "lstat", failing_lstat)
+    delete = fs.delete_empty_directory if empty_directory else fs.delete
+    with pytest.raises(ProviderError) as failure:
+        await delete(ref, expected_etag=revision)
+    monkeypatch.undo()
+    assert source.exists()
+    if replacement:
+        assert "restored from" in str(failure.value)
+        quarantines = [path for path in tmp_path.iterdir() if path != source]
+        assert len(quarantines) == 1
+        assert quarantines[0].name in str(failure.value)
+        assert isinstance(failure.value.__cause__, FileExistsError)
+        original_failure = failure.value.__cause__.__context__
+        assert isinstance(original_failure, OSError)
+        assert original_failure.errno == errno.EIO
+        if empty_directory:
+            assert not list(quarantines[0].iterdir())
+            assert (source / "external.txt").read_bytes() == b"external bytes"
+        else:
+            assert quarantines[0].read_bytes() == b"original bytes"
+            assert source.read_bytes() == b"external bytes"
+    else:
+        if not empty_directory:
+            assert source.read_bytes() == b"original bytes"
+        assert list(tmp_path.iterdir()) == [source]

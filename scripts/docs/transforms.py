@@ -52,11 +52,14 @@ def rewrite_for_surface(md: str, surface: str, source_map: dict[str, str]) -> st
 
     def repl(m: re.Match[str]) -> str:
         text, target = m.group(1), m.group(2)
+        # Python-Markdown accepts a leading issue number as an ATX heading.
+        # Preserve the link label as prose when removing its destination.
+        unlinked = "\\" + text if text.startswith("#") else text
         if is_forbidden(target, surface):
-            return text
+            return unlinked
         path, anchor = _split_anchor(target)
         if path.endswith(".ipynb"):
-            return text
+            return unlinked
         if path.endswith(".md") and not path.startswith(("/", "http")):
             mapped = by_basename.get(Path(path).name)
             if mapped is not None:
@@ -65,7 +68,7 @@ def rewrite_for_surface(md: str, surface: str, source_map: dict[str, str]) -> st
                 if surface == "wiki":
                     mapped = mapped.removesuffix(".md")
                 return f"[{text}]({mapped}{anchor})"
-            return text  # relative .md to a non-published/internal doc
+            return unlinked  # relative .md to a non-published/internal doc
         return m.group(0)  # external, anchor-only, or otherwise untouched
 
     return _LINK_RE.sub(repl, md)

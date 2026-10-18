@@ -886,6 +886,216 @@ async def test_query_refresh_recovers_failed_current_workgroup_detail_context() 
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("failed_list", ["catalog", "database"])
+@pytest.mark.parametrize("credential_recovery", [False, True])
+async def test_query_refresh_recovers_failed_context_discovery(
+    failed_list: str, credential_recovery: bool
+) -> None:
+    client = PageClient()
+    setattr(client, f"{failed_list}_error", ProviderError("temporarily unavailable"))
+    page = make_page_vm(client)
+    try:
+        await page.setup()
+        assert page.context.database == ""
+        setattr(client, f"{failed_list}_error", None)
+
+        if credential_recovery:
+            assert await page.refresh_for_credential_recovery() is PaneState.IDLE
+        else:
+            await page.refresh_query_context()
+
+        assert page.context == QueryContext(
+            "analytics", "us-west-2", "primary", "AwsDataCatalog", "default"
+        )
+        assert page.catalogs_state is PaneState.IDLE
+        assert page.catalogs_error_text is None
+        assert page.databases_state is PaneState.IDLE
+        assert page.databases_error_text is None
+        page.query.set_sql("SELECT 1")
+        await page.query.execute()
+        assert client.start_calls[-1][1] == page.context
+    finally:
+        await page.shutdown()
+        page.dispose()
+
+
+@pytest.mark.asyncio
+async def test_query_refresh_preserves_workgroup_selected_from_a_later_page() -> None:
+    client = PageClient()
+
+    async def paged_workgroups(*, start_token: str | None = None):
+        client.workgroup_calls.append(start_token)
+        if start_token is None:
+            return [client.workgroups[0]], "second"
+        return [client.workgroups[1]], None
+
+    client.list_workgroups_page = paged_workgroups  # type: ignore[method-assign]
+    page = make_page_vm(client)
+    try:
+        await page.setup()
+        await page.load_more_workgroups()
+        await page.select_workgroup("analysts")
+        expected = page.context
+        page.query.set_sql("SELECT 42")
+
+        await page.refresh_query_context()
+
+        assert page.context == expected
+        assert page.query.sql == "SELECT 42"
+        assert client.workgroup_calls == [None, "second", None, "second"]
+        assert client.workgroup_detail_calls == ["primary", "analysts"]
+    finally:
+        await page.shutdown()
+        page.dispose()
+
+
+@pytest.mark.asyncio
+async def test_query_refresh_cannot_replace_a_newer_catalog_selection() -> None:
+    client = PageClient()
+    page = make_page_vm(client)
+    started, release = asyncio.Event(), asyncio.Event()
+    try:
+        await page.setup()
+
+        async def blocked_workgroups(*, start_token: str | None = None):
+            started.set()
+            await release.wait()
+            return [client.workgroups[1]], None
+
+        client.list_workgroups_page = blocked_workgroups  # type: ignore[method-assign]
+        refreshing = asyncio.create_task(page.refresh_query_context())
+        await started.wait()
+        await page.select_catalog("federated")
+        expected = page.context
+        assert expected.catalog == "federated"
+        release.set()
+        await refreshing
+
+        assert page.context == expected
+        assert client.workgroup_detail_calls == ["primary"]
+    finally:
+        release.set()
+        await page.shutdown()
+        page.dispose()
+
+
+@pytest.mark.asyncio
+async def test_query_refresh_preserves_context_when_workgroup_discovery_is_capped() -> None:
+    client = PageClient()
+    page = make_page_vm(client)
+    try:
+        await page.setup()
+        await page.select_workgroup("analysts")
+        expected = page.context
+
+        async def capped_workgroups(*, start_token: str | None = None):
+            return [
+                AthenaWorkgroupSummary(f"group-{index}", "ENABLED", None, None)
+                for index in range(1000)
+            ], "beyond-limit"
+
+        client.list_workgroups_page = capped_workgroups  # type: ignore[method-assign]
+        await page.refresh_query_context()
+
+        assert page.workgroup_limit_reached
+        assert page.context == expected
+    finally:
+        await page.shutdown()
+        page.dispose()
+
+
+@pytest.mark.asyncio
+async def test_disabled_workgroup_allows_history_but_never_query_submission() -> None:
+    client = PageClient()
+    disabled = replace(client.workgroups[0], state="DISABLED")
+    client.workgroups[0] = disabled
+    client.workgroup_details["primary"] = replace(
+        client.workgroup_details["primary"], summary=disabled
+    )
+    page = make_page_vm(client)
+    try:
+        await page.setup()
+        await page.select_view("history")
+        assert client.history_calls == [("primary", None)]
+        await page.select_view("query")
+        page.query.set_sql("SELECT 1")
+
+        assert not page.query.execute_command.can_execute()
+        await page.query.execute()
+        assert client.start_calls == []
+    finally:
+        await page.shutdown()
+        page.dispose()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("enabled_available", [True, False])
+async def test_table_handoff_requires_enabled_workgroup_on_later_page(
+    enabled_available: bool,
+) -> None:
+    client = PageClient()
+    for index, summary in enumerate(client.workgroups):
+        if index == 0 or not enabled_available:
+            disabled = replace(summary, state="DISABLED")
+            client.workgroups[index] = disabled
+            client.workgroup_details[summary.name] = replace(
+                client.workgroup_details[summary.name], summary=disabled
+            )
+    client.databases[("analysts", "AwsDataCatalog")] = ["default"]
+
+    async def paged_workgroups(*, start_token: str | None = None):
+        client.workgroup_calls.append(start_token)
+        return (
+            ([client.workgroups[0]], "second")
+            if start_token is None
+            else ([client.workgroups[1]], None)
+        )
+
+    client.list_workgroups_page = paged_workgroups  # type: ignore[method-assign]
+    page = make_page_vm(client)
+    try:
+        await page.setup()
+        page.query.set_sql("SELECT 42")
+        ref = TableRef("AwsDataCatalog", "default", "events", "analytics", "us-west-2")
+        if enabled_available:
+            await page.open_table(ref)
+            assert page.context.workgroup == "analysts"
+            assert page.query.sql == 'SELECT * FROM "default"."events" LIMIT 5'
+            assert page.query.execute_command.can_execute()
+        else:
+            with pytest.raises(ValueError, match="enabled workgroup"):
+                await page.open_table(ref)
+            assert page.query.sql == "SELECT 42"
+        assert client.start_calls == []
+    finally:
+        await page.shutdown()
+        page.dispose()
+
+
+@pytest.mark.asyncio
+async def test_table_handoff_skips_authoritative_disabled_detail_despite_enabled_summary() -> None:
+    client = PageClient()
+    client.workgroup_details["primary"] = replace(
+        client.workgroup_details["primary"],
+        summary=replace(client.workgroups[0], state="DISABLED"),
+    )
+    client.databases[("analysts", "AwsDataCatalog")] = ["default"]
+    page = make_page_vm(client)
+    try:
+        await page.setup()
+        await page.open_table(
+            TableRef("AwsDataCatalog", "default", "events", "analytics", "us-west-2")
+        )
+        assert page.context.workgroup == "analysts"
+        assert client.workgroup_detail_calls == ["primary", "analysts"]
+        assert page.query.execute_command.can_execute()
+        assert client.start_calls == []
+    finally:
+        await page.shutdown()
+        page.dispose()
+
+
+@pytest.mark.asyncio
 async def test_query_refresh_selects_a_valid_fallback_when_workgroup_disappears() -> None:
     client = PageClient()
     store = ServiceSelectionStore()
@@ -2658,3 +2868,25 @@ async def test_a_page_that_never_used_history_keeps_the_strict_coupling() -> Non
         assert snapshot.query.results.from_history is False
     finally:
         await page.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_query_refresh_blocks_workgroup_newly_reported_disabled() -> None:
+    client = PageClient()
+    page = make_page_vm(client)
+    try:
+        await page.setup()
+        page.query.set_sql("SELECT 1")
+        assert page.query.execute_command.can_execute()
+        client.workgroups[0] = replace(client.workgroups[0], state="DISABLED")
+        client.workgroup_details["primary"] = replace(
+            client.workgroup_details["primary"], summary=client.workgroups[0]
+        )
+        await page.refresh_query_context()
+        assert not page.query.execute_command.can_execute()
+        await page.query.execute_command.execute_async()
+        assert client.start_calls == []
+        assert page.query.sql == "SELECT 1"
+    finally:
+        await page.shutdown()
+        page.dispose()

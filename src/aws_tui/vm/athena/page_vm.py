@@ -212,6 +212,7 @@ class AthenaPageVM:
             draft_session=self._draft_session,
             validate_draft_execution=self._validate_draft_execution,
             drafts_enabled=lambda: drafts is not None and drafts.enabled,
+            execution_context_available=self._workgroup_allows_execution,
         )
         self.history = AthenaHistoryVM(
             client=client,
@@ -1180,8 +1181,45 @@ class AthenaPageVM:
 
         if not choice_is_current():
             return
-        if not self._context.workgroup:
-            raise ValueError("table is unavailable in the active Athena source")
+        attempted: set[str] = set()
+        if (
+            self._workgroup_detail is not None
+            and self._workgroup_detail.summary.state == "DISABLED"
+        ):
+            attempted.add(self._workgroup_detail.summary.name)
+        while not self._workgroup_allows_execution():
+
+            def eligible() -> tuple[str, ...]:
+                return tuple(
+                    row.name
+                    for row in self.workgroups
+                    if row.state == "ENABLED" and row.name not in attempted
+                )
+
+            available = await self._load_until_discovered(
+                lambda: bool(eligible()),
+                has_more=lambda: self.has_more_workgroups,
+                current_token=lambda: self._workgroup_pager.current_token,
+                item_count=lambda: len(self.workgroups),
+                load_more=self.load_more_workgroups,
+                failed=lambda: self._workgroups_error_text is not None,
+            )
+            if not choice_is_current():
+                return
+            if not available:
+                raise ValueError("table requires an available enabled workgroup")
+            enabled_workgroup = eligible()[0]
+            attempted.add(enabled_workgroup)
+            await self._select_workgroup(
+                enabled_workgroup,
+                preferred_catalog=table_ref.catalog_name,
+                preferred_database=table_ref.database_name,
+                setup_active=True,
+            )
+            if not choice_is_current():
+                return
+            if self._workgroup_detail_state is not PaneState.IDLE:
+                raise ValueError("table requires an available enabled workgroup")
         catalog_available = await self._ensure_catalog_loaded(table_ref)
         if not choice_is_current():
             return
@@ -1368,12 +1406,35 @@ class AthenaPageVM:
         if not self._is_alive():
             return
         workgroup = self._context.workgroup
+        context_generation = self._context_generation
+        workgroup_generation = self._workgroup_generation + 1
         await self.refresh_workgroups()
-        if not self._is_alive() or self._workgroups_state not in {
+        if (
+            not self._is_current_context(context_generation)
+            or workgroup_generation != self._workgroup_generation
+        ):
+            return
+        if self._workgroups_state not in {
             PaneState.IDLE,
             PaneState.EMPTY,
         }:
             return
+        if workgroup:
+            available = await self._load_until_discovered(
+                lambda: any(row.name == workgroup for row in self.workgroups),
+                has_more=lambda: self.has_more_workgroups,
+                current_token=lambda: self._workgroup_pager.current_token,
+                item_count=lambda: len(self.workgroups),
+                load_more=self.load_more_workgroups,
+                failed=lambda: self._workgroups_error_text is not None,
+            )
+            if (
+                available is None
+                or (not available and self.workgroup_limit_reached)
+                or not self._is_current_context(context_generation)
+                or workgroup_generation != self._workgroup_generation
+            ):
+                return
         workgroup_names = tuple(row.name for row in self.workgroups)
         if not workgroup_names:
             await self._clear_query_context()
@@ -1392,7 +1453,13 @@ class AthenaPageVM:
                 setup_active=True,
             )
             return
-        if self._workgroup_detail_state is PaneState.IDLE:
+        if (
+            self._workgroup_detail_state is PaneState.IDLE
+            and self._catalogs_state is PaneState.IDLE
+            and self._databases_state is PaneState.IDLE
+            and all(self._context.cache_key)
+            and self._workgroup_allows_execution()
+        ):
             return
         await self._select_workgroup(
             workgroup,
@@ -2212,6 +2279,7 @@ class AthenaPageVM:
             self._notify(f"is_loading_more_{kind}")
 
     def _notify_context_lists(self) -> None:
+        self.query.refresh_execution_availability()
         for property_name in (
             "workgroups",
             "catalogs",
@@ -2228,7 +2296,21 @@ class AthenaPageVM:
         ):
             self._notify(property_name)
 
+    def _workgroup_allows_execution(self) -> bool:
+        detail = self._workgroup_detail
+        return (
+            self._workgroup_detail_state is PaneState.IDLE
+            and detail is not None
+            and detail.summary.name == self._context.workgroup
+            and detail.summary.state == "ENABLED"
+            and not any(
+                row.name == self._context.workgroup and row.state == "DISABLED"
+                for row in self.workgroups
+            )
+        )
+
     def _notify_workgroup_detail(self) -> None:
+        self.query.refresh_execution_availability()
         for property_name in (
             "workgroup_detail",
             "workgroup_detail_state",

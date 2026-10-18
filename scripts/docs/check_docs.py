@@ -180,12 +180,17 @@ def check_titles(manifest: Manifest, repo_root: str | Path) -> list[Finding]:
         path = repo_root / leaf.source
         if not path.is_file():
             continue
+        markdown = path.read_text(encoding="utf-8")
+        parser = _HeadingIdParser()
+        parser.feed(Markdown(extensions=["fenced_code", "tables"]).convert(markdown))
+        if parser.h1_count != 1:
+            findings.append(
+                Finding(
+                    "error", f"{leaf.source}: {parser.h1_count} rendered H1 headings; expected one"
+                )
+            )
         heading = next(
-            (
-                line
-                for line in path.read_text(encoding="utf-8").splitlines()
-                if line.startswith("# ")
-            ),
+            (line for line in markdown.splitlines() if line.startswith("# ")),
             None,
         )
         if heading is None:
@@ -418,10 +423,13 @@ class _HeadingIdParser(HTMLParser):
     def __init__(self) -> None:
         super().__init__()
         self.anchors: set[str] = set()
+        self.h1_count = 0
 
     def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
         if not re.fullmatch(r"h[1-6]", tag):
             return
+        if tag == "h1":
+            self.h1_count += 1
         anchor = dict(attrs).get("id")
         if anchor is not None:
             self.anchors.add(anchor)
