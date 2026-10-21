@@ -211,7 +211,19 @@ class TransferRowWidget(HubSubscriberMixin, Widget):
             self.query_one(".transfer-bar", Static).update(self._bar_text())
             self.query_one(".transfer-bytes", Static).update(self._bytes_text())
             self.query_one(".transfer-rate", Static).update(self._rate_text())
-            self.query_one("#cancel-btn", Button).disabled = self._vm.is_finished
+            cancel = self.query_one("#cancel-btn", Button)
+            owner_screen = cancel.screen
+            if owner_screen.focused is cancel and self._vm.is_finished:
+                # Focus flags/events and Widget.focus() are deferred. Anchor
+                # synchronously before disabling so a queued Enter cannot
+                # reach a neighbor or the pane. Use the owning screen only:
+                # background completion must not steal an active modal.
+                overlay = next(
+                    (node for node in self.ancestors if isinstance(node, TransfersOverlay)), None
+                )
+                if overlay is not None:
+                    owner_screen.set_focus(overlay, scroll_visible=False)
+            cancel.disabled = self._vm.is_finished
         except NoMatches:
             return
 
@@ -299,9 +311,13 @@ class TransferRowWidget(HubSubscriberMixin, Widget):
         return int(self._vm.model.bytes_done / total * 100)
 
 
-class TransfersOverlay(Widget):
+class TransfersOverlay(Widget, can_focus=True):
     """Top-right floating box that aggregates active + recently-finished
     transfers."""
+
+    BINDINGS: ClassVar[list[BindingType]] = [
+        Binding("escape", "leave_controls", "Return to service", show=False, priority=True),
+    ]
 
     DEFAULT_CSS = """
     TransfersOverlay {
@@ -337,11 +353,13 @@ class TransfersOverlay(Widget):
         classes: str | None = None,
         history_vm: TransferHistoryVM | None = None,
         open_history: Callable[[Literal["history", "recovery"]], None] | None = None,
+        restore_focus: Callable[[], None] | None = None,
     ) -> None:
         super().__init__(id=id, classes=classes)
         self._vm: TransfersVM = vm
         self._history_vm = history_vm
         self._open_history = open_history
+        self._restore_focus = restore_focus
         self._hub: MessageHub[Message] = hub
         self._sub: DisposableBase | None = None
         self._expired_ids: set[str] = set()
@@ -418,7 +436,52 @@ class TransfersOverlay(Widget):
         if visible or (self._history_vm is not None and self._history_vm.records):
             self.remove_class("-hidden")
         else:
+            focused = self.app.focused
+            if focused is not None and self in focused.ancestors_with_self:
+                self.action_leave_controls()
             self.add_class("-hidden")
+
+    def _enabled_controls(self) -> list[Button]:
+        return [button for button in self.query(Button) if not button.disabled]
+
+    def focus_controls(self) -> bool:
+        """Enter active cancellation controls through the command palette."""
+        if self.has_class("-hidden"):
+            return False
+        button = next(
+            (button for button in self._enabled_controls() if button.has_class("transfer-cancel")),
+            None,
+        )
+        if button is None:
+            return False
+        button.focus()
+        return True
+
+    def cycle_controls(self, *, reverse: bool = False) -> None:
+        controls = self._enabled_controls()
+        focused = self.app.focused
+        if focused not in controls:
+            if controls:
+                controls[-1 if reverse else 0].focus()
+            else:
+                self.action_leave_controls()
+            return
+        index = controls.index(focused) + (-1 if reverse else 1)
+        if 0 <= index < len(controls):
+            controls[index].focus()
+        else:
+            self.action_leave_controls()
+
+    def activate_focused(self) -> None:
+        focused = self.app.focused
+        if isinstance(focused, Button) and focused in self._enabled_controls():
+            focused.press()
+
+    def action_leave_controls(self) -> None:
+        if self._restore_focus is not None:
+            self._restore_focus()
+        else:
+            self.app.set_focus(None)
 
     def open_history(self, mode: Literal["history", "recovery"] = "history") -> None:
         """Keyboard/palette bridge remains usable even when the overlay is empty."""
@@ -428,6 +491,7 @@ class TransfersOverlay(Widget):
     def on_button_pressed(self, event: Button.Pressed) -> None:
         if event.button.id in {"transfer-history-open", "transfer-recovery-open"}:
             event.stop()
+            self.action_leave_controls()
             self.open_history(
                 "recovery" if event.button.id == "transfer-recovery-open" else "history"
             )

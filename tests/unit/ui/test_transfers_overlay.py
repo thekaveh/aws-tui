@@ -48,13 +48,9 @@ def _transfer(state: TransferState) -> tuple[TransferVM, MessageHub[Message]]:
 async def test_cancel_button_activates_the_vm_command_when_focused(key: str) -> None:
     """Enter/Space on a FOCUSED cancel button runs the VM command.
 
-    This host is a bare ``App``, where Textual's stock ``tab`` binding moves
-    focus normally. It does NOT establish that the button is reachable in the
-    real application: ``AwsTuiApp`` binds ``tab`` to ``pane.switch_focus`` with
-    priority, ``_cycle_focus`` never visits the transfers overlay, and there is
-    no transfers ``FocusSlot`` — so under the real app a keyboard-only user
-    cannot reach this button at all. Naming this test "tab_reachable" implied a
-    guarantee it never checked.
+    This bare ``App`` verifies local button behavior. The real application's
+    palette route, priority Enter routing, cancellation identity and focus
+    restoration are covered by integration/test_transfer_keyboard.py.
     """
     vm, hub = _transfer(TransferState.RUNNING)
     try:

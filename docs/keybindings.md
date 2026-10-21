@@ -64,6 +64,7 @@ explicit meaning.
 | Action | Default | Notes |
 |---|---|---|
 | Transfer history and recovery | `Ctrl+T` | `app.transfer_history`; also available from the Transfers overlay and palette, including empty history |
+| Focus active transfers | Unbound | Choose **Focus active transfers** from the command palette; use Tab/Shift+Tab to choose a control, Enter/Space to activate, and Escape to return to the service. |
 | S3 object details | `Ctrl+O` | Read-only current S3 object properties; Copy / Ctrl+C copies the full selected field |
 | Quick Look | `Space` | In normal file-pane mode, previews CSV/JSON/JSONL tables and Parquet schema/sample; `r` toggles the cached raw 64 KiB prefix, `Up`/`Down` and `Left`/`Right` scroll, and `Esc`/`Space` close; multi-select toggles its mark |
 | Fuzzy find | `Ctrl+P` | Find and select a loaded entry |
@@ -361,6 +362,7 @@ unbound until a handler ships.
 | `app.quit` | `q` / `ctrl+c` | yes | Graceful shutdown |
 | `app.open_settings` | `,` | yes | Open the Settings navigation page |
 | `app.transfer_history` | `ctrl+t` | yes | Transfer history and recovery |
+| `app.focus_transfers` | none (`Unbound`) | yes | Focus active transfer controls from the palette; configurable in `[keybindings]` |
 | `app.command_palette` | `:` / `ctrl+k` | yes | Open the command palette |
 | `app.help` | `?` | yes | Help overlay |
 | `app.themes` | `t` | yes | Open theme picker modal |

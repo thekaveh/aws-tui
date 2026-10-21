@@ -233,6 +233,10 @@ section. The current tree must not be tagged as v0.8.0.
 
 ### Fixed
 
+- Active transfers have a keyboard-accessible palette route. Enter and Space
+  activate the chosen cancellation control without activating the file pane;
+  Escape returns to the service focus.
+
 - File actions use the same focused, ready-pane checks as command discovery.
   Changed copy/delete confirmations show an expiration warning instead of
   silently discarding the accepted operation.

@@ -108,6 +108,7 @@ class KeymapStore:
         "app.quit": ("q", "ctrl+c"),
         "app.command_palette": (":", "ctrl+k"),
         "app.transfer_history": ("ctrl+t",),
+        "app.focus_transfers": (),
         "app.help": ("?",),
         "app.open_settings": (",",),
         "service.open.s3": (),
