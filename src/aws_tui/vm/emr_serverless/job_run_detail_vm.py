@@ -14,6 +14,7 @@ from aws_tui.domain.emr_serverless import (
     EmrServerlessClientProtocol,
     JobRunDetail,
     JobRunState,
+    JobRunSummary,
 )
 from aws_tui.domain.filesystem import ProviderError
 from aws_tui.infra.redaction import redact_text
@@ -40,6 +41,7 @@ class JobRunDetailVM:
         self._application_id: str | None = None
         self._job_run_id: str | None = None
         self._detail: JobRunDetail | None = None
+        self._summary: JobRunSummary | None = None
         self._state: PaneState = PaneState.EMPTY
         self._error_text: str | None = None
         self._disposed: bool = False
@@ -66,6 +68,23 @@ class JobRunDetailVM:
         return self._detail
 
     @property
+    def summary(self) -> JobRunSummary | None:
+        return self._summary
+
+    def set_summary(self, summary: JobRunSummary | None) -> None:
+        """Retain only already-loaded metadata for this exact target."""
+        if self._disposed:
+            return
+        if summary is not None and (summary.application_id, summary.job_run_id) != (
+            self._application_id,
+            self._job_run_id,
+        ):
+            summary = None
+        if self._summary != summary:
+            self._summary = summary
+            self._notify("summary")
+
+    @property
     def state(self) -> PaneState:
         return self._state
 
@@ -89,6 +108,7 @@ class JobRunDetailVM:
         self._application_id = application_id
         self._job_run_id = job_run_id
         self._detail = None
+        self._summary = None
         # Clear the prior target's error text — sibling parity with
         # JobRunLogsVM.set_target, PaneVM._reload, JobRunsVM.
         # set_application (added round 34). Without this the prior

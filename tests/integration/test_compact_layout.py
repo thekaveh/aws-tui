@@ -530,7 +530,16 @@ async def test_deferred_emr_mount_focus_preserves_newer_focus(
                 "modal": page.left_pane,
             }[target]
             assert widget is not None
-            await focus_and_settle(widget)
+            if target == "detail":
+                # Exercise the slot's normal handoff, then preserve its exact
+                # operable target when the older mount callback is released.
+                widget.focus()
+                await wait_until(
+                    lambda: app.screen.focused is widget.query_one("#detail-body", VerticalScroll),
+                    what="detail slot hands focus to its scroll body",
+                )
+            else:
+                await focus_and_settle(widget)
             if target.endswith("-open"):
                 await pilot.press("enter")
                 await wait_until(
