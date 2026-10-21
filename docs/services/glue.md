@@ -51,16 +51,36 @@ The bounded limits and required permissions are documented in the
 [Cookbook](../cookbook.md#71-iceberg-detection-and-metadata-views). These
 queries incur ordinary Athena workgroup and result-storage behavior.
 
-A seventh tab, **Peek**, previews table rows by querying the table's S3 location directly with a local DuckDB engine instead of Athena. There is no workgroup, query execution, or query bill.
+A seventh tab, **Peek**, previews table rows by reading the table's S3 location with local DuckDB instead of Athena.
+It incurs no Athena query charge and needs no Athena workgroup or result-output location.
+These savings apply to the Peek scan.
+Loading **Snaps** or another metadata tab can still run an Athena query.
+
+Direct reads can incur S3 request, retrieval and data transfer charges; see [Amazon S3 pricing](https://aws.amazon.com/s3/pricing/).
+Applicable KMS charges are separate.
 
 Select a different snapshot on **Snaps**, then open **Peek** to load its rows.
 Reopening Peek with the same snapshot does not repeat the scan.
 After a failed or cancelled reload, retained rows keep their successful snapshot label.
 Use **Retry** to load the selected snapshot.
 
-It needs the optional `duckdb` extra (the [Git installation with the DuckDB extra](../install.md#2-optional-extras)) and an AWS profile connection. It does not appear for `s3-compatible` connections. Without the extra installed, it stays present and selectable. Choosing it reports the missing engine with an install prompt rather than disappearing silently.
+Peek needs the optional [`duckdb` extra](../install.md#2-optional-extras) and an AWS profile connection.
+It does not appear for `s3-compatible` connections.
+Without the extra, the tab stays present and selectable.
+Choosing it reports the missing engine with an install prompt.
 
-Its row limit is a real ceiling, not a local-window widen. The load-more control reruns a genuinely new scan at the next row-limit step (100 → 1,000 → 10,000). This differs from the same control on the six metadata tabs above. See the
+DuckDB uses the selected profile and region through its credential chain.
+The profile's credentials must allow direct source S3 reads and any required KMS decryption.
+Athena or Lake Formation query grants alone do not authorize those reads.
+
+S3 and credential-provider endpoints must be reachable.
+The first query also needs access to `extensions.duckdb.org` unless compatible extensions are already cached.
+See the [Peek prerequisites](../cookbook.md#74-local-row-preview-with-duckdb-peek) for source permissions, encryption access and credential-chain behavior.
+
+Its row limit bounds returned rows, not S3 bytes read, requests or charges.
+Retry and load more can read S3 again.
+The load-more control runs a new scan at the next row-limit step (100 → 1,000 → 10,000).
+This differs from the same control on the six metadata tabs above. See the
 [Cookbook](../cookbook.md#74-local-row-preview-with-duckdb-peek) for a full
 walkthrough.
 
