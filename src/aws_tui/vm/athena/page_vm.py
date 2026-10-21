@@ -4,7 +4,7 @@ import asyncio
 import contextlib
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field, replace
-from typing import Any, Generic, Literal, TypeAlias, TypeVar
+from typing import Any, Generic, Literal, TypeAlias, TypeVar, cast
 
 import anyio
 import reactivex as rx
@@ -123,6 +123,13 @@ class _PageWorker(Generic[T]):
     pager: SnapshotTokenPager[T, str] = field(init=False, repr=False)
 
 
+@dataclass(frozen=True, slots=True)
+class _RefreshedChoices(Generic[T]):
+    rows: tuple[T, ...]
+    # None means bounded/incomplete discovery, not confirmed removal.
+    selected_present: bool | None
+
+
 async def _unverified_source() -> bool:
     return False
 
@@ -169,6 +176,7 @@ class AthenaPageVM:
         self._loaded_views: set[AthenaView] = set()
         self._lifecycle_generation = 0
         self._context_generation = 0
+        self._query_refresh_generation = 0
         self._workgroup_generation = 0
         self._catalog_generation = 0
         self._database_generation = 0
@@ -1488,9 +1496,294 @@ class AthenaPageVM:
         )
 
     async def refresh_query_context(self) -> None:
-        await self._refresh_query_context()
-        if self._is_alive() and all(self._context.cache_key):
-            await self.tables.refresh()
+        if not self._is_alive():
+            return
+        # Reserve existing metadata guards too, including recovery selectors
+        # awaiting an older request. This changes no query/editor identity.
+        self._context_generation += 1
+        self._query_refresh_generation += 1
+        request = self._query_refresh_generation
+        choice = self._context_choice_revision
+        lifecycle = self._lifecycle_generation
+        task = asyncio.current_task()
+
+        def owns_request() -> bool:
+            return (
+                self._is_alive()
+                and request == self._query_refresh_generation
+                and choice == self._context_choice_revision
+                and lifecycle == self._lifecycle_generation
+            )
+
+        if task is not None:
+            self._page_tasks.add(task)
+        try:
+            if all(self._context.cache_key) and not self._context_selection_required:
+                current = await self._refresh_complete_query_context(owns_request)
+            else:
+                await self._refresh_query_context()
+                current = owns_request()
+            if (
+                current
+                and owns_request()
+                and not self._context_selection_required
+                and all(self._context.cache_key)
+            ):
+                await self.tables.refresh()
+        finally:
+            if task is not None:
+                self._page_tasks.discard(task)
+
+    async def _refresh_complete_query_context(self, owns_request: Callable[[], bool]) -> bool:
+        context = self._context
+        generation = self._context_generation
+
+        def current() -> bool:
+            return owns_request() and self._is_current_context(generation)
+
+        workgroups = await self._refresh_choices(
+            "workgroups",
+            lambda token: self._client.list_workgroups_page(start_token=token),
+            valid=valid_athena_workgroup_summary,
+            identity=lambda row: row.name,
+            selected=lambda row: row.name == context.workgroup,
+            current=current,
+        )
+        if not current():
+            return False
+        if workgroups is not None and workgroups.selected_present is False:
+            if workgroups.rows:
+                await self._select_workgroup(
+                    workgroups.rows[0].name,
+                    preferred_catalog=context.catalog,
+                    preferred_database=context.database,
+                    setup_active=True,
+                )
+            else:
+                await self._clear_query_context()
+            return owns_request()
+
+        await self._refresh_workgroup_detail(context.workgroup, current)
+        if not current():
+            return False
+        catalogs = await self._refresh_choices(
+            "catalogs",
+            lambda token: self._client.list_catalogs_page(
+                workgroup=context.workgroup, start_token=token
+            ),
+            valid=valid_athena_catalog_summary,
+            identity=lambda row: row.name,
+            selected=lambda row: row.name == context.catalog,
+            current=current,
+        )
+        if not current():
+            return False
+        if catalogs is not None and catalogs.selected_present is False:
+            if catalogs.rows:
+                await self._select_catalog(
+                    catalogs.rows[0].name,
+                    preferred_database=context.database,
+                    setup_active=True,
+                )
+            else:
+                self._begin_context_change(
+                    context.workgroup, "", "", clear_catalogs=False, clear_databases=True
+                )
+                self._selection_store.discard(self._selection_scope, "catalog")
+                self._selection_store.discard(self._selection_scope, "database")
+                await self.query.set_context(self._context)
+            return owns_request()
+
+        databases = await self._refresh_choices(
+            "databases",
+            lambda token: self._client.list_databases_page(
+                context.catalog, workgroup=context.workgroup, start_token=token
+            ),
+            valid=lambda row: (
+                valid_database_summary(row)
+                and row.ref.connection_name == context.connection_name
+                and row.ref.region == context.region
+                and row.ref.catalog_name == context.catalog
+            ),
+            identity=lambda row: row.ref,
+            selected=lambda row: row.ref.database_name == context.database,
+            current=current,
+        )
+        if not current():
+            return False
+        if databases is not None and databases.selected_present is False:
+            if databases.rows:
+                await self._select_database(databases.rows[0].ref.database_name)
+            else:
+                self._begin_context_change(
+                    context.workgroup,
+                    context.catalog,
+                    "",
+                    clear_catalogs=False,
+                    clear_databases=False,
+                )
+                self._selection_store.discard(self._selection_scope, "database")
+                await self.query.set_context(self._context)
+            return owns_request()
+        return current()
+
+    async def _refresh_choices(
+        self,
+        kind: Literal["workgroups", "catalogs", "databases"],
+        fetch: Callable[[str | None], Awaitable[tuple[list[T], str | None]]],
+        *,
+        valid: Callable[[T], bool],
+        identity: Callable[[T], object],
+        selected: Callable[[T], bool],
+        current: Callable[[], bool],
+    ) -> _RefreshedChoices[T] | None:
+        previous_rows = getattr(self, kind)
+        # Keep loaded controls usable while detached stages fetch. Mutating
+        # their loading states here would outlive a superseded request.
+        seen_rows: set[object] = set()
+
+        async def checked_fetch(token: str | None) -> tuple[list[T], str | None]:
+            # VMx can release its cancelled awaiter before this actual read
+            # finishes. Retain the provider task until shutdown drains it.
+            task = asyncio.current_task()
+            if task is not None:
+                self._page_tasks.add(task)
+                task.add_done_callback(self._page_tasks.discard)
+            rows, next_token = await fetch(token)
+            if task is not None and task.cancelling():
+                raise asyncio.CancelledError
+            if not current():
+                return [], None
+            if (
+                type(rows) is not list
+                or not all(valid(row) for row in rows)
+                or not optional_non_empty_exact_string(next_token)
+            ):
+                raise ValueError("Athena metadata response identity mismatch")
+            for row in rows:
+                key = identity(row)
+                if key in seen_rows:
+                    raise ValueError("Athena metadata response repeats an identity")
+                seen_rows.add(key)
+            return rows, next_token
+
+        pager = SnapshotTokenPager(checked_fetch, max_items=_MAX_CONTEXT_ITEMS)
+        try:
+            if not current():
+                return None
+            await pager.refresh_command.execute_async()
+            seen_tokens: set[str] = set()
+            empty_pages = 0
+            for _ in range(_DISCOVERY_PAGE_LIMIT):
+                if not current():
+                    return None
+                if (
+                    any(selected(row) for row in pager.items)
+                    and len(pager.items) >= len(previous_rows)
+                ) or pager.current_token is None:
+                    break
+                token = pager.current_token
+                if token in seen_tokens:
+                    break
+                seen_tokens.add(token)
+                count = len(pager.items)
+                await pager.load_more_command.execute_async()
+                empty_pages = empty_pages + 1 if len(pager.items) == count else 0
+                if empty_pages > _DISCOVERY_EMPTY_PAGE_LIMIT:
+                    break
+            if not current():
+                return None
+            present: bool | None = any(selected(row) for row in pager.items)
+            if not present and (pager.current_token is not None or pager.limit_reached):
+                present = None
+            worker_name = {
+                "workgroups": "workgroup",
+                "catalogs": "catalog",
+                "databases": "database",
+            }[kind]
+            old_worker = getattr(self, f"_{worker_name}_worker")
+            self._finish_loading_more(kind, old_worker)
+            if not current():
+                return None
+            setattr(
+                self, f"_{worker_name}_generation", getattr(self, f"_{worker_name}_generation") + 1
+            )
+            worker: _PageWorker[Any]
+            if kind == "workgroups":
+                worker = self._make_workgroup_worker()
+            elif kind == "catalogs":
+                worker = self._make_catalog_worker(self._context.workgroup)
+            else:
+                worker = self._make_database_worker(self._context.workgroup, self._context.catalog)
+            # kind couples the staged row type to its installed pager.
+            target_pager = cast("SnapshotTokenPager[T, str]", worker.pager)
+            target_pager.restore(
+                pager.items, pager.current_token, limit_reached=pager.limit_reached
+            )
+            setattr(self, f"_{worker_name}_worker", worker)
+            setattr(self, f"_{worker_name}_pager", worker.pager)
+            old_worker.pager.dispose()
+            self._set_list_state(kind, PaneState.IDLE if pager.items else PaneState.EMPTY)
+            self._notify_context_lists()
+            return _RefreshedChoices(tuple(pager.items), present)
+        except Exception as exc:
+            if not current():
+                return None
+            if isinstance(exc, ProviderError):
+                state, error = map_provider_error(exc, fallback=_CONTEXT_ERROR)
+            else:
+                state, error = map_unexpected_error(fallback=_CONTEXT_ERROR)
+                report_unexpected_service_error(
+                    self._hub,
+                    service="athena",
+                    operation=f"refresh_{kind}",
+                    error=exc,
+                    source=self._connection.name,
+                    region=self._connection.region,
+                )
+            if current():
+                self._set_list_error(kind, state, error)
+            return None
+        finally:
+            pager.dispose()
+
+    async def _refresh_workgroup_detail(self, workgroup: str, current: Callable[[], bool]) -> None:
+        try:
+            if not current():
+                return
+            detail = await self._client.get_workgroup(workgroup)
+            task = asyncio.current_task()
+            if task is not None and task.cancelling():
+                raise asyncio.CancelledError
+            if not current():
+                return
+            if not valid_athena_workgroup_detail(detail) or detail.summary.name != workgroup:
+                raise ValueError("Athena workgroup response identity mismatch")
+            self._workgroup_detail = detail
+            self._workgroup_detail_state = PaneState.IDLE
+            self._workgroup_detail_error_text = None
+        except Exception as exc:
+            if not current():
+                return
+            self._workgroup_detail = None
+            if isinstance(exc, ProviderError):
+                state, error = map_provider_error(exc, fallback=_WORKGROUP_DETAIL_ERROR)
+            else:
+                state, error = map_unexpected_error(fallback=_WORKGROUP_DETAIL_ERROR)
+                report_unexpected_service_error(
+                    self._hub,
+                    service="athena",
+                    operation="refresh_workgroup",
+                    error=exc,
+                    source=self._connection.name,
+                    region=self._connection.region,
+                )
+            if not current():
+                return
+            self._workgroup_detail_state = state
+            self._workgroup_detail_error_text = error
+        if current():
+            self._notify_workgroup_detail()
 
     async def _refresh_query_context(self) -> None:
         if not self._is_alive():
@@ -1890,6 +2183,11 @@ class AthenaPageVM:
         workgroup: str,
         context_generation: int,
     ) -> bool:
+        previous = (
+            self._workgroup_detail,
+            self._workgroup_detail_state,
+            self._workgroup_detail_error_text,
+        )
         self._workgroup_detail = None
         self._workgroup_detail_state = PaneState.LOADING
         self._workgroup_detail_error_text = None
@@ -1899,8 +2197,23 @@ class AthenaPageVM:
             self._page_tasks.add(task)
         try:
             detail = await self._client.get_workgroup(workgroup)
+            if task is not None and task.cancelling():
+                raise asyncio.CancelledError
             if detail.summary.name != workgroup:
                 raise ValueError("Athena workgroup response identity mismatch")
+        except asyncio.CancelledError:
+            if self._is_current_context(context_generation):
+                old_detail, old_state, old_error = previous
+                if old_detail is not None and old_detail.summary.name != workgroup:
+                    old_detail, old_state, old_error = None, PaneState.EMPTY, None
+                if old_state is PaneState.LOADING:
+                    old_state = PaneState.IDLE if old_detail is not None else PaneState.EMPTY
+                    old_error = None
+                self._workgroup_detail = old_detail
+                self._workgroup_detail_state = old_state
+                self._workgroup_detail_error_text = old_error
+                self._notify_workgroup_detail()
+            raise
         except ProviderError as exc:
             if self._is_current_context(context_generation):
                 state, error_text = map_provider_error(
@@ -2103,6 +2416,10 @@ class AthenaPageVM:
         async def fetch(
             token: str | None,
         ) -> tuple[list[AthenaWorkgroupSummary], str | None]:
+            task = asyncio.current_task()
+            if task is not None:
+                self._page_tasks.add(task)
+                task.add_done_callback(self._page_tasks.discard)
             nonlocal restored_page
             if token is None and restored_page is not None:
                 staged_rows, next_token = restored_page
@@ -2131,6 +2448,10 @@ class AthenaPageVM:
         async def fetch(
             token: str | None,
         ) -> tuple[list[AthenaCatalogSummary], str | None]:
+            task = asyncio.current_task()
+            if task is not None:
+                self._page_tasks.add(task)
+                task.add_done_callback(self._page_tasks.discard)
             nonlocal restored_page
             if not workgroup:
                 return [], None
@@ -2163,6 +2484,10 @@ class AthenaPageVM:
         async def fetch(
             token: str | None,
         ) -> tuple[list[DatabaseSummary], str | None]:
+            task = asyncio.current_task()
+            if task is not None:
+                self._page_tasks.add(task)
+                task.add_done_callback(self._page_tasks.discard)
             nonlocal restored_page
             if not workgroup or not catalog:
                 return [], None
@@ -2389,7 +2714,12 @@ class AthenaPageVM:
             self._notify(property_name)
 
     def _workgroup_allows_execution(self) -> bool:
-        return not self._context_selection_required and self._enabled_workgroup_available()
+        return (
+            not self._context_selection_required
+            and self._enabled_workgroup_available()
+            and any(row.name == self._context.catalog for row in self.catalogs)
+            and any(row.ref.database_name == self._context.database for row in self.databases)
+        )
 
     def _enabled_workgroup_available(self) -> bool:
         detail = self._workgroup_detail
@@ -2398,6 +2728,10 @@ class AthenaPageVM:
             and detail is not None
             and detail.summary.name == self._context.workgroup
             and detail.summary.state == "ENABLED"
+            and any(
+                row.name == self._context.workgroup and row.state == "ENABLED"
+                for row in self.workgroups
+            )
             and not any(
                 row.name == self._context.workgroup and row.state == "DISABLED"
                 for row in self.workgroups

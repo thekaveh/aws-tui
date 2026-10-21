@@ -12,6 +12,11 @@ under the next supported AWS source. `Shift+W`, `Shift+C`, and `Shift+D` open
 the corresponding selector. Changing any parent context retires loaders,
 results, and app-owned execution state from the prior identity.
 
+On Query, focus a context selector and press `r` to refresh context metadata and tables.
+Refresh reloads workgroup details, catalogs and databases while preserving valid selections, SQL, draft ownership and execution results.
+A failed read shows its own error while other refreshed metadata remains usable.
+Bounded or incomplete discovery does not prove that a selected resource was removed.
+
 A successful source change opens a fresh editor. If the change fails or is
 cancelled, Athena restores the outgoing SQL, context, and save status while that
 transaction still owns the page. This also preserves unsaved SQL when local
