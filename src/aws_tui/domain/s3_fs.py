@@ -58,6 +58,20 @@ from aws_tui.domain.filesystem import (
 )
 from aws_tui.domain.preview_limits import PreviewBudget, PreviewLimitExceeded, PreviewRequestKind
 from aws_tui.domain.s3_object_details import S3ObjectDetails
+from aws_tui.domain.s3_versions import (
+    BucketVersioning,
+    S3ObjectVersion,
+    S3RecoveryDestination,
+    S3RecoveryPublication,
+    S3RecoveryWrite,
+    S3VersionListing,
+    S3VersionSource,
+    recovery_metadata,
+    validate_version_identity,
+    validate_version_observation,
+    version_page,
+    versioning_state,
+)
 
 # Family of transport-layer failures that the user should see as
 # "endpoint unreachable" rather than a generic provider error. We
@@ -467,48 +481,287 @@ class S3FS:
         except ClientError as exc:
             raise _map_client_error(exc, key) from exc
 
-    async def read_object_details(self, path: PathRef) -> S3ObjectDetails:
+    def version_location(self, path: PathRef) -> tuple[str, str]:
+        """Resolve a literal historical key, including a key ending in '/'."""
+        return self._resolve(path)
+
+    async def list_versions(self, path: PathRef) -> S3VersionListing:
+        """Enumerate one exact key, preserving delete markers and both cursors."""
+        bucket, key = self.version_location(path)
+        if not key:
+            raise ProviderError("S3 version listing requires an exact object key")
+        if bucket.endswith("--x-s3"):
+            raise ProviderError("S3 object versions are unsupported for a directory bucket")
+        seen_markers: set[tuple[str, str]] = set()
+        versions: dict[str, S3ObjectVersion] = {}
+        request: dict[str, Any] = {"Bucket": bucket, "Prefix": key, "MaxKeys": 1000}
+        scanned = 0
+        try:
+            async with self._client() as s3:
+                for _page in range(_MAX_LISTING_PAGES):
+                    try:
+                        response = await s3.list_object_versions(**request)
+                    except ClientError as exc:
+                        if _error_code(exc) in {"AccessDenied", "403", "Forbidden"}:
+                            raise PermissionDeniedError(
+                                "S3 version listing denied; s3:ListBucketVersions is required"
+                            ) from exc
+                        if _error_code(exc) in {"NotImplemented", "NotSupported"}:
+                            raise ProviderError(
+                                "S3 version listing is unsupported by this endpoint"
+                            ) from exc
+                        raise
+                    entries, count = version_page(response, path=path, bucket=bucket, key=key)
+                    scanned += count
+                    if scanned > _MAX_LISTING_ENTRIES:
+                        raise ProviderError(
+                            "S3 version listing exceeded the bounded entry limit; "
+                            "no partial history is shown"
+                        )
+                    for entry in entries:
+                        previous = versions.get(entry.version_id)
+                        if previous is not None and previous != entry:
+                            raise ProviderError("invalid S3 version response: conflicting identity")
+                        versions[entry.version_id] = entry
+                    truncated = response.get("IsTruncated", False)
+                    if not isinstance(truncated, bool):
+                        raise ProviderError("invalid S3 version response: truncation flag")
+                    if not truncated:
+                        break
+                    next_key = response.get("NextKeyMarker")
+                    next_version = response.get("NextVersionIdMarker")
+                    if (
+                        not isinstance(next_key, str)
+                        or not next_key
+                        or not isinstance(next_version, str)
+                        or not next_version
+                        or (next_key, next_version) in seen_markers
+                    ):
+                        raise ProviderError("invalid or repeated S3 version pagination marker pair")
+                    seen_markers.add((next_key, next_version))
+                    request.update(KeyMarker=next_key, VersionIdMarker=next_version)
+                else:
+                    raise ProviderError(
+                        "S3 version listing exceeded the bounded page limit; no partial history is shown"
+                    )
+                try:
+                    state, notice = versioning_state(await s3.get_bucket_versioning(Bucket=bucket))
+                except _TRANSPORT_FAILURE_EXCEPTIONS:
+                    state = BucketVersioning.UNAVAILABLE
+                    notice = (
+                        "Bucket versioning state unavailable: endpoint unreachable. "
+                        "Retained version listing succeeded."
+                    )
+                except ClientError as exc:
+                    state = BucketVersioning.UNAVAILABLE
+                    notice = (
+                        "Bucket versioning state unavailable: access denied to "
+                        "s3:GetBucketVersioning. Retained version listing succeeded."
+                        if _error_code(exc) in {"AccessDenied", "403", "Forbidden"}
+                        else f"Bucket versioning state unavailable ({_error_code(exc)}); "
+                        "retained version listing succeeded."
+                    )
+        except _AUTH_FAILURE_EXCEPTIONS as exc:
+            raise _auth_error(exc) from exc
+        except _TRANSPORT_FAILURE_EXCEPTIONS as exc:
+            raise ProviderUnreachableError(str(exc)) from exc
+        except ClientError as exc:
+            raise _map_client_error(exc, key) from exc
+        ordered = tuple(sorted(versions.values(), key=lambda v: v.modified, reverse=True))
+        return S3VersionListing(bucket, key, ordered, state, notice)
+
+    def version_source(self, version: S3ObjectVersion) -> S3VersionSource:
+        return S3VersionSource(self, version)
+
+    def _version_read_args(self, version: S3ObjectVersion) -> dict[str, Any]:
+        if self.version_location(version.path) != (version.bucket, version.key):
+            raise ConflictError("historical source is bound to another exact S3 location")
+        if not version.key or not isinstance(version.version_id, str) or not version.version_id:
+            raise ProviderError("historical read requires an exact key and version ID")
+        if version.bucket.endswith("--x-s3"):
+            raise ProviderError("S3 object versions are unsupported for a directory bucket")
+        if version.is_delete_marker:
+            raise ConflictError("an S3 delete marker has no file content")
+        if version.version_id == "null" and not version.etag:
+            raise ConflictError("null version observation cannot be validated without its ETag")
+        request: dict[str, Any] = {
+            "Bucket": version.bucket,
+            "Key": version.key,
+            "VersionId": version.version_id,
+        }
+        if version.etag is not None:
+            request["IfMatch"] = version.etag
+        return request
+
+    async def stat_version(self, version: S3ObjectVersion) -> FileEntry:
+        request = self._version_read_args(version)
+        try:
+            async with self._client() as s3:
+                head = await s3.head_object(**request)
+                validate_version_observation(version, head)
+        except _AUTH_FAILURE_EXCEPTIONS as exc:
+            raise _auth_error(exc) from exc
+        except _TRANSPORT_FAILURE_EXCEPTIONS as exc:
+            raise ProviderUnreachableError(str(exc)) from exc
+        except ClientError as exc:
+            raise _map_version_client_error(exc, version) from exc
+        return FileEntry(
+            name=version.path.name,
+            kind=EntryKind.FILE,
+            size=version.size,
+            modified=version.modified,
+            etag=_s3_revision_token(head),
+        )
+
+    async def read_version_details(self, version: S3ObjectVersion) -> S3ObjectDetails:
+        return await self.read_object_details(version.path, _version=version)
+
+    async def recovery_destination(
+        self, version: S3ObjectVersion, destination: PathRef
+    ) -> S3RecoveryDestination:
+        request = self._version_read_args(version)
+        bucket, key = self.version_location(destination)
+        if bucket != version.bucket or not key or key == version.key:
+            raise ConflictError("recovery requires a different key in the selected S3 bucket")
+        try:
+            async with self._client() as s3:
+                head = await s3.head_object(**request)
+                validate_version_observation(version, head)
+                try:
+                    tagged = await s3.get_object_tagging(
+                        Bucket=version.bucket, Key=version.key, VersionId=version.version_id
+                    )
+                except ClientError as exc:
+                    raise _map_version_client_error(exc, version, tagging=True) from exc
+                validate_version_identity(version, tagged, allow_absent=True)
+                metadata = recovery_metadata(head, tagged)
+                if version.version_id == "null":
+                    checked = await s3.head_object(**request)
+                    validate_version_observation(version, checked)
+                    if recovery_metadata(checked, tagged) != metadata:
+                        raise ConflictError("null version metadata changed; list versions again")
+        except _AUTH_FAILURE_EXCEPTIONS as exc:
+            raise _auth_error(exc) from exc
+        except _TRANSPORT_FAILURE_EXCEPTIONS as exc:
+            raise ProviderUnreachableError(str(exc)) from exc
+        except ClientError as exc:
+            raise _map_version_client_error(exc, version) from exc
+        return S3RecoveryDestination(
+            self, S3RecoveryWrite(destination, bucket, key, metadata, S3RecoveryPublication())
+        )
+
+    async def write_recovery_stream(
+        self,
+        context: S3RecoveryWrite,
+        source: AsyncIterator[bytes],
+        *,
+        total_size: int | None,
+        progress: ProgressCallback | None,
+    ) -> None:
+        if self.version_location(context.destination) != (context.bucket, context.key):
+            raise ConflictError("recovery destination provider changed")
+        await self.write_stream(
+            context.destination,
+            source,
+            total_size=total_size,
+            progress=progress,
+            overwrite=False,
+            _recovery=context,
+        )
+
+    async def read_version_stream(
+        self, version: S3ObjectVersion, *, chunk_size: int = _DEFAULT_CHUNK_SIZE
+    ) -> AsyncIterator[bytes]:
+        if chunk_size <= 0:
+            raise ProviderError("historical stream chunk size must be positive")
+        await self.stat_version(version)
+        return self._read_version_chunks(version, chunk_size)
+
+    async def _read_version_chunks(
+        self, version: S3ObjectVersion, chunk_size: int
+    ) -> AsyncIterator[bytes]:
+        request = self._version_read_args(version)
+        try:
+            async with self._client() as s3:
+                response = await s3.get_object(**request)
+                body = response["Body"]
+                async with body:
+                    validate_version_observation(version, response)
+                    while chunk := await body.read(chunk_size):
+                        yield chunk
+        except _AUTH_FAILURE_EXCEPTIONS as exc:
+            raise _auth_error(exc) from exc
+        except _TRANSPORT_FAILURE_EXCEPTIONS as exc:
+            raise ProviderUnreachableError(str(exc)) from exc
+        except ClientError as exc:
+            raise _map_version_client_error(exc, version) from exc
+
+    async def read_object_details(
+        self, path: PathRef, *, _version: S3ObjectVersion | None = None
+    ) -> S3ObjectDetails:
         """Read current-object headers and tags, with independent section failures."""
-        if path.is_root or (self._bucket is None and len(path.segments) < 2):
-            raise ProviderError("S3 object details require an object path")
-        bucket, key = self._resolve_file(path)
+        if _version is None:
+            if path.is_root or (self._bucket is None and len(path.segments) < 2):
+                raise ProviderError("S3 object details require an object path")
+            bucket, key = self._resolve_file(path)
+            head_args: dict[str, Any] = {"Bucket": bucket, "Key": key}
+        else:
+            head_args = self._version_read_args(_version)
+            bucket, key = _version.bucket, _version.key
         checksums_error: str | None = None
         tags_error: str | None = None
         tags: tuple[tuple[str, str], ...] | None = None
         try:
             async with self._client() as s3:
                 try:
-                    head = await s3.head_object(Bucket=bucket, Key=key, ChecksumMode="ENABLED")
+                    head = await s3.head_object(**head_args, ChecksumMode="ENABLED")
                 except _TRANSPORT_FAILURE_EXCEPTIONS as exc:
                     checksums_error = str(ProviderUnreachableError(str(exc)))
-                    head = await s3.head_object(Bucket=bucket, Key=key)
+                    head = await s3.head_object(**head_args)
                 except ClientError as exc:
-                    mapped = _map_client_error(exc, key)
+                    mapped = (
+                        _map_client_error(exc, key)
+                        if _version is None
+                        else _map_version_client_error(exc, _version)
+                    )
                     if not isinstance(
                         mapped, (PermissionDeniedError, ProviderUnreachableError, ThrottledError)
                     ) and not _unsupported_checksum_mode(exc):
                         raise mapped from exc
                     checksums_error = str(mapped)
-                    head = await s3.head_object(Bucket=bucket, Key=key)
+                    head = await s3.head_object(**head_args)
+
+                if _version is not None:
+                    validate_version_observation(_version, head)
 
                 # "null" is a literal S3 version ID for this read; mutation's
                 # operation-owned version normalization deliberately differs.
                 tag_args = {"Bucket": bucket, "Key": key}
-                if head.get("VersionId"):
+                if _version is not None:
+                    tag_args["VersionId"] = _version.version_id
+                elif head.get("VersionId"):
                     tag_args["VersionId"] = head["VersionId"]
                 try:
                     tagged = await s3.get_object_tagging(**tag_args)
+                    if _version is not None:
+                        validate_version_identity(_version, tagged, allow_absent=True)
                     if "TagSet" in tagged:
                         tags = tuple((tag["Key"], tag["Value"]) for tag in tagged["TagSet"])
                 except Exception as exc:
                     # Cancellation derives from BaseException and must unwind
                     # the client context instead of returning partial success.
-                    tags_error = _details_section_error(exc, key)
+                    tags_error = (
+                        str(_map_version_client_error(exc, _version, tagging=True))
+                        if _version is not None and isinstance(exc, ClientError)
+                        else _details_section_error(exc, key)
+                    )
         except _AUTH_FAILURE_EXCEPTIONS as exc:
             raise _auth_error(exc) from exc
         except _TRANSPORT_FAILURE_EXCEPTIONS as exc:
             raise ProviderUnreachableError(str(exc)) from exc
         except ClientError as exc:
+            if _version is not None:
+                raise _map_version_client_error(exc, _version) from exc
             raise _map_client_error(exc, key) from exc
 
         encryption = tuple(
@@ -541,7 +794,7 @@ class S3FS:
             modified=_to_aware(head.get("LastModified")),
             storage_class=head.get("StorageClass"),
             etag=head.get("ETag"),
-            version_id=head.get("VersionId"),
+            version_id=_version.version_id if _version is not None else head.get("VersionId"),
             encryption=encryption or None,
             metadata=tuple(head["Metadata"].items()) if "Metadata" in head else None,
             tags=tags,
@@ -1044,12 +1297,16 @@ class S3FS:
         progress: ProgressCallback | None = None,
         overwrite: bool = True,
         stage_claim: Callable[[str], None] | None = None,
+        _recovery: S3RecoveryWrite | None = None,
     ) -> None:
         if stage_claim is not None:
             raise ProviderError("S3 streaming writes do not support local stage ownership claims")
+        if _recovery is not None and (overwrite or path != _recovery.destination):
+            raise ConflictError("recovery writer cannot overwrite or change its bound destination")
         if path.is_root:
             raise ConflictError("cannot write to root")
-        bucket, key = self._resolve_file(path)
+        bucket, key = self._resolve_file(path) if _recovery is None else self.version_location(path)
+        creation_metadata = {} if _recovery is None else _recovery.metadata.creation_args()
 
         reader = _AsyncStreamReader(source)
         part_size = _multipart_part_size(total_size)
@@ -1067,24 +1324,38 @@ class S3FS:
                 try:
                     chunk = await reader.read(part_size)
                     if not chunk:
-                        put_args: dict[str, Any] = {"Bucket": bucket, "Key": key, "Body": b""}
+                        put_args: dict[str, Any] = {
+                            "Bucket": bucket,
+                            "Key": key,
+                            "Body": b"",
+                            **creation_metadata,
+                        }
                         if not overwrite:
                             put_args["IfNoneMatch"] = "*"
                         put_task = asyncio.create_task(s3.put_object(**put_args))
-                        put_response, put_cancelled = await _drain_publication_task(put_task)
+                        try:
+                            put_response, put_cancelled = await _drain_publication_task(put_task)
+                        except BaseException:
+                            if _recovery is not None:
+                                _recovery.publication.uncertain = True
+                            raise
+                        if _recovery is not None:
+                            _recovery.publication.published = True
+                            _recovery.publication.version_id = put_response.get("VersionId")
                         if put_cancelled:
                             cancellation = asyncio.CancelledError()
-                            await _rollback_cancelled_upload(
-                                s3,
-                                bucket=bucket,
-                                key=key,
-                                response=put_response,
-                                cancellation=cancellation,
-                            )
+                            if _recovery is None:
+                                await _rollback_cancelled_upload(
+                                    s3,
+                                    bucket=bucket,
+                                    key=key,
+                                    response=put_response,
+                                    cancellation=cancellation,
+                                )
                             raise cancellation
                         return
                     create_task = asyncio.create_task(
-                        s3.create_multipart_upload(Bucket=bucket, Key=key)
+                        s3.create_multipart_upload(Bucket=bucket, Key=key, **creation_metadata)
                     )
                     try:
                         created = await asyncio.shield(create_task)
@@ -1134,19 +1405,28 @@ class S3FS:
                     complete_task = asyncio.create_task(
                         s3.complete_multipart_upload(**complete_args)
                     )
-                    complete_response, complete_cancelled = await _drain_publication_task(
-                        complete_task
-                    )
+                    try:
+                        complete_response, complete_cancelled = await _drain_publication_task(
+                            complete_task
+                        )
+                    except BaseException:
+                        if _recovery is not None:
+                            _recovery.publication.uncertain = True
+                        raise
+                    if _recovery is not None:
+                        _recovery.publication.published = True
+                        _recovery.publication.version_id = complete_response.get("VersionId")
                     upload_id = None
                     if complete_cancelled:
                         cancellation = asyncio.CancelledError()
-                        await _rollback_cancelled_upload(
-                            s3,
-                            bucket=bucket,
-                            key=key,
-                            response=complete_response,
-                            cancellation=cancellation,
-                        )
+                        if _recovery is None:
+                            await _rollback_cancelled_upload(
+                                s3,
+                                bucket=bucket,
+                                key=key,
+                                response=complete_response,
+                                cancellation=cancellation,
+                            )
                         raise cancellation
                 except BaseException as exc:
                     abort_error: Exception | None = None
@@ -1184,6 +1464,8 @@ class S3FS:
                             "S3 multipart upload failed and cleanup also failed; "
                             f"upload ID {upload_id!r} may require manual abort: {abort_error}"
                         )
+                        if _recovery is not None:
+                            _recovery.publication.cleanup_error = message
                         if isinstance(exc, asyncio.CancelledError):
                             exc.add_note(message)
                             raise
@@ -1714,6 +1996,33 @@ def _auth_error(exc: BaseException) -> AuthRequiredError:
     if isinstance(exc, CredentialRetrievalError):
         return AuthRequiredError(f"AWS auth: credential process failed.\n{_AUTH_HINT}")
     return AuthRequiredError(f"AWS auth: {exc}.\n{_AUTH_HINT}")
+
+
+def _map_version_client_error(
+    exc: ClientError, version: S3ObjectVersion, *, tagging: bool = False
+) -> ProviderError:
+    code = _error_code(exc)
+    target = f"{version.bucket}/{version.key} (version {version.version_id})"
+    if code in {"NoSuchVersion", "NoSuchKey", "404", "NotFound"}:
+        return NotFoundError(f"selected S3 version is missing or expired: {target}")
+    if code in {"MethodNotAllowed", "405"}:
+        return ConflictError(
+            f"selected S3 version is a delete marker, without file content: {target}"
+        )
+    if code in {"AccessDenied", "403", "Forbidden"}:
+        permission = "s3:GetObjectVersionTagging" if tagging else "s3:GetObjectVersion"
+        return PermissionDeniedError(
+            f"selected S3 version access denied; check {permission}: {target}"
+        )
+    if code == "InvalidObjectState":
+        return ProviderError(
+            f"selected S3 version requires an archive restore before retrieval: {target}"
+        )
+    if code in {"PreconditionFailed", "412"}:
+        return ConflictError(
+            f"selected S3 version observation changed; list versions again: {target}"
+        )
+    return _map_client_error(exc, target)
 
 
 def _map_client_error(exc: ClientError, target: str) -> ProviderError:

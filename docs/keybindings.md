@@ -404,6 +404,7 @@ unbound until a handler ships.
 | `pane.mark_down` | `shift+down` | yes | Extend the marked selection downward |
 | `pane.switch_focus` | `tab` | yes | Cycle the active page's focus ring |
 | `pane.switch_focus_back` | `shift+tab` | yes | Cycle the active page's focus ring in reverse |
+| `pane.object_versions` | *(none)* | yes | Palette: **S3 object versions**; inspect/download exact historical content or recover to a different new key |
 | `pane.object_details` | `ctrl+o` | yes | Inspect current S3 object properties without content download or mutation |
 | `pane.quick_look` | `space` (normal mode) | yes | Preview bounded structured content and cache a raw prefix of at most 64 KiB |
 | `pane.filter` | `/` | yes | Local loaded-name filter |

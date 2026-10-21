@@ -35,6 +35,14 @@ class ActionPresentation:
 
 ACTION_SPECS: tuple[ActionSpec, ...] = (
     ActionSpec(
+        "pane.object_versions",
+        "S3 object versions",
+        "File operations",
+        keywords=("historical", "deleted", "recover", "exact key"),
+        service_ids=frozenset(("s3",)),
+        key_source="unbound",
+    ),
+    ActionSpec(
         "pane.object_details",
         "S3 object details",
         "File operations",
