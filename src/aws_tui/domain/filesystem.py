@@ -262,6 +262,21 @@ class DirectoryRevisionCapturer(Protocol):
 
 
 @runtime_checkable
+class MoveNamespaceResolver(Protocol):
+    """Resolve move locations without treating endpoint aliases as disjoint stores."""
+
+    def canonical_move_path(self, path: PathRef) -> tuple[str | None, PathRef] | None:
+        """Return a trusted namespace ID and literal resource path, without I/O.
+
+        An unknown ID cannot prove separation from another namespace. Different
+        nonempty IDs assert independently verified disjoint stores, never URL,
+        DNS or credential identity. The resource path includes container names
+        such as the S3 bucket. None denotes a virtual root with no one location.
+        """
+        ...
+
+
+@runtime_checkable
 class MoveRevisionPreflight(Protocol):
     """Provider hook for validating an opaque source revision before a move."""
 
@@ -359,6 +374,7 @@ __all__ = [
     "ExclusiveDirectoryClaimer",
     "FileEntry",
     "FileSystemProvider",
+    "MoveNamespaceResolver",
     "MoveRevisionPreflight",
     "NotFoundError",
     "PathRef",

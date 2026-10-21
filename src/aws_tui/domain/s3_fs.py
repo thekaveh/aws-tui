@@ -129,6 +129,12 @@ class S3FS:
         Whether botocore should verify TLS certificates for HTTPS
         endpoints. Set False for explicitly configured self-signed
         development endpoints.
+    move_namespace:
+        Optional trusted identity of an independently verified storage namespace.
+        Distinct IDs permit same-bucket/key moves between separate stores. Never
+        derive this assertion from endpoint, DNS, profile or credential spelling.
+        Unknown namespaces are conservatively treated as potentially shared for
+        destructive moves. Ordinary copy identity is unchanged.
     """
 
     def __init__(
@@ -140,12 +146,18 @@ class S3FS:
         endpoint_url: str | None = None,
         force_path_style: bool = False,
         verify_tls: bool = True,
+        move_namespace: str | None = None,
     ) -> None:
+        if move_namespace is not None and (
+            type(move_namespace) is not str or not move_namespace.strip()
+        ):
+            raise ValueError("move namespace must be a nonempty trusted identifier")
         self._session = session
         self._bucket: str | None = bucket
         self._prefix: str = prefix.strip("/")
         self._endpoint_url: str | None = endpoint_url
         self._verify_tls: bool = verify_tls
+        self._move_namespace = move_namespace
         # Apply the same retry / timeout policy spec §6.3 + §7.3 mandates for
         # every AWS client. infra/AwsSession.client() does the equivalent for
         # service callers; S3FS is constructed directly with an aioboto3
@@ -186,6 +198,14 @@ class S3FS:
         bucket_root = path.is_root if self._bucket is not None else len(path.segments) == 1
         segments = () if bucket_root and not key else tuple(key.split("/"))
         return (("s3", endpoint, bucket), PathRef(segments))
+
+    def canonical_move_path(self, path: PathRef) -> tuple[str | None, PathRef] | None:
+        """Keep bucket/key identity independent of request-endpoint spelling."""
+        resolved = self.canonical_storage_path(path)
+        if resolved is None:
+            return None
+        (_family, _endpoint, bucket), key = resolved
+        return self._move_namespace, PathRef((bucket, *key.segments))
 
     atomic_write_replaces = True
 

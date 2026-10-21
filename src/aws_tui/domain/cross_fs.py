@@ -46,6 +46,7 @@ from aws_tui.domain.filesystem import (
     ExclusiveDirectoryClaimer,
     FileEntry,
     FileSystemProvider,
+    MoveNamespaceResolver,
     MoveRevisionPreflight,
     NotFoundError,
     PathRef,
@@ -1437,6 +1438,34 @@ class CrossFsCopy:
 class CrossFsMove(CrossFsCopy):
     """Copy + delete source. The source is only deleted after the copy succeeds."""
 
+    def _potentially_shared_move_paths(
+        self, src: PathRef, dst: PathRef
+    ) -> tuple[PathRef, PathRef] | None:
+        source = self._move_location(self._source, src)
+        destination = self._move_location(self._destination, dst)
+        if source is None or destination is None:
+            return None
+        source_namespace, source_path = source
+        destination_namespace, destination_path = destination
+        if (
+            source_namespace is not None
+            and destination_namespace is not None
+            and source_namespace != destination_namespace
+        ):
+            return None
+        return source_path, destination_path
+
+    @staticmethod
+    def _move_location(
+        provider: FileSystemProvider, path: PathRef
+    ) -> tuple[str | None, PathRef] | None:
+        if not isinstance(provider, MoveNamespaceResolver):
+            return None
+        location = provider.canonical_move_path(path)
+        if location is None:
+            raise ConflictError("move requires a concrete storage location, not a virtual root")
+        return location
+
     async def move(
         self,
         src: PathRef,
@@ -1445,10 +1474,20 @@ class CrossFsMove(CrossFsCopy):
         progress: ProgressCallback | None = None,
         on_conflict: ConflictResolution = ConflictResolution.ERROR,
     ) -> bool:
-        if self._same_storage_path(src, dst):
+        shared_paths = self._potentially_shared_move_paths(src, dst)
+        if self._same_storage_path(src, dst) or (
+            shared_paths is not None and shared_paths[0] == shared_paths[1]
+        ):
             raise ConflictError(f"source and destination are the same path: {src.as_posix()}")
         src_entry = await self._source.stat(src)
         self._validate_same_storage_destination(src, dst, src_entry.kind)
+        if shared_paths is not None and src_entry.kind == EntryKind.DIRECTORY:
+            source_path, destination_path = shared_paths
+            if (
+                len(destination_path.segments) > len(source_path.segments)
+                and destination_path.segments[: len(source_path.segments)] == source_path.segments
+            ):
+                raise ConflictError(f"destination is inside source directory: {dst.as_posix()}")
         await self._preflight_move_tree(
             src,
             src_entry,
