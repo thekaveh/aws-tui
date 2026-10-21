@@ -83,6 +83,7 @@ ACTION_SPECS: tuple[ActionSpec, ...] = (
     ),
     ActionSpec("app.themes", "Theme picker", "App"),
     ActionSpec("app.transfer_history", "Transfer history and recovery", "App"),
+    ActionSpec("app.focus_transfers", "Focus active transfers", "App"),
     ActionSpec("app.cycle_theme", "Cycle theme", "App"),
     ActionSpec(
         "app.swap_source",
