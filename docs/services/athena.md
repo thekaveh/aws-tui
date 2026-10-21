@@ -12,6 +12,16 @@ under the next supported AWS source. `Shift+W`, `Shift+C`, and `Shift+D` open
 the corresponding selector. Changing any parent context retires loaders,
 results, and app-owned execution state from the prior identity.
 
+A successful source change opens a fresh editor. If the change fails or is
+cancelled, Athena restores the outgoing SQL, context, and save status while that
+transaction still owns the page. This also preserves unsaved SQL when local
+draft persistence is off. Newer edits or navigation take priority over rollback.
+
+If the original context is no longer available, Athena retains the SQL and
+clears its context selectors. Run remains disabled until you select an available
+context. Existing draft-origin restrictions still apply.
+Refresh and credential retry preserve the requirement to select a context.
+
 Focus moves through Source, Workgroup, Catalog, Database, the tabs, and the
 active view; enabled load-more controls appear immediately after their selector.
 The segmented frame contains Query (`1`), History (`2`), Results (`3`), and

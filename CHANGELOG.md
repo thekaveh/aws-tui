@@ -233,6 +233,10 @@ section. The current tree must not be tagged as v0.8.0.
 
 ### Fixed
 
+- Failed or cancelled Athena source changes restore exact outgoing SQL and its
+  context, including when local draft persistence is off. Newer edits and
+  navigation take priority; recovery retains draft provenance and save status.
+
 - Update locked aiohttp, certifi and Pillow security releases; allow Pillow 13
   for documentation assets. Require patched uv and development pip versions
   that remove the compromised emSign CA certificate.

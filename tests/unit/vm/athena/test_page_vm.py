@@ -1212,6 +1212,123 @@ async def test_catalog_change_invalidates_results_before_new_context_load_finish
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("invalid", [False, True, "flag"])
+async def test_source_editor_fallback_validates_before_clearing_context(invalid):
+    client = PageClient()
+    original = make_page_vm(client)
+    candidate = make_page_vm(client)
+    try:
+        await original.setup()
+        await candidate.setup()
+        await original.select_catalog("federated")
+        original.query.set_sql("SELECT 'original editor'")
+        snapshot = original.export_editor_snapshot()
+        candidate.query.set_sql("SELECT 'candidate editor'")
+        before = candidate.export_snapshot()
+        if invalid:
+            if invalid == "flag":
+                snapshot = replace(snapshot, context_selection_required="invalid")
+            else:
+                snapshot = replace(
+                    snapshot,
+                    editor=replace(
+                        snapshot.editor,
+                        context=replace(snapshot.editor.context, connection_name="other-source"),
+                    ),
+                )
+            with pytest.raises(ValueError, match="provenance"):
+                await candidate.restore_source_editor(snapshot)
+            assert candidate.export_snapshot() == before
+        else:
+            await candidate.restore_source_editor(snapshot)
+            assert candidate.query.sql == "SELECT 'original editor'"
+            assert candidate.context.workgroup == ""
+            assert not candidate.query.execute_command.can_execute()
+            await candidate.query.execute()
+            assert not client.start_calls
+            await candidate.refresh_query_context()
+            assert candidate.context.workgroup == ""
+            assert not candidate.query.execute_command.can_execute()
+            required = candidate.export_editor_snapshot()
+            candidate.install_editor_snapshot(replace(required, context_selection_required=False))
+            assert candidate.export_editor_snapshot().context_selection_required
+            revision = candidate.context_choice_revision
+            await candidate.select_workgroup("not-an-available-workgroup")
+            assert candidate.context_choice_revision == revision
+            assert not candidate.query.execute_command.can_execute()
+            # A new explicit context choice can recover the editor normally.
+            await candidate.select_workgroup("primary")
+            assert candidate.query.sql == "SELECT 'original editor'"
+            assert candidate.query.execute_command.can_execute()
+    finally:
+        await original.shutdown()
+        await candidate.shutdown()
+        original.dispose()
+        candidate.dispose()
+
+
+@pytest.mark.parametrize("outcome", ["failure", "cancelled", "success"])
+async def test_table_resolution_owns_unresolved_source_editor_decision(monkeypatch, outcome):
+    client = PageClient()
+    original = make_page_vm(client)
+    candidate = make_page_vm(client)
+    entered = asyncio.Event()
+    release = asyncio.Event()
+    task = None
+    try:
+        await original.setup()
+        await candidate.setup()
+        await original.select_catalog("federated")
+        original.query.set_sql("SELECT 'prior context SQL'")
+        await candidate.restore_source_editor(original.export_editor_snapshot())
+        missing = TableRef(
+            catalog_name="missing",
+            database_name="missing",
+            table_name="table",
+            connection_name=client.connection_name,
+            region=client.region,
+        )
+        if outcome == "success":
+            missing = replace(missing, catalog_name="AwsDataCatalog", database_name="default")
+        if outcome == "cancelled":
+
+            async def gated_catalog(_table):
+                entered.set()
+                await release.wait()
+                return False
+
+            monkeypatch.setattr(candidate, "_ensure_catalog_loaded", gated_catalog)
+        task = asyncio.create_task(candidate.open_table(missing))
+        if outcome == "cancelled":
+            await asyncio.wait_for(entered.wait(), timeout=2)
+            task.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await task
+        elif outcome == "failure":
+            with pytest.raises(ValueError, match="unavailable"):
+                await task
+        else:
+            await task
+        if outcome == "success":
+            assert candidate.query.sql.startswith("SELECT * FROM")
+            assert not candidate.export_editor_snapshot().context_selection_required
+            assert candidate.query.execute_command.can_execute()
+        else:
+            assert candidate.query.sql == "SELECT 'prior context SQL'"
+            assert candidate.export_editor_snapshot().context_selection_required
+            assert not candidate.query.execute_command.can_execute()
+            await candidate.query.execute()
+        assert not client.start_calls
+    finally:
+        release.set()
+        if task is not None:
+            await asyncio.gather(task, return_exceptions=True)
+        await original.shutdown()
+        await candidate.shutdown()
+        original.dispose()
+        candidate.dispose()
+
+
 async def test_page_snapshot_round_trip_restores_query_results_and_selections_without_execution(
     tmp_path: Path,
 ) -> None:
