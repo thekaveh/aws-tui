@@ -233,6 +233,10 @@ section. The current tree must not be tagged as v0.8.0.
 
 ### Fixed
 
+- **S3 directory-copy guidance.** Existing-prefix merges are documented
+  separately from unsupported new-tree publication and whole-tree replacement,
+  with per-child conflicts, preflight refusals and partial outcomes explained.
+
 - **Peek access and cost guidance.** Local DuckDB preview avoids Athena query
   charges and workgroup/output setup. Direct S3 reads remain subject to source
   permissions, encryption access, connectivity and applicable remote-read charges.
