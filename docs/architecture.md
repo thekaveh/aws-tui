@@ -194,8 +194,18 @@ handlers.
 
 `ActionRegistry` is also rooted in `app.py`. `Shift+Q`, `Shift+V`, command-palette entries, and the Iceberg arrow button dispatch the same registered Glue actions. The Glue VMs then publish a single typed Athena request path.
 
-`AwsTuiApp` remains a large composition-root adapter that coordinates navigation,
-cross-service rollback, action routing, and shutdown. Extracting those transaction coordinators into dedicated mediators is deferred to a focused architecture change. The move spans cancellation ownership and complete rollback state across all four services. Treating it as a mechanical maintenance refactor would carry more risk than the line-count reduction justifies.
+`service_navigation.py` owns service-navigation generations, task-scoped selection
+suppression, serialization locks, pending navigation/rollback tasks, and remembered
+S3 fallback identity. Its `ServiceNavigation` collaborator applies transfer-drain,
+required-connection, retry, adoption and failure policy through explicit typed operations.
+It imports no Textual code and can be tested without constructing the application.
+
+`AwsTuiApp` adapts UI events, worker operations, focus and widget publication.
+It passes live model access and per-attempt view operations to the navigation owner.
+Service-specific table/editor snapshots remain with their existing transaction logic;
+their model-adoption calls use the same owner. `ContentHostVM` retains candidate
+construction, setup, shutdown and disposal. Action routing and application shutdown
+remain in the composition root.
 
 At startup, automatic connection attempts consume one shared 90-second budget;
 untried sources remain available for explicit selection after the local fallback
@@ -221,6 +231,11 @@ When outgoing content exposes `shutdown`, `ContentHostVM.set_content(...)` await
 teardown. App shutdown is task-owned and idempotent.
 
 Explicit quit and Textual unmount (including fatal teardown) await the same sequence. First, stop navigation intake and drain transfers, setup, queries, and preview workers. Then close every aioboto3 client and dispose subscriptions and the VM tree. Finally, flush and close logs so teardown diagnostics remain available (spec §6.4).
+
+Navigation closes intake synchronously before the app stops its workers.
+After the service-lock barrier, its owner cancels and drains navigation tasks,
+then drains rollback tasks without cancelling their durable cleanup.
+Superseding external navigation cancels older handoffs without joining them under that lock.
 
 ## 4. Messaging
 
@@ -248,9 +263,10 @@ the interaction stays inside one subtree. Custom envelopes (defined in
 Cross-service navigation stays service-neutral. `OpenAthenaTableRequest` and
 `OpenGlueTableRequest` carry a `TableRef` containing catalog, database, table,
 connection name, and region; the Athena request may add a validated snapshot
-ID. `app.py` serializes table handoffs, resolves the exact connection, rejects
-region drift, snapshots the outgoing Glue/Athena state for rollback, and
-mounts the destination through `RootVM`.
+ID. `app.py` resolves the exact connection, rejects region drift, and snapshots
+the outgoing Glue/Athena state for rollback. `ServiceNavigation` supplies handoff
+serialization and ownership, and delegates adoption to `RootVM`.
+App supplies the destination's UI publication operations.
 
 For an Athena destination, the `AthenaPageVM` publishes the exact quoted `SELECT * FROM "database"."table" LIMIT 5` immediately after mount. This happens before awaiting remote Athena setup. A snapshot request adds `FOR VERSION AS OF <snapshot-id>` before the limit. The query VM keeps its VMx
 Run command disabled while the exact workgroup, catalog, and database context

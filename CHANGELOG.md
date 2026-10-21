@@ -179,6 +179,9 @@ section. The current tree must not be tagged as v0.8.0.
 
 ### Changed
 
+- **Service navigation ownership.** A typed collaborator owns navigation epochs,
+  task cleanup, S3 fallback and adoption policy while App retains UI operations.
+
 - **Live chrome cleanup.** Removed the unmounted legacy `StatusBar` widget,
   its subscribed viewmodel, obsolete theme selectors, and the unused
   `pytest-xdist` development dependency. Connection identity remains in the
