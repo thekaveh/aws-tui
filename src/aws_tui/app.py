@@ -179,6 +179,31 @@ class _StagedServiceRecovery:
     live_state_is_current: Callable[[], bool] = field(repr=False)
 
 
+@dataclass(slots=True)
+class _SourceInputObservation:
+    vm: object = field(repr=False)
+    sql_changes: int = 0
+    context_choices: int = 0
+    subscription: DisposableBase | None = field(default=None, repr=False)
+
+    def changed(self, property_name: str) -> None:
+        if property_name == "sql":
+            self.sql_changes += 1
+
+
+@dataclass(slots=True)
+class _SourceRollback:
+    service_id: str
+    connection: Connection | None
+    auth_state: TokenState | None
+    owner: tuple[str, int] | None
+    outgoing: object = field(repr=False)
+    athena: AthenaPageSnapshot | None = field(default=None, repr=False)
+    editor: AthenaPageEditorSnapshot | None = field(default=None, repr=False)
+    claimed: bool = False
+    target: _SourceInputObservation | None = field(default=None, repr=False)
+
+
 @dataclass(frozen=True, slots=True)
 class _GluePageSnapshot:
     active_view: GlueView
@@ -2520,7 +2545,12 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
         }.get(origin.service_id or "")
         if page is not None:
             mounted = page()
-            return mounted is not None and mounted.is_attached and mounted.vm is origin.vm
+            return (
+                mounted is not None
+                and mounted.is_attached
+                and not mounted.is_disabled
+                and mounted.vm is origin.vm
+            )
         if origin.service_id == "s3":
             return any(view.is_attached and view.vm is origin.vm for view in self.query(DualPane))
         if origin.service_id == SETTINGS_NAV_ID:
@@ -3950,7 +3980,10 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
                                 state = candidate.credential_recovery_state()
                         else:
                             if athena_fallback_editor is not None:
-                                candidate.install_editor_snapshot(athena_fallback_editor)
+                                if athena_fallback_editor.context_selection_required:
+                                    await candidate.restore_source_editor(athena_fallback_editor)
+                                else:
+                                    candidate.install_editor_snapshot(athena_fallback_editor)
                             state = candidate.credential_recovery_state()
                 elif isinstance(candidate, GluePageVM) and glue_snapshot is not None:
                     await candidate.setup()
@@ -4042,11 +4075,41 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
         replacement: Widget | None = None
         staging_host: Container | None = None
         host: Container | None = None
+        root = ctx.root_vm
+        outgoing_vm = root.content_host.current
+        outgoing_id = root.content_host.current_id
+        original_connection = root.active_connection
+        original_revision = self._source_revision
+        navigation_owner = self._service_navigation_owner
+        input_claimed = False
+
+        def owns_adoption() -> bool:
+            if not input_claimed:
+                return is_current is None or is_current()
+            # Shutdown invalidates the outgoing snapshot. Once input is
+            # claimed, compare transaction ownership rather than exporting
+            # state from a retired page.
+            current = root.content_host.current
+            return (
+                not self._service_navigation_closed
+                and self._shutdown_task is None
+                and self._service_navigation_owner == navigation_owner
+                and self._source_revision == original_revision
+                and root.active_connection == original_connection
+                and (
+                    current is None
+                    or (current is outgoing_vm and root.content_host.current_id == outgoing_id)
+                )
+            )
 
         def claim_outgoing_input() -> bool:
             """Close live Athena intake only at the host's shutdown boundary."""
+            nonlocal input_claimed
+            if not owns_adoption():
+                return False
             outgoing = ctx.root_vm.content_host.current
             if not isinstance(outgoing, AthenaPageVM):
+                input_claimed = True
                 return True
             page = next((page for page in self.query(AthenaPage) if page.vm is outgoing), None)
             if page is None or not page.is_attached:
@@ -4059,6 +4122,7 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
             editor.read_only = True
             page.disabled = True
             outgoing.close_input_admission()
+            input_claimed = True
             return True
 
         try:
@@ -4106,7 +4170,7 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
                 TokenState.CONNECTED,
                 service_id,
                 recovery.vm,
-                ownership_is_current=is_current,
+                ownership_is_current=owns_adoption,
                 claim_input=claim_outgoing_input,
             )
             if not adopted:
@@ -4683,6 +4747,8 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
         if self._shutdown_task is not None or self._service_navigation_closed:
             return
         origin = self._capture_discovery_origin()
+        if not self._discovery_origin_owned(origin):
+            return
         dual = self._dual_pane()
         pane = dual.focused_pane if dual is not None else None
         self._run_lifecycle_worker(
@@ -4697,6 +4763,9 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
         S3 retains independent source rings for its two panes. Other AWS
         services rebuild under the next supported AWS connection.
         """
+        origin = origin or self._capture_discovery_origin()
+        if not self._discovery_origin_owned(origin):
+            return
         self.record_action("app.swap_source")
         generation = self._supersede_table_navigation()
         async with self._service_navigation_lock:
@@ -4722,8 +4791,10 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
         if self._shutdown_task is not None or self._service_navigation_closed:
             return
         origin = self._capture_discovery_origin()
-        if not event.header.is_attached or not any(
-            getattr(node, "vm", None) is origin.vm for node in event.header.ancestors
+        if (
+            not self._discovery_origin_owned(origin)
+            or not event.header.is_attached
+            or not any(getattr(node, "vm", None) is origin.vm for node in event.header.ancestors)
         ):
             return
         service_id = self._app_ctx.root_vm.services_menu.selected_id
@@ -5264,117 +5335,288 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
             return True
         return await self._rebuild_single_context_source(service_id, target)
 
+    def _source_rollback_owned(self, state: _SourceRollback) -> bool:
+        return (
+            not self._service_navigation_closed
+            and self._shutdown_task is None
+            and self._service_navigation_owner == state.owner
+        )
+
+    def _source_input_untouched(self, observation: _SourceInputObservation) -> bool:
+        if self._app_ctx.root_vm.content_host.current is not observation.vm:
+            return False
+        if observation.sql_changes:
+            return False
+        if isinstance(observation.vm, AthenaPageVM):
+            if observation.vm.context_choice_revision != observation.context_choices:
+                return False
+            page = next((p for p in self.query(AthenaPage) if p.vm is observation.vm), None)
+            if page is not None and page.is_attached:
+                # Protect actual typing whose Changed message is still queued.
+                return page.query_one("#athena-editor", TextArea).text == observation.vm.query.sql
+        return True
+
+    def _source_rollback_may_replace(self, state: _SourceRollback) -> bool:
+        if not self._source_rollback_owned(state):
+            return False
+        current = self._app_ctx.root_vm.content_host.current
+        return (
+            current is None
+            or current is state.outgoing
+            or (state.target is not None and self._source_input_untouched(state.target))
+        )
+
+    def _claim_source_input(self, vm: object) -> bool:
+        if isinstance(vm, AthenaPageVM):
+            page = next((p for p in self.query(AthenaPage) if p.vm is vm), None)
+            if page is not None and page.is_attached:
+                editor = page.query_one("#athena-editor", TextArea)
+                if editor.text != vm.query.sql:
+                    return False
+                editor.read_only = True
+                page.disabled = True
+            vm.close_input_admission()
+        return True
+
     async def _rebuild_single_context_source(
         self,
         service_id: str,
         target: Connection,
     ) -> bool:
-        """Rebuild under ``target`` and restore the prior source on failure."""
-
+        """Rebuild a source, retaining exact owned Athena input for rollback."""
         ctx = self._app_ctx
-        prior_connection = ctx.root_vm.active_connection
-        prior_auth_state = ctx.root_vm.active_auth_state
-        try:
-            auth_state = ctx.aws_session.probe_token(target).state
-        except Exception as exc:
-            ctx.log_sink.warning(
-                "service_source.probe_failed",
-                service_id=service_id,
-                connection=target.name,
-                error_type=type(exc).__name__,
-            )
-            auth_state = TokenState.MISSING
-        try:
-            await ctx.root_vm.switch_connection_and_service(target, auth_state, service_id)
-            if await self._mount_service_view(service_id, required_connection=target):
-                return True
-        except asyncio.CancelledError:
-            if prior_connection is not None and prior_auth_state is not None:
-                await self._restore_single_context_source_durably(
-                    service_id,
-                    prior_connection,
-                    prior_auth_state,
-                )
-            raise
-        except Exception as exc:
-            ctx.log_sink.error(
-                "service_source.rebuild_failed",
-                service_id=service_id,
-                connection=target.name,
-                error_type=type(exc).__name__,
-            )
-
-        restored = False
-        rollback_cancelled = False
-        if prior_connection is not None and prior_auth_state is not None:
-            restored, rollback_cancelled = await self._restore_single_context_source_durably(
-                service_id,
-                prior_connection,
-                prior_auth_state,
-            )
-        if rollback_cancelled:
-            raise asyncio.CancelledError
-        notifications.error(
-            ctx.root_vm.chrome.toast_stack,
-            subject="Source",
-            message=(
-                f"couldn't switch to {target.name}; "
-                + ("restored the previous source" if restored else "source restore failed")
-            ),
+        state = _SourceRollback(
+            service_id,
+            ctx.root_vm.active_connection,
+            ctx.root_vm.active_auth_state,
+            self._service_navigation_owner,
+            ctx.root_vm.content_host.current,
         )
-        return False
+
+        def capture_outgoing() -> bool:
+            if (
+                not self._source_rollback_owned(state)
+                or ctx.root_vm.content_host.current is not state.outgoing
+            ):
+                return False
+            if isinstance(state.outgoing, AthenaPageVM):
+                page = self._athena_page()
+                if page is None or page.vm is not state.outgoing or page.is_disabled:
+                    return False
+                if page.query_one("#athena-editor", TextArea).text != state.outgoing.query.sql:
+                    return False
+                # Exports must precede input closure, and capture the latest
+                # state after outgoing setup cleanup has finished yielding.
+                state.editor = state.outgoing.export_editor_snapshot()
+                try:
+                    state.athena = state.outgoing.export_snapshot()
+                except ValueError:
+                    state.athena = None
+            if not self._claim_source_input(state.outgoing):
+                return False
+            state.claimed = True
+            return True
+
+        def observe_target(vm: object) -> None:
+            observation = _SourceInputObservation(vm)
+            if isinstance(vm, AthenaPageVM):
+                observation.context_choices = vm.context_choice_revision
+                observation.subscription = vm.query.on_property_changed.subscribe(
+                    observation.changed
+                )
+            state.target = observation
+
+        try:
+            try:
+                auth_state = ctx.aws_session.probe_token(target).state
+            except Exception as exc:
+                ctx.log_sink.warning(
+                    "service_source.probe_failed",
+                    service_id=service_id,
+                    connection=target.name,
+                    error_type=type(exc).__name__,
+                )
+                auth_state = TokenState.MISSING
+            try:
+                adopted = await ctx.root_vm.switch_connection_and_service(
+                    target,
+                    auth_state,
+                    service_id,
+                    prepare_vm=observe_target,
+                    ownership_is_current=lambda: self._source_rollback_owned(state),
+                    claim_input=capture_outgoing,
+                )
+                if not adopted or not self._source_rollback_owned(state):
+                    return False
+                if await self._mount_service_view(service_id, required_connection=target):
+                    return self._source_rollback_owned(state)
+            except asyncio.CancelledError:
+                await self._restore_single_context_source_durably(state)
+                raise
+            except Exception as exc:
+                ctx.log_sink.error(
+                    "service_source.rebuild_failed",
+                    service_id=service_id,
+                    connection=target.name,
+                    error_type=type(exc).__name__,
+                )
+
+            restored, rollback_cancelled = await self._restore_single_context_source_durably(state)
+            if rollback_cancelled:
+                raise asyncio.CancelledError
+            if not self._source_rollback_owned(state):
+                return False
+            if (
+                state.target is not None
+                and ctx.root_vm.content_host.current is state.target.vm
+                and not self._source_input_untouched(state.target)
+            ):
+                # A newer target edit owns this page, even if its mount failed.
+                return False
+            notifications.error(
+                ctx.root_vm.chrome.toast_stack,
+                subject="Source",
+                message=f"couldn't switch to {target.name}; "
+                + ("restored the previous source" if restored else "source restore failed"),
+            )
+            return False
+        finally:
+            if state.target is not None and state.target.subscription is not None:
+                state.target.subscription.dispose()
 
     async def _restore_single_context_source_durably(
         self,
-        service_id: str,
-        connection: Connection,
-        auth_state: TokenState,
+        state: _SourceRollback,
     ) -> tuple[bool, bool]:
         rollback = asyncio.create_task(
-            self._restore_single_context_source(service_id, connection, auth_state),
-            name=f"{service_id}-source-rollback",
+            self._restore_single_context_source(state),
+            name=f"{state.service_id}-source-rollback",
         )
         cancelled = False
+        abort_requested = False
         while not rollback.done():
             try:
                 await asyncio.shield(rollback)
             except asyncio.CancelledError:
                 cancelled = True
+                if not self._source_rollback_owned(state) and not abort_requested:
+                    abort_requested = True
+                    rollback.cancel()
+                # Subsequent caller cancellation must not reach the child's
+                # asynchronous cleanup through an unshielded gather.
+        if abort_requested and rollback.cancelled():
+            return False, True
         return rollback.result(), cancelled
 
-    async def _restore_single_context_source(
-        self,
-        service_id: str,
-        connection: Connection,
-        auth_state: TokenState,
-    ) -> bool:
+    async def _restore_single_context_source(self, state: _SourceRollback) -> bool:
+        if not self._source_rollback_may_replace(state):
+            return False
+        root = self._app_ctx.root_vm
+        if not state.claimed:
+            return root.content_host.current is state.outgoing
+        connection, auth_state = state.connection, state.auth_state
+        if connection is None or auth_state is None:
+            return False
+        candidate: object | None = None
+        adopted = False
+        publication_error: Exception | asyncio.CancelledError | None = None
         try:
-            # Rollback is part of the current source transaction. Its menu
-            # update must not supersede a newer navigation waiting on the lock.
-            suppression = (asyncio.current_task(), service_id)
-            self._service_navigation_suppressed_selection = suppression
-            try:
-                await self._app_ctx.root_vm.switch_connection_and_service(
-                    connection,
-                    auth_state,
-                    service_id,
-                )
-            finally:
-                if self._service_navigation_suppressed_selection is suppression:
-                    self._service_navigation_suppressed_selection = None
-            return await self._mount_service_view(
-                service_id,
-                required_connection=connection,
+            if state.service_id == "athena" and state.editor is not None:
+                # Restore off-screen with inactive draft ownership. The live
+                # target remains authoritative throughout awaited preflight.
+                recovery = root.build_recovery_service_vm("athena", connection)
+                candidate = recovery.vm
+                if not isinstance(candidate, AthenaPageVM):
+                    raise TypeError("Athena rollback requires an Athena page")
+                candidate.construct()
+                await candidate.setup()
+                if not self._source_rollback_may_replace(state):
+                    return False
+                if state.athena is not None:
+                    try:
+                        await candidate.restore_snapshot(state.athena)
+                    except ValueError:
+                        # This candidate has never been exposed to user input.
+                        # Retain SQL and its origin if context is unavailable;
+                        # admission is checked again before publishing it.
+                        await candidate.restore_source_editor(state.editor)
+                else:
+                    await candidate.restore_source_editor(state.editor)
+                if not self._source_rollback_may_replace(state):
+                    return False
+                suppression = (asyncio.current_task(), state.service_id)
+                self._service_navigation_suppressed_selection = suppression
+                try:
+                    try:
+                        adopted = await root.adopt_prepared_service_vm(
+                            connection,
+                            auth_state,
+                            state.service_id,
+                            candidate,
+                            ownership_is_current=lambda: self._source_rollback_may_replace(state),
+                            claim_input=lambda: self._claim_source_input(root.content_host.current),
+                        )
+                    except (Exception, asyncio.CancelledError) as exc:
+                        # Publication is the ownership transfer, even when a
+                        # synchronous observer interrupts the return path.
+                        adopted = root.content_host.current is candidate
+                        if not adopted:
+                            raise
+                        publication_error = exc
+                finally:
+                    if self._service_navigation_suppressed_selection is suppression:
+                        self._service_navigation_suppressed_selection = None
+                if not adopted:
+                    return False
+                if self._source_rollback_owned(state):
+                    recovery.commit_selection()
+            else:
+                suppression = (asyncio.current_task(), state.service_id)
+                self._service_navigation_suppressed_selection = suppression
+                try:
+                    adopted = await root.switch_connection_and_service(
+                        connection,
+                        auth_state,
+                        state.service_id,
+                        ownership_is_current=lambda: self._source_rollback_may_replace(state),
+                    )
+                finally:
+                    if self._service_navigation_suppressed_selection is suppression:
+                        self._service_navigation_suppressed_selection = None
+            if not adopted or not self._source_rollback_owned(state):
+                if publication_error is not None:
+                    raise publication_error
+                return False
+            # No SQL write follows publication: newer mounted input always wins.
+            mounted = await self._mount_service_view(
+                state.service_id, required_connection=connection
             )
+            if publication_error is not None:
+                raise publication_error
+            return mounted
         except Exception as exc:
             self._app_ctx.log_sink.error(
                 "service_source.rollback_failed",
-                service_id=service_id,
+                service_id=state.service_id,
                 connection=connection.name,
-                error=str(exc),
                 error_type=type(exc).__name__,
             )
             return False
+        finally:
+            if candidate is not None and not adopted and root.content_host.current is not candidate:
+                retirement = asyncio.create_task(
+                    self._discard_staged_service_recovery(candidate),
+                    name="athena-source-rollback-retirement",
+                )
+                retirement_cancelled = False
+                while not retirement.done():
+                    try:
+                        await asyncio.shield(retirement)
+                    except asyncio.CancelledError:
+                        retirement_cancelled = True
+                retirement.result()
+                if retirement_cancelled:
+                    raise asyncio.CancelledError
 
     def _make_s3_provider_for_connection(self, conn: Connection) -> FileSystemProvider:
         """Build the S3 pane provider through the registered S3 service.
@@ -6986,7 +7228,17 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
         a cancelled worker may have left behind.
         """
         ctx = self._app_ctx
+        navigation_owner = self._service_navigation_owner
+
+        def owns_mount() -> bool:
+            return (
+                not self._service_navigation_closed
+                and self._service_navigation_owner == navigation_owner
+            )
+
         await self._cancel_transfer_workers_before_content_swap()
+        if not owns_mount():
+            return False
         if required_connection is not None and ctx.root_vm.active_connection != required_connection:
             active = ctx.root_vm.active_connection
             ctx.log_sink.error(
@@ -7028,6 +7280,8 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
         try:
             host = self.query_one("#content-host", Container)
             await ctx.root_vm.switch_service(service_id)
+            if not owns_mount():
+                return False
         except Exception as exc:
             ctx.log_sink.error(
                 "app.mount_service_view.switch_service_failed",
@@ -7054,6 +7308,8 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
                 focus_coordinator=ctx.focus_coordinator,
             )
             await self._replace_content_widget(host, replacement)
+            if not owns_mount():
+                return False
             if service_id in {"glue", "athena", "emr-serverless"}:
                 self._recompute_hint_disables()
         except Exception as exc:

@@ -120,9 +120,10 @@ class ContentHostVM:
     ) -> bool:
         """Adopt content, or leave a rejected candidate owned by its caller.
 
-        Compare ownership after outgoing setup drains, then optionally claim
-        input synchronously before shutdown. False preserves the outgoing tree;
-        its caller must drain/dispose the rejected candidate.
+        Compare ownership after setup drains and again after shutdown. A
+        rejection before shutdown preserves the outgoing tree; a later loss
+        leaves the host empty for its newer owner. The caller must drain and
+        dispose a rejected candidate.
         """
         try:
             async with self._swap_lock:
@@ -206,6 +207,10 @@ class ContentHostVM:
         if shutdown_cancelled:
             send_value_free(self._hub, PropertyChangedMessage.create(self, self.name, "current"))
             raise asyncio.CancelledError
+
+        if ownership_is_current is not None and not ownership_is_current():
+            send_value_free(self._hub, PropertyChangedMessage.create(self, self.name, "current"))
+            return False
 
         if vm is None:
             send_value_free(self._hub, PropertyChangedMessage.create(self, self.name, "current"))
