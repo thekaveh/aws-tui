@@ -1570,7 +1570,7 @@ def test_cancel_command_tracks_every_interruptible_query_phase() -> None:
     assert vm.cancel_command.can_execute()
 
     vm._busy = False  # type: ignore[attr-defined]
-    assert not vm.cancel_command.can_execute()
+    assert vm.cancel_command.can_execute()
 
 
 def test_request_token_fixture_is_independently_derived() -> None:

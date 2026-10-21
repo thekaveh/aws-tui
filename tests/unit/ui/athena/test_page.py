@@ -12,8 +12,8 @@ from textual.geometry import Size
 from textual.widgets import Button, DataTable, OptionList, Static, TextArea
 from vmx import NULL_DISPATCHER
 
-from aws_tui.domain.filesystem import ProviderError
-from aws_tui.domain.query import ResultColumn, ResultPage
+from aws_tui.domain.filesystem import ProviderError, ProviderUnreachableError
+from aws_tui.domain.query import QueryExecutionDetail, ResultColumn, ResultPage
 from aws_tui.infra.theme_store import ThemeStore
 from aws_tui.ui.widgets.athena.history_view import AthenaHistoryView
 from aws_tui.ui.widgets.athena.page import AthenaPage
@@ -1109,6 +1109,59 @@ async def test_editor_and_execute_button_drive_the_query_vm() -> None:
         assert client.start_calls
         assert client.start_calls[0][0] == "SELECT count(*) FROM events"
         assert vm.results.rows == (("1",),)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("recovery", ["stop", "rerun"])
+async def test_query_buttons_recover_owned_query_after_poll_failure(recovery: str) -> None:
+    class PollFailureClient(PageClient):
+        async def get_query_execution(self, execution_id: str) -> QueryExecutionDetail:
+            if execution_id == "q-app-1":
+                raise ProviderUnreachableError("controlled polling failure")
+            return await super().get_query_execution(execution_id)
+
+    client = PollFailureClient()
+    vm, _client = _build_vm(client)
+    await vm.setup()
+    app = _AthenaApp(vm)
+    try:
+        async with app.run_test(size=(120, 40)) as pilot:
+            editor = app.query_one("#athena-editor", TextArea)
+            await seed_athena_sql(pilot, vm.query, editor, "SELECT 1")
+            await pilot.click("#athena-execute")
+            stop = app.query_one("#athena-cancel", Button)
+            run = app.query_one("#athena-execute", Button)
+            await wait_until(
+                lambda: (
+                    bool(vm.query.error_text)
+                    and not vm.query.is_executing
+                    and not stop.disabled
+                    and not run.disabled
+                ),
+                what="polling failure left owned query stoppable and rerunnable",
+            )
+
+            if recovery == "stop":
+                await pilot.click("#athena-cancel")
+                await wait_until(
+                    lambda: not vm.query.owns_active_query and stop.disabled,
+                    what="Stop retired the original query after polling failure",
+                )
+                assert len(client.start_calls) == 1
+            else:
+                await wait_until(
+                    lambda: not run.has_class("-active"),
+                    what="initial Run button press animation finished",
+                )
+                await pilot.click("#athena-execute")
+                await wait_until(
+                    lambda: len(client.start_calls) == 2 and vm.results.rows == (("1",),),
+                    what="Run stopped the original query and loaded the replacement results",
+                )
+            assert client.stop_calls == ["q-app-1"]
+    finally:
+        await vm.shutdown()
+        vm.dispose()
 
 
 @pytest.mark.asyncio

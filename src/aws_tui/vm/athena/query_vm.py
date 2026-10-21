@@ -608,6 +608,7 @@ class AthenaQueryVM:
                 cleanup.result()
             finally:
                 self._lifecycle_transition = False
+                self._notify("is_executing")
             if cancelled:
                 raise asyncio.CancelledError
 
@@ -726,6 +727,8 @@ class AthenaQueryVM:
                     self._validation_error = str(exc)
                     self._notify("validation_error")
                 return
+            if not await self._retire_owned_query_before_run(generation):
+                return
             self._reset_execution_state()
             self._validation_error = None
             self._is_submitting = True
@@ -735,13 +738,19 @@ class AthenaQueryVM:
             self._notify("pane_state")
             submission_context = self._context
             request_token = _request_token(submission_context)
-            submission_task = asyncio.create_task(
-                self._runner.start(
+
+            async def submit_current_query() -> QueryExecutionRef:
+                # Context/shutdown can acquire the retirement lock before this
+                # scheduled task runs. Fence the actual provider dispatch too.
+                if not self._execution_request_is_current(generation):
+                    raise asyncio.CancelledError
+                return await self._runner.start(
                     normalized_sql,
                     submission_context,
                     request_token=request_token,
                 )
-            )
+
+            submission_task = asyncio.create_task(submit_current_query())
             self._submission_task = submission_task
             try:
                 ref = await asyncio.shield(submission_task)
@@ -795,6 +804,41 @@ class AthenaQueryVM:
             if self._execution_task is task:
                 self._execution_task = None
             self._set_busy(False)
+
+    def _execution_request_is_current(self, generation: int) -> bool:
+        return (
+            generation == self._generation
+            # Stop may be waiting for the retirement lock, and a provider may
+            # suppress task cancellation while completing its Stop request.
+            and not self._cancel_command.is_executing
+            and self._execution_task is not None
+            and not self._execution_task.cancelling()
+            and not self._disposed
+            and not self._shutdown_started
+            and not self._input_admission_closed
+            and not self._lifecycle_transition
+            and not self._is_context_resolving
+            and not self.draft_execution_blocked
+            and self._execution_context_available()
+        )
+
+    async def _retire_owned_query_before_run(self, generation: int) -> bool:
+        # A failed status read does not settle the remote execution. Serialize
+        # replacement with Stop/context/shutdown rather than resetting its ID.
+        async with self._lifecycle_lock:
+            if not self._execution_request_is_current(generation):
+                return False
+            ref = self._execution_ref
+            if self._owns_active_query and ref is not None:
+                if not await self._try_stop(ref):
+                    return False
+                self._owns_active_query = False
+                self._state = QueryState.CANCELLED
+                self._notify_execution()
+            # VMx schedules command cancellation onto the loop. Let an observer's
+            # cancellation of this rerun arrive before submitting its replacement.
+            await asyncio.sleep(0)
+            return self._execution_request_is_current(generation)
 
     def refresh_execution_availability(self) -> None:
         available = self._execution_context_available()
@@ -868,6 +912,7 @@ class AthenaQueryVM:
                 cleanup.result()
             finally:
                 self._lifecycle_transition = False
+                self._notify("is_executing")
             if cancelled:
                 raise asyncio.CancelledError
 
@@ -940,7 +985,11 @@ class AthenaQueryVM:
             # Oldest first: a ref this stale has already been retried on every
             # intervening cancel. Dropping it abandons a server-side stop, which
             # is strictly better than freezing navigation on a growing fan-out.
-            self._pending_cleanup_refs.pop(next(iter(self._pending_cleanup_refs)))
+            abandoned = self._pending_cleanup_refs.pop(next(iter(self._pending_cleanup_refs)))
+            _logger.warning(
+                "athena query cleanup abandoned",
+                extra={"execution_id": abandoned.execution_id, "cleanup_reason": "capacity"},
+            )
 
     async def _stop_retained_ref(
         self,
@@ -953,6 +1002,11 @@ class AthenaQueryVM:
             # A denial is permanent for this session's credentials: retrying it
             # on every later cancel only multiplies the failures.
             self._pending_cleanup_refs.pop(ref.execution_id, None)
+            if not stopped:
+                _logger.warning(
+                    "athena query cleanup abandoned",
+                    extra={"execution_id": ref.execution_id, "cleanup_reason": "permission_denied"},
+                )
         return stopped
 
     async def _stop_pending_cleanup(self, *, report_error: bool) -> None:
@@ -1123,6 +1177,7 @@ class AthenaQueryVM:
             self._disposed
             or self._shutdown_started
             or self._input_admission_closed
+            or self._lifecycle_transition
             or self._is_context_resolving
             or not self._sql.strip()
             or self._busy
@@ -1139,7 +1194,6 @@ class AthenaQueryVM:
         return (
             not self._disposed
             and not self._shutdown_started
-            and self._busy
             and (
                 self._is_submitting or (self._owns_active_query and self._execution_ref is not None)
             )
