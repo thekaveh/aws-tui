@@ -181,6 +181,7 @@ same size.
 | Open selected table location in S3 | `:` / `Ctrl+K`, then **Open table location in S3** | `glue.open_s3_location` is palette-only and absent from `KeymapStore.DEFAULT_BINDINGS`. It preserves the exact Glue connection name and region; malformed or missing locations do not navigate. |
 | Query selected table in Athena | `Shift+Q` (`Q`) or `:` / `Ctrl+K`, then **Query table in Athena** | Runs `glue.query_in_athena` for a visible selected Glue table. It opens Athena, resolves the exact catalog/database request context, and prefills the quoted `SELECT * FROM "database"."table" LIMIT 5`; it does not execute the query. |
 | Query selected Iceberg snapshot in Athena | `Shift+V` (`V`), `:` / `Ctrl+K`, then **Query Iceberg snapshot in Athena**, or the Iceberg time-travel button | Runs `glue.time_travel_in_athena` only for a visible selected snapshot on the Snapshots tab. It opens Athena with the same exact source and bounded SQL plus `FOR VERSION AS OF <snapshot-id>` before `LIMIT 5`; it does not execute the query. |
+| Explain Iceberg metadata or compare snapshots | **Info**, or `:` / `Ctrl+K`, then **Explain Iceberg metadata or compare snapshots** | Uses loaded metadata. See [snapshot comparison and current observations](services/glue.md#31-explain-metadata-and-compare-snapshots) for selection, units and limits. |
 
 `Ctrl+G` is reserved by `glue.compare_tables` in the default keymap. If an existing configuration assigns it to another action, explicitly disable `"glue.compare_tables" = []` or remap that action. For example, remap it to `"alt+g"` in `[keybindings]`. Otherwise the existing collision validator rejects the overlay. The comparison remains available in the command palette when unbound.
 
@@ -197,7 +198,7 @@ Glue's forward focus order is:
 - **Crawlers:** Source, Crawler state, view tabs, crawlers, crawler detail, and
     the navigation rail.
 
-Disabled Iceberg load-more/retry/time-travel controls are omitted. `Shift+Tab`
+Disabled Iceberg Info/load-more/retry/time-travel controls are omitted. `Shift+Tab`
 walks the same active ring in reverse.
 
 ### 1.10. Amazon Athena
@@ -437,6 +438,7 @@ unbound until a handler ships.
 | `glue.query_in_athena` | `Q` (`shift+q`) | yes | Open the selected Glue table in Athena and prefill exact quoted `SELECT * ... LIMIT 5` SQL without executing it |
 | `glue.time_travel_in_athena` | `V` (`shift+v`) | yes | Open the selected visible Iceberg snapshot in Athena and prefill exact bounded `FOR VERSION AS OF` SQL without executing it |
 | `glue.load_more` | `l` | yes | Fetch the next page for the focused Glue list |
+| `glue.iceberg_info` | none (button or command palette) | yes | Explain loaded metadata, pin snapshot A and compare it with selected B without another query |
 | `athena.query` | `1` | yes | Select the Athena Query view |
 | `athena.history` | `2` | yes | Select the Athena History view |
 | `athena.results` | `3` | yes | Select the Athena Results view |
@@ -469,11 +471,12 @@ unbound until a handler ships.
 
 Rows with a default key are registered by
 `KeymapStore.DEFAULT_BINDINGS` and may be overlaid in
-`[keybindings]`. `glue.open_s3_location`, `athena.open_result_location`, and
+`[keybindings]`. `glue.open_s3_location`, `glue.iceberg_info`, `athena.open_result_location`, and
 `athena.open_in_glue` are palette-only,
 registered in `ActionRegistry`, and absent from
 `KeymapStore.DEFAULT_BINDINGS`; assigning them a key is not currently
 supported.
+The Iceberg **Info** button provides the same action without the palette.
 Any unknown overlay id is logged and causes the app to fall back to
 the default keymap.
 

@@ -51,6 +51,53 @@ The bounded limits and required permissions are documented in the
 [Cookbook](../cookbook.md#71-iceberg-detection-and-metadata-views). These
 queries incur ordinary Athena workgroup and result-storage behavior.
 
+Before each metadata read, the footer displays its collection, retained row cap,
+SQL limit and scan-cost caveat. The SQL requests one extra row to detect truncation.
+The row cap does not bound scanned bytes or charges.
+If the complete plan cannot be displayed, the read does not start.
+
+### 3.1. Explain metadata and compare snapshots
+
+On **Snaps**, select a row and open **Info** for its committed time, parent,
+operation and historical summary. Each summary key retains its raw values
+beside the explained metric and unit. Missing, malformed or ambiguous values
+read `unknown`; a known zero remains zero.
+
+To compare two snapshots from the selected table:
+
+1. Select the first snapshot and open **Info**.
+2. Choose **Pin selected snapshot as A**, then close Info with `Esc`.
+3. Select the second snapshot and reopen **Info**.
+4. Choose **Compare A with selected B**.
+
+The comparison displays both values and signed `B - A` deltas for recognized
+numeric counters with known units. Numeric-looking IDs and arbitrary properties
+do not become quantities. Ancestry requires loaded parent or history links;
+missing links, conflicts and cycles remain unresolved.
+
+On **Files** and **Parts**, Info summarizes **current observations** independently
+of historical snapshot A. Counts, byte distributions and delete counters cover
+all fetched rows, including rows beyond the visible page. Reports include
+sample size, known-value counts, coverage, row cap and successful observation time.
+An incomplete source has an unknown denominator; the report does not extrapolate.
+
+Quantiles use nearest rank over known values; sums are known-value subtotals.
+Content codes retain their raw integers: `0` means data, `1` position deletes,
+and `2` equality deletes. Other codes mean `unknown`.
+Data-file record counts precede applying deletes, so they do not count surviving rows.
+
+On **Refs**, Info explains the selected reference's raw retention settings.
+It does not infer missing table defaults or predict deletion times.
+The main reference does not expire; branch-only settings do not apply to tags.
+
+Info and comparison use loaded metadata and issue no additional queries.
+Their scrollable, selectable text includes the complete source identity and
+observation provenance. `Tab` reaches Info; arrows and `Enter` choose an action.
+Within Info, `Tab` reaches the text viewer and `Esc` closes the dialog.
+Changing the table or refreshing its metadata invalidates the open report.
+
+### 3.2. Preview table rows
+
 A seventh tab, **Peek**, previews table rows by reading the table's S3 location with local DuckDB instead of Athena.
 It incurs no Athena query charge and needs no Athena workgroup or result-output location.
 These savings apply to the Peek scan.

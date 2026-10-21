@@ -1,15 +1,18 @@
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Awaitable, Callable
 from functools import partial
 from inspect import isawaitable
 from typing import ClassVar, Literal, TypeAlias, cast
 
 from reactivex.abc import DisposableBase
+from rich.cells import cell_len
 from rich.text import Text
 from textual.app import ComposeResult
 from textual.binding import Binding, BindingType
 from textual.containers import Horizontal
+from textual.errors import NoWidget
 from textual.events import Click
 from textual.message import Message as TextualMessage
 from textual.widget import Widget
@@ -21,12 +24,21 @@ from aws_tui.domain.iceberg import (
     IcebergHistoryEntry,
     IcebergManifest,
     IcebergPartition,
+    IcebergQueryPlan,
     IcebergReference,
     IcebergSnapshot,
 )
+from aws_tui.domain.iceberg_interpretation import content_label
 from aws_tui.ui.actions import ActionDispatcher
 from aws_tui.ui.widgets._worker import DeferredWorkerMixin
 from aws_tui.ui.widgets.glue.detail_rows import display_time, display_value, state_placeholder
+from aws_tui.ui.widgets.glue.iceberg_info import (
+    IcebergInfoModal,
+    comparison_text,
+    observation_text,
+    reference_text,
+    snapshot_text,
+)
 from aws_tui.vm.file_manager.pane_vm import PaneState
 from aws_tui.vm.glue.iceberg_vm import GlueIcebergVM, IcebergRow, IcebergView
 
@@ -153,6 +165,12 @@ class GlueIcebergView(DeferredWorkerMixin, Widget):
         height: 3;
         margin: 0 0 0 1;
     }
+    GlueIcebergView #glue-iceberg-info {
+        width: 8;
+        min-width: 8;
+        height: 3;
+        margin: 0 0 0 1;
+    }
     """
 
     def __init__(self, vm: GlueIcebergVM, *, id: str | None = None) -> None:
@@ -165,6 +183,12 @@ class GlueIcebergView(DeferredWorkerMixin, Widget):
         self._suppress_highlight = False
         self._refresh_pending = False
         self._table_snapshot: object | None = None
+        self._release_plan_presenter: Callable[[], None] | None = None
+        self._plan_paints: set[asyncio.Future[bool]] = set()
+        self._plan_presentation_lock = asyncio.Lock()
+        self._shown_plan: IcebergQueryPlan | None = None
+        self._info_modal: IcebergInfoModal | None = None
+        self._info_context: object | None = None
 
     def compose(self) -> ComposeResult:
         with Horizontal(id="glue-iceberg-tabs"):
@@ -187,6 +211,13 @@ class GlueIcebergView(DeferredWorkerMixin, Widget):
         )
         yield Static("", id="glue-iceberg-footer", markup=False)
         with Horizontal(id="glue-iceberg-controls"):
+            yield Button(
+                "Info",
+                id="glue-iceberg-info",
+                compact=True,
+                flat=True,
+                tooltip="Explain loaded metadata or compare snapshots",
+            )
             yield Button(
                 "↓",
                 id="glue-iceberg-more",
@@ -211,6 +242,7 @@ class GlueIcebergView(DeferredWorkerMixin, Widget):
 
     def on_mount(self) -> None:
         self.border_title = "Iceberg metadata"
+        self._release_plan_presenter = self._vm.set_plan_presenter(self._present_metadata_plan)
         self._refresh()
         self._sub = self._vm.on_property_changed.subscribe(on_next=self._on_vm_changed)
         # The Peek pane binds directly to its own child VM's Observable --
@@ -220,12 +252,89 @@ class GlueIcebergView(DeferredWorkerMixin, Widget):
         )
 
     def on_unmount(self) -> None:
+        if self._info_modal is not None:
+            self._info_modal.invalidate()
+        if self._release_plan_presenter is not None:
+            self._release_plan_presenter()
+            self._release_plan_presenter = None
+        for pending in self._plan_paints:
+            if not pending.done():
+                pending.set_result(False)
+        self._plan_paints.clear()
+        self._shown_plan = None
         if self._sub is not None:
             self._sub.dispose()
             self._sub = None
         if self._preview_sub is not None:
             self._preview_sub.dispose()
             self._preview_sub = None
+
+    def _plan_can_be_seen(self, plan: IcebergQueryPlan) -> bool:
+        return (
+            self.is_attached
+            and self._vm.available
+            and self._vm.table_ref == plan.table_ref
+            and self.app.screen is self.screen
+            and all(
+                node.display and node.visible
+                for node in self.ancestors_with_self
+                if isinstance(node, Widget)
+            )
+        )
+
+    async def _present_metadata_plan(self, plan: IcebergQueryPlan) -> bool:
+        # Serialize presentation frames, not provider reads. Every admitted
+        # read must have its own visible plan before it can reach Athena.
+        async with self._plan_presentation_lock:
+            if not self.is_attached:
+                return False
+            self._shown_plan = plan
+            self._refresh()
+            if not self._plan_can_be_seen(plan):
+                self._shown_plan = None
+                return False
+            pending: asyncio.Future[bool] = asyncio.get_running_loop().create_future()
+            self._plan_paints.add(pending)
+            try:
+                if not self.call_after_refresh(self._acknowledge_plan_paint, plan, pending):
+                    return False
+                return await pending
+            finally:
+                self._plan_paints.discard(pending)
+                if self._shown_plan is plan:
+                    self._shown_plan = None
+                if self.is_attached:
+                    self._schedule_refresh()
+
+    def _acknowledge_plan_paint(
+        self,
+        plan: IcebergQueryPlan,
+        pending: asyncio.Future[bool],
+    ) -> None:
+        if pending.done():
+            return
+        footer = self.query_one("#glue-iceberg-footer", Static)
+        accepted = self._shown_plan is plan and self._plan_can_be_seen(plan)
+        if accepted:
+            try:
+                geometry = self.screen.find_widget(footer)
+                content = footer.content_region
+                lines = str(footer.render()).splitlines()
+                accepted = (
+                    geometry.visible_region.intersection(self.screen.region).contains_region(
+                        content
+                    )
+                    and content.height >= len(lines)
+                    and content.width >= max(map(cell_len, lines))
+                    and all(
+                        self.screen.get_widget_at(content.x + x, content.y + y)[0] is footer
+                        for y, line in enumerate(lines)
+                        for x in range(cell_len(line))
+                    )
+                )
+            except NoWidget:
+                accepted = False
+        pending.set_result(accepted)
 
     def focus_targets(self) -> tuple[Widget, ...]:
         """Return the complete enabled Iceberg interaction surface."""
@@ -234,6 +343,7 @@ class GlueIcebergView(DeferredWorkerMixin, Widget):
         candidates = (
             *self.query(_IcebergTab),
             self.query_one("#glue-iceberg-table", DataTable),
+            self.query_one("#glue-iceberg-info", Button),
             self.query_one("#glue-iceberg-more", Button),
             self.query_one("#glue-iceberg-retry", Button),
             self.query_one("#glue-iceberg-time-travel", Button),
@@ -298,7 +408,9 @@ class GlueIcebergView(DeferredWorkerMixin, Widget):
         self._vm.select_snapshot(self._vm.snapshots[event.cursor_row].snapshot_id)
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
-        if event.button.id == "glue-iceberg-more":
+        if event.button.id == "glue-iceberg-info":
+            self.show_info()
+        elif event.button.id == "glue-iceberg-more":
             if self._preview_active:
                 # The Peek pane's honest load-more: a real second DuckDB
                 # scan at the next row-limit step, unlike the sibling panes'
@@ -324,7 +436,93 @@ class GlueIcebergView(DeferredWorkerMixin, Widget):
             self._time_travel_selected()
 
     def _on_vm_changed(self, _property_name: str) -> None:
+        if self._info_modal is not None and self._info_context != self._interpretation_context():
+            self._info_modal.invalidate()
         self._schedule_refresh()
+
+    def _interpretation_context(self) -> object:
+        return (
+            self._vm.table_ref,
+            self._vm.available,
+            self._vm.active_view,
+            self._vm.state,
+            self._vm.selected_snapshot_id,
+            self._vm.observed_at_for(self._vm.active_view),
+        )
+
+    @property
+    def info_available(self) -> bool:
+        if not self._vm.available or self._preview_active:
+            return False
+        if self._vm.state not in {PaneState.IDLE, PaneState.EMPTY}:
+            return False
+        if self._vm.active_view == "snapshots":
+            return self._vm.selected_snapshot_detail is not None
+        if self._vm.active_view in {"files", "partitions"}:
+            return self._vm.observed_at_for(self._vm.active_view) is not None
+        return self._vm.active_view == "refs" and bool(self._vm.items)
+
+    def show_info(self) -> None:
+        """Open explanations of already fetched rows; never start a read."""
+        ref = self._vm.table_ref
+        if not self.info_available or ref is None or self._info_modal is not None:
+            return
+        view = self._vm.active_view
+        choices: tuple[tuple[str, Callable[[], str]], ...]
+        if view == "snapshots":
+
+            def detail() -> str:
+                snapshot = self._vm.selected_snapshot_detail
+                return snapshot_text(snapshot) if snapshot is not None else "Snapshot unknown"
+
+            def pin() -> str:
+                if self._vm.pin_comparison_snapshot():
+                    return f"Pinned historical snapshot A: {self._vm.comparison_snapshot_id}\nClose, select another snapshot, then choose Compare A with selected B."
+                return "Snapshot is no longer available"
+
+            def compare() -> str:
+                comparison = self._vm.snapshot_comparison
+                return (
+                    comparison_text(comparison)
+                    if comparison is not None
+                    else "Pin snapshot A first; then select snapshot B."
+                )
+
+            choices = (
+                ("Snapshot details", detail),
+                ("Pin selected snapshot as A", pin),
+                ("Compare A with selected B", compare),
+            )
+        elif view in {"files", "partitions"}:
+            summary = self._vm.observation_for(view)
+            if summary is None:
+                return
+            text = observation_text(summary, pinned_snapshot=self._vm.comparison_snapshot_id)
+            if view == "files":
+                text += "\n\nRaw content codes in fetched rows: " + ", ".join(
+                    content_label(code) for code in self._vm.observed_file_content_codes
+                )
+            choices = (("Current observation summary", lambda: text),)
+        else:
+            index = self.query_one("#glue-iceberg-table", DataTable).cursor_row
+            if not 0 <= index < len(self._vm.items):
+                return
+            text = reference_text(cast(IcebergReference, self._vm.items[index]))
+            choices = (("Selected reference retention", lambda: text),)
+        coverage = self._vm.coverage_for(view)
+        identity = (
+            f"{ref.connection_name} · {ref.region}\n{ref.catalog_name}.{ref.database_name}.{ref.table_name}\n"
+            f"{view} · coverage {coverage.status if coverage else 'unknown'} · "
+            f"row cap {coverage.row_limit if coverage else 'unknown'} · "
+            f"observed {display_time(self._vm.observed_at_for(view))}"
+        )
+        self._info_context = self._interpretation_context()
+        self._info_modal = IcebergInfoModal(identity, choices)
+        self.app.push_screen(self._info_modal, self._info_closed)
+
+    def _info_closed(self, _result: None) -> None:
+        self._info_modal = None
+        self._info_context = None
 
     def _on_preview_changed(self, _property_name: str) -> None:
         self._schedule_refresh()
@@ -374,6 +572,7 @@ class GlueIcebergView(DeferredWorkerMixin, Widget):
             more = self.query_one("#glue-iceberg-more", Button)
             retry = self.query_one("#glue-iceberg-retry", Button)
             time_travel = self.query_one("#glue-iceberg-time-travel", Button)
+            info = self.query_one("#glue-iceberg-info", Button)
         except Exception:
             return
         self.display = self._vm.available
@@ -518,7 +717,27 @@ class GlueIcebergView(DeferredWorkerMixin, Widget):
                 PaneState.ERROR,
             }
             retry.disabled = self._vm.state is PaneState.LOADING
+        plan = self._shown_plan
+        if plan is not None:
+            if self._vm.state_for(cast(IcebergView, plan.collection)) is PaneState.LOADING:
+                coverage = self._vm.coverage_for(cast(IcebergView, plan.collection))
+                footer.update(
+                    f"Athena {plan.collection} LIMIT {plan.request_limit}\n"
+                    f"Keep {plan.row_limit} rows · coverage {coverage.status if coverage is not None else 'unknown'}\n"
+                    "Row cap ≠ scan bytes or cost"
+                )
+                ref = plan.table_ref
+                footer.tooltip = Text(
+                    f"{ref.connection_name} · {ref.region}\n"
+                    f"{ref.catalog_name}.{ref.database_name}.{ref.table_name}\n{plan.sql}"
+                )
+            else:
+                self._shown_plan = None
+                footer.tooltip = None
+        else:
+            footer.tooltip = None
         time_travel.disabled = not self._vm.can_time_travel_in_athena
+        info.disabled = not self.info_available
 
     def _current_view(self) -> _TabView:
         return "preview" if self._preview_active else self._vm.active_view

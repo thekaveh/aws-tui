@@ -4,8 +4,9 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from typing import Any, Literal, Protocol, TypeAlias, cast
 
 import reactivex as rx
@@ -29,8 +30,18 @@ from aws_tui.domain.iceberg import (
     IcebergInspection,
     IcebergManifest,
     IcebergPartition,
+    IcebergQueryPlan,
     IcebergReference,
     IcebergSnapshot,
+    metadata_query_plan,
+)
+from aws_tui.domain.iceberg_interpretation import (
+    ObservationSummary,
+    SnapshotComparison,
+    SnapshotExplanation,
+    compare_snapshots,
+    current_observation,
+    explain_snapshot,
 )
 from aws_tui.infra.duckdb import DuckDbPort, NativeDuckDb
 from aws_tui.vm._observable import ObserverSafeSubject, send_value_free
@@ -65,6 +76,15 @@ _VIEWS: tuple[IcebergView, ...] = (
     "refs",
 )
 _VIEW_SET = frozenset(_VIEWS)
+
+
+class _PlanNotPresented(Exception):
+    """A retired/unavailable presentation must not admit an Athena read."""
+
+
+_PLAN_NOT_PRESENTED = object()
+
+
 _ROW_TYPES: dict[IcebergView, type[IcebergRow]] = {
     "snapshots": IcebergSnapshot,
     "history": IcebergHistoryEntry,
@@ -157,6 +177,7 @@ class UnavailableIcebergInspector:
 class _MetadataPane:
     rows: tuple[IcebergRow, ...] = field(default_factory=tuple)
     coverage: IcebergCoverage | None = None
+    observed_at: datetime | None = None
     visible_count: int = 0
     state: PaneState = PaneState.EMPTY
     error_text: str | None = None
@@ -164,6 +185,7 @@ class _MetadataPane:
     generation: int = 0
     stable_rows: tuple[IcebergRow, ...] = field(default_factory=tuple)
     stable_coverage: IcebergCoverage | None = None
+    stable_observed_at: datetime | None = None
     stable_visible_count: int = 0
     stable_state: PaneState = PaneState.EMPTY
     stable_error_text: str | None = None
@@ -209,6 +231,10 @@ class GlueIcebergVM:
         self._table_ref: TableRef | None = None
         self._active_view: IcebergView = "snapshots"
         self._selected_snapshot_id: int | None = None
+        self._comparison_snapshot_id: int | None = None
+        self._plan_presenter: Callable[[IcebergQueryPlan], Awaitable[bool]] | None = None
+        self._plan_lease: object | None = None
+        self._plan_required = False
         self._panes = {view: _MetadataPane() for view in _VIEWS}
         self._on_property_changed = ObserverSafeSubject[str]()
         self._inner: ComponentVMOf[None] = (
@@ -281,6 +307,82 @@ class GlueIcebergVM:
         return self._selected_snapshot_id
 
     @property
+    def comparison_snapshot_id(self) -> int | None:
+        return self._comparison_snapshot_id
+
+    @property
+    def selected_snapshot_detail(self) -> SnapshotExplanation | None:
+        if not self.available:
+            return None
+        row = next((r for r in self.snapshots if r.snapshot_id == self._selected_snapshot_id), None)
+        return explain_snapshot(row) if row is not None else None
+
+    @property
+    def snapshot_comparison(self) -> SnapshotComparison | None:
+        if not self.available or self._table_ref is None:
+            return None
+        snapshots = cast(tuple[IcebergSnapshot, ...], self._panes["snapshots"].rows)
+        a = next((r for r in snapshots if r.snapshot_id == self._comparison_snapshot_id), None)
+        b = next((r for r in snapshots if r.snapshot_id == self._selected_snapshot_id), None)
+        if a is None or b is None:
+            return None
+        return compare_snapshots(
+            self._table_ref,
+            a,
+            b,
+            snapshots=snapshots,
+            history=cast(tuple[IcebergHistoryEntry, ...], self._panes["history"].rows),
+        )
+
+    def observed_at_for(self, view: IcebergView) -> datetime | None:
+        return self._pane(view).observed_at
+
+    def observation_for(self, view: Literal["files", "partitions"]) -> ObservationSummary | None:
+        if not self.available or self._table_ref is None:
+            return None
+        pane = self._pane(view)
+        if pane.observed_at is None:
+            return None
+        return current_observation(
+            self._table_ref,
+            view,
+            cast(tuple[IcebergDataFile, ...] | tuple[IcebergPartition, ...], pane.rows),
+            pane.coverage,
+            pane.observed_at,
+        )
+
+    def set_plan_presenter(
+        self,
+        presenter: Callable[[IcebergQueryPlan], Awaitable[bool]],
+    ) -> Callable[[], None]:
+        """Install the mounted view's render acknowledgement, without a read.
+
+        Headless inspection remains usable without a renderer. A mounted UI
+        installs this port before user-triggered loads and acknowledges only
+        after the bounded read plan was actually painted.
+        """
+        if self._disposed or self._shutdown_started:
+            return lambda: None
+        lease = object()
+        self._plan_required = True
+        self._plan_lease = lease
+        self._plan_presenter = presenter
+
+        def release() -> None:
+            if self._plan_lease is lease:
+                self._plan_presenter = None
+                self._plan_lease = None
+
+        return release
+
+    def pin_comparison_snapshot(self) -> bool:
+        if not self.can_time_travel_in_athena:
+            return False
+        self._comparison_snapshot_id = self._selected_snapshot_id
+        self._notify("comparison_snapshot_id")
+        return True
+
+    @property
     def can_time_travel_in_athena(self) -> bool:
         pane = self._panes["snapshots"]
         snapshot_id = self._selected_snapshot_id
@@ -312,6 +414,13 @@ class GlueIcebergVM:
         return cast(tuple[IcebergDataFile, ...], self._panes["files"].visible_rows)
 
     @property
+    def observed_file_content_codes(self) -> tuple[int, ...]:
+        """Raw codes across the complete fetched sample, before local paging."""
+        return tuple(
+            sorted({cast(IcebergDataFile, row).content for row in self._panes["files"].rows})
+        )
+
+    @property
     def partitions(self) -> tuple[IcebergPartition, ...]:
         return cast(tuple[IcebergPartition, ...], self._panes["partitions"].visible_rows)
 
@@ -337,6 +446,8 @@ class GlueIcebergVM:
         if self._disposed:
             return
         self._disposed = True
+        self._plan_presenter = None
+        self._plan_lease = None
         self._shutdown_started = True
         self._binding_mutation_epoch += 1
         self._invalidate_binding(notify=False)
@@ -484,10 +595,12 @@ class GlueIcebergVM:
         binding_generation = self._binding_generation
         self._table_ref = None
         self._selected_snapshot_id = None
+        self._comparison_snapshot_id = None
         for view, pane in self._panes.items():
             pane.generation += 1
             pane.rows = ()
             pane.coverage = None
+            pane.observed_at = None
             pane.visible_count = 0
             pane.state = PaneState.EMPTY
             pane.error_text = None
@@ -603,11 +716,26 @@ class GlueIcebergVM:
         table_ref = self._table_ref
         if not self._metadata_load_is_admitted() or table_ref is None:
             return False
+        # Capture admission before notifying observers. Once a UI renderer has
+        # owned this VM, losing it can never restore the headless fallback.
+        presenter, plan_lease = self._plan_presenter, self._plan_lease
+        plan_required = self._plan_required
+        if plan_required and presenter is None:
+            return False
         pane = self._panes[view]
         pane.generation += 1
         request_generation = pane.generation
         binding_generation = self._binding_generation
         caller_task = asyncio.current_task()
+        request_retired = False
+
+        def plan_owner_is_current() -> bool:
+            return (
+                self._plan_lease is plan_lease
+                and self._plan_presenter is presenter
+                and self._plan_required == plan_required
+            )
+
         try:
             if not self._metadata_load_is_admitted():
                 return False
@@ -621,13 +749,54 @@ class GlueIcebergVM:
                 table_ref,
             ):
                 return False
-            metadata_task = asyncio.create_task(self._loader(view)(table_ref))
+
+            async def inspect_after_plan() -> object:
+                if request_retired or not plan_owner_is_current():
+                    return _PLAN_NOT_PRESENTED
+                if presenter is not None:
+                    presented = await presenter(metadata_query_plan(table_ref, view))
+                    if presented is not True or not plan_owner_is_current():
+                        return _PLAN_NOT_PRESENTED
+                current = asyncio.current_task()
+                if (
+                    request_retired
+                    or (caller_task is not None and caller_task.cancelling())
+                    or (current is not None and current.cancelling())
+                    or not plan_owner_is_current()
+                    or not self._metadata_load_is_admitted()
+                    or not self._is_current(view, request_generation, binding_generation, table_ref)
+                ):
+                    return _PLAN_NOT_PRESENTED
+                return await self._loader(view)(table_ref)
+
+            metadata_task = asyncio.create_task(inspect_after_plan())
             self._metadata_tasks.add(metadata_task)
             metadata_task.add_done_callback(self._metadata_task_done)
-            rows = await metadata_task
+            try:
+                rows = await asyncio.shield(metadata_task)
+            except asyncio.CancelledError:
+                # Retire before forwarding cancellation: a renderer that
+                # suppresses/uncancels its own task cannot revive this read.
+                request_retired = True
+                metadata_task.cancel()
+                while not metadata_task.done():
+                    with contextlib.suppress(asyncio.CancelledError, Exception):
+                        await asyncio.shield(metadata_task)
+                raise
             if caller_task is not None and caller_task.cancelling():
-                raise asyncio.CancelledError
+                raise asyncio.CancelledError from None
+            if rows is _PLAN_NOT_PRESENTED:
+                raise _PlanNotPresented
             normalized, coverage = self._normalize_inspection(view, table_ref, rows)
+        except _PlanNotPresented:
+            if self._is_current(view, request_generation, binding_generation, table_ref):
+                selection_changed = self._restore_stable(view, pane)
+                if selection_changed:
+                    self._notify("selected_snapshot_id")
+                self._notify_view(view)
+            if caller_task is not None and caller_task.cancelling():
+                raise asyncio.CancelledError from None
+            return False
         except asyncio.CancelledError:
             if self._is_current(view, request_generation, binding_generation, table_ref):
                 selection_changed = self._restore_stable(view, pane)
@@ -666,6 +835,7 @@ class GlueIcebergVM:
             return False
         pane.rows = normalized
         pane.coverage = coverage
+        pane.observed_at = datetime.now(UTC)
         pane.visible_count = min(len(normalized), self._page_size)
         pane.state = PaneState.IDLE if normalized else PaneState.EMPTY
         pane.error_text = None
@@ -677,7 +847,16 @@ class GlueIcebergVM:
         ):
             selection_changed = self._selected_snapshot_id is not None
             self._selected_snapshot_id = None
+        comparison_changed = False
+        if view == "snapshots" and not any(
+            cast(IcebergSnapshot, row).snapshot_id == self._comparison_snapshot_id
+            for row in normalized
+        ):
+            comparison_changed = self._comparison_snapshot_id is not None
+            self._comparison_snapshot_id = None
         self._remember_stable(view, pane)
+        if comparison_changed:
+            self._notify("comparison_snapshot_id")
         if selection_changed:
             self._notify("selected_snapshot_id")
         self._notify_view(view)
@@ -695,6 +874,7 @@ class GlueIcebergVM:
             return
         pane.stable_rows = pane.rows
         pane.stable_coverage = pane.coverage
+        pane.stable_observed_at = pane.observed_at
         pane.stable_visible_count = pane.visible_count
         pane.stable_state = pane.state
         pane.stable_error_text = pane.error_text
@@ -705,6 +885,7 @@ class GlueIcebergVM:
     def _restore_stable(self, view: IcebergView, pane: _MetadataPane) -> bool:
         pane.rows = pane.stable_rows
         pane.coverage = pane.stable_coverage
+        pane.observed_at = pane.stable_observed_at
         pane.visible_count = pane.stable_visible_count
         pane.state = pane.stable_state
         pane.error_text = pane.stable_error_text
@@ -903,6 +1084,7 @@ def _valid_pairs(
     value: object,
     *,
     optional_values: bool = False,
+    unique_keys: bool = True,
 ) -> bool:
     if type(value) is not tuple:
         return False
@@ -914,7 +1096,7 @@ def _valid_pairs(
         if not _valid_string(key) or not ((item is None and optional_values) or type(item) is str):
             return False
         keys.append(cast(str, key))
-    return len(keys) == len(set(keys))
+    return not unique_keys or len(keys) == len(set(keys))
 
 
 def _valid_row(view: IcebergView, row: IcebergRow) -> bool:
@@ -926,7 +1108,7 @@ def _valid_row(view: IcebergView, row: IcebergRow) -> bool:
             and _valid_int(snapshot.parent_id, optional=True)
             and snapshot.operation in {"append", "delete", "overwrite", "replace"}
             and _valid_string(snapshot.manifest_list)
-            and _valid_pairs(snapshot.summary)
+            and _valid_pairs(snapshot.summary, unique_keys=False)
         )
     if view == "history":
         history = cast(IcebergHistoryEntry, row)
@@ -951,8 +1133,7 @@ def _valid_row(view: IcebergView, row: IcebergRow) -> bool:
     if view == "files":
         data_file = cast(IcebergDataFile, row)
         return (
-            data_file.content in {0, 1, 2}
-            and type(data_file.content) is int
+            _valid_int(data_file.content)
             and _valid_string(data_file.file_path)
             and data_file.file_format in {"AVRO", "ORC", "PARQUET"}
             and _valid_int(data_file.spec_id)

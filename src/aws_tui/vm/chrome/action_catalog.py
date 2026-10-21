@@ -142,6 +142,13 @@ ACTION_SPECS: tuple[ActionSpec, ...] = (
     ),
     ActionSpec("glue.load_more", "Load more Glue rows", "Glue", service_ids=frozenset(("glue",))),
     ActionSpec(
+        "glue.iceberg_info",
+        "Explain Iceberg metadata or compare snapshots",
+        "Glue",
+        service_ids=frozenset(("glue",)),
+        key_source="unbound",
+    ),
+    ActionSpec(
         "glue.time_travel_in_athena",
         "Query Iceberg snapshot in Athena",
         "Glue",
