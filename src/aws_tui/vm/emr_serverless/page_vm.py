@@ -473,6 +473,7 @@ class EmrServerlessPageVM:
             return
         application_id = self.applications.selected_id
         self.job_run_detail.set_target(application_id, run_id)
+        self.job_run_detail.set_summary(self.job_runs.selected_summary)
         # Retarget immediately so a failed detail read cannot leave the
         # previously selected run's logs visible beside the new selection.
         self.job_run_logs.set_target(application_id, run_id, None, metadata_known=False)
@@ -497,6 +498,7 @@ class EmrServerlessPageVM:
         # Canonical selection belongs to the complete retained collection.
         # A local filter can hide it without removing its detail/log targets.
         if selected is not None:
+            self.job_run_detail.set_summary(self.job_runs.selected_summary)
             return
         if runs:
             await self.select_job_run(runs[0].job_run_id)

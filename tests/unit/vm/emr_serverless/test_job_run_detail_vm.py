@@ -23,6 +23,29 @@ def _make() -> tuple[JobRunDetailVM, _InMemoryEmr]:
     return vm, fake
 
 
+@pytest.mark.parametrize("foreign_target", [("a1", "other"), ("other", "r1"), None])
+def test_summary_fallback_is_owned_by_the_exact_current_target(foreign_target) -> None:
+    vm, fake = _make()
+    summary = fake.add_job_run(application_id="a1", job_run_id="r1", name="current")
+    vm.set_target("a1", "r1")
+    vm.set_summary(summary)
+    assert vm.summary is summary
+    if foreign_target is not None:
+        foreign = fake.add_job_run(application_id=foreign_target[0], job_run_id=foreign_target[1])
+    else:
+        foreign = None
+    vm.set_summary(foreign)
+    assert vm.summary is None
+    vm.set_summary(summary)
+    vm.set_target("a1", "other")
+    assert vm.summary is None
+    vm.set_summary(summary)
+    assert vm.summary is None
+    vm.set_target(None, None)
+    assert vm.summary is None
+    vm.dispose()
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("outcome", ["detail", "provider-error", "unexpected-error"])
 @pytest.mark.parametrize("switch_target", [False, True])

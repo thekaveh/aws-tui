@@ -173,6 +173,11 @@ class JobRunsVM:
         return current.model.job_run_id
 
     @property
+    def selected_summary(self) -> JobRunSummary | None:
+        current = self._inner.current
+        return current.model if current is not None else None
+
+    @property
     def state(self) -> PaneState:
         return self._state
 

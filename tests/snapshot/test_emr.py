@@ -76,27 +76,12 @@ def test_emr_page_open_source_picker_wide_snapshot(theme: str, snap_compare) -> 
 
 @pytest.mark.parametrize("theme", THEMES)
 def test_emr_page_populated_renders_expected_glyphs_and_labels(theme: str) -> None:
-    """Content-presence guard for ``test_emr_page_populated_snapshot``.
+    """Rendered compact rows and detail retain the seeded run identity.
 
-    A uniformly-blank populated render would pass parity-match across all 10
-    themes (per PR #53 lesson). The fixture seeds one application
-    ``etl-pipeline-1``, a SUCCESS run ``nightly-2026-06-25``, and a detail
-    with ``EmrJobRole`` in the execution role ARN; assert those strings
-    survive the render.
-
-    The source value is asserted here too. It used to be excluded on the
-    reasoning that the trigger was "deliberately ellipsized at this size,
-    so source identity is covered by the fixture's live widget state" --
-    but the trigger was not ellipsized, it was rendering nothing at all,
-    and no snapshot assertion looked. A pre-fix golden contains the
-    ``source`` border label and the application name while containing zero
-    occurrences of ``demo-prod``. Assert the value, not just the label.
-
-    The job-run NAME column is 1fr of a narrow LEFT pane, so a long
-    run name like ``nightly-2026-06-25`` ellipsizes to
-    ``nightly-2026-06…`` in the runs list — match the prefix (still
-    uniquely from the seeded fixture). The full name still appears
-    verbatim in the RIGHT detail pane."""
+    Names must survive clipping, full identity belongs to detail, and the
+    full timestamp remains available there when compact rows omit it.
+    These guards reject blank or stale-looking renders across all themes.
+    """
     p = (
         Path(__file__).parent
         / "__snapshots__"
@@ -110,16 +95,11 @@ def test_emr_page_populated_renders_expected_glyphs_and_labels(theme: str) -> No
     # to fit its cell. The prefix is still uniquely the seeded connection, and
     # its absence is exactly the defect this guard exists to catch.
     assert "demo-prod" in svg, f"source context value missing for theme {theme!r}"
-    # The job-run NAME column is 1fr of a narrow LEFT pane (now 2/7
-    # of total width post-PR-batch-7items), so the long fixture
-    # name ``nightly-2026-06-25`` ellipsizes to ``nightly-2…`` in
-    # the runs list — match the smallest meaningful prefix that's
-    # still uniquely the seeded run name.
-    assert "nightly-2" in svg, f"job run name (prefix) missing for theme {theme!r}"
+    assert "nightly-2" in svg, f"job run name missing for theme {theme!r}"
+    assert "r-001" in svg, f"full run ID missing for theme {theme!r}"
+    assert "Run&#160;ID" in svg, f"run ID label missing for theme {theme!r}"
     assert "EmrJobRole" in svg, f"execution role ARN fragment missing for theme {theme!r}"
-    # Pin the date+time column so a regression to time-only would
-    # fail. SVG encodes the space between date and time as
-    # ``&#160;``.
+    # Detail retains the full datetime even when the list omits it.
     assert "2026-06-25&#160;12:00" in svg, f"job run date+time missing for theme {theme!r}"
 
 
@@ -171,6 +151,8 @@ def test_emr_page_responsive_states_keep_context_visible(theme: str, terminal_in
 
     populated_svg = populated.read_text()
     assert "etl-" in populated_svg
+    assert "nightly" in populated_svg, "compact run identity missing"
+    assert "r-001" in populated_svg, "full detail run ID missing"
     # 80-column runs ellipsize the source to ``demo-pr…``; the prefix is still
     # uniquely the seeded connection and still proves the value rendered.
     assert "demo-pr" in populated_svg, "source context value missing"

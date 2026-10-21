@@ -10,21 +10,16 @@ fire ``RunSelected`` (the detail follows immediately, no Enter
 required — same UX as a list-master-detail UI). ``Enter`` and click
 are also valid commits. ``r`` posts ``RefreshRequested``.
 
-Row layout — three columns, strictly aligned per row:
+Wide rows align three columns:
 
          NAME              DATE & TIME
     ●    nightly-job      2026-06-25 12:01
     ●    ad-hoc           2026-06-27 12:05
     ●    retry-7b3        2026-06-26 11:58
 
-User feedback (post-PR-#90): the picker drops the textual
-``STARTED``/``STOPPED`` labels in favour of a colored Rich-markup
-glyph; the job-run row inherits the same semantics. The leading
-indicator is a 1-cell colored glyph (green ● SUCCESS, blue ●
-RUNNING, dim ⏸ pending, etc.) — no ``SUCCESS``/``FAILED`` text.
-The trailing column carries ``YYYY-MM-DD HH:MM`` (was just
-``HH:MM:SS`` which user noticed was missing the date AND was being
-truncated by row text-overflow).
+Compact rows omit the timestamp to reserve name/ID space. The detail
+pane provides full identity, state and timestamp through keyboard
+navigation at every width. State glyphs share the filter-chip legend.
 """
 
 from __future__ import annotations
@@ -112,6 +107,9 @@ _DATETIME_COL_WIDTH: int = 16
 #: Indicator column = 1 visible cell for the glyph + breathing
 #: room. Allocated 3 chars so the glyph sits centred.
 _INDICATOR_COL_WIDTH: int = 3
+# Full date + indicator + 12 name cells + row padding (2), name gap (1)
+# and the scroll body's scrollbar (2). Smaller panes prioritize identity.
+_FULL_ROW_MIN_WIDTH: int = _DATETIME_COL_WIDTH + _INDICATOR_COL_WIDTH + 12 + 5
 
 
 class _LoadMoreSentinel(Static):
@@ -127,9 +125,8 @@ class _LoadMoreSentinel(Static):
 
 class _JobRunRow(Horizontal):
     """One job-run row, laid out as a 3-cell Horizontal so each
-    column has its own width and the trailing datetime column
-    stays visible while the middle NAME cell ellipsizes on long
-    names. Carries ``run_id`` so the pane's
+    column has its own width. Wide rows retain the datetime while
+    compact rows reserve that space for NAME. Carries ``run_id`` so the pane's
     :meth:`JobRunsPane.on_click` can map a clicked row to the
     underlying run without sharing a Textual widget id between
     paint cycles (which would race ``remove_children`` / ``mount``
@@ -212,6 +209,9 @@ class JobRunsPane(Widget, can_focus=True):
         width: {_DATETIME_COL_WIDTH};
         height: 1;
         content-align: right middle;
+    }}
+    JobRunsPane.-compact .runs-cell-datetime {{
+        display: none;
     }}
     /* "Load more" sentinel row sits at the bottom of the runs list
        when the VM has another page available. Dimmed + italic so
@@ -307,6 +307,9 @@ class JobRunsPane(Widget, can_focus=True):
         await self._refresh_rows()
 
     def on_resize(self) -> None:
+        # Reserve identity before spending 16 cells on a timestamp. The
+        # selected run's full time remains available in keyboard detail.
+        self.set_class(self.content_size.width < _FULL_ROW_MIN_WIDTH, "-compact")
         self.call_after_refresh(self._reveal_selection)
 
     def on_unmount(self) -> None:

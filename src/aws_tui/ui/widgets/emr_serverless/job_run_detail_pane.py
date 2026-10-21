@@ -18,7 +18,7 @@ from textual.message import Message as TextualMessage
 from textual.widget import Widget
 from textual.widgets import Static
 
-from aws_tui.domain.emr_serverless import JobRunDetail
+from aws_tui.domain.emr_serverless import JobRunDetail, JobRunSummary
 from aws_tui.ui.widgets._focus_guard import is_on_active_screen
 from aws_tui.vm.emr_serverless.job_run_detail_vm import JobRunDetailVM
 from aws_tui.vm.file_manager.pane_vm import PaneState
@@ -109,7 +109,7 @@ class JobRunDetailPane(Widget, can_focus=True):
         cross-VM `state` collisions PR #103 hub-filter was guarding
         against can't reach here because this Subject is scoped to
         JobRunDetailVM only."""
-        if prop in {"detail", "state"}:
+        if prop in {"detail", "state", "summary"}:
             self.call_after_refresh(self._refresh)
 
     def _refresh(self) -> None:
@@ -120,6 +120,25 @@ class JobRunDetailPane(Widget, can_focus=True):
         body.remove_children()
         state = self._vm.state
         d = self._vm.detail
+        metadata = d or self._vm.summary
+        if metadata is not None:
+            summary = self._vm.summary
+            listed_name = (
+                summary.name
+                if summary is not None
+                and (summary.application_id, summary.job_run_id)
+                == (metadata.application_id, metadata.job_run_id)
+                else None
+            )
+            if d is None:
+                body.mount(Static("From runs list", classes="detail-placeholder", markup=False))
+            for key, value in (
+                ("Name", metadata.name or listed_name or metadata.job_run_id),
+                ("Run ID", metadata.job_run_id),
+                ("State", _state_label(metadata)),
+                ("Started", metadata.created_at.strftime("%Y-%m-%d %H:%M:%S")),
+            ):
+                body.mount(Static(_format_kv(key, value), classes="detail-row", markup=False))
         # All rows that render AWS-returned content are mounted
         # with ``markup=False`` so square brackets in user-supplied
         # job-run fields (entry_point, args, spark params, IAM ARN,
@@ -174,14 +193,6 @@ class JobRunDetailPane(Widget, can_focus=True):
         if d is None:
             body.mount(Static("(no run selected)", classes="detail-placeholder", markup=False))
             return
-        body.mount(Static(_format_kv("State", _state_label(d)), classes="detail-row", markup=False))
-        body.mount(
-            Static(
-                _format_kv("Started", d.created_at.strftime("%Y-%m-%d %H:%M:%S")),
-                classes="detail-row",
-                markup=False,
-            )
-        )
         body.mount(
             Static(
                 _format_kv(
@@ -218,7 +229,7 @@ class JobRunDetailPane(Widget, can_focus=True):
             body.mount(Static(line, classes="detail-row", markup=False))
 
 
-def _state_label(d: JobRunDetail) -> str:
+def _state_label(d: JobRunDetail | JobRunSummary) -> str:
     glyph = _TERMINAL_GLYPH.get(d.state.value, "?")
     return f"{glyph} {d.state.value}"
 

@@ -233,6 +233,11 @@ section. The current tree must not be tagged as v0.8.0.
 
 ### Fixed
 
+- **Readable compact EMR runs.** Narrow run lists reserve name/ID space
+  instead of clipping it behind timestamps. The scrollable detail pane
+  exposes full identity and keeps loaded list metadata available if a
+  detail request fails.
+
 - **Keyboard access to EMR details.** The detail focus slot scrolls overflowing
   arguments and Spark settings with arrows, vi keys, page keys and Home/End.
   Reverse Tab from the navigation rail returns to logs, completing the
