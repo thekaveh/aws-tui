@@ -34,9 +34,9 @@ from collections.abc import Awaitable, Callable, Coroutine
 from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
-from typing import Any, Final, NoReturn
-from uuid import uuid4
+from typing import Any, Final, Literal, NoReturn
 
+from aws_tui.domain._operation_names import operation_name
 from aws_tui.domain.filesystem import (
     AtomicDirectoryPublisher,
     AtomicNoReplacePublisher,
@@ -937,8 +937,8 @@ class CrossFsCopy:
         )
 
     @staticmethod
-    def _operation_sibling(path: PathRef, purpose: str) -> PathRef:
-        return path.with_name(f".{path.name}.aws-tui-{purpose}-{uuid4().hex}")
+    def _operation_sibling(path: PathRef, purpose: Literal["stage", "backup"]) -> PathRef:
+        return path.with_name(operation_name(purpose))
 
     def _require_publisher(self, kind: EntryKind, destination: PathRef) -> AtomicNoReplacePublisher:
         if not isinstance(self._destination, AtomicNoReplacePublisher) or not (
