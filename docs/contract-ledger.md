@@ -638,7 +638,8 @@ This pass validates the lock, guards, builds, artifact contents and Twine metada
 The locked formatter is `ruff==0.17.0`. Official upstream tags and PyPI
 artifact hashes are checked before integration. The setup-uv update adds an
 optional architecture input; these workflows keep their existing inputs and
-`uv==0.11.19`.
+`uv==0.13.4`. Checkout commands require uv >= 0.13.4; locked development
+tooling requires pip >= 26.2.2. These floors include the emSign CA bundle fix.
 
 Workflow jobs retain least-privilege permissions and bounded timeouts. CI and release export every locked dependency group before pip-audit. Pages and wiki publication run only from `main`, including manual dispatch, so a branch-controlled checkout cannot receive the wiki deploy key. The wiki deploy key is checked before it is written. The Homebrew checkout does not persist its cross-repository token.
 

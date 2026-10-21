@@ -6,7 +6,7 @@ from its Git repository.
 
 ## 1. Run from a checkout with uv
 
-Install `uv`, a supported Python version and Git first.
+Install `uv` 0.13.4 or newer, a supported Python version and Git first.
 Git must be available on `PATH`. From a new checkout:
 
 ```bash
@@ -70,7 +70,7 @@ Populate the cache on a connected machine, or install the extensions for the sam
 ## 3. Standalone application install
 
 Use this option for a separate `aws-tui` command without running from a checkout.
-Install `uv` or `pipx`, a supported Python version and Git first.
+Install `uv` 0.13.4 or newer, or `pipx`, a supported Python version and Git first.
 Git must be available on `PATH` for these repository URLs. Choose one installer:
 
 ```bash

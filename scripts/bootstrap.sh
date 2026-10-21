@@ -11,7 +11,7 @@ set -euo pipefail
 
 cd "$(dirname "$0")/.."
 
-UV_MIN_VERSION=${UV_MIN_VERSION:-0.11.19}
+UV_MIN_VERSION=${UV_MIN_VERSION:-0.13.4}
 if ! command -v uv >/dev/null 2>&1; then
   cat >&2 <<EOF
 error: aws-tui requires uv >= ${UV_MIN_VERSION}; found: not installed.
