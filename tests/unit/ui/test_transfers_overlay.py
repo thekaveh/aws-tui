@@ -87,7 +87,7 @@ async def test_cancel_button_is_disabled_for_finished_transfer() -> None:
         vm.dispose()
 
 
-def test_expired_ids_are_pruned_with_bounded_transfer_history() -> None:
+async def test_expired_ids_are_pruned_with_bounded_transfer_history() -> None:
     hub = cast("MessageHub[Message]", MessageHub())
     vm = TransfersVM(hub=hub, dispatcher=NULL_DISPATCHER)
     vm.construct()
@@ -106,7 +106,7 @@ def test_expired_ids_are_pruned_with_bounded_transfer_history() -> None:
             )
         )
         overlay._expired_ids.add(f"transfer-{index}")
-    overlay._rebuild()
+    await overlay._rebuild()
 
     retained_ids = {transfer.id for transfer in vm.transfers}
     assert overlay._expired_ids == retained_ids
