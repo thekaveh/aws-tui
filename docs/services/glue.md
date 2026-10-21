@@ -49,6 +49,11 @@ queries incur ordinary Athena workgroup and result-storage behavior.
 
 A seventh tab, **Peek**, previews table rows by querying the table's S3 location directly with a local DuckDB engine instead of Athena. There is no workgroup, query execution, or query bill.
 
+Select a different snapshot on **Snaps**, then open **Peek** to load its rows.
+Reopening Peek with the same snapshot does not repeat the scan.
+After a failed or cancelled reload, retained rows keep their successful snapshot label.
+Use **Retry** to load the selected snapshot.
+
 It needs the optional `duckdb` extra (the [Git installation with the DuckDB extra](../install.md#2-optional-extras)) and an AWS profile connection. It does not appear for `s3-compatible` connections. Without the extra installed, it stays present and selectable. Choosing it reports the missing engine with an install prompt rather than disappearing silently.
 
 Its row limit is a real ceiling, not a local-window widen. The load-more control reruns a genuinely new scan at the next row-limit step (100 → 1,000 → 10,000). This differs from the same control on the six metadata tabs above. See the

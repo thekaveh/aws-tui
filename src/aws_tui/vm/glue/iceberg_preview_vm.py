@@ -93,6 +93,7 @@ class IcebergPreviewPage:
 
     columns: tuple[str, ...] = ()
     rows: tuple[tuple[str | None, ...], ...] = ()
+    snapshot_id: int | None = None
 
 
 class IcebergPreviewFailure(Exception):
@@ -143,7 +144,7 @@ class IcebergPreviewVM:
         self._profile: str | None = None
         self._region: str = ""
         self._limit: int = ROW_LIMIT_STEPS[0]
-        self._snapshot_id: int | None = None
+        self._requested_snapshot_id: int | None = None
         self._load_requested: bool = False
 
         # Per-VM Observable -- the pane binds here, never to the shared hub.
@@ -194,7 +195,7 @@ class IcebergPreviewVM:
     def _on_resource_property_changed(self, property_name: str) -> None:
         if property_name != "state":
             return
-        for name in ("columns", "rows", "error_text", "state"):
+        for name in ("snapshot_id", "columns", "rows", "error_text", "state"):
             self._notify(name)
 
     # ── Properties ──────────────────────────────────────────────────────────
@@ -259,11 +260,22 @@ class IcebergPreviewVM:
         already-capped rows -- this does not: ``load_more`` re-runs a
         genuinely new query at the next row-limit step.
         """
-        return len(self.rows) >= self._limit and next_row_limit(self._limit) is not None
+        return (
+            self.snapshot_id == self._requested_snapshot_id
+            and len(self.rows) >= self._limit
+            and next_row_limit(self._limit) is not None
+        )
 
     @property
     def snapshot_id(self) -> int | None:
-        return self._snapshot_id
+        """The successful scan's identity, retained together with its rows."""
+        return self._page().snapshot_id
+
+    def needs_load_for(self, snapshot_id: int | None) -> bool:
+        """Attempt each binding/snapshot once; explicit Retry handles failures."""
+        return self.available and (
+            not self._load_requested or self._requested_snapshot_id != snapshot_id
+        )
 
     @property
     def needs_load(self) -> bool:
@@ -310,7 +322,7 @@ class IcebergPreviewVM:
         self._location = location
         self._profile = profile
         self._region = region
-        self._snapshot_id = None
+        self._requested_snapshot_id = None
         self._limit = ROW_LIMIT_STEPS[0]
         self._load_requested = False
         if not self._disposed and self._resource.state.status is not AsyncResourceStatus.IDLE:
@@ -326,11 +338,12 @@ class IcebergPreviewVM:
         self._notify("state")
 
     async def ensure_loaded(self, snapshot_id: int | None = None) -> None:
-        """Run the first scan for this binding; a no-op every time after.
+        """Run the first scan for this binding and requested snapshot.
 
-        Idempotent per binding, so the pane may call it on every refresh.
+        Idempotent for an unchanged request, including a failed attempt, so
+        the pane may call it on every refresh without a retry loop.
         """
-        if not self.needs_load:
+        if not self.needs_load_for(snapshot_id):
             return
         await self.load(snapshot_id)
 
@@ -347,8 +360,7 @@ class IcebergPreviewVM:
             self._notify("state")
             return
         self._load_requested = True
-        self._snapshot_id = snapshot_id
-        self._notify("snapshot_id")
+        self._requested_snapshot_id = snapshot_id
         if self._resource.state.status is AsyncResourceStatus.IDLE:
             await self._resource.load()
         else:
@@ -360,6 +372,10 @@ class IcebergPreviewVM:
         A real second query, not a widened local window over already-capped
         rows. Returns ``False`` when already at the top step.
         """
+        # Retained rows from another snapshot can be read, but not paged
+        # under the attempted identity. Retry loads that selected snapshot.
+        if self.snapshot_id != snapshot_id:
+            return False
         next_limit = next_row_limit(self._limit)
         if next_limit is None:
             return False
@@ -386,13 +402,14 @@ class IcebergPreviewVM:
         profile = self._profile
         if location is None or profile is None:
             return IcebergPreviewPage()
-        sql = iceberg_preview_sql(location, limit=self._limit, snapshot_id=self._snapshot_id)
+        snapshot_id = self._requested_snapshot_id
+        sql = iceberg_preview_sql(location, limit=self._limit, snapshot_id=snapshot_id)
         result = await anyio.to_thread.run_sync(
             partial(self._port.query, sql, profile=profile, region=self._region)
         )
         if result.outcome is not DuckDbOutcome.OK:
             raise IcebergPreviewFailure(result.outcome)
-        return IcebergPreviewPage(columns=result.columns, rows=result.rows)
+        return IcebergPreviewPage(columns=result.columns, rows=result.rows, snapshot_id=snapshot_id)
 
     def _resting_state(self) -> PaneState:
         """Where a cancelled scan leaves the pane.
