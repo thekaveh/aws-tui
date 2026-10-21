@@ -233,6 +233,9 @@ section. The current tree must not be tagged as v0.8.0.
 
 ### Fixed
 
+- Glue table detail shows scoped partition and statistics loading or failures
+  instead of false zero counts. Successful schema and storage remain visible,
+  and Refresh replaces recovered statuses with actual counts.
 - Glue Peek reloads when the selected Iceberg snapshot changes. Retained rows
   keep their successful snapshot identity through failed or cancelled reloads,
   with Retry available for the selected snapshot.
