@@ -5,6 +5,7 @@ from __future__ import annotations
 from textual import on, work
 from textual.app import ComposeResult
 from textual.containers import Horizontal, Vertical
+from textual.css.query import NoMatches
 from textual.widget import Widget
 from textual.widgets import Button, Static
 from vmx import Message, MessageHub
@@ -87,6 +88,8 @@ class S3ConnectionsPanel(Widget):
         # containing ``[``, ``.``, whitespace, or any non-ASCII
         # character. Rebuilt on every render in ``_render_children``.
         self._id_to_name: dict[str, str] = {}
+        self._edit_generation = 0
+        self._edit_form_revision: int | None = None
 
     @property
     def vm(self) -> S3ConnectionsVM:
@@ -94,28 +97,29 @@ class S3ConnectionsPanel(Widget):
 
     def compose(self) -> ComposeResult:
         yield Vertical(*self._render_children(), id="panel-body")
+        status = Static("", id="connection-read-status", markup=False)
+        status.display = False
+        yield status
         yield ConnectionFormInline(hub=self._hub)
+
+    def on_hide(self) -> None:
+        self._edit_generation += 1
+        self._set_read_status("")
+
+    def on_unmount(self) -> None:
+        self._edit_generation += 1
 
     def _render_children(self) -> list[Widget]:
         """Build the body's children as constructed widget instances.
 
         Safe to call OUTSIDE compose() (no context-manager state required).
         """
-        # ``self._vm.connections`` reaches the OS keyring through
-        # ``ConnectionResolver._dispatch_s3_credentials``, and the keyring is
-        # external state that can be absent or refuse to unlock -- a headless
-        # Linux box with no Secret Service, or a cancelled macOS unlock prompt.
-        # The resolver deliberately propagates that instead of reporting "no
-        # credentials" (see
-        # ``test_keychain_backend_failure_is_not_disguised_as_missing_credentials``),
-        # which is correct: a silent ``None`` would let the app fall back to
-        # different credentials. But this call happens inside ``compose()``, and
-        # a ``compose()`` failure is not delivered to the mount awaiter, so it
-        # bypassed the mount guard and reached ``_handle_exception`` -- opening
-        # Settings, the one screen that could repair the connection, tore the
-        # session down. Render the failure instead of raising through compose.
+        self._edit_generation += 1
+        # Rows require metadata only. A locked keychain must not prevent the
+        # user from opening Settings; malformed configuration still needs a
+        # guarded compose path.
         try:
-            conns = self._vm.connections
+            conns = self._vm.connection_metadata
         except Exception as exc:
             self._id_to_name = {}
             return [
@@ -123,10 +127,10 @@ class S3ConnectionsPanel(Widget):
                     Static("S3-compatible connections are unavailable."),
                     Static(""),
                     Static(
-                        f"The OS keychain could not be read: {type(exc).__name__}.",
+                        f"Connection metadata could not be read: {type(exc).__name__}.",
                         markup=False,
                     ),
-                    Static("Unlock the keychain and reopen Settings."),
+                    Static("Check the configuration and reopen Settings."),
                     classes="empty-state",
                 )
             ]
@@ -199,6 +203,8 @@ class S3ConnectionsPanel(Widget):
         ensures the old widgets are fully unmounted before the new ones
         are mounted, preventing ``DuplicateIds`` errors.
         """
+        self._edit_generation += 1
+        self._set_read_status("")
         body = self.query_one("#panel-body", Vertical)
         await body.remove_children()
         await body.mount_all(self._render_children())
@@ -209,12 +215,18 @@ class S3ConnectionsPanel(Widget):
         self._on_add_clicked()
 
     def _on_add_clicked(self) -> None:
+        self._edit_generation += 1
+        self._set_read_status("")
         form = self.query_one(ConnectionFormInline)
         form.open_for_add()
 
     @on(Button.Pressed, ".row-chip-edit")
     def _on_edit(self, event: Button.Pressed) -> None:
         event.stop()
+        if not event.button.is_attached or not any(
+            event.button is current for current in self.query(_ChipEdit)
+        ):
+            return
         btn_id = event.button.id or ""
         slug = btn_id.removeprefix("edit-")
         # Map back through ``_id_to_name`` because the button id is
@@ -227,8 +239,60 @@ class S3ConnectionsPanel(Widget):
         self._on_edit_clicked(name)
 
     def _on_edit_clicked(self, name: str) -> None:
-        existing = self._vm.find_by_name(name)
+        if name not in self._id_to_name.values():
+            return
+        self._edit_generation += 1
+        form = self.query_one(ConnectionFormInline)
+        self._edit_form_revision = form.intent_revision
+        self._set_read_status("Loading connection. Unlock the keychain if prompted.")
+        self._load_edit(name, self._edit_generation, form, form.intent_revision)
+
+    def _set_read_status(self, text: str) -> None:
+        try:
+            status = self.query_one("#connection-read-status", Static)
+        except NoMatches:
+            return
+        status.update(text)
+        status.display = bool(text)
+
+    def _owns_edit(self, generation: int, form: ConnectionFormInline, revision: int) -> bool:
+        return (
+            generation == self._edit_generation
+            and self.is_attached
+            and self._vm.is_constructed
+            and form.is_attached
+            and form.parent is self
+            and form.intent_revision == revision
+            and all(node.display and node.visible for node in self.ancestors_with_self)
+        )
+
+    @work(exclusive=True, group="s3-connections-edit")
+    async def _load_edit(
+        self, name: str, generation: int, form: ConnectionFormInline, revision: int
+    ) -> None:
+        if not self._owns_edit(generation, form, revision):
+            if self.is_attached and generation == self._edit_generation:
+                self._set_read_status("")
+            return
+        try:
+            existing = await self._vm.find_by_name_async(name)
+        except Exception:
+            if self._owns_edit(generation, form, revision):
+                message = (
+                    "Could not load this connection. Check its configuration or unlock "
+                    "the keychain, then try Edit again."
+                )
+                self._set_read_status(message)
+                self._surface_error_toast(message, toast_id="edit-credentials-error")
+            elif self.is_attached and generation == self._edit_generation:
+                self._set_read_status("")
+            return
+        if not self._owns_edit(generation, form, revision):
+            if self.is_attached and generation == self._edit_generation:
+                self._set_read_status("")
+            return
         if existing is None:
+            self._set_read_status("This connection is no longer available. Refresh the list.")
             return
         defaults = S3CompatForm(
             name=existing.name,
@@ -240,18 +304,24 @@ class S3ConnectionsPanel(Widget):
             force_path_style=existing.force_path_style,
             verify_tls=existing.verify_tls,
         )
-        form = self.query_one(ConnectionFormInline)
+        self._set_read_status("")
         form.open_for_edit(name=name, defaults=defaults)
 
     @on(Button.Pressed, ".row-chip-delete")
     def _on_delete(self, event: Button.Pressed) -> None:
         event.stop()
+        if not event.button.is_attached or not any(
+            event.button is current for current in self.query(_ChipDelete)
+        ):
+            return
         btn_id = event.button.id or ""
         slug = btn_id.removeprefix("delete-")
         # Same id-slug → name mapping as the edit handler.
         name = self._id_to_name.get(slug)
         if name is None:
             return
+        self._edit_generation += 1
+        self._set_read_status("")
         self._do_delete(name)
 
     @work(exclusive=True, group="s3-connections-delete")
@@ -321,6 +391,8 @@ class S3ConnectionsPanel(Widget):
         refresh (e.g., panel not yet mounted) and the user would see
         the form close without the list updating.
         """
+        self._edit_generation += 1
+        self._set_read_status("")
         form = self.query_one(ConnectionFormInline)
         entry = self._vm.entry_from_form(event.form)
         if event.mode == "add":
@@ -373,8 +445,14 @@ class S3ConnectionsPanel(Widget):
         await self.refresh_rows()
 
     def on_connection_form_cancelled(self, event: ConnectionFormCancelled) -> None:
-        """Form closed itself on cancel; nothing to do here."""
-        return
+        """Retire pending edit reads when the current form is cancelled."""
+        # close() advances the form revision synchronously. If a newer Edit
+        # already captured that revision, this queued cancellation predates it.
+        form = self.query_one(ConnectionFormInline)
+        if self._edit_form_revision == form.intent_revision:
+            return
+        self._edit_generation += 1
+        self._set_read_status("")
 
 
 __all__ = ["S3ConnectionsPanel"]

@@ -11,7 +11,7 @@ from vmx.lifecycle.status import ConstructionStatus
 from vmx.services.dispatcher import Dispatcher
 
 from aws_tui.infra.config_store import ConfigError, ConfigStore, ConnectionEntry
-from aws_tui.infra.connection_resolver import Connection, ConnectionResolver
+from aws_tui.infra.connection_resolver import Connection, ConnectionNotFound, ConnectionResolver
 from aws_tui.infra.keychain import (
     KeychainBackend,
     app_keychain_revision_service,
@@ -111,8 +111,13 @@ class S3ConnectionsVM:
         return tuple(c for c in self._resolver.list() if c.kind == "s3-compatible")
 
     @property
+    def connection_metadata(self) -> tuple[Connection, ...]:
+        """Fresh S3-compatible row metadata, without credential resolution."""
+        return tuple(c for c in self._resolver.list_metadata() if c.kind == "s3-compatible")
+
+    @property
     def names(self) -> frozenset[str]:
-        return frozenset(c.name for c in self.connections)
+        return frozenset(c.name for c in self.connection_metadata)
 
     # ── Write ──────────────────────────────────────────────────────────────
 
@@ -241,10 +246,15 @@ class S3ConnectionsVM:
 
     def find_by_name(self, name: str) -> Connection | None:
         """Look up a connection by name; returns None if not found."""
-        for c in self.connections:
-            if c.name == name:
-                return c
-        return None
+        try:
+            connection = self._resolver.resolve_selected(name)
+        except ConnectionNotFound:
+            return None
+        return connection if connection.kind == "s3-compatible" else None
+
+    async def find_by_name_async(self, name: str) -> Connection | None:
+        """Resolve only the selected connection away from the UI event loop."""
+        return await anyio.to_thread.run_sync(partial(self.find_by_name, name))
 
     def entry_from_form(self, form: S3CompatForm) -> ConnectionEntry:
         """Convert a filled :class:`S3CompatForm` to a :class:`ConnectionEntry`.

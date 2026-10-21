@@ -202,6 +202,12 @@ class ConnectionResolver:
         """Return the union of explicit and auto-discovered connections."""
         return self._merge_connections(self._explicit_connections(self._config_store.load()))
 
+    def list_metadata(self) -> builtins.list[Connection]:
+        """List source identities without dereferencing their credentials."""
+        return self._merge_connections(
+            self._explicit_connections(self._config_store.load(), metadata_only=True)
+        )
+
     def discover(self) -> ConnectionDiscovery:
         """Read fresh local sources, retaining usable connections on file errors."""
         invalid_sources: set[str] = set()
@@ -317,7 +323,7 @@ class ConnectionResolver:
     # ------------------------------------------------------------------
 
     def _explicit_connections(
-        self, cfg: Config, invalid_sources: set[str] | None = None
+        self, cfg: Config, invalid_sources: set[str] | None = None, *, metadata_only: bool = False
     ) -> builtins.list[Connection]:
         out: list[Connection] = []
         for entry in cfg.connections.values():
@@ -336,7 +342,7 @@ class ConnectionResolver:
             elif entry.kind == "s3-compatible":
                 access_key_id, secret_access_key, session_token = (
                     self._dispatch_s3_credentials(entry, invalid_sources)
-                    if self._read_credentials
+                    if self._read_credentials and not metadata_only
                     else (None, None, None)
                 )
                 out.append(
