@@ -56,7 +56,15 @@ def textual_key_name(key: str) -> str:
         # exactly that casing, so fold it rather than reject it. Single
         # characters are left alone: ``K`` and ``k`` are genuinely different
         # keys.
-        return key.casefold()
+        normalized = key.casefold()
+        parts = normalized.split("+")
+        if len(parts) > 1 and all(
+            part in {"alt", "ctrl", "shift", "meta", "super", "hyper"} for part in parts[:-1]
+        ):
+            # Textual's terminal parser emits sorted modifier names. Normalize
+            # config/overlays identically for bindings and collision checks.
+            return "+".join([*sorted(parts[:-1]), parts[-1]])
+        return normalized
     if key.isalnum():
         return key
     try:
@@ -178,6 +186,14 @@ class KeymapStore:
         "athena.insert_table_ref": ("i",),
         "athena.execute": ("ctrl+enter",),
         "athena.cancel": ("escape",),
+        "athena.sql_authoring": ("alt+e",),
+        "athena.complete": ("ctrl+space",),
+        "athena.format_sql": ("ctrl+alt+f",),
+        "athena.open_sql": ("ctrl+alt+o",),
+        "athena.save_sql": ("ctrl+alt+s",),
+        "athena.save_sql_as": ("ctrl+alt+shift+s",),
+        "athena.insert_snippet": (),
+        "athena.save_snippet": (),
         "athena.load_more": ("l",),
         "athena.inspect_cell": ("alt+enter",),
         "athena.copy_cell": ("alt+c",),

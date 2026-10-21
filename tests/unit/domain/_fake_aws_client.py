@@ -29,6 +29,7 @@ class FakeAwsClient:
         self.get_jobs = AsyncMock()
         self.get_partitions = AsyncMock()
         self.get_table = AsyncMock()
+        self.get_table_metadata = AsyncMock()
         self.get_tables = AsyncMock()
         self.get_tags = AsyncMock()
         self.list_data_catalogs = AsyncMock()

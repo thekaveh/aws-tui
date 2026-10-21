@@ -23,6 +23,7 @@ from aws_tui.domain.athena import (
     ResultConfigurationRequiredError,
 )
 from aws_tui.domain.data_catalog import (
+    Column,
     DatabaseRef,
     DatabaseSummary,
     TableRef,
@@ -49,6 +50,7 @@ from aws_tui.domain.query import (
     ResultPage,
 )
 from aws_tui.domain.s3_uri import parse_s3_uri
+from aws_tui.domain.sql_authoring import CompletionTable
 from aws_tui.domain.sql_policy import ReadOnlySqlPolicy
 
 T = TypeVar("T")
@@ -220,6 +222,7 @@ class InMemoryAthena:
         self.catalogs: dict[str, list[AthenaCatalogSummary]] = {}
         self.databases: dict[tuple[str, str], list[DatabaseSummary]] = {}
         self.tables: dict[tuple[str, str, str], list[TableSummary]] = {}
+        self.table_columns: dict[tuple[str, str, str, str], tuple[Column, ...]] = {}
         self.history: dict[str, list[str]] = {}
         self.query_executions: dict[str, QueryExecutionDetail] = {}
         self.result_pages: dict[tuple[str, str | None], ResultPage] = {}
@@ -306,6 +309,8 @@ class InMemoryAthena:
         catalog: str,
         database: str,
         name: str,
+        *,
+        columns: tuple[Column, ...] = (),
     ) -> TableSummary:
         table = TableSummary(
             TableRef(
@@ -322,6 +327,7 @@ class InMemoryAthena:
             None,
         )
         self.tables.setdefault((workgroup, catalog, database), []).append(table)
+        self.table_columns[(workgroup, catalog, database, name)] = columns
         return table
 
     def add_query_result(
@@ -500,6 +506,28 @@ class InMemoryAthena:
             scope=("list_tables_page", catalog, database, workgroup),
             start_token=start_token,
             page_size=self.page_size,
+        )
+
+    async def get_table_columns(
+        self,
+        catalog: str,
+        database: str,
+        table: str,
+        *,
+        workgroup: str | None = None,
+    ) -> CompletionTable:
+        if not all(
+            _valid_required_text(value) for value in (catalog, database, table)
+        ) or not _valid_optional_text(workgroup):
+            raise ValidationError("invalid Athena metadata request")
+        self._record("get_table_columns", catalog, database, table, workgroup)
+        self._raise_if_denied()
+        key = (workgroup or "", catalog, database, table)
+        if key not in self.table_columns:
+            raise NotFoundError("table metadata unavailable")
+        return CompletionTable(
+            TableRef(catalog, database, table, self.connection_name, self.region),
+            self.table_columns[key],
         )
 
     async def list_query_executions_page(

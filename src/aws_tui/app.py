@@ -61,7 +61,12 @@ from aws_tui.infra.doctor_probe import probe_source
 from aws_tui.infra.keymap_store import textual_key_name
 from aws_tui.infra.redaction import redact_text
 from aws_tui.infra.theme_store import ThemeNotFound, ThemeStore
-from aws_tui.service_navigation import ServiceMountPorts, ServiceNavigation, ViewPublisher
+from aws_tui.service_navigation import (
+    ConnectionAdoptionOptions,
+    ServiceMountPorts,
+    ServiceNavigation,
+    ViewPublisher,
+)
 from aws_tui.services.glue.service import GlueService
 from aws_tui.ui import notifications
 from aws_tui.ui.actions import ActionRegistry
@@ -71,6 +76,7 @@ from aws_tui.ui.query_cache import release_detached_query_results
 from aws_tui.ui.terminal_protocol import prefer_sigwinch_resize
 from aws_tui.ui.widgets._worker import DeferredWorkerMixin
 from aws_tui.ui.widgets.athena.page import AthenaPage
+from aws_tui.ui.widgets.athena.query_view import AthenaQueryView
 from aws_tui.ui.widgets.athena.results_view import AthenaResultsView
 from aws_tui.ui.widgets.brand_banner import BrandBanner
 from aws_tui.ui.widgets.command_palette import CommandPalette
@@ -242,6 +248,17 @@ class _ThemeApplyFailure:
 
 
 _SOURCE_SERVICE_IDS = frozenset({"s3", "emr-serverless", "glue", "athena"})
+_ATHENA_SQL_ACTIONS = {
+    "athena.sql_authoring": "menu",
+    "athena.complete": "complete",
+    "athena.format_sql": "format",
+    "athena.open_sql": "open",
+    "athena.save_sql": "save",
+    "athena.save_sql_as": "save_as",
+    "athena.insert_snippet": "insert_snippet",
+    "athena.save_snippet": "save_snippet",
+}
+
 _ATHENA_RESULT_ACTIONS = frozenset(
     {
         "athena.inspect_cell",
@@ -782,6 +799,8 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
         )
         self._actions.register("athena.execute", self.action_execute_athena)
         self._actions.register("athena.cancel", self.action_cancel_athena)
+        for action_id, command in _ATHENA_SQL_ACTIONS.items():
+            self._actions.register(action_id, partial(self._athena_sql_control, action_id, command))
         self._actions.register(
             "athena.load_more",
             partial(
@@ -863,6 +882,7 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
         self._nav_selection_sub: DisposableBase | None = None
         self._cursor_sub: DisposableBase | None = None
         self._service_navigation_sub: DisposableBase | None = None
+        self._pending_table_handoff: _TableHandoffSnapshot | None = None
         self._palette_failure_sub: DisposableBase | None = None
         self._table_clipboard_sub: DisposableBase | None = None
         self.launch_ready = False
@@ -2719,7 +2739,13 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
             return frozenset() if emr.vm.can_cancel_selected_run() else frozenset({"emr.cancel"})
         athena = self._athena_page()
         if athena is not None:
-            disabled = set()
+            disabled: set[str] = set()
+            authoring = tuple(athena.query(AthenaQueryView))
+            disabled.update(
+                action
+                for action, command in _ATHENA_SQL_ACTIONS.items()
+                if not authoring or not authoring[0].authoring_available(command)
+            )
             if not athena.vm.query.execute_command.can_execute():
                 disabled.add("athena.execute")
             if not athena.vm.query.cancel_command.can_execute():
@@ -2883,6 +2909,12 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
                 reasons["app.swap_source"] = "source_missing"
         athena = self._athena_page()
         if athena is not None:
+            authoring = tuple(athena.query(AthenaQueryView))
+            for action, command in _ATHENA_SQL_ACTIONS.items():
+                if not authoring or not authoring[0].authoring_available(command):
+                    reasons[action] = (
+                        "busy" if athena.vm.active_view == "query" else "focus_required"
+                    )
             results = athena.vm.results
             controls = tuple(athena.query(AthenaResultsView))
             live_results = (
@@ -5262,6 +5294,18 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
         if page is not None:
             await page.action_cancel()
 
+    def _athena_sql_control(self, action_id: str, command: str) -> None:
+        if len(self.screen_stack) > 1 or self._app_ctx.focus_coordinator.is_modal:
+            return
+        page = self._athena_page()
+        if page is None:
+            return
+        controls = tuple(page.query(AthenaQueryView))
+        if not controls or not controls[0].authoring_available(command):
+            return
+        self.record_action(action_id)
+        controls[0].dispatch_authoring(command)
+
     async def action_load_more_athena(self) -> None:
         self.record_action("athena.load_more")
         page = self._athena_page()
@@ -6288,6 +6332,10 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
             )
             return
 
+        if not await self._retry_pending_table_handoff(generation):
+            return
+        if generation != self.service_navigation.generation:
+            return
         try:
             snapshot = self._capture_table_handoff_snapshot()
         except ValueError:
@@ -6303,11 +6351,93 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
             )
             return
         destination = "athena" if isinstance(request, OpenAthenaTableRequest) else "glue"
+        current = ctx.root_vm.content_host.current
+        outgoing: AthenaPageVM | None = (
+            current
+            if isinstance(request, OpenAthenaTableRequest) and isinstance(current, AthenaPageVM)
+            else None
+        )
+        outgoing_claimed = False
+
+        def editor_identity(page: AthenaPageVM) -> tuple[object, ...]:
+            return (
+                page.query.editor_revision,
+                page.authoring.ownership_revision,
+                page.context_choice_revision,
+                page.context,
+                page.query._draft_recovery_guard_revision,
+            )
+
+        outgoing_identity = editor_identity(outgoing) if outgoing is not None else None
         mutation_started = False
+
+        def owns_outgoing() -> bool:
+            if (
+                generation != self.service_navigation.generation
+                or self.service_navigation.closed
+                or self._shutdown_task is not None
+            ):
+                return False
+            if outgoing_claimed:
+                return True  # Our own shutdown retires the captured page.
+            if outgoing is None:
+                return True
+            current_vm: object = ctx.root_vm.content_host.current
+            if (
+                current_vm is not outgoing
+                or not outgoing._is_alive()
+                or editor_identity(outgoing) != outgoing_identity
+            ):
+                return False
+            page = next((p for p in self.query(AthenaPage) if p.vm is outgoing), None)
+            return (
+                page is None
+                or not page.is_attached
+                or (page.query_one("#athena-editor", TextArea).text == outgoing.query.sql)
+            )
+
+        async def confirm_replace(message: str) -> bool:
+            if not owns_outgoing() or ctx.confirm_vm.is_open:
+                return False
+            dialogs = TextualDialogService(self, ctx.confirm_vm, hub=ctx.hub)
+            return await ctx.confirm_vm.ask(
+                ConfirmRequest(title=message, confirm_label="Replace"), dialog_service=dialogs
+            )
+
+        if outgoing is not None and not await outgoing.authoring.confirm_replacement(
+            confirm=confirm_replace, still_selected=owns_outgoing
+        ):
+            return
+
+        def claim_outgoing() -> bool:
+            nonlocal snapshot, outgoing_claimed, mutation_started
+            if not owns_outgoing():
+                return False
+            try:
+                latest = self._capture_table_handoff_snapshot()
+            except ValueError:
+                return False
+            if not owns_outgoing() or not self._claim_source_input(outgoing):
+                return False
+            snapshot = latest
+            outgoing_claimed = True
+            mutation_started = True
+            return True
+
         primed_athena: AthenaPageVM | None = None
         primed_athena_token: object | None = None
 
         def destination_input_is_owned() -> bool:
+            current = ctx.root_vm.content_host.current
+            if outgoing is not None:
+                if not outgoing_claimed:
+                    return False  # A still-live source has not transferred its input.
+                if current is None or current is outgoing:
+                    # ContentHost may retire both source and unpublished candidate
+                    # before raising cancellation or returning a rejected adoption.
+                    return self._shutdown_task is None and self._table_handoff_should_restore(
+                        generation
+                    )
             return primed_athena is None or (
                 primed_athena_token is not None
                 and primed_athena.owns_table_query_input(primed_athena_token)
@@ -6339,15 +6469,25 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
 
                     prepare_candidate = prime_athena_candidate
 
-                mutation_started = True
-                await self.service_navigation.switch_connection_and_service(
+                options: ConnectionAdoptionOptions = {"prepare_vm": prepare_candidate}
+                if outgoing is not None:
+                    options["ownership_is_current"] = owns_outgoing
+                    options["claim_input"] = claim_outgoing
+                mutation_started = outgoing is None
+                adopted = await self.service_navigation.switch_connection_and_service(
                     ctx.root_vm,
                     connection,
                     auth_state,
                     destination,
-                    prepare_vm=prepare_candidate,
+                    **options,
                 )
-            if await self._restore_superseded_table_handoff(generation, snapshot):
+                if not adopted:
+                    if outgoing_claimed:
+                        raise RuntimeError("destination adoption was retired")
+                    return
+            if await self._restore_superseded_table_handoff(
+                generation, snapshot, input_is_owned=destination_input_is_owned
+            ):
                 if primed_athena is not None:
                     primed_athena.abandon_table_query_prime(prime_token=primed_athena_token)
                     primed_athena = None
@@ -6368,12 +6508,16 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
                     raise RuntimeError("Athena destination view is unavailable")
                 page.refresh_from_vm()
                 await self.wait_for_refresh()
-                if await self._restore_superseded_table_handoff(generation, snapshot):
+                if await self._restore_superseded_table_handoff(
+                    generation, snapshot, input_is_owned=destination_input_is_owned
+                ):
                     primed_athena.abandon_table_query_prime(prime_token=primed_athena_token)
                     primed_athena = None
                     return
             await self._wait_for_current_service_setup()
-            if await self._restore_superseded_table_handoff(generation, snapshot):
+            if await self._restore_superseded_table_handoff(
+                generation, snapshot, input_is_owned=destination_input_is_owned
+            ):
                 return
 
             target = ctx.root_vm.content_host.current
@@ -6390,7 +6534,9 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
                     raise RuntimeError("Glue destination is unavailable")
                 await target.open_table(ref)
             await self.wait_for_refresh()
-            await self._restore_superseded_table_handoff(generation, snapshot)
+            await self._restore_superseded_table_handoff(
+                generation, snapshot, input_is_owned=destination_input_is_owned
+            )
         except GlueSelectionSuperseded:
             # A newer catalog choice owns the mounted destination.
             return
@@ -6403,11 +6549,13 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
                 and restore_owned_destination
                 and self._table_handoff_should_restore(generation)
             ):
-                await self._restore_table_handoff_durably(
+                restored, _ = await self._restore_table_handoff_durably(
                     snapshot,
                     generation,
                     input_is_owned=destination_input_is_owned,
                 )
+                if not restored and outgoing_claimed:
+                    self._retain_failed_table_handoff(snapshot, generation)
             raise
         except Exception as exc:
             restore_owned_destination = destination_input_is_owned()
@@ -6419,11 +6567,13 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
                 and restore_owned_destination
                 and self._table_handoff_should_restore(generation)
             ):
-                _, rollback_cancelled = await self._restore_table_handoff_durably(
+                restored, rollback_cancelled = await self._restore_table_handoff_durably(
                     snapshot,
                     generation,
                     input_is_owned=destination_input_is_owned,
                 )
+                if not restored and outgoing_claimed:
+                    self._retain_failed_table_handoff(snapshot, generation)
             if rollback_cancelled:
                 raise asyncio.CancelledError from None
             if generation != self.service_navigation.generation:
@@ -6440,6 +6590,111 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
                 message=f"could not open the table in {destination.title()}",
                 toast_id="table-handoff-destination-failed",
             )
+
+    def _retain_failed_table_handoff(
+        self, snapshot: _TableHandoffSnapshot, generation: int
+    ) -> None:
+        if snapshot.athena is not None and self._table_handoff_should_restore(generation):
+            # One owned recovery obligation; an empty successor capture must not
+            # replace the only remaining copy of the accepted outgoing document.
+            if self._pending_table_handoff is None:
+                self._pending_table_handoff = snapshot
+            self._pending_table_handoff_notice()
+
+    def _pending_table_handoff_notice(self) -> None:
+        notifications.advise(
+            self._app_ctx.root_vm.chrome.toast_stack,
+            subject="Source",
+            message="previous SQL is retained in this session. Retry opening the table to recover it",
+            toast_id="table-handoff-recovery-pending",
+        )
+
+    async def _retry_pending_table_handoff(self, generation: int) -> bool:
+        snapshot = self._pending_table_handoff
+        if snapshot is None:
+            return True
+        current = self._app_ctx.root_vm.content_host.current
+        if isinstance(current, AthenaPageVM) and (
+            current.query.is_executing
+            or current.query.is_submitting
+            or current.query.is_context_resolving
+            or current.results.is_loading_more
+        ):
+            self._pending_table_handoff_notice()
+            return False
+        editor_identity = (
+            (
+                current.query.editor_revision,
+                current.authoring.ownership_revision,
+                current.context_choice_revision,
+                current.query.context,
+                current.query._draft_recovery_guard_revision,
+            )
+            if isinstance(current, AthenaPageVM)
+            else None
+        )
+        claimed = False
+
+        def owns_retry() -> bool:
+            if self._shutdown_task is not None or not self._table_handoff_should_restore(
+                generation
+            ):
+                return False
+            if claimed:
+                return True
+            hosted: object = self._app_ctx.root_vm.content_host.current
+            if hosted is not current or generation != self.service_navigation.generation:
+                return False
+            if isinstance(current, AthenaPageVM):
+                identity = (
+                    current.query.editor_revision,
+                    current.authoring.ownership_revision,
+                    current.context_choice_revision,
+                    current.query.context,
+                    current.query._draft_recovery_guard_revision,
+                )
+                if not current._is_alive() or identity != editor_identity:
+                    return False
+                page = next((p for p in self.query(AthenaPage) if p.vm is current), None)
+                if page is not None and page.is_attached:
+                    return page.query_one("#athena-editor", TextArea).text == current.query.sql
+            return True
+
+        def claim_retry() -> bool:
+            nonlocal claimed
+            if not owns_retry() or not self._claim_source_input(current):
+                return False
+            claimed = True
+            return True
+
+        if isinstance(current, AthenaPageVM) and (current.query.sql or current.authoring.dirty):
+            ctx = self._app_ctx
+            if not owns_retry() or ctx.confirm_vm.is_open:
+                return False
+            accepted = await ctx.confirm_vm.ask(
+                ConfirmRequest(
+                    title="Restore previous SQL before opening the table?",
+                    body_lines=("This replaces the current editor with the retained document.",),
+                    confirm_label="Restore",
+                ),
+                dialog_service=TextualDialogService(self, ctx.confirm_vm, hub=ctx.hub),
+            )
+            if not accepted or not owns_retry():
+                return False
+
+        restored, cancelled = await self._restore_table_handoff_durably(
+            snapshot,
+            generation,
+            input_is_owned=owns_retry,
+            adoption_options={"ownership_is_current": owns_retry, "claim_input": claim_retry},
+        )
+        if restored and self._pending_table_handoff is snapshot:
+            self._pending_table_handoff = None
+        if cancelled:
+            raise asyncio.CancelledError
+        if not restored:
+            self._pending_table_handoff_notice()
+        return restored
 
     def _capture_table_handoff_snapshot(self) -> _TableHandoffSnapshot:
         ctx = self._app_ctx
@@ -6535,14 +6790,21 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
         self,
         generation: int,
         snapshot: _TableHandoffSnapshot,
+        *,
+        input_is_owned: Callable[[], bool] | None = None,
     ) -> bool:
         if generation == self.service_navigation.generation:
             return False
-        if self._table_handoff_should_restore(generation):
-            _, cancelled = await self._restore_table_handoff_durably(
+        if self._table_handoff_should_restore(generation) and (
+            input_is_owned is None or input_is_owned()
+        ):
+            restored, cancelled = await self._restore_table_handoff_durably(
                 snapshot,
                 generation,
+                input_is_owned=input_is_owned,
             )
+            if not restored:
+                self._retain_failed_table_handoff(snapshot, generation)
             if cancelled:
                 raise asyncio.CancelledError
         return True
@@ -6553,9 +6815,15 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
         generation: int,
         *,
         input_is_owned: Callable[[], bool] | None = None,
+        adoption_options: ConnectionAdoptionOptions | None = None,
     ) -> tuple[bool, bool]:
         rollback = asyncio.create_task(
-            self._restore_table_handoff(snapshot, generation, input_is_owned=input_is_owned),
+            self._restore_table_handoff(
+                snapshot,
+                generation,
+                input_is_owned=input_is_owned,
+                adoption_options=adoption_options,
+            ),
             name="table-handoff-rollback",
         )
         self.service_navigation.track_rollback(rollback)
@@ -6597,19 +6865,46 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
         generation: int,
         *,
         input_is_owned: Callable[[], bool] | None = None,
+        adoption_options: ConnectionAdoptionOptions | None = None,
     ) -> bool:
         async with self.service_navigation.service_lock:
             if input_is_owned is not None and not input_is_owned():
                 return False
+            if adoption_options is None and input_is_owned is not None:
+                claimed = False
+
+                def owns_restore() -> bool:
+                    if self._shutdown_task is not None or not self._table_handoff_should_restore(
+                        generation
+                    ):
+                        return False
+                    return claimed or input_is_owned()
+
+                def claim_restore() -> bool:
+                    nonlocal claimed
+                    if not owns_restore() or not self._claim_source_input(
+                        self._app_ctx.root_vm.content_host.current
+                    ):
+                        return False
+                    claimed = True
+                    return True
+
+                adoption_options = {
+                    "ownership_is_current": owns_restore,
+                    "claim_input": claim_restore,
+                }
             return await self._restore_table_handoff_transaction(
                 snapshot,
                 generation,
+                adoption_options=adoption_options,
             )
 
     async def _restore_table_handoff_transaction(
         self,
         snapshot: _TableHandoffSnapshot,
         generation: int,
+        *,
+        adoption_options: ConnectionAdoptionOptions | None = None,
     ) -> bool:
         if not self._table_handoff_should_restore(generation):
             return False
@@ -6625,12 +6920,15 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
             return False
         with self.service_navigation.suppress_selection(snapshot.service_id):
             try:
-                await self.service_navigation.switch_connection_and_service(
+                adopted = await self.service_navigation.switch_connection_and_service(
                     self._app_ctx.root_vm,
                     snapshot.connection,
                     snapshot.auth_state,
                     snapshot.service_id,
+                    **(adoption_options or {}),
                 )
+                if not adopted:
+                    return False
             except Exception as exc:
                 self._app_ctx.log_sink.error(
                     "service_navigation.table_rollback_failed",
@@ -6643,11 +6941,6 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
                 return False
         if not self._table_handoff_should_restore(generation):
             return False
-        if not await self._mount_service_view(
-            snapshot.service_id,
-            required_connection=snapshot.connection,
-        ):
-            return False
         await self._wait_for_current_service_setup()
         if not self._table_handoff_should_restore(generation):
             return False
@@ -6657,6 +6950,15 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
                 await current.restore_snapshot(snapshot.athena)
         elif isinstance(current, GluePageVM) and snapshot.glue is not None:
             await self._restore_glue_page_snapshot(current, snapshot.glue)
+        if not self._table_handoff_should_restore(generation):
+            return False
+        # Restore before mounting. An editable empty recovery view would accept
+        # newer input that the later snapshot installation could overwrite.
+        if not await self._mount_service_view(
+            snapshot.service_id,
+            required_connection=snapshot.connection,
+        ):
+            return False
         if not self._table_handoff_should_restore(generation):
             return False
         await self.wait_for_refresh()

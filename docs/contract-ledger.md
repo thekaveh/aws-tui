@@ -25,10 +25,10 @@ durable map of the real upstream surfaces that mocks and adapters must track.
 
 | Integration point | Pinned version / ref | Consumed contract | Verification method |
 |---|---:|---|---|
-| Amazon Athena client | `botocore==1.40.61` service model, Athena API `2017-05-18` | The `AthenaClient` uses exactly the 16 boto operation methods listed below, including batched history hydration and prepared-query detail. It always supplies `WorkGroup`, `QueryExecutionContext` (catalog/database), and a client request token to `start_query_execution`. `AthenaClient.start_query(...)` accepts an optional `output_location` and adds `ResultConfiguration.OutputLocation` only when its caller supplies that value. The shipped `AthenaQueryVM` query runner does not supply `output_location`; it relies on the selected workgroup's enforced customer S3 or Athena managed-results configuration. List/result continuations are opaque `NextToken` values. | Source-derived operation inventory is compared exactly with the locked Botocore model, with explicit high-risk input-member checks. Unit tests cover every operation, both start-query request shapes, response mapping, pagination, output-configuration failures, error normalization, and result-header handling. |
+| Amazon Athena client | `botocore==1.40.61` service model, Athena API `2017-05-18` | The `AthenaClient` uses exactly the 17 boto operation methods listed below, including batched history hydration and prepared-query detail. It always supplies `WorkGroup`, `QueryExecutionContext` (catalog/database), and a client request token to `start_query_execution`. `AthenaClient.start_query(...)` accepts an optional `output_location` and adds `ResultConfiguration.OutputLocation` only when its caller supplies that value. The shipped `AthenaQueryVM` query runner does not supply `output_location`; it relies on the selected workgroup's enforced customer S3 or Athena managed-results configuration. List/result continuations are opaque `NextToken` values. | Source-derived operation inventory is compared exactly with the locked Botocore model, with explicit high-risk input-member checks. Unit tests cover every operation, both start-query request shapes, response mapping, pagination, output-configuration failures, error normalization, and result-header handling. |
 | Athena page and result handoff | Internal `AthenaPageVM` / `OpenS3LocationRequest` contract | Query, History, Results, and Saved are connection- and region-scoped. Athena renders Source, Workgroup, Catalog, and Database as four individually framed selectors in an unframed row; its focus order is source, workgroup, catalog, database, tabs, then the active view. Query controls precede the Query editor and Execution detail; Run and Stop use stable `5x3` terminal geometry with positive-height content fully inside the controls frame. The client accepts one read-only parsed statement, can interrupt submission and stop only app-started active executions, and loads results a page at a time with a 10,000-row cumulative VM ceiling. A Glue handoff prefills a database/table-qualified `SELECT *` starter ending in `LIMIT 5`, supplies the exact catalog/database through `QueryExecutionContext`, explicitly projects SQL into the mounted editor, and never auto-executes it. Known result-location, context, and workgroup start rejections retain fixed redacted categories through the runner and VM. A result handoff reloads the selected execution and requires a succeeded execution, matching active connection/region/context, and a valid `s3://` output location before handing the exact identity to S3. Full SQL, raw boto responses, and result values do not enter logs or crash dumps. | `tests/unit/domain/test_athena.py`, `tests/unit/domain/test_sql_policy.py`, Athena VM tests, `tests/integration/test_athena_page.py`, `tests/integration/test_glue_athena_navigation.py`, `tests/integration/test_athena_s3_handoff.py`, demo tests, and Athena snapshots. |
 
-Exact boto operation ledger (16):
+Exact boto operation ledger (17):
 
 ```text
 list_work_groups
@@ -36,6 +36,7 @@ get_work_group
 list_data_catalogs
 list_databases
 list_table_metadata
+get_table_metadata
 list_query_executions
 get_query_execution
 batch_get_query_execution
@@ -89,21 +90,29 @@ athena.cancel
 athena.choose_catalog
 athena.choose_database
 athena.choose_workgroup
+athena.complete
 athena.copy_cell
 athena.copy_row
 athena.execute
 athena.filter_results
+athena.format_sql
 athena.history
+athena.insert_snippet
 athena.insert_table_ref
 athena.inspect_cell
 athena.load_more
 athena.open_in_glue
 athena.open_result_location
+athena.open_sql
 athena.query
 athena.reset_results
 athena.results
+athena.save_snippet
+athena.save_sql
+athena.save_sql_as
 athena.saved
 athena.sort_results
+athena.sql_authoring
 glue.catalog
 glue.choose_crawler_state
 glue.choose_run_state

@@ -692,6 +692,7 @@ defines each Athena action and its resource types. This is the minimum Athena AP
       "athena:ListDataCatalogs",
       "athena:ListDatabases",
       "athena:ListTableMetadata",
+      "athena:GetTableMetadata",
       "athena:ListQueryExecutions",
       "athena:GetQueryExecution",
       "athena:BatchGetQueryExecution",

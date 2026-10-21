@@ -59,6 +59,7 @@ class AthenaDraftSessionSnapshot:
     state: DraftState = field(repr=False)
     origin_revision: tuple[str, int] | None = field(repr=False)
     pending_context: QueryContext | None = field(default=None, repr=False)
+    document_pending: bool = field(default=False, repr=False)
 
 
 def valid_draft_session_snapshot(value: object, *, sql: str) -> bool:
@@ -86,7 +87,9 @@ def valid_draft_session_snapshot(value: object, *, sql: str) -> bool:
         and value.editor_revision >= 0
         and type(value.deleted) is bool
         and type(value.save_failed) is bool
+        and type(value.document_pending) is bool
         and type(value.state) is str
+        and (not value.document_pending or value.state in {"off", "error", "context_required"})
         and value.state in {"off", "empty", "pending", "saved", "error", "context_required"}
         and (
             value.pending_context is None
@@ -827,6 +830,7 @@ class AthenaDraftSession:
         self._state: DraftState = "off"
         self._transferred = False
         self._transfer_pending_context: QueryContext | None = None
+        self._document_pending = False
         self._on_property_changed = ObserverSafeSubject[str]()
 
     @property
@@ -840,6 +844,8 @@ class AthenaDraftSession:
                 return self._runtime.error_text or _ENABLE_ERROR
             return _SAVE_ERROR
         if self._state == "context_required":
+            if self._document_pending:
+                return "Table query context is unconfirmed. Select the table again or clear the editor."
             if self._bound_context is not None:
                 return _CONTEXT_ERROR
             return _INCOMPLETE_CONTEXT
@@ -898,6 +904,7 @@ class AthenaDraftSession:
                 and self._capture.captured_editor_revision == self._editor_revision
                 else self._transfer_pending_context
             ),
+            self._document_pending,
         )
 
     def install_snapshot(
@@ -926,6 +933,7 @@ class AthenaDraftSession:
         self._capture = None
         self._transferred = True
         self._transfer_pending_context = snapshot.pending_context
+        self._document_pending = snapshot.document_pending
         if self._runtime.enabled and self._context_needs_guard():
             self._state = "context_required"
         if self._active:
@@ -970,11 +978,38 @@ class AthenaDraftSession:
         else:
             runtime._retain_unscheduled(self)
 
+    def replace_document(self, sql: str, context: QueryContext, *, pending: bool = False) -> None:
+        """Start an explicitly accepted document without acknowledging a save.
+
+        Retire only this session's old write obligation. Its stored draft stays
+        available; a new document must never schedule a deletion of that origin.
+        """
+        if self._detached:
+            return
+        self._runtime._revoke_session_capture(self)
+        self._runtime._release_session_obligation(self)
+        self._capture = None
+        self._origin_revision = None
+        self._bound_context = None
+        self._saved_sql = None
+        self._saved_context = None
+        self._transferred = False
+        self._transfer_pending_context = None
+        self._document_pending = pending
+        self.edited(sql, context)
+
     def edited(self, sql: str, context: QueryContext) -> None:
         if self._detached:
             return
         self._transfer_pending_context = None
-        bound_origin = self._bound_context
+        bound_origin = None if self._document_pending else self._bound_context
+        if self._document_pending and not sql.strip():
+            # Clearing an unconfirmed generated document is not deletion of the
+            # previously stored draft whose context was only a temporary stage.
+            self._runtime._revoke_session_capture(self)
+            self._runtime._release_session_obligation(self)
+            self._capture = None
+            self._origin_revision = None
         coordinator, capture = self._runtime._coordinator, self._capture
         if (
             not sql.strip()
@@ -994,6 +1029,7 @@ class AthenaDraftSession:
         self._deleted_revision = None
         if not sql.strip():
             self._bound_context = None
+            self._document_pending = False
         elif self._bound_context is None and all(context.cache_key):
             self._bound_context = context
         if not self._active or not self._runtime.enabled:
@@ -1012,8 +1048,10 @@ class AthenaDraftSession:
                 self._runtime._release_session_obligation(self)
                 self._capture = None
                 self._state = "empty"
-        elif not all(context.cache_key) or (
-            self._bound_context is not None and self._bound_context != context
+        elif (
+            self._document_pending
+            or not all(context.cache_key)
+            or (self._bound_context is not None and self._bound_context != context)
         ):
             self._runtime._revoke_session_capture(self)
             self._runtime._retain_unscheduled(self)
@@ -1026,7 +1064,8 @@ class AthenaDraftSession:
 
     def _context_needs_guard(self) -> bool:
         return bool(self._sql.strip()) and (
-            self._context is None
+            self._document_pending
+            or self._context is None
             or not all(self._context.cache_key)
             or (self._bound_context is not None and self._bound_context != self._context)
         )
@@ -1049,6 +1088,7 @@ class AthenaDraftSession:
         if self._detached:
             return
         self._transfer_pending_context = None
+        self._document_pending = False
         self._runtime._release_session_obligation(self)
         coordinator = self._runtime._coordinator
         if coordinator is not None and coordinator.intake and self._active:
@@ -1079,7 +1119,9 @@ class AthenaDraftSession:
         self._transfer_pending_context = None
         self._saved_sql = None
         self._saved_context = None
-        self._state = "empty"
+        self._state = (
+            "context_required" if self._document_pending and self._sql.strip() else "empty"
+        )
         self._notify("state")
         self._notify("error_text")
 

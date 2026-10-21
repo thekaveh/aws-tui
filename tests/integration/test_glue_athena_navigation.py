@@ -24,6 +24,7 @@ from aws_tui.ui.widgets.command_palette import CommandPalette
 from aws_tui.ui.widgets.context_picker import ContextPicker
 from aws_tui.ui.widgets.hint_legend import HintLegend
 from aws_tui.vm.athena.page_vm import AthenaPageVM
+from aws_tui.vm.chrome.confirm_vm import ConfirmationVM
 from aws_tui.vm.glue.page_vm import GluePageVM
 from aws_tui.vm.messages import (
     OpenAthenaTableRequest,
@@ -34,6 +35,26 @@ from aws_tui.vm.nav_menu_vm import SETTINGS_NAV_ID
 from tests.helpers import drain_workers, seed_athena_sql, wait_until
 
 SERVICE_SETUP_TIMEOUT_SECONDS = 30
+
+
+@pytest.fixture(autouse=True)
+def _accept_sql_replacement_for_navigation_contracts(monkeypatch):
+    """These cases exercise an accepted navigation, including its rollback.
+
+    The actual accept/decline dialog and stale-answer boundaries are exercised
+    separately in test_athena_authoring_handoffs. Keep other confirmations real.
+    """
+    original = ConfirmationVM.ask
+
+    async def ask(self, request, **kwargs):
+        if (
+            request.title == "Replace modified SQL in the editor?"
+            and request.confirm_label == "Replace"
+        ):
+            return True
+        return await original(self, request, **kwargs)
+
+    monkeypatch.setattr(ConfirmationVM, "ask", ask)
 
 
 async def _wait_for_service_setup(
@@ -344,7 +365,7 @@ async def test_glue_prefills_before_athena_setup_completes(
                     app,
                     pilot,
                     "#athena-query-status",
-                    "RESOLVING TABLE CONTEXT",
+                    "Untitled · RESOLVING TABLE CONTEXT",
                 )
                 assert not any(call.method == "start_query" for call in client.calls)
 
@@ -1105,7 +1126,8 @@ async def test_superseded_table_handoff_is_one_serialized_transaction(
                 service_id: str,
                 *,
                 prepare_vm: Callable[[object], None] | None = None,
-            ) -> None:
+                **options,
+            ) -> bool:
                 if (
                     pause_stage == "switch"
                     and service_id == "athena"
@@ -1113,11 +1135,12 @@ async def test_superseded_table_handoff_is_one_serialized_transaction(
                 ):
                     pause_started.set()
                     await release_pause.wait()
-                await original_switch(
+                return await original_switch(
                     connection,
                     auth_state,
                     service_id,
                     prepare_vm=prepare_vm,
+                    **options,
                 )
 
             async def pause_mount(
@@ -1263,15 +1286,17 @@ async def test_user_navigation_supersedes_inflight_table_handoff(
                 service_id: str,
                 *,
                 prepare_vm: Callable[[object], None] | None = None,
-            ) -> None:
+                **options,
+            ) -> bool:
                 if pause_stage == "switch" and service_id == "athena":
                     pause_started.set()
                     await release_pause.wait()
-                await original_switch(
+                return await original_switch(
                     connection,
                     auth_state,
                     service_id,
                     prepare_vm=prepare_vm,
+                    **options,
                 )
 
             async def pause_mount(
@@ -1379,13 +1404,15 @@ async def test_table_handoff_preflight_rejects_active_athena_without_mutation(
                 service_id: str,
                 *,
                 prepare_vm: Callable[[object], None] | None = None,
-            ) -> None:
+                **options,
+            ) -> bool:
                 switch_calls.append(service_id)
-                await original_switch(
+                return await original_switch(
                     connection,
                     auth_state,
                     service_id,
                     prepare_vm=prepare_vm,
+                    **options,
                 )
 
             monkeypatch.setattr(
@@ -1470,15 +1497,17 @@ async def test_user_navigation_claim_during_table_rollback_always_wins(
                 service_id: str,
                 *,
                 prepare_vm: Callable[[object], None] | None = None,
-            ) -> None:
+                **options,
+            ) -> bool:
                 if rollback_active and rollback_stage == "switch" and service_id == "athena":
                     rollback_started.set()
                     await release_rollback.wait()
-                await original_switch(
+                return await original_switch(
                     connection,
                     auth_state,
                     service_id,
                     prepare_vm=prepare_vm,
+                    **options,
                 )
 
             async def pause_mount(
@@ -1868,15 +1897,17 @@ async def test_table_handoff_rollback_survives_repeated_cancellation_and_restore
                 service_id: str,
                 *,
                 prepare_vm: Callable[[object], None] | None = None,
-            ) -> None:
+                **options,
+            ) -> bool:
                 if service_id == "athena":
                     rollback_started.set()
                     await release_rollback.wait()
-                await original_switch(
+                return await original_switch(
                     connection,
                     auth_state,
                     service_id,
                     prepare_vm=prepare_vm,
+                    **options,
                 )
 
             monkeypatch.setattr(GluePageVM, "open_table", pause_open)
@@ -1961,15 +1992,17 @@ async def test_shutdown_drains_inflight_table_handoff_rollback(
                 service_id: str,
                 *,
                 prepare_vm: Callable[[object], None] | None = None,
-            ) -> None:
+                **options,
+            ) -> bool:
                 if service_id == "athena":
                     rollback_started.set()
                     await release_rollback.wait()
-                await original_switch(
+                return await original_switch(
                     connection,
                     auth_state,
                     service_id,
                     prepare_vm=prepare_vm,
+                    **options,
                 )
 
             monkeypatch.setattr(GluePageVM, "open_table", pause_open)
