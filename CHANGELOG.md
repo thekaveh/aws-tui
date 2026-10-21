@@ -233,6 +233,10 @@ section. The current tree must not be tagged as v0.8.0.
 
 ### Fixed
 
+- **Visible EMR run selection.** Keyboard navigation keeps the selected run
+  inside its scroll viewport without rebuilding rows. Refresh, pagination and
+  terminal resizing reveal the current selection after layout.
+
 - **Responsive connection Settings.** Listing S3-compatible connections does
   not read keychain secrets. Editing loads only the selected connection's
   credentials in a worker. Failed or superseded reads preserve current input

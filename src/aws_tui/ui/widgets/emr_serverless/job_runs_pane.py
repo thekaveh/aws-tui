@@ -29,6 +29,7 @@ truncated by row text-overflow).
 
 from __future__ import annotations
 
+import asyncio
 from typing import ClassVar
 
 from reactivex.abc import DisposableBase
@@ -270,6 +271,7 @@ class JobRunsPane(Widget, can_focus=True):
         # path, plus we paint synchronously in the handler to avoid
         # an event-loop hop's worth of cursor-trail.
         self._sub: DisposableBase | None = None
+        self._rows_lock = asyncio.Lock()
 
     def compose(self) -> ComposeResult:
         with Horizontal(classes="runs-chip-row"):
@@ -293,16 +295,19 @@ class JobRunsPane(Widget, can_focus=True):
             yield Static("DATE & TIME", classes="runs-cell-datetime")
         yield VerticalScroll(id="runs-body")
 
-    def on_mount(self) -> None:
+    async def on_mount(self) -> None:
         self.border_title = "runs"
         self._refresh_chips()
-        self._refresh_rows()
         # Round-3 directive §9.bis.11 / PR #103 retirement: subscribe
         # to JobRunsVM's per-instance Observable. This Subject only
         # fires for THIS VM, so no `sender_object` filtering is
         # needed against cross-VM `state` echoes from sibling EMR
         # VMs sharing the hub.
         self._sub = self._vm.on_property_changed.subscribe(on_next=self._on_vm_property_changed)
+        await self._refresh_rows()
+
+    def on_resize(self) -> None:
+        self.call_after_refresh(self._reveal_selection)
 
     def on_unmount(self) -> None:
         if self._sub is not None:
@@ -448,14 +453,12 @@ class JobRunsPane(Widget, can_focus=True):
         guarding against can't reach this handler because the
         Subject is scoped to JobRunsVM only.
 
-        Note: ``selected_id`` is deliberately NOT in the redraw set.
-        The pane's visible selection is driven by the cursor index
-        (already updated synchronously in ``action_cursor_up`` /
-        ``_down``); reacting to ``selected_id`` here would force a
-        full ``remove_children`` + re-mount on every arrow press —
-        the visible flash the user reported post-PR-#98.
+        Selection changes only repaint/reveal existing rows. Rebuilding
+        them on every arrow press would cause visible flicker.
         """
-        if prop == "state_filter":
+        if prop == "selected_id":
+            self._repaint_selection()
+        elif prop == "state_filter":
             self.call_after_refresh(self._refresh_chips)
             self.call_after_refresh(self._refresh_rows)
         elif prop in {"runs", "state"}:
@@ -491,13 +494,33 @@ class JobRunsPane(Widget, can_focus=True):
         target_run_id = self._vm.selected_id
         for row in self.query(_JobRunRow):
             row.set_class(row.run_id == target_run_id, "-selected")
+        self._reveal_selection()
 
-    def _refresh_rows(self) -> None:
+    def _reveal_selection(self) -> None:
+        """Reveal the current mounted selection without changing its identity."""
+        if not self.is_attached or not self._vm.is_constructed:
+            return
+        body = self.query_one("#runs-body", VerticalScroll)
+        for row in body.query(_JobRunRow):
+            if row.run_id == self._vm.selected_id:
+                body.scroll_to_widget(row, animate=False, immediate=True)
+                break
+
+    async def _refresh_rows(self) -> None:
+        # Initial mount and queued state/runs notifications share this DOM.
+        async with self._rows_lock:
+            await self._replace_rows()
+
+    async def _replace_rows(self) -> None:
+        if not self.is_attached or not self._vm.is_constructed:
+            return
         try:
             body = self.query_one("#runs-body", VerticalScroll)
         except Exception:
             return
-        body.remove_children()
+        await body.remove_children()
+        if not self.is_attached or not self._vm.is_constructed:
+            return
         state = self._vm.state
         runs = self._vm.runs
         # Order mirrors ``JobRunDetailPane._refresh``: PROVIDER-error
@@ -516,10 +539,10 @@ class JobRunsPane(Widget, can_focus=True):
         # was the asymmetric holdout. Static-string branches get
         # the guard too for parity.
         if state is PaneState.LOADING:
-            body.mount(Static("loading…", classes="runs-placeholder", markup=False))
+            await body.mount(Static("loading…", classes="runs-placeholder", markup=False))
             return
         if state is PaneState.UNREACHABLE:
-            body.mount(
+            await body.mount(
                 Static(
                     self._vm.error_text or "endpoint unreachable — press r to retry",
                     classes="runs-placeholder",
@@ -528,7 +551,7 @@ class JobRunsPane(Widget, can_focus=True):
             )
             return
         if state is PaneState.AUTH_REQUIRED:
-            body.mount(
+            await body.mount(
                 Static(
                     "authentication required — aws sso login --profile <X>",
                     classes="runs-placeholder",
@@ -537,7 +560,7 @@ class JobRunsPane(Widget, can_focus=True):
             )
             return
         if state is PaneState.FORBIDDEN:
-            body.mount(
+            await body.mount(
                 Static(
                     self._vm.error_text or "permission denied — check IAM policy",
                     classes="runs-placeholder",
@@ -546,7 +569,7 @@ class JobRunsPane(Widget, can_focus=True):
             )
             return
         if state is PaneState.ERROR:
-            body.mount(
+            await body.mount(
                 Static(
                     self._vm.error_text or "error — press r to retry",
                     classes="runs-placeholder",
@@ -555,7 +578,7 @@ class JobRunsPane(Widget, can_focus=True):
             )
             return
         if state is PaneState.EMPTY or not runs:
-            body.mount(Static("(no runs)", classes="runs-placeholder", markup=False))
+            await body.mount(Static("(no runs)", classes="runs-placeholder", markup=False))
             return
         # The cursor position is derived from `vm.selected_id`; on
         # first mount or after a refresh that clears the prior
@@ -563,26 +586,31 @@ class JobRunsPane(Widget, can_focus=True):
         # (or leaves it None). Either way, paint via id match —
         # there is no View-side fallback clamp needed.
         cursor_run_id = self._vm.selected_id
+        rows: list[Widget] = []
         for r in runs:
             row_classes = "runs-row"
             if r.job_run_id == cursor_run_id:
                 row_classes += " -selected"
-            body.mount(_JobRunRow(r, run_id=r.job_run_id, classes=row_classes))
+            rows.append(_JobRunRow(r, run_id=r.job_run_id, classes=row_classes))
         if self._vm.has_more:
-            body.mount(
+            rows.append(
                 _LoadMoreSentinel(
                     "↓  Load more  (PgDn)",
                     classes="runs-row runs-load-more",
                 )
             )
         elif self._vm.limit_reached:
-            body.mount(
+            rows.append(
                 Static(
                     f"Showing first {len(runs)} runs · safety limit",
                     classes="runs-row runs-load-more",
                     markup=False,
                 )
             )
+        await body.mount_all(rows)
+        # Resolve current identity after actual mounting and the next layout;
+        # selection may have changed while the children were being mounted.
+        self.call_after_refresh(self._repaint_selection)
 
 
 __all__ = ["JobRunsPane"]
