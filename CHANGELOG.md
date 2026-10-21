@@ -233,6 +233,9 @@ section. The current tree must not be tagged as v0.8.0.
 
 ### Fixed
 
+- Athena queries remain stoppable after polling errors. Rerunning first stops
+  the prior query; a failed stop preserves its identity and prevents replacement.
+
 - Release removed service widgets from cached queries after navigation.
 
 - Athena Refresh retries failed catalog and database discovery. It preserves
