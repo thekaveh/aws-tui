@@ -17,6 +17,7 @@ _MODELED_OPERATIONS = {
         "ListDataCatalogs",
         "ListDatabases",
         "ListTableMetadata",
+        "GetTableMetadata",
         "ListQueryExecutions",
         "GetQueryExecution",
         "BatchGetQueryExecution",
@@ -81,6 +82,12 @@ _OPERATION_SOURCES = {
 }
 
 _CONSUMED_INPUT_MEMBERS = {
+    ("athena", "GetTableMetadata"): {
+        "CatalogName",
+        "DatabaseName",
+        "TableName",
+        "WorkGroup",
+    },
     ("logs", "DescribeLogStreams"): {
         "logGroupName",
         "logStreamNamePrefix",

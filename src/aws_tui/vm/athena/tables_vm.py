@@ -55,6 +55,11 @@ class AthenaTablesVM:
         return self._context_revision
 
     @property
+    def metadata_revision(self) -> int:
+        """Count refreshes separately from the context-triggered UI load intent."""
+        return self._generation
+
+    @property
     def items(self) -> tuple[TableSummary, ...]:
         return tuple(self._pager.items)
 

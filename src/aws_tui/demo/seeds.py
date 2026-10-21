@@ -160,6 +160,27 @@ _PROFILE_OBJECTS: dict[str, tuple[tuple[str, int], ...]] = {
     "demo-shared": _SHARED_OBJECTS,
 }
 
+_DEV_TABLE_COLUMNS = (
+    Column("event_id", "string", "Event identifier", False),
+    Column("event_name", "string", "Event name", False),
+    Column("event_ts", "timestamp", "Event timestamp", False),
+    Column("event_date", "date", "Event date", True),
+)
+
+_PROD_TABLE_COLUMNS = (
+    Column("order_id", "bigint", "Order identifier", False),
+    Column("gross_total", "decimal(12,2)", "Gross sales", False),
+    Column("region", "string", "Sales region", False),
+    Column("sales_date", "date", "Sales date", True),
+)
+
+_SHARED_TABLE_COLUMNS = (
+    Column("metric_name", "string", "Metric name", False),
+    Column("metric_value", "double", "Metric value", False),
+    Column("observed_at", "timestamp", "Observation time", False),
+    Column("team", "string", "Owning team", True),
+)
+
 _RESULT_COLUMNS = (
     ResultColumn("value", "varchar", "NULLABLE"),
     ResultColumn("metric", "varchar", "NULLABLE"),
@@ -409,12 +430,7 @@ def seeded_demo_glue() -> dict[str, InMemoryGlue]:
     dev.add_iceberg_table(
         "dev_analytics",
         "dev_events_iceberg",
-        columns=(
-            Column("event_id", "string", "Event identifier", False),
-            Column("event_name", "string", "Event name", False),
-            Column("event_ts", "timestamp", "Event timestamp", False),
-            Column("event_date", "date", "Event date", True),
-        ),
+        columns=_DEV_TABLE_COLUMNS,
         partition_columns=("event_date",),
         metadata_version=2,
     )
@@ -430,12 +446,7 @@ def seeded_demo_glue() -> dict[str, InMemoryGlue]:
     prod.add_iceberg_table(
         "prod_warehouse",
         "prod_sales_iceberg",
-        columns=(
-            Column("order_id", "bigint", "Order identifier", False),
-            Column("gross_total", "decimal(12,2)", "Gross sales", False),
-            Column("region", "string", "Sales region", False),
-            Column("sales_date", "date", "Sales date", True),
-        ),
+        columns=_PROD_TABLE_COLUMNS,
         partition_columns=("sales_date",),
         metadata_version=8,
     )
@@ -449,12 +460,7 @@ def seeded_demo_glue() -> dict[str, InMemoryGlue]:
     shared.add_iceberg_table(
         "shared_lake",
         "shared_metrics_iceberg",
-        columns=(
-            Column("metric_name", "string", "Metric name", False),
-            Column("metric_value", "double", "Metric value", False),
-            Column("observed_at", "timestamp", "Observation time", False),
-            Column("team", "string", "Owning team", True),
-        ),
+        columns=_SHARED_TABLE_COLUMNS,
         partition_columns=("team",),
         metadata_version=3,
     )
@@ -519,6 +525,7 @@ def _seed_dev_athena(athena: InMemoryAthena) -> None:
         "DevDataCatalog",
         "dev_events",
         "events",
+        columns=_DEV_TABLE_COLUMNS,
     )
     athena.add_database(
         "dev-analytics",
@@ -530,6 +537,7 @@ def _seed_dev_athena(athena: InMemoryAthena) -> None:
         "AwsDataCatalog",
         "dev_analytics",
         "dev_events_iceberg",
+        columns=_DEV_TABLE_COLUMNS,
     )
     context = QueryContext(
         athena.connection_name,
@@ -640,6 +648,7 @@ def _seed_prod_athena(athena: InMemoryAthena) -> None:
         "ProdDataCatalog",
         "prod_sales",
         "daily_sales",
+        columns=_PROD_TABLE_COLUMNS,
     )
     athena.add_database(
         "prod-reporting",
@@ -651,6 +660,7 @@ def _seed_prod_athena(athena: InMemoryAthena) -> None:
         "AwsDataCatalog",
         "prod_warehouse",
         "prod_sales_iceberg",
+        columns=_PROD_TABLE_COLUMNS,
     )
     context = QueryContext(
         athena.connection_name,
@@ -732,6 +742,7 @@ def _seed_shared_athena(athena: InMemoryAthena) -> None:
         "AwsDataCatalog",
         "shared_lake",
         "shared_metrics_iceberg",
+        columns=_SHARED_TABLE_COLUMNS,
     )
     _seed_select_one(
         athena,

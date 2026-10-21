@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+import asyncio
+from dataclasses import dataclass, field
+from functools import partial
+from pathlib import Path
 from typing import ClassVar
 
 from reactivex.abc import DisposableBase
@@ -7,12 +11,21 @@ from textual import events
 from textual.app import ComposeResult
 from textual.binding import Binding, BindingType
 from textual.containers import Horizontal, VerticalScroll
+from textual.document._document import Document, Selection
 from textual.message import Message
 from textual.screen import Screen
 from textual.widget import Widget
 from textual.widgets import Button, Static, TextArea
+from vmx import Message as HubMessage
+from vmx import MessageHub
 
+from aws_tui.domain.query import QueryContext
 from aws_tui.ui.widgets._worker import DeferredWorkerMixin
+from aws_tui.ui.widgets.athena.authoring_dialogs import (
+    SqlChoiceModal,
+    SqlValueModal,
+    ask_sql_confirmation,
+)
 from aws_tui.ui.widgets.glue.detail_rows import display_value
 from aws_tui.vm.athena.page_vm import AthenaPageVM
 
@@ -23,6 +36,37 @@ DRAFT_LABELS = {
     "context_required": "Draft pending",
     "empty": "No saved draft",
 }
+
+SQL_COMMANDS = (
+    ("complete", "Complete at cursor"),
+    ("format", "Format SQL layout"),
+    ("open", "Open local .sql file"),
+    ("save", "Save SQL file"),
+    ("save_as", "Save SQL file as…"),
+    ("insert_snippet", "Insert local snippet…"),
+    ("save_snippet", "Save local snippet…"),
+)
+
+
+@dataclass(frozen=True, slots=True)
+class _EditorCapture:
+    text: str = field(repr=False)
+    selection: Selection
+    editor_revision: int
+    document_revision: int
+    context: QueryContext = field(repr=False)
+    context_revision: int
+
+
+class _SqlEditor(TextArea):
+    def undo(self) -> None:
+        # Textual8.2.8 refreshes scrollbars before restoring the edit's old
+        # selection. A multiline-to-single-line undo otherwise uses a now
+        # out-of-range cursor during that refresh. Native history still owns
+        # the edit and restores its exact original selection afterward.
+        if self.history.undo_stack:
+            self.move_cursor((0, 0))
+        super().undo()
 
 
 class AthenaQueryView(DeferredWorkerMixin, Widget):
@@ -65,6 +109,7 @@ class AthenaQueryView(DeferredWorkerMixin, Widget):
         margin: 0 1 0 0;
     }
     AthenaQueryView #athena-drafts { width: 8; min-width: 8; height: 3; padding: 0; margin: 0 1 0 0; }
+    AthenaQueryView #athena-authoring { width: 7; min-width: 7; height: 3; padding: 0; margin: 0 1 0 0; }
     AthenaQueryView #athena-query-status {
         width: 1fr;
         height: 3;
@@ -91,12 +136,18 @@ class AthenaQueryView(DeferredWorkerMixin, Widget):
     }
     """
 
-    def __init__(self, vm: AthenaPageVM, *, id: str | None = None) -> None:
+    def __init__(
+        self, vm: AthenaPageVM, *, hub: MessageHub[HubMessage] | None = None, id: str | None = None
+    ) -> None:
         super().__init__(id=id, classes="athena-service-view")
         self._page_vm = vm
+        self._hub = hub if hub is not None else MessageHub()
         self._vm = vm.query
         self._sub: DisposableBase | None = None
         self._drafts_sub: DisposableBase | None = None
+        self._page_sub: DisposableBase | None = None
+        self._replacement_revision = -1
+        self._authoring_pending = False
         self._syncing_editor = False
         self._layout_screen: Screen[object] | None = None
 
@@ -123,10 +174,17 @@ class AthenaQueryView(DeferredWorkerMixin, Widget):
             button.styles.line_pad = 0
             button.display = self._page_vm.drafts is not None and self._page_vm.drafts.enabled
             yield button
+            yield Button(
+                "SQL",
+                id="athena-authoring",
+                compact=True,
+                flat=True,
+                tooltip="SQL completion, formatting, files and local snippets",
+            )
             status = Static("", id="athena-query-status", markup=False)
             status.can_focus = True
             yield status
-        yield TextArea(
+        yield _SqlEditor(
             self._vm.sql,
             language="sql",
             soft_wrap=True,
@@ -159,12 +217,16 @@ class AthenaQueryView(DeferredWorkerMixin, Widget):
         self.query_one("#athena-query-detail").border_title = "execution detail"
         self._refresh()
         self._sub = self._vm.on_property_changed.subscribe(on_next=self._on_vm_changed)
+        self._page_sub = self._page_vm.on_property_changed.subscribe(self._on_page_changed)
         if self._page_vm.drafts is not None:
             self._drafts_sub = self._page_vm.drafts.on_property_changed.subscribe(
                 self._on_vm_changed
             )
 
     def on_unmount(self) -> None:
+        if self._page_sub is not None:
+            self._page_sub.dispose()
+            self._page_sub = None
         if self._layout_screen is not None:
             self._layout_screen.screen_layout_refresh_signal.unsubscribe(self)
             self._layout_screen = None
@@ -188,6 +250,193 @@ class AthenaQueryView(DeferredWorkerMixin, Widget):
             self.dispatch_cancel()
         elif event.button.id == "athena-drafts":
             self.post_message(self.OpenDrafts())
+        elif event.button.id == "athena-authoring":
+            self.dispatch_authoring("menu")
+
+    def authoring_available(self, command: str = "menu") -> bool:
+        return (
+            self.is_mounted
+            and self.is_attached
+            and self.is_running
+            and self._page_vm._is_alive()
+            and self._page_vm.active_view == "query"
+            and not self._authoring_pending
+            and not self._vm.is_context_resolving
+            and not self._vm.is_submitting
+            and not self._vm.is_executing
+            and (command != "complete" or not self._page_vm.completion.busy)
+        )
+
+    def dispatch_authoring(self, command: str) -> None:
+        if not self.authoring_available(command):
+            return
+        self._sync_sql_from_editor()
+        editor = self.query_one("#athena-editor", TextArea)
+        capture = _EditorCapture(
+            editor.text,
+            editor.selection,
+            self._vm.editor_revision,
+            self._page_vm.authoring.ownership_revision,
+            self._vm.context,
+            self._page_vm.context_choice_revision,
+        )
+        self._authoring_pending = True
+        self._run_lifecycle_worker(
+            partial(self._perform_authoring, command, capture),
+            group="athena-authoring",
+            exclusive=False,
+        )
+
+    def _owns_capture(self, capture: _EditorCapture) -> bool:
+        task = asyncio.current_task()
+        if (
+            not self.is_mounted
+            or not self.is_attached
+            or not self.is_running
+            or not self._page_vm._is_alive()
+            or (task is not None and task.cancelling())
+        ):
+            return False
+        editor = self.query_one("#athena-editor", TextArea)
+        return (
+            self._page_vm.active_view == "query"
+            and editor.text == capture.text
+            and editor.selection == capture.selection
+            and self._vm.editor_revision == capture.editor_revision
+            and self._page_vm.authoring.ownership_revision == capture.document_revision
+            and self._vm.context == capture.context
+            and self._page_vm.context_choice_revision == capture.context_revision
+        )
+
+    async def _confirm_sql(self, message: str) -> bool:
+        return await ask_sql_confirmation(
+            self, hub=self._hub, dispatcher=self._page_vm.dispatcher, message=message
+        )
+
+    async def _show_prompt(self, prompt: SqlChoiceModal | SqlValueModal) -> str | None:
+        try:
+            return await self.app.push_screen_wait(prompt)
+        finally:
+            # push_screen_wait shields the screen's future; worker retirement
+            # must invalidate its exact prompt without dismissing a newer one.
+            prompt.invalidate()
+
+    def _native_edit(self, text: str, start: tuple[int, int], end: tuple[int, int]) -> None:
+        editor = self.query_one("#athena-editor", TextArea)
+        editor.history.checkpoint()
+        editor.replace(text, start, end, maintain_selection_offset=False)
+        editor.history.checkpoint()
+        self._vm.set_sql(editor.text)
+
+    async def _perform_authoring(self, command: str, capture: _EditorCapture) -> None:
+        authoring = self._page_vm.authoring
+        try:
+            if not self._owns_capture(capture):
+                return
+            if command == "menu":
+                selected = await self._show_prompt(SqlChoiceModal("SQL authoring", SQL_COMMANDS))
+                if selected is None or not self._owns_capture(capture):
+                    return
+                command = selected
+            editor = self.query_one("#athena-editor", TextArea)
+            if command == "format":
+                result = await authoring.format_document()
+                if result is not None and result.reason is None and self._owns_capture(capture):
+                    self._native_edit(
+                        result.sql,
+                        (0, 0),
+                        editor.document.end,
+                    )
+            elif command == "complete":
+                batch = await self._page_vm.completion.complete(
+                    len(editor.document.get_text_range((0, 0), capture.selection.end))
+                )
+                if (
+                    not self._owns_capture(capture)
+                    or not self._page_vm.completion.is_current(batch)
+                    or batch is None
+                ):
+                    return
+                selected = await self._show_prompt(
+                    SqlChoiceModal(
+                        "SQL completion",
+                        tuple(
+                            (str(i), f"{choice.label} · {choice.kind} {choice.detail}")
+                            for i, choice in enumerate(batch.choices)
+                        ),
+                        detail=batch.message,
+                    )
+                )
+                if (
+                    selected is not None
+                    and self._owns_capture(capture)
+                    and self._page_vm.completion.is_current(batch)
+                ):
+                    start, end = capture.selection.start, capture.selection.end
+                    if start == end:
+                        document = Document(capture.text)
+                        start = document.get_location_from_index(batch.target.start)
+                        end = document.get_location_from_index(batch.target.end)
+                    self._native_edit(batch.choices[int(selected)].text, start, end)
+            elif command in {"open", "save", "save_as"}:
+                path = authoring.path
+                if command != "save" or path is None:
+                    value = await self._show_prompt(
+                        SqlValueModal(
+                            "Open local SQL file"
+                            if command == "open"
+                            else "Save local SQL file as",
+                            value=str(path) if path else "",
+                            detail="UTF-8 .sql · up to 1 MiB · existing files require confirmation",
+                        )
+                    )
+                    if value is None or not self._owns_capture(capture):
+                        return
+                    try:
+                        path = Path(value).expanduser().absolute()
+                    except (OSError, ValueError, RuntimeError):
+                        authoring.report_invalid_path()
+                        return
+                if path is not None:
+                    if command == "open":
+                        await authoring.open_sql(path, confirm=self._confirm_sql)
+                    else:
+                        await authoring.save_sql(path, confirm=self._confirm_sql)
+            elif command == "save_snippet":
+                name = await self._show_prompt(
+                    SqlValueModal(
+                        "Save local SQL snippet",
+                        detail="Local library only · name up to 80 characters · no AWS named-query changes",
+                    )
+                )
+                if name is not None and self._owns_capture(capture):
+                    await authoring.save_snippet(name)
+            elif command == "insert_snippet":
+                if not await authoring.load_snippets() or not self._owns_capture(capture):
+                    return
+                selected = await self._show_prompt(
+                    SqlChoiceModal(
+                        "Local SQL snippets",
+                        tuple((s.id, f"{s.name} · {s.provenance}") for s in authoring.snippets),
+                        detail="Local library · separate from AWS named queries and prepared statements",
+                    )
+                )
+                if selected is not None and self._owns_capture(capture):
+                    sql = authoring.snippet_sql(selected)
+                    if sql is not None:
+                        self._native_edit(sql, capture.selection.start, capture.selection.end)
+        finally:
+            self._authoring_pending = False
+            if self.is_mounted and self.is_attached and self.is_running:
+                self._refresh(sync_editor=False)
+                if (
+                    self.screen is self.app.screen
+                    and self._page_vm._is_alive()
+                    and self._page_vm.active_view == "query"
+                    and self.app.focused
+                    in (None, self.query_one("#athena-editor"), self.query_one("#athena-authoring"))
+                ):
+                    self.query_one("#athena-editor", TextArea).focus()
 
     def dispatch_execute(self) -> None:
         """Start the query on a worker, never on the message pump.
@@ -243,6 +492,7 @@ class AthenaQueryView(DeferredWorkerMixin, Widget):
             self.query_one("#athena-execute", Button),
             self.query_one("#athena-cancel", Button),
             self.query_one("#athena-drafts", Button),
+            self.query_one("#athena-authoring", Button),
             self.query_one("#athena-query-status", Static),
             self.query_one("#athena-query-detail", VerticalScroll),
         )
@@ -285,6 +535,15 @@ class AthenaQueryView(DeferredWorkerMixin, Widget):
     def _on_vm_changed(self, _property_name: str) -> None:
         self.call_after_refresh(self._refresh)
 
+    def _on_page_changed(self, _property_name: str) -> None:
+        if self.is_mounted and self.is_attached and self.is_running:
+            self.call_after_refresh(self._refresh_document_metadata)
+
+    def _refresh_document_metadata(self) -> None:
+        self._refresh(
+            sync_editor=self._replacement_revision != self._page_vm.authoring.replacement_revision
+        )
+
     def _sync_sql_from_editor(self) -> None:
         try:
             editor = self.query_one("#athena-editor", TextArea)
@@ -301,15 +560,37 @@ class AthenaQueryView(DeferredWorkerMixin, Widget):
             detail = self.query_one("#athena-query-detail-text", Static)
         except Exception:
             return
-        if sync_editor and editor.text != self._vm.sql:
+        if sync_editor and (
+            editor.text != self._vm.sql
+            or self._replacement_revision != self._page_vm.authoring.replacement_revision
+        ):
             self._syncing_editor = True
             try:
                 editor.text = self._vm.sql
+                self._replacement_revision = self._page_vm.authoring.replacement_revision
             finally:
                 self._syncing_editor = False
         execute.disabled = not self._vm.execute_command.can_execute()
         cancel.disabled = not self._vm.cancel_command.can_execute()
-        status.update(self._status_text())
+        authoring = self._page_vm.authoring
+        document = authoring.path.name if authoring.path else "Untitled"
+        message = authoring.status or self._status_text()
+        if self._page_vm.completion.state != "idle":
+            message = self._page_vm.completion.message
+        if (
+            self._vm.is_context_resolving
+            or self._vm.is_submitting
+            or self._vm.is_executing
+            or self._vm.state is not None
+            or self._vm.validation_error is not None
+            or self._vm.error_text is not None
+        ):
+            # Authoring feedback must never replace execution ownership,
+            # progress, validation or error feedback for Run/Stop.
+            message = self._status_text()
+        status.update(f"{document}{' *' if authoring.dirty else ''} · {message}")
+        status.tooltip = str(authoring.path) if authoring.path else "Unsaved local SQL document"
+        self.query_one("#athena-authoring", Button).disabled = not self.authoring_available()
         detail.update(self._detail_text())
         drafts = self._page_vm.drafts
         button = self.query_one("#athena-drafts", Button)
@@ -345,6 +626,10 @@ class AthenaQueryView(DeferredWorkerMixin, Widget):
 
     def _detail_text(self) -> str:
         rows: list[str] = []
+        if self._page_vm.authoring.path is not None:
+            rows.append(f"SQL file        {self._page_vm.authoring.path}")
+        if self._page_vm.authoring.status:
+            rows.append(f"SQL authoring   {self._page_vm.authoring.status}")
         for label, error_text in (
             ("Workgroup", self._page_vm.workgroup_detail_error_text),
             ("Workgroups", self._page_vm.workgroups_error_text),

@@ -97,6 +97,11 @@ VMs to build service pages, but it cannot import Textual widgets.
         `open_table_in_glue()` publishes `OpenGlueTableRequest` only when the
         current SQL resolves to one visible table.
 
+        `AthenaAuthoringVM` owns local document metadata, file operations, and snippets.
+        `AthenaCompletionVM` owns bounded schema reads and context-scoped completion caches.
+        The Query view owns cursor placement, selected suggestions, and native undo history.
+        Query execution remains in `AthenaQueryVM`; authoring does not submit SQL.
+
     - `vm/settings/` — `SettingsVM` (built per-mount when the user
         selects the Settings nav peer) and `S3ConnectionsVM` (singleton
         on `AppContext`, drives the in-app Connections CRUD).

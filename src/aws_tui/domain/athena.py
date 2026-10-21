@@ -14,6 +14,7 @@ import botocore.exceptions
 from aws_tui.domain.aws_auth import AWS_AUTH_ERROR_CODES, AWS_CREDENTIAL_EXCEPTIONS
 from aws_tui.domain.aws_transport import AWS_TRANSPORT_EXCEPTIONS
 from aws_tui.domain.data_catalog import (
+    Column,
     DatabaseRef,
     DatabaseSummary,
     TableRef,
@@ -42,6 +43,7 @@ from aws_tui.domain.query import (
     ResultColumn,
     ResultPage,
 )
+from aws_tui.domain.sql_authoring import CompletionTable
 from aws_tui.domain.sql_policy import ReadOnlySqlPolicy
 from aws_tui.infra.aws_session import AwsSession
 from aws_tui.infra.connection_resolver import Connection
@@ -451,6 +453,55 @@ class AthenaClient:
                     workgroup or "",
                     start_token or "",
                 ),
+            )
+
+    async def get_table_columns(
+        self,
+        catalog: str,
+        database: str,
+        table: str,
+        *,
+        workgroup: str | None = None,
+    ) -> CompletionTable:
+        """Read bounded column metadata from the active Athena catalog.
+
+        WorkGroup is forwarded for IAM Identity Center catalogs. This operation
+        does not create a query execution or assume a Glue-backed catalog.
+        """
+        kwargs: dict[str, object] = {
+            "CatalogName": catalog,
+            "DatabaseName": database,
+            "TableName": table,
+        }
+        if workgroup is not None:
+            kwargs["WorkGroup"] = workgroup
+        try:
+            async with await self._aws_session.client(self._connection, "athena") as client:
+                response = await client.get_table_metadata(**kwargs)
+            metadata = _required_mapping(_response_mapping(response), "TableMetadata")
+            if _required_string(metadata, "Name") != table:
+                raise ValueError("table metadata identity mismatch")
+            regular = _response_items(metadata, "Columns")
+            partitions = _response_items(metadata, "PartitionKeys")
+            if len(regular) + len(partitions) > 2_000:
+                raise ValueError("table column metadata exceeds authoring limit")
+            columns: list[Column] = []
+            for rows, partition_key in ((regular, False), (partitions, True)):
+                for row in rows:
+                    name = _required_string(row, "Name")
+                    type_name = _required_string(row, "Type")
+                    if not name or not type_name:
+                        raise ValueError("table column metadata is incomplete")
+                    columns.append(
+                        Column(name, type_name, _optional_string(row, "Comment"), partition_key)
+                    )
+            return CompletionTable(
+                TableRef(catalog, database, table, self._connection.name, self._connection.region),
+                tuple(columns),
+            )
+        except Exception as exc:
+            _raise_mapped_athena_error(
+                exc, sensitive_values=(catalog, database, table, workgroup or "")
             )
 
     async def list_query_executions_page(

@@ -465,6 +465,7 @@ def test_focus_slot_enum_has_all_required_members() -> None:
         "ATHENA_SECONDARY",
         "ATHENA_CANCEL",
         "ATHENA_DRAFTS",
+        "ATHENA_AUTHORING",
         "ATHENA_STATUS",
         "ATHENA_DETAIL",
         "ATHENA_HISTORY_MORE",

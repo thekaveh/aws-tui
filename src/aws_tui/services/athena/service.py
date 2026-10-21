@@ -10,6 +10,7 @@ from vmx.services.dispatcher import Dispatcher
 
 from aws_tui.domain.athena import AthenaClient
 from aws_tui.domain.athena_runner import AthenaQueryRunner
+from aws_tui.domain.sql_authoring import CompletionTable
 from aws_tui.domain.sql_policy import ReadOnlySqlPolicy
 from aws_tui.infra.aws_session import AwsSession
 from aws_tui.infra.connection_resolver import Connection
@@ -60,6 +61,15 @@ class AthenaClientProtocol(Protocol):
         workgroup: str | None = None,
         start_token: str | None = None,
     ) -> tuple[list[Any], str | None]: ...
+
+    async def get_table_columns(
+        self,
+        catalog: str,
+        database: str,
+        table: str,
+        *,
+        workgroup: str | None = None,
+    ) -> CompletionTable: ...
 
     async def get_query_execution(self, execution_id: str) -> Any: ...
 

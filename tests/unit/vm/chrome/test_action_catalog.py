@@ -48,6 +48,24 @@ def test_complete_actual_app_catalog(tmp_path):
         ctx.log_sink.close()
 
 
+def test_all_sql_authoring_commands_are_discoverable_and_remappable(tmp_path):
+    from aws_tui.infra.keymap_store import KeymapStore
+
+    expected = {
+        "athena.sql_authoring",
+        "athena.complete",
+        "athena.format_sql",
+        "athena.open_sql",
+        "athena.save_sql",
+        "athena.save_sql_as",
+        "athena.insert_snippet",
+        "athena.save_snippet",
+    }
+    assert expected <= {spec.id for spec in ACTION_SPECS}
+    keymap = KeymapStore(overlay={"athena.format_sql": "ctrl+alt+h"})
+    assert keymap.resolve("athena.format_sql") == ("ctrl+alt+h",)
+
+
 @pytest.mark.parametrize(
     ("registered", "active", "reasons", "expected"),
     [

@@ -426,7 +426,11 @@ async def _show_full_app_selected_table(pilot: Pilot[None]) -> None:
     page = app.query_one(AthenaPage)
     await wait_until(lambda: bool(page.vm.tables.items), what="snapshot table metadata loaded")
     ref = page.vm.tables.items[-1].ref
-    await page.vm.select_table(ref.table_name)
+
+    async def accept_replacement(_message: str) -> bool:
+        return True  # Capture the accepted table state; dialog cases live in UI tests.
+
+    await page.vm.select_table(ref.table_name, confirm=accept_replacement)
     await pilot.pause()
     picker = app.query_one("#athena-table", ContextPicker)
     editor = app.query_one("#athena-editor", TextArea)
