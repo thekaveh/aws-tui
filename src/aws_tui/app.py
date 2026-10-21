@@ -2314,10 +2314,103 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
             return None
         return getattr(dual, "focused_pane", None)
 
+    def _discovery_file_pane(self, origin: _DiscoveryOrigin) -> PaneVM | None:
+        """Resolve physical focus before inheriting a retained pane cursor."""
+        dual = self._dual_pane()
+        if dual is None:
+            return None
+        if origin.focus is not None:
+            if isinstance(origin.focus, (Input, TextArea, Button, ModalButton)):
+                return None
+            owner = next(
+                (node for node in origin.focus.ancestors_with_self if isinstance(node, Pane)),
+                None,
+            )
+            return owner.vm if owner is not None and owner.vm in (dual.left, dual.right) else None
+        return (
+            dual.left
+            if origin.slot is FocusSlot.S3_LEFT
+            else dual.right
+            if origin.slot is FocusSlot.S3_RIGHT
+            else None
+        )
+
+    def _ready_file_action_pane(self) -> PaneVM | None:
+        """Use discovery's focused, live, ready-pane admission for every route."""
+        if (
+            len(self.screen_stack) != 1
+            or self._app_ctx.focus_coordinator.is_modal
+            or self._shutdown_task is not None
+            or self._service_navigation_closed
+        ):
+            return None
+        origin = self._capture_discovery_origin()
+        if not self._discovery_origin_owned(origin):
+            return None
+        pane = self._discovery_file_pane(origin)
+        return (
+            pane if pane is not None and pane.state in {PaneState.IDLE, PaneState.EMPTY} else None
+        )
+
+    def _file_confirmation_guard(
+        self,
+        dual: DualPaneVM,
+        source: PaneVM,
+        targets: list[object],
+        cursor_fallback: bool,
+        destination: PaneVM | None = None,
+    ) -> Callable[[], bool]:
+        """Bind a confirmation to its exact listing, source and target identities."""
+        origin = self._capture_discovery_origin()
+        panes = (source,) if destination is None else (source, destination)
+        tokens = tuple(
+            (pane.provider, pane.path, pane.current_connection_key, pane.listing_revision)
+            for pane in panes
+        )
+        confirmed = tuple(targets)
+
+        def current() -> bool:
+            if (
+                self._shutdown_task is not None
+                or self._service_navigation_closed
+                or not self._discovery_origin_owned(origin)
+                or self._dual_pane() is not dual
+                or dual.focused_pane is not source
+            ):
+                return False
+            for pane, (provider, path, connection, revision) in zip(panes, tokens, strict=True):
+                if (
+                    pane.state not in {PaneState.IDLE, PaneState.EMPTY}
+                    or pane.provider is not provider
+                    or pane.path != path
+                    or pane.current_connection_key != connection
+                    or pane.listing_revision != revision
+                ):
+                    return False
+            marked = tuple(source.marked_entries)
+            same_marks = len(marked) == len(confirmed) and all(
+                entry is target for entry, target in zip(marked, confirmed, strict=True)
+            )
+            if cursor_fallback:
+                # The worker's own transient mark may already be installed.
+                return source.selected_entry is confirmed[0] and (not marked or same_marks)
+            return same_marks
+
+        return current
+
+    def _file_confirmation_invalidated(self) -> None:
+        notifications.advise(
+            self._app_ctx.root_vm.chrome.toast_stack,
+            subject="Transfer",
+            message="confirmation expired because the listing, selection or source changed",
+            action="review the current entries and try again",
+            toast_id="file-confirmation-invalidated",
+        )
+
     def _execute_pane_selection(self, action_id: str, command_name: str) -> None:
         if len(self.screen_stack) > 1 or self._app_ctx.focus_coordinator.is_modal:
             return
-        pane = self._focused_file_pane()
+        pane = self._ready_file_action_pane()
         if pane is None or pane.state not in {PaneState.IDLE, PaneState.EMPTY}:
             return
         self.record_action(action_id)
@@ -2328,7 +2421,7 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
     def _listing_control(self, operation: str) -> None:
         if len(self.screen_stack) > 1 or self._app_ctx.focus_coordinator.is_modal:
             return
-        pane = self._focused_file_pane()
+        pane = self._ready_file_action_pane()
         if pane is None or pane.state not in {PaneState.IDLE, PaneState.EMPTY}:
             return
         if operation == "clear":
@@ -2504,7 +2597,7 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
         emr_page = self._emr_page()
         if emr_page is not None and emr_page.activate_focused():
             return
-        pane = self._focused_file_pane()
+        pane = self._ready_file_action_pane()
         if pane is None:
             return
         entry_vm = pane.selected_entry
@@ -2681,25 +2774,16 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
             return dict.fromkeys(discovery_ids, "focus_required")
         dual = self._dual_pane()
         if dual is not None:
-            pane = (
-                dual.left
-                if origin.slot is FocusSlot.S3_LEFT
-                else dual.right
-                if origin.slot is FocusSlot.S3_RIGHT
-                else None
-            )
-            if origin.focus is not None:
-                owner = next(
-                    (node for node in origin.focus.ancestors_with_self if isinstance(node, Pane)),
-                    None,
-                )
-                pane = owner.vm if owner is not None else None
+            pane = self._discovery_file_pane(origin)
             for spec in ACTION_SPECS:
                 if spec.service_ids == frozenset({"s3"}) and (
                     pane is None or pane.state not in {PaneState.IDLE, PaneState.EMPTY}
                 ):
                     reasons[spec.id] = "focus_required" if pane is None else "busy"
             if pane is not None:
+                destination = dual.right if pane is dual.left else dual.left
+                if destination.state not in {PaneState.IDLE, PaneState.EMPTY}:
+                    reasons["pane.copy"] = "busy"
                 selected = pane.selected_entry
                 # Copy/delete use marks first; the footer's parent-row denial
                 # applies only to their cursor fallback in discovery.
@@ -4382,7 +4466,7 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
         later keystroke, ``ctrl+q`` included.
         """
         self.record_action("pane.copy_entry_path")
-        pane = self._focused_file_pane()
+        pane = self._ready_file_action_pane()
         if pane is None:
             return
         target = pane.viewmodel.copy_selected_path
@@ -4406,7 +4490,7 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
         on the pump that dequeues the next key.
         """
         self.record_action("pane.copy_path")
-        pane = self._focused_file_pane()
+        pane = self._ready_file_action_pane()
         if pane is None:
             return
         self.copy_value(pane.viewmodel.copy_path, "path")
@@ -4446,9 +4530,9 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
         dual = self._dual_pane()
         if dual is None:
             return
-        src_pane = getattr(dual, "focused_pane", None)
-        dst_pane = getattr(dual, "other_pane", None)
-        if src_pane is None or dst_pane is None:
+        src_pane = self._ready_file_action_pane()
+        dst_pane = dual.other_pane
+        if src_pane is None or dst_pane.state not in {PaneState.IDLE, PaneState.EMPTY}:
             return
 
         targets = list(src_pane.marked_entries)
@@ -4484,7 +4568,16 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
             return
         self._confirmation_pending = True
         self.run_worker(
-            self._confirm_copy(dual, src_pane, list(targets), used_cursor_fallback, request),
+            self._confirm_copy(
+                dual,
+                src_pane,
+                list(targets),
+                used_cursor_fallback,
+                request,
+                self._file_confirmation_guard(
+                    dual, src_pane, list(targets), used_cursor_fallback, dst_pane
+                ),
+            ),
             group="confirmation",
         )
 
@@ -4495,14 +4588,21 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
         targets: list[object],
         used_cursor_fallback: bool,
         request: ConfirmRequest,
+        is_current: Callable[[], bool],
     ) -> None:
         ctx = self._app_ctx
         try:
+            if not is_current():
+                self._file_confirmation_invalidated()
+                return
             dialogs = TextualDialogService(self, ctx.confirm_vm, hub=ctx.hub)
             if not await ctx.confirm_vm.ask(request, dialog_service=dialogs):
                 return
+            if not is_current():
+                self._file_confirmation_invalidated()
+                return
             self._run_lifecycle_worker(
-                partial(self._run_copy, dual, src_pane, targets, used_cursor_fallback),
+                partial(self._run_copy, dual, src_pane, targets, used_cursor_fallback, is_current),
                 group=_TRANSFER_COPY_GROUP,
             )
         finally:
@@ -4514,6 +4614,7 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
         src_pane: object,
         targets: list[object],
         used_cursor_fallback: bool,
+        is_current: Callable[[], bool],
     ) -> None:
         """Run ``DualPaneVM.copy_across`` from a worker. Errors are
         toasted, never re-raised."""
@@ -4521,9 +4622,15 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
         copy_across = getattr(dual, "copy_across", None)
         if copy_across is None:
             return
+        if not is_current():
+            self._file_confirmation_invalidated()
+            return
         if used_cursor_fallback:
             _flash_cursor_fallback_marks(src_pane, targets, marked=True)
         try:
+            if not is_current():
+                self._file_confirmation_invalidated()
+                return
             await copy_across()
         except Exception as exc:
             ctx.log_sink.error(
@@ -4561,7 +4668,7 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
         dual = self._dual_pane()
         if dual is None:
             return
-        src_pane = getattr(dual, "focused_pane", None)
+        src_pane = self._ready_file_action_pane()
         if src_pane is None:
             return
 
@@ -4594,7 +4701,14 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
             return
         self._confirmation_pending = True
         self.run_worker(
-            self._confirm_delete(dual, src_pane, list(targets), used_cursor_fallback, request),
+            self._confirm_delete(
+                dual,
+                src_pane,
+                list(targets),
+                used_cursor_fallback,
+                request,
+                self._file_confirmation_guard(dual, src_pane, list(targets), used_cursor_fallback),
+            ),
             group="confirmation",
         )
 
@@ -4605,14 +4719,23 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
         targets: list[object],
         used_cursor_fallback: bool,
         request: ConfirmRequest,
+        is_current: Callable[[], bool],
     ) -> None:
         ctx = self._app_ctx
         try:
+            if not is_current():
+                self._file_confirmation_invalidated()
+                return
             dialogs = TextualDialogService(self, ctx.confirm_vm, hub=ctx.hub)
             if not await ctx.confirm_vm.ask(request, dialog_service=dialogs):
                 return
+            if not is_current():
+                self._file_confirmation_invalidated()
+                return
             self._run_lifecycle_worker(
-                partial(self._run_delete, dual, src_pane, targets, used_cursor_fallback),
+                partial(
+                    self._run_delete, dual, src_pane, targets, used_cursor_fallback, is_current
+                ),
                 group=_TRANSFER_DELETE_GROUP,
             )
         finally:
@@ -4624,15 +4747,22 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
         src_pane: object,
         targets: list[object],
         used_cursor_fallback: bool,
+        is_current: Callable[[], bool],
     ) -> None:
         """Mirror of :meth:`_run_copy` for the delete path."""
         ctx = self._app_ctx
         delete_in_focused = getattr(dual, "delete_in_focused", None)
         if delete_in_focused is None:
             return
+        if not is_current():
+            self._file_confirmation_invalidated()
+            return
         if used_cursor_fallback:
             _flash_cursor_fallback_marks(src_pane, targets, marked=True)
         try:
+            if not is_current():
+                self._file_confirmation_invalidated()
+                return
             await delete_in_focused()
         except Exception as exc:
             ctx.log_sink.error(
@@ -4725,11 +4855,8 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
         of the entries list (handled by ``move_cursor_command``'s own
         clamp), but the toggle only happens when ``cur`` is a real
         row (always true here since we got it from ``cursor_index``)."""
-        dual = self._dual_pane()
-        if dual is None:
-            return
-        pane = getattr(dual, "focused_pane", None)
-        if pane is None:
+        pane = self._ready_file_action_pane()
+        if pane is None or pane.selected_entry is None or pane.selected_entry.is_parent_link:
             return
         cur = pane.cursor_index
         entries = pane.filtered_entries
