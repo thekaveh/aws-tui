@@ -233,6 +233,10 @@ section. The current tree must not be tagged as v0.8.0.
 
 ### Fixed
 
+- Athena Query Refresh reloads workgroup configuration, catalogs and databases
+  while retaining valid context, SQL, draft provenance and execution results.
+  Failed reads remain local to their metadata, and superseded replies cannot
+  replace newer choices.
 - Transfer cards scroll within the overlay at compact terminal sizes. Later
   Cancel controls remain reachable, title and history controls stay visible,
   and resizing preserves the focused transfer. Small batches retain a compact

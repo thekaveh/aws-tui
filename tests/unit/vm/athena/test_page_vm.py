@@ -943,7 +943,7 @@ async def test_query_refresh_preserves_workgroup_selected_from_a_later_page() ->
         assert page.context == expected
         assert page.query.sql == "SELECT 42"
         assert client.workgroup_calls == [None, "second", None, "second"]
-        assert client.workgroup_detail_calls == ["primary", "analysts"]
+        assert client.workgroup_detail_calls == ["primary", "analysts", "analysts"]
     finally:
         await page.shutdown()
         page.dispose()

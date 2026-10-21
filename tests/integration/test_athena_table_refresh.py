@@ -4,13 +4,15 @@ from __future__ import annotations
 
 import contextlib
 from contextlib import asynccontextmanager
+from dataclasses import replace
 
 import pytest
 from textual.widget import Widget
-from textual.widgets import TextArea
+from textual.widgets import OptionList, Static, TextArea
 
 from aws_tui.app import AwsTuiApp
 from aws_tui.composition import build_app_context
+from aws_tui.domain.athena import AthenaCatalogSummary
 from aws_tui.domain.data_catalog import TableRef, TableSummary
 from aws_tui.services.athena import AthenaService
 from aws_tui.ui.widgets.athena.page import AthenaPage
@@ -155,3 +157,47 @@ async def test_primed_table_beyond_first_metadata_page_stays_selected_without_lo
         assert app.query_one("#athena-editor", TextArea).text == sql
         assert vm.query.execution_ref is None
         assert client.start_calls == []
+
+
+@pytest.mark.parametrize("guarded", [False, True])
+async def test_physical_refresh_updates_context_options_and_retains_query_ownership(
+    tmp_path, guarded
+):
+    async with mounted_tables(tmp_path) as (app, _page, vm, client, pilot):
+        await vm.select_table("first_table")
+        await vm.query.execute()
+        vm.query.set_draft_recovery_guard(guarded)
+        before = vm.query.export_snapshot()
+        ref = vm.selected_table_ref
+        client.catalogs["primary"] = [
+            client.catalogs["primary"][0],
+            AthenaCatalogSummary("new_catalog", "LAMBDA", None),
+        ]
+        client.databases[("primary", "AwsDataCatalog")] = ["default", "new_database"]
+        client.workgroup_details["primary"] = replace(
+            client.workgroup_details["primary"],
+            output_location="s3://updated-results/",
+            enforce_workgroup_configuration=False,
+        )
+        await focus_and_settle(app.query_one("#athena-workgroup", ContextPicker))
+
+        await pilot.press("r")
+        await drain_workers(app)
+        await pilot.pause()
+
+        for selector, expected in [
+            ("#athena-catalog", ["AwsDataCatalog", "new_catalog"]),
+            ("#athena-database", ["default", "new_database"]),
+        ]:
+            options = app.query_one(selector, ContextPicker).query_one(OptionList)
+            assert [
+                options.get_option_at_index(i).id for i in range(options.option_count)
+            ] == expected
+        assert vm.query.export_snapshot() == before
+        assert vm.selected_table_ref == ref
+        assert app.query_one("#athena-table", ContextPicker).value == "first_table"
+        detail = str(app.query_one("#athena-query-detail-text", Static).render())
+        assert "s3://updated-results/" in detail
+        assert "caller configurable" in detail
+        assert client.stop_calls == []
+        assert len(client.start_calls) == 1
