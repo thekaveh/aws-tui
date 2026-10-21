@@ -701,6 +701,7 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
         self._actions.register("app.help", self.action_help)
         self._actions.register("app.themes", self.action_themes)
         self._actions.register("app.transfer_history", self.action_transfer_history)
+        self._actions.register("app.focus_transfers", self.action_focus_transfers)
         self._actions.register("app.cycle_theme", self.action_cycle_theme)
         self._actions.register("app.open_settings", self.action_open_settings)
         for service_id in ("s3", "athena", "glue", "emr-serverless"):
@@ -847,6 +848,7 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
         self._shutdown_complete = False
         self._shutdown_errors: tuple[tuple[str, str], ...] = ()
         self._command_palette_populated: bool = False
+        self._transfers_discovery_active = bool(self._app_ctx.transfers_vm.active_count)
         self._discovery_origin: _DiscoveryOrigin | None = None
         self._discovery_palette_ids: set[str] = set()
         self._discovery_source_ids: dict[_DiscoverySourceTarget, str] = {}
@@ -955,6 +957,7 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
             hub=ctx.hub,
             history_vm=ctx.transfer_history_vm,
             open_history=self._open_transfer_history,
+            restore_focus=self._restore_transfer_focus,
             id="transfers-overlay",
         )
 
@@ -2257,6 +2260,27 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
         if len(self.screen_stack) == 1:
             self.query_one(TransfersOverlay).open_history("history")
 
+    def action_focus_transfers(self) -> None:
+        if len(self.screen_stack) == 1 and self._shutdown_task is None:
+            self.record_action("app.focus_transfers")
+            self.query_one(TransfersOverlay).focus_controls()
+
+    def _focused_transfer_overlay(self) -> TransfersOverlay | None:
+        if len(self.screen_stack) != 1 or self.focused is None:
+            return None
+        return next(
+            (
+                node
+                for node in self.focused.ancestors_with_self
+                if isinstance(node, TransfersOverlay)
+            ),
+            None,
+        )
+
+    def _restore_transfer_focus(self) -> None:
+        if self._shutdown_task is None and len(self.screen_stack) == 1:
+            self._project_focus_slot(self._app_ctx.focus_coordinator.focused_slot)
+
     def _open_transfer_history(self, mode: Literal["history", "recovery"]) -> None:
         if len(self.screen_stack) == 1:
             self.push_screen(
@@ -2591,6 +2615,8 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
         pane are ignored.
         """
         self.record_action("pane.quick_look")
+        if self._focused_transfer_overlay() is not None:
+            return
         glue_page = self._glue_page()
         if glue_page is not None and glue_page.activate_focused(space=True):
             return
@@ -2767,6 +2793,8 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
         reasons = {
             action: "selection_required" for action in self._readiness_disabled(origin.focused_ids)
         }
+        if not self._app_ctx.transfers_vm.active_count:
+            reasons["app.focus_transfers"] = "selection_required"
         discovery_ids = {spec.id for spec in ACTION_SPECS} | self._discovery_source_targets.keys()
         if not self._discovery_origin_owned(origin):
             return dict.fromkeys(discovery_ids, "page_unavailable")
@@ -3258,6 +3286,10 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
         self._cycle_focus(reverse=True)
 
     def _cycle_focus(self, *, reverse: bool) -> None:
+        overlay = self._focused_transfer_overlay()
+        if overlay is not None:
+            overlay.cycle_controls(reverse=reverse)
+            return
         view = self._first_run_view()
         if view is not None:
             if not view.cycle_focus(reverse=reverse):
@@ -3536,6 +3568,10 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
 
     async def action_descend(self) -> None:
         self.record_action("pane.descend")
+        overlay = self._focused_transfer_overlay()
+        if overlay is not None:
+            overlay.activate_focused()
+            return
         focused = self.focused if len(self.screen_stack) == 1 else None
         if (
             len(self.screen_stack) == 1
@@ -7004,6 +7040,18 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
         from aws_tui.vm.file_manager.pane_vm import PaneVM
 
         if not isinstance(msg, PropertyChangedMessage):
+            return
+        from aws_tui.vm.file_manager.transfer_vm import TransferVM
+
+        if msg.sender_object is self._app_ctx.transfers_vm or isinstance(
+            msg.sender_object, TransferVM
+        ):
+            # State notifications also carry byte-only progress. Discovery
+            # needs only transitions between no active transfers and some.
+            active = bool(self._app_ctx.transfers_vm.active_count)
+            if active != self._transfers_discovery_active:
+                self._transfers_discovery_active = active
+                self._refresh_discovery_surfaces()
             return
         emr_page = self._emr_page()
         if emr_page is not None and msg.sender_object in {
