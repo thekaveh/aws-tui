@@ -17,6 +17,7 @@ from aws_tui.infra.keymap_store import KeymapStore
 from aws_tui.ui.widgets._focus_guard import focus_rests_within, is_on_active_screen
 from aws_tui.ui.widgets._subscriber import HubSubscriberMixin
 from aws_tui.ui.widgets._worker import DeferredWorkerMixin
+from aws_tui.ui.widgets.athena.authoring_dialogs import ask_sql_confirmation
 from aws_tui.ui.widgets.athena.drafts_modal import AthenaDraftsModal, DraftModalResult
 from aws_tui.ui.widgets.athena.history_view import AthenaHistoryView
 from aws_tui.ui.widgets.athena.load_more_button import AthenaLoadMoreButton
@@ -51,6 +52,7 @@ _ATHENA_FOCUS_ORDER = (
     FocusSlot.ATHENA_SECONDARY,
     FocusSlot.ATHENA_CANCEL,
     FocusSlot.ATHENA_DRAFTS,
+    FocusSlot.ATHENA_AUTHORING,
     FocusSlot.ATHENA_STATUS,
     FocusSlot.ATHENA_SAVED_PREPARED_MORE,
     FocusSlot.ATHENA_DETAIL,
@@ -238,10 +240,13 @@ class AthenaPage(DeferredWorkerMixin, HubSubscriberMixin, Widget):
         )
         with Container(id="athena-view-host"):
             views: tuple[tuple[AthenaView, Widget], ...] = (
-                ("query", AthenaQueryView(self._vm, id="athena-query-view")),
+                ("query", AthenaQueryView(self._vm, hub=self._hub, id="athena-query-view")),
                 ("history", AthenaHistoryView(self._vm, id="athena-history-view")),
                 ("results", AthenaResultsView(self._vm, id="athena-results-view")),
-                ("saved", AthenaSavedView(self._vm, id="athena-saved-view")),
+                (
+                    "saved",
+                    AthenaSavedView(self._vm, confirm=self._confirm_sql, id="athena-saved-view"),
+                ),
             )
             for view, child in views:
                 child.display = view == self._vm.active_view
@@ -348,7 +353,7 @@ class AthenaPage(DeferredWorkerMixin, HubSubscriberMixin, Widget):
         value = event.value
         if event.control.id == "athena-table":
             self._run_lifecycle_worker(
-                partial(self._vm.select_table, value),
+                partial(self._select_table_from_picker, value),
                 group="athena-context",
             )
         elif event.control.id == "athena-workgroup" and value != self._vm.context.workgroup:
@@ -422,6 +427,21 @@ class AthenaPage(DeferredWorkerMixin, HubSubscriberMixin, Widget):
                 self.call_after_refresh(apply_focus)
 
         self.app.push_screen(modal, restore_focus)
+
+    async def _confirm_sql(self, message: str) -> bool:
+        return await ask_sql_confirmation(
+            self, hub=self._hub, dispatcher=self._vm.dispatcher, message=message
+        )
+
+    async def _select_table_from_picker(self, value: str) -> None:
+        try:
+            await self._vm.select_table(value, confirm=self._confirm_sql)
+        finally:
+            # A picker commits visually before the async replacement decision.
+            # Refusal/stale confirmation must project the actual committed VM
+            # selection again, without selecting the refused table in the VM.
+            if self.is_mounted and self.is_attached and self.is_running:
+                self.call_after_refresh(self._refresh_page)
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
         loaders = {
@@ -661,6 +681,7 @@ class AthenaPage(DeferredWorkerMixin, HubSubscriberMixin, Widget):
                 (FocusSlot.ATHENA_SECONDARY, self.query_one("#athena-execute", Button)),
                 (FocusSlot.ATHENA_CANCEL, self.query_one("#athena-cancel", Button)),
                 (FocusSlot.ATHENA_DRAFTS, self.query_one("#athena-drafts", Button)),
+                (FocusSlot.ATHENA_AUTHORING, self.query_one("#athena-authoring", Button)),
                 (FocusSlot.ATHENA_STATUS, self.query_one("#athena-query-status", Widget)),
                 (
                     FocusSlot.ATHENA_DETAIL,

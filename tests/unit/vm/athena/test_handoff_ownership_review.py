@@ -22,6 +22,10 @@ from tests.integration.test_glue_athena_navigation import _athena_client, _open_
 from tests.unit.vm.athena.test_page_vm import PageClient, make_page_vm
 
 
+async def _accept_replace(_message: str) -> bool:
+    return True
+
+
 class GatedDatabaseClient(PageClient):
     def __init__(self) -> None:
         super().__init__()
@@ -48,7 +52,7 @@ async def test_newer_database_choice_supersedes_pending_discovery_failure() -> N
     page = make_page_vm(client)
     await page.setup()
     page.query.set_sql("SELECT 1")
-    pending = asyncio.create_task(page.open_table(_target()))
+    pending = asyncio.create_task(page.open_table(_target(), confirm=_accept_replace))
     try:
         await asyncio.wait_for(client.entered.wait(), timeout=1)
         await page.select_database("newer_choice")
@@ -73,7 +77,7 @@ async def test_cancelled_direct_handoff_preserves_newer_context_and_editor() -> 
     page = make_page_vm(client)
     await page.setup()
     page.query.set_sql("SELECT 1")
-    pending = asyncio.create_task(page.open_table(_target()))
+    pending = asyncio.create_task(page.open_table(_target(), confirm=_accept_replace))
     try:
         await asyncio.wait_for(client.entered.wait(), timeout=1)
         await page.select_database("newer_choice")
@@ -97,7 +101,7 @@ async def test_cancelled_old_handoff_does_not_end_new_same_table_prime() -> None
     client = GatedDatabaseClient()
     page = make_page_vm(client)
     await page.setup()
-    pending = asyncio.create_task(page.open_table(_target()))
+    pending = asyncio.create_task(page.open_table(_target(), confirm=_accept_replace))
     try:
         await asyncio.wait_for(client.entered.wait(), timeout=1)
         page.prime_table_query(_target())

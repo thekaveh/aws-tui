@@ -6,6 +6,8 @@ import string
 from itertools import combinations
 
 import pytest
+from textual import events
+from textual._xterm_parser import XTermParser
 from textual.binding import BindingsMap
 
 from aws_tui.infra.keymap_store import KeymapStore, UnknownAction, textual_key_name
@@ -19,6 +21,27 @@ _APPROVED_ALIAS_PAIRS = (
     ("athena.results", "glue.crawlers"),
     ("athena.load_more", "glue.load_more"),
 )
+
+
+@pytest.mark.parametrize(
+    ("configured", "sequence"),
+    [
+        ("ctrl+alt+f", "\x1b[102;7u"),
+        ("ctrl+alt+o", "\x1b[111;7u"),
+        ("ctrl+alt+s", "\x1b[115;7u"),
+        ("ctrl+alt+shift+s", "\x1b[115;8u"),
+    ],
+)
+def test_modifier_order_matches_actual_terminal_parser(configured, sequence):
+    token = next(token for token in XTermParser().feed(sequence) if isinstance(token, events.Key))
+    assert textual_key_name(configured) == token.key
+
+
+def test_reordered_modifiers_cannot_bypass_overlay_collision_detection():
+    from aws_tui.infra.keymap_store import KeybindingCollision
+
+    with pytest.raises(KeybindingCollision):
+        KeymapStore(overlay={"athena.format_sql": "alt+ctrl+s"})
 
 
 class TestDefaults:

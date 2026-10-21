@@ -217,6 +217,13 @@ focused soft fill, and single keyboard focus stop as Glue.
 | Choose workgroup / catalog / database | `Shift+W` / `Shift+C` / `Shift+D` | Runs `athena.choose_workgroup`, `athena.choose_catalog`, or `athena.choose_database` and opens the corresponding selector. |
 | Execute editor SQL | `Ctrl+Enter` | Runs `athena.execute` only after the local read-only SQL validation succeeds. |
 | Stop query | `Esc` | Runs `athena.cancel`; Stop interrupts query submission or stops the active app-owned execution. |
+| SQL authoring menu | `Alt+E` | `athena.sql_authoring`; completion, formatting, local files, and local snippets. |
+| Complete at cursor | `Ctrl+Space` | `athena.complete`; inserts the selected current-context suggestion. |
+| Format SQL layout | `Ctrl+Alt+F` | `athena.format_sql`; an explicit, undoable layout edit. |
+| Open local SQL file | `Ctrl+Alt+O` | `athena.open_sql`; bounded UTF-8 `.sql` load with modified-document confirmation. |
+| Save SQL file | `Ctrl+Alt+S` | `athena.save_sql`; saves the current path or asks for one. |
+| Save SQL file as | `Ctrl+Alt+Shift+S` | `athena.save_sql_as`; chooses a path and confirms overwrites. |
+| Insert / save local snippet | SQL menu or command palette | `athena.insert_snippet` / `athena.save_snippet`; remappable, with no default key. |
 | Load more result rows | `l` | Runs `athena.load_more` when the selected result has another page. |
 | Inspect selected cell | `Alt+Enter` | `athena.inspect_cell`; complete read-only value; Escape/Close restores the cell. |
 | Copy selected cell / row as JSON | `Alt+C` / `Alt+Shift+C` | `athena.copy_cell` / `athena.copy_row`; original values, null and empty distinguished. |
@@ -228,11 +235,14 @@ focused soft fill, and single keyboard focus stop as Glue.
 | Open result artifact in S3 | `:` / `Ctrl+K`, then **Open Athena result in S3** | `athena.open_result_location` is palette-only and absent from `KeymapStore.DEFAULT_BINDINGS`; it validates the successful execution's exact connection, region, and S3 URI before navigating. |
 | Open query table in Glue | `:` / `Ctrl+K`, then **Open query table in Glue** | `athena.open_in_glue` is palette-only and works only when the current read-only SQL resolves to one visible table. |
 
-Athena's forward focus order starts with Source, Workgroup, its enabled load-more button, Catalog, and its enabled load-more button. It continues with Database, its enabled load-more button, view tabs, the active view's controls, and the navigation rail. The
+Athena's forward focus order starts with Source, Workgroup, its enabled load-more button, Catalog, and its enabled load-more button.
+Database and its enabled load-more button follow.
+On Query, available Table and load-more controls precede the view tabs.
+The active view's controls and navigation rail follow the tabs. The
 Query view lays out Query controls above the Query editor, then Execution
 detail. The active-view controls are:
 
-- **Query:** editor, enabled Execute, enabled Cancel, query detail.
+- **Query:** editor, enabled Run, enabled Stop, enabled Drafts, SQL, query status, execution detail.
 - **History:** history list, enabled Load more, enabled Results, history detail.
 - **Results:** results table, enabled Load more.
 - **Saved:** named queries, enabled named-query Load more, prepared statements,
@@ -243,6 +253,10 @@ Unavailable buttons are omitted, and `Shift+Tab` is the exact reverse order.
 The six result actions appear with configured keys in Help and the Athena
 command palette. See [loaded result semantics](services/athena.md#7-inspect-and-control-loaded-results)
 for JSON encoding, paging scope, reset behavior, and clipboard limitations.
+
+SQL authoring actions also appear in Help and the command palette with configured keys.
+Use the SQL menu if your terminal cannot distinguish a shortcut.
+See [SQL authoring](services/athena.md#8-author-sql-and-use-local-files) for file, completion, snippet, and undo behavior.
 
 Bare printable bindings, including `i`, `W`, `C`, and `D`, are deliberately
 non-priority: a focused Athena editor receives them as text. Use the command
@@ -433,6 +447,14 @@ unbound until a handler ships.
 | `athena.insert_table_ref` | `i` | yes | Insert the same-source typed table clipboard value into the query editor |
 | `athena.execute` | `ctrl+enter` | yes | Submit validated, read-only editor SQL |
 | `athena.cancel` | `escape` | yes | Stop interrupts query submission or stops an active app-owned Athena execution |
+| `athena.sql_authoring` | `alt+e` | yes | Open the SQL authoring menu |
+| `athena.complete` | `ctrl+space` | yes | Offer bounded current-context suggestions at the cursor |
+| `athena.format_sql` | `ctrl+alt+f` | yes | Format SQL as an undoable layout edit |
+| `athena.open_sql` | `ctrl+alt+o` | yes | Open a local UTF-8 SQL file |
+| `athena.save_sql` | `ctrl+alt+s` | yes | Save to the current or chosen local path |
+| `athena.save_sql_as` | `ctrl+alt+shift+s` | yes | Save to another local path |
+| `athena.insert_snippet` | none (`Unbound`) | yes | Insert a named local snippet at the cursor |
+| `athena.save_snippet` | none (`Unbound`) | yes | Store current SQL in the local snippet library |
 | `athena.load_more` | `l` | yes | Fetch the next available result page |
 | `athena.inspect_cell` | `alt+enter` | yes | Inspect complete original selected cell |
 | `athena.copy_cell` | `alt+c` | yes | Copy original selected cell as JSON |

@@ -40,6 +40,8 @@ from aws_tui.domain.query import (
 from aws_tui.domain.sql_policy import ReadOnlySqlPolicy
 from aws_tui.infra.connection_resolver import Connection
 from aws_tui.infra.crash_dump import CrashDump
+from aws_tui.infra.sql_authoring_store import SqlFileStore
+from aws_tui.infra.sql_snippet_store import SqlSnippetStore
 from aws_tui.vm.athena._pager_compat import SnapshotTokenPager, seed_token_pager
 from aws_tui.vm.athena.drafts_vm import AthenaDraftsVM
 from aws_tui.vm.athena.page_vm import AthenaPageVM
@@ -50,6 +52,10 @@ from aws_tui.vm.service_source_vm import SelectionScope, ServiceSelectionStore
 
 _STATS = QueryStatistics(1, 1, 1, 1, 0, False)
 _COLUMN = ResultColumn("value", "integer", "NULLABLE")
+
+
+async def _accept_sql_replacement(_message: str) -> bool:
+    return True
 
 
 class PageClient:
@@ -383,6 +389,8 @@ def make_page_vm(
     drafts: AthenaDraftsVM | None = None,
     drafts_active: bool = True,
     source_is_current: Callable[[], Awaitable[bool]] | None = None,
+    sql_files: SqlFileStore | None = None,
+    sql_snippets: SqlSnippetStore | None = None,
 ) -> AthenaPageVM:
     connection = Connection(
         name=connection_name or client.connection_name,
@@ -402,6 +410,8 @@ def make_page_vm(
         drafts=drafts,
         drafts_active=drafts_active,
         source_is_current=source_is_current,
+        sql_files=sql_files,
+        sql_snippets=sql_snippets,
     )
     page.construct()
     return page
@@ -1058,13 +1068,13 @@ async def test_table_handoff_requires_enabled_workgroup_on_later_page(
         page.query.set_sql("SELECT 42")
         ref = TableRef("AwsDataCatalog", "default", "events", "analytics", "us-west-2")
         if enabled_available:
-            await page.open_table(ref)
+            await page.open_table(ref, confirm=_accept_sql_replacement)
             assert page.context.workgroup == "analysts"
             assert page.query.sql == 'SELECT * FROM "default"."events" LIMIT 5'
             assert page.query.execute_command.can_execute()
         else:
             with pytest.raises(ValueError, match="enabled workgroup"):
-                await page.open_table(ref)
+                await page.open_table(ref, confirm=_accept_sql_replacement)
             assert page.query.sql == "SELECT 42"
         assert client.start_calls == []
     finally:
@@ -1298,7 +1308,7 @@ async def test_table_resolution_owns_unresolved_source_editor_decision(monkeypat
                 return False
 
             monkeypatch.setattr(candidate, "_ensure_catalog_loaded", gated_catalog)
-        task = asyncio.create_task(candidate.open_table(missing))
+        task = asyncio.create_task(candidate.open_table(missing, confirm=_accept_sql_replacement))
         if outcome == "cancelled":
             await asyncio.wait_for(entered.wait(), timeout=2)
             task.cancel()

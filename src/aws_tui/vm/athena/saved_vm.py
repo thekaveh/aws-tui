@@ -90,6 +90,11 @@ class _SavedWorker(Generic[T]):
 
 
 class AthenaSavedVM:
+    @property
+    def selection_revision(self) -> int:
+        """Fence a selected query even after an A-to-B-to-A selection change."""
+        return self._detail_generation
+
     def __init__(
         self,
         *,

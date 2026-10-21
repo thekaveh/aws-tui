@@ -174,6 +174,7 @@ class AthenaQueryVM:
         self._is_submitting = False
         self._is_context_resolving = False
         self._sql = ""
+        self._editor_revision = 0
         self._validation_error: str | None = None
         self._execution_ref: QueryExecutionRef | None = None
         self._state: QueryState | None = None
@@ -251,11 +252,53 @@ class AthenaQueryVM:
         ):
             raise ValueError("Draft context is unavailable")
         self._sql = record.sql
+        self._editor_revision += 1
         self._validation_error = None
         self._draft_session.recovered(record)
         self._notify("sql")
         self._notify("validation_error")
         self._notify("draft_state")
+
+    def stage_table_document(self, sql: str) -> None:
+        """Publish accepted table SQL without saving it under an unresolved origin."""
+        if (
+            self._disposed
+            or self._shutdown_started
+            or self._input_admission_closed
+            or self._snapshot_export_is_busy()
+        ):
+            return
+        self._editor_revision += int(sql != self._sql)
+        self._sql = sql
+        self._validation_error = None
+        if self._draft_session is not None:
+            self._draft_session.replace_document(sql, self._context, pending=True)
+        self._notify("sql")
+        self._notify("validation_error")
+
+    def bind_table_document(
+        self, *, expected_sql: str, expected_context: QueryContext, expected_editor_revision: int
+    ) -> bool:
+        """Bind an accepted, resolved table document; ordinary edits keep their origin."""
+
+        def current() -> bool:
+            task = asyncio.current_task()
+            return (
+                not self._disposed
+                and not self._shutdown_started
+                and not self._input_admission_closed
+                and not self._snapshot_export_is_busy()
+                and not (task is not None and task.cancelling())
+                and self._sql == expected_sql
+                and self._context == expected_context
+                and self._editor_revision == expected_editor_revision
+            )
+
+        if not current():
+            return False
+        if self._draft_session is not None:
+            self._draft_session.replace_document(expected_sql, expected_context)
+        return current()
 
     @property
     def context(self) -> QueryContext:
@@ -349,6 +392,11 @@ class AthenaQueryVM:
         self._inner.construct()
         self._results.construct()
 
+    @property
+    def editor_revision(self) -> int:
+        """Monotonic ownership token for edits and installed editor snapshots."""
+        return self._editor_revision
+
     def set_sql(self, sql: str) -> None:
         if (
             self._disposed
@@ -358,6 +406,7 @@ class AthenaQueryVM:
         ):
             return
         self._sql = sql
+        self._editor_revision += 1
         self._validation_error = None
         if self._draft_session is not None:
             self._draft_session.edited(sql, self._context)
@@ -450,6 +499,7 @@ class AthenaQueryVM:
         if self._draft_session is not None and snapshot.draft is not None:
             self._draft_session.install_snapshot(snapshot.draft, context=self._context)
         self._sql = snapshot.sql
+        self._editor_revision += 1
         self._draft_recovery_guard = snapshot.recovery_guard or self._draft_recovery_guard
         self._draft_recovery_guard_revision += 1
 

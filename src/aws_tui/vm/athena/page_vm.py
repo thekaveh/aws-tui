@@ -24,6 +24,8 @@ from aws_tui.domain.query import QueryContext
 from aws_tui.domain.sql_policy import ReadOnlySqlPolicy, select_starter_sql
 from aws_tui.infra.athena_draft_store import SqlDraft
 from aws_tui.infra.connection_resolver import Connection
+from aws_tui.infra.sql_authoring_store import SqlFileStore
+from aws_tui.infra.sql_snippet_store import SqlSnippetStore
 from aws_tui.vm._observable import ObserverSafeSubject, send_value_free
 from aws_tui.vm.athena._domain_validation import (
     optional_exact_string,
@@ -41,6 +43,8 @@ from aws_tui.vm.athena._pager_compat import (
     SnapshotTokenPager,
     seed_token_pager,
 )
+from aws_tui.vm.athena.authoring_vm import AthenaAuthoringVM, AuthoringDocumentSnapshot, Confirm
+from aws_tui.vm.athena.completion_vm import AthenaCompletionVM
 from aws_tui.vm.athena.draft_recovery import validate_draft_context
 from aws_tui.vm.athena.drafts_vm import AthenaDraftsVM
 from aws_tui.vm.athena.history_vm import AthenaHistorySnapshot, AthenaHistoryVM
@@ -85,6 +89,9 @@ class AthenaPageEditorSnapshot:
     editor: AthenaEditorSnapshot = field(repr=False)
     recovery_error: str | None = field(repr=False)
     context_selection_required: bool = False
+    document: AuthoringDocumentSnapshot = field(
+        default_factory=AuthoringDocumentSnapshot, repr=False
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -100,6 +107,9 @@ class AthenaPageSnapshot:
     history: AthenaHistorySnapshot = field(repr=False)
     saved: AthenaSavedSnapshot = field(repr=False)
     draft_recovery_error: str | None = field(default=None, repr=False)
+    document: AuthoringDocumentSnapshot = field(
+        default_factory=AuthoringDocumentSnapshot, repr=False
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -134,6 +144,10 @@ async def _unverified_source() -> bool:
     return False
 
 
+async def _decline_sql_replace(_message: str) -> bool:
+    return False
+
+
 class AthenaPageVM:
     def __init__(
         self,
@@ -149,6 +163,8 @@ class AthenaPageVM:
         drafts: AthenaDraftsVM | None = None,
         drafts_active: bool = True,
         source_is_current: Callable[[], Awaitable[bool]] | None = None,
+        sql_files: SqlFileStore | None = None,
+        sql_snippets: SqlSnippetStore | None = None,
     ) -> None:
         self._drafts = drafts
         self._draft_session = drafts.open_session(active=drafts_active) if drafts else None
@@ -253,6 +269,30 @@ class AthenaPageVM:
         self._table_query_prime_sql = ""
         self._context_choice_revision = 0
         self._table_query_prime_choice_revision = 0
+        self._table_query_prime_editor_revision = 0
+        self._table_query_prime_document_revision = 0
+        self._table_query_prime_guard_revision = 0
+        self.authoring = AthenaAuthoringVM(
+            query=self.query,
+            client=client,
+            files=sql_files,
+            snippets=sql_snippets,
+            context_revision=lambda: self._context_choice_revision,
+            is_current=self._is_alive,
+            notify=lambda: self._notify("authoring"),
+        )
+        self.completion = AthenaCompletionVM(
+            client=client,
+            query=self.query,
+            context_revision=lambda: (
+                self._context_choice_revision
+                + self._context_generation
+                + self._query_refresh_generation
+                + self.tables.metadata_revision
+            ),
+            is_current=self._is_alive,
+            notify=lambda: self._notify("completion"),
+        )
 
     @property
     def selected_table_ref(self) -> TableRef | None:
@@ -263,7 +303,7 @@ class AthenaPageVM:
         """Count explicit context choices, excluding background discovery."""
         return self._context_choice_revision
 
-    async def select_table(self, table_name: str) -> None:
+    async def select_table(self, table_name: str, *, confirm: Confirm | None = None) -> None:
         if (
             not self._is_alive()
             or self.tables.context != self._context
@@ -277,9 +317,54 @@ class AthenaPageVM:
         ref = next((row.ref for row in self.tables.items if row.ref.table_name == table_name), None)
         if ref is None:
             return
+        revision = self.tables.metadata_revision
+        document = self.authoring.ownership_revision
+        guard_revision = self.query._draft_recovery_guard_revision
+
+        def still_selected() -> bool:
+            return (
+                self._is_alive()
+                and self.tables.context == self._context
+                and self.tables.metadata_revision == revision
+                and any(row.ref == ref for row in self.tables.items)
+                and self.query._draft_recovery_guard_revision == guard_revision
+            )
+
+        sql = select_starter_sql(ref)
+        if (
+            not await self.authoring.replace_sql(
+                sql,
+                confirm=confirm or _decline_sql_replace,
+                origin="Table query",
+                still_selected=still_selected,
+            )
+            or not still_selected()
+            or self.authoring.ownership_revision != document + 1
+        ):
+            return
+        editor_revision = self.query.editor_revision
+        if (
+            not self.query.bind_table_document(
+                expected_sql=sql,
+                expected_context=self._context,
+                expected_editor_revision=editor_revision,
+            )
+            or not still_selected()
+            or self.authoring.ownership_revision != document + 1
+        ):
+            return
+        self.query.set_draft_recovery_guard(False)
+        if self.query._draft_recovery_guard_revision != guard_revision + 1:
+            return
+        guard_revision += 1
+        if (
+            not still_selected()
+            or self.authoring.ownership_revision != document + 1
+            or self.query.editor_revision != editor_revision
+        ):
+            return
         self._selected_table_ref = ref
         self._select_view_state("query")
-        self.query.set_sql(select_starter_sql(ref))
         self._notify("selected_table_ref")
 
     @property
@@ -323,6 +408,9 @@ class AthenaPageVM:
         before_page = self._snapshot_restore_token()
         before_query = self.query.snapshot_generation
         before_editor = session.editor_revision
+        before_sql_revision = self.query.editor_revision
+        before_document = self.authoring.ownership_revision
+        before_choice = self._context_choice_revision
         accepted = declined = cancelled = False
 
         def unchanged() -> bool:
@@ -334,6 +422,7 @@ class AthenaPageVM:
                 and self._snapshot_restore_token() == before_page
                 and self.query.snapshot_generation == before_query
                 and session.editor_revision == before_editor
+                and self.query.editor_revision == before_sql_revision
                 and self.query._draft_recovery_guard_revision == before_guard
                 and not self.query.is_executing
                 and not self.query.is_submitting
@@ -355,10 +444,7 @@ class AthenaPageVM:
                 return False
             if not unchanged() or not await current_context_valid() or not unchanged():
                 return False
-            if (
-                session.has_unsaved_text(self.query.sql, before_context)
-                and not await confirm_replace()
-            ):
+            if self.authoring.dirty and not await confirm_replace():
                 declined = True
                 return False
             latest = await read_selected()
@@ -369,10 +455,42 @@ class AthenaPageVM:
             async with self.query.snapshot_restore_guard(before_query):
                 if not unchanged():
                     return False
+                self.authoring.install_snapshot(
+                    AuthoringDocumentSnapshot(origin="Local draft"), notify=False
+                )
                 self.query.install_draft_sql(selected)
-                self._select_view_state("query")
-                self._draft_recovery_error = None
+                if (
+                    not self._is_alive()
+                    or self._snapshot_restore_token()[1:] != before_page[1:]
+                    or self.authoring.ownership_revision != before_document + 1
+                    or self.query.snapshot_generation != before_query
+                    or self.query.editor_revision != before_sql_revision + 1
+                    or session.editor_revision != before_editor + 1
+                    or self.query.sql != selected.sql
+                    or self.query.context != before_context
+                    or self.query._draft_recovery_guard_revision != before_guard
+                ):
+                    return False
                 self.query.set_draft_recovery_guard(False)
+
+                def installed_is_current() -> bool:
+                    return (
+                        self._is_alive()
+                        and self.context == before_context
+                        and self._context_choice_revision == before_choice
+                        and self.query.context == before_context
+                        and self.query.editor_revision == before_sql_revision + 1
+                        and session.editor_revision == before_editor + 1
+                        and self.authoring.ownership_revision == before_document + 1
+                        and self.query._draft_recovery_guard_revision == before_guard + 1
+                    )
+
+                if not installed_is_current():
+                    return False
+                self._select_view_state("query")
+                if not installed_is_current():
+                    return False
+                self._draft_recovery_error = None
                 accepted = True
                 return True
         except asyncio.CancelledError:
@@ -412,6 +530,10 @@ class AthenaPageVM:
     @property
     def client(self) -> Any:
         return self._client
+
+    @property
+    def dispatcher(self) -> Dispatcher:
+        return self._dispatcher
 
     @property
     def context(self) -> QueryContext:
@@ -632,6 +754,7 @@ class AthenaPageVM:
             history=self.history.export_snapshot(),
             saved=self.saved.export_snapshot(),
             draft_recovery_error=self._draft_recovery_error,
+            document=self.authoring.export_snapshot(),
         )
         if not self.snapshot_is_valid(snapshot):
             raise ValueError("Athena snapshot is invalid")
@@ -644,6 +767,7 @@ class AthenaPageVM:
             self.query.export_editor_snapshot(),
             self._draft_recovery_error,
             self._context_selection_required,
+            self.authoring.export_snapshot(),
         )
 
     def install_editor_snapshot(self, snapshot: AthenaPageEditorSnapshot) -> None:
@@ -652,6 +776,7 @@ class AthenaPageVM:
             or type(snapshot) is not AthenaPageEditorSnapshot
             or not optional_exact_string(snapshot.recovery_error)
             or type(snapshot.context_selection_required) is not bool
+            or not AthenaAuthoringVM.snapshot_is_valid(snapshot.document)
         ):
             raise ValueError("Athena editor provenance is unavailable")
         recovery_error = (
@@ -660,6 +785,8 @@ class AthenaPageVM:
             else snapshot.recovery_error
         )
         self.query.install_editor_snapshot(snapshot.editor, notify=False)
+        self.authoring.install_snapshot(snapshot.document, notify=False)
+        self.completion.invalidate(notify=False)
         self._context_selection_required |= snapshot.context_selection_required
         self._draft_recovery_error = recovery_error
         self.query._notify_snapshot_restored()
@@ -752,6 +879,7 @@ class AthenaPageVM:
             )
             or not optional_exact_string(snapshot.history_execution_id)
             or not optional_exact_string(snapshot.draft_recovery_error)
+            or not AthenaAuthoringVM.snapshot_is_valid(snapshot.document)
             or (snapshot.saved_kind is not None and type(snapshot.saved_kind) is not SavedQueryKind)
             or not optional_exact_string(snapshot.saved_query_id)
             or ((snapshot.saved_kind is None) != (snapshot.saved_query_id is None))
@@ -1026,6 +1154,8 @@ class AthenaPageVM:
         )
         recovery_error_changed = self._draft_recovery_error != recovery_error
         self.query._install_snapshot(snapshot.query)
+        self.authoring.install_snapshot(snapshot.document, notify=False)
+        self.completion.invalidate(notify=False)
         self._draft_recovery_error = recovery_error
         refs = self._policy.table_refs(snapshot.query.sql, self._context)
         self._selected_table_ref = refs[0] if len(refs) == 1 else None
@@ -1061,6 +1191,7 @@ class AthenaPageVM:
 
     def _snapshot_restore_token(self) -> tuple[object, ...]:
         return (
+            self.authoring.ownership_revision,
             self._context,
             self._context_selection_required,
             self._active_view,
@@ -1164,16 +1295,31 @@ class AthenaPageVM:
         self,
         table_ref: TableRef,
         snapshot_id: int | None = None,
+        *,
+        confirm: Confirm | None = None,
     ) -> None:
         """Prefill one exact table in the editor without executing it."""
         prime_identity = (table_ref, snapshot_id)
         already_primed = (
             self.query.is_context_resolving and self._table_query_prime == prime_identity
         )
+        if not self._is_alive() or self.query.is_executing or self.query.is_submitting:
+            return
+        if (
+            not valid_table_ref(table_ref)
+            or table_ref.connection_name != self._connection.name
+            or table_ref.region != self._connection.region
+        ):
+            raise ValueError("table is unavailable in the active Athena source")
         previous_view = self._active_view
-        previous_sql = self.query.sql
+        previous_editor = self.export_editor_snapshot() if not already_primed else None
+        previous_table = self._selected_table_ref
         if not already_primed:
-            self.prime_table_query(table_ref, snapshot_id)
+            if not await self.authoring.confirm_replacement(
+                confirm=confirm or _decline_sql_replace
+            ):
+                return
+            self._prime_table_query(table_ref, snapshot_id)
         prime_token = self._table_query_prime_token
         choice_revision = self._table_query_prime_choice_revision
         primed_sql = select_starter_sql(table_ref, snapshot_id)
@@ -1189,28 +1335,52 @@ class AthenaPageVM:
             if (
                 not already_primed
                 and owns_resolution()
-                and self._active_view == "query"
-                and self.query.sql == primed_sql
+                and self.owns_table_query_input(prime_token)
+                and previous_editor is not None
             ):
+                self._selected_table_ref = previous_table
+                self.install_editor_snapshot(
+                    replace(
+                        previous_editor,
+                        context_selection_required=(
+                            previous_editor.context_selection_required
+                            or previous_editor.editor.context != self._context
+                        ),
+                    )
+                )
                 self._select_view_state(previous_view)
-                self.query.set_sql(previous_sql)
+                self._notify("selected_table_ref")
                 if self._context_selection_required:
                     self._workgroup_detail_error_text = _SOURCE_CONTEXT_ERROR
                     self._notify_workgroup_detail()
 
         try:
+            if not self.owns_table_query_input(prime_token):
+                return
             await self._resolve_table_context(
                 table_ref, choice_revision=choice_revision, prime_token=prime_token
             )
-            if (
+            if not (
                 owns_resolution()
-                and self.query.sql == primed_sql
+                and self.owns_table_query_input(prime_token)
                 and self._context.catalog == table_ref.catalog_name
                 and self._context.database == table_ref.database_name
                 and self._enabled_workgroup_available()
             ):
-                self._context_selection_required = False
-                self.query.refresh_execution_availability()
+                return
+            if not self.query.bind_table_document(
+                expected_sql=primed_sql,
+                expected_context=self._context,
+                expected_editor_revision=self._table_query_prime_editor_revision,
+            ) or not self.owns_table_query_input(prime_token):
+                return
+            before_guard = self._table_query_prime_guard_revision
+            self.query.set_draft_recovery_guard(False)
+            if self.query._draft_recovery_guard_revision == before_guard + 1:
+                self._table_query_prime_guard_revision = before_guard + 1
+                if self.owns_table_query_input(prime_token):
+                    self._context_selection_required = False
+                    self.query.refresh_execution_availability()
         except asyncio.CancelledError:
             restore_previous_editor()
             raise
@@ -1232,6 +1402,11 @@ class AthenaPageVM:
         snapshot_id: int | None = None,
     ) -> object:
         """Publish local handoff state before remote Athena discovery."""
+        if self.authoring.dirty:
+            raise ValueError("Modified SQL requires an explicit replacement decision")
+        return self._prime_table_query(table_ref, snapshot_id)
+
+    def _prime_table_query(self, table_ref: TableRef, snapshot_id: int | None) -> object:
         if (
             not self._is_alive()
             or not valid_table_ref(table_ref)
@@ -1240,16 +1415,27 @@ class AthenaPageVM:
         ):
             raise ValueError("table is unavailable in the active Athena source")
         starter_sql = select_starter_sql(table_ref, snapshot_id)
-        self._select_view_state("query")
-        self.query.begin_context_resolution()
-        self.query.set_sql(starter_sql)
+        before_document = self.authoring.ownership_revision
+        before_guard = self.query._draft_recovery_guard_revision
+        if (
+            not self.authoring._adopt(starter_sql, path=None, origin="Table query")
+            or self.authoring.ownership_revision != before_document + 1
+        ):
+            raise ValueError("SQL table request is no longer current")
         self._table_query_prime = (table_ref, snapshot_id)
         self._table_query_prime_token = object()
         self._table_query_prime_sql = starter_sql
         self._table_query_prime_choice_revision = self._context_choice_revision
+        self._table_query_prime_editor_revision = self.query.editor_revision
+        self._table_query_prime_document_revision = self.authoring.ownership_revision
+        self._table_query_prime_guard_revision = before_guard
         self._selected_table_ref = table_ref
+        token = self._table_query_prime_token
+        self._select_view_state("query")
+        if self.owns_table_query_input(token):
+            self.query.begin_context_resolution()
         self._notify("selected_table_ref")
-        return self._table_query_prime_token
+        return token
 
     def owns_table_query_input(self, prime_token: object) -> bool:
         """Check whether a transaction still owns its published editor/context."""
@@ -1260,6 +1446,9 @@ class AthenaPageVM:
             and self._context_choice_revision == self._table_query_prime_choice_revision
             and self._active_view == "query"
             and self.query.sql == self._table_query_prime_sql
+            and self.query.editor_revision == self._table_query_prime_editor_revision
+            and self.authoring.ownership_revision == self._table_query_prime_document_revision
+            and self.query._draft_recovery_guard_revision == self._table_query_prime_guard_revision
         )
 
     def abandon_table_query_prime(self, *, prime_token: object | None = None) -> None:
@@ -1448,20 +1637,51 @@ class AthenaPageVM:
                 name,
             )
 
-    async def open_saved_in_editor(self) -> None:
-        if not self._is_alive():
+    async def open_saved_in_editor(self, *, confirm: Confirm | None = None) -> None:
+        if (
+            not self._is_alive()
+            or self.query.is_executing
+            or self.query.is_submitting
+            or self.query.is_context_resolving
+        ):
             return
         sql = self.saved.selected_sql()
         if sql is None:
             return
         selected_id = self.saved.selected_query_id
+        kind = self.saved.selected_kind
+        revision = self.saved.selection_revision
+        context = self._context_generation
+        document = self.authoring.ownership_revision
+
+        def still_selected() -> bool:
+            return (
+                self._is_current_context(context)
+                and self.saved.selection_revision == revision
+                and self.saved.selected_kind is kind
+                and self.saved.selected_query_id == selected_id
+                and self.saved.selected_sql() == sql
+            )
+
+        if (
+            not await self.authoring.replace_sql(
+                sql,
+                confirm=confirm or _decline_sql_replace,
+                origin="AWS named query"
+                if kind is SavedQueryKind.NAMED
+                else "AWS prepared statement",
+                still_selected=still_selected,
+            )
+            or not still_selected()
+            or self.authoring.ownership_revision != document + 1
+        ):
+            return
         if selected_id is not None:
             self._selection_store.set(
                 self._selection_scope,
                 "saved_query_id",
                 selected_id,
             )
-        self.query.set_sql(sql)
         await self.select_view("query")
 
     async def open_history_results(self) -> None:
@@ -1498,6 +1718,7 @@ class AthenaPageVM:
     async def refresh_query_context(self) -> None:
         if not self._is_alive():
             return
+        self.completion.invalidate()
         # Reserve existing metadata guards too, including recovery selectors
         # awaiting an older request. This changes no query/editor identity.
         self._context_generation += 1
@@ -1921,11 +2142,15 @@ class AthenaPageVM:
         """Reserve this outgoing page against queued editor/selector actions."""
         self._input_admission_closed = True
         self.query.close_input_admission()
+        self.authoring.close_input_admission()
+        self.completion.close_input_admission()
 
     async def shutdown(self) -> None:
         async with self._shutdown_lock:
             if self._disposed or self._shutdown_complete:
                 return
+            if not self._input_admission_closed:
+                self.close_input_admission()
             self._shutdown_started = True
             self._lifecycle_generation += 1
             self._context_generation += 1
@@ -1956,6 +2181,8 @@ class AthenaPageVM:
                 self.history.shutdown(),
                 self.saved.shutdown(),
                 self.tables.shutdown(),
+                self.authoring.shutdown(),
+                self.completion.shutdown(),
             )
             await self._drain_page_tasks()
             self._shutdown_complete = True
@@ -1963,6 +2190,8 @@ class AthenaPageVM:
     def dispose(self) -> None:
         if self._disposed:
             return
+        if not self._input_admission_closed:
+            self.close_input_admission()
         self._disposed = True
         self._lifecycle_generation += 1
         self._context_generation += 1
@@ -2147,6 +2376,7 @@ class AthenaPageVM:
         clear_catalogs: bool,
         clear_databases: bool,
     ) -> int:
+        self.completion.invalidate(notify=False)
         self._context_generation += 1
         generation = self._context_generation
         self._context = QueryContext(

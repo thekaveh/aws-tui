@@ -184,6 +184,36 @@ ACTION_SPECS: tuple[ActionSpec, ...] = (
         "athena.cancel", "Cancel Athena query", "Athena", service_ids=frozenset(("athena",))
     ),
     ActionSpec(
+        "athena.sql_authoring", "SQL authoring menu", "Athena", service_ids=frozenset(("athena",))
+    ),
+    ActionSpec(
+        "athena.complete", "Complete SQL at cursor", "Athena", service_ids=frozenset(("athena",))
+    ),
+    ActionSpec(
+        "athena.format_sql", "Format SQL layout", "Athena", service_ids=frozenset(("athena",))
+    ),
+    ActionSpec(
+        "athena.open_sql", "Open local SQL file", "Athena", service_ids=frozenset(("athena",))
+    ),
+    ActionSpec(
+        "athena.save_sql", "Save local SQL file", "Athena", service_ids=frozenset(("athena",))
+    ),
+    ActionSpec(
+        "athena.save_sql_as", "Save local SQL file as", "Athena", service_ids=frozenset(("athena",))
+    ),
+    ActionSpec(
+        "athena.insert_snippet",
+        "Insert local SQL snippet",
+        "Athena",
+        service_ids=frozenset(("athena",)),
+    ),
+    ActionSpec(
+        "athena.save_snippet",
+        "Save local SQL snippet",
+        "Athena",
+        service_ids=frozenset(("athena",)),
+    ),
+    ActionSpec(
         "athena.load_more", "Load more Athena rows", "Athena", service_ids=frozenset(("athena",))
     ),
     ActionSpec(

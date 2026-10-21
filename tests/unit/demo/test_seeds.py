@@ -17,6 +17,33 @@ from aws_tui.domain.emr_serverless import JobRunState
 from aws_tui.domain.filesystem import NotFoundError, PathRef
 
 
+@pytest.mark.parametrize(
+    ("profile", "workgroup", "database", "table"),
+    [
+        ("demo-dev", "dev-analytics", "dev_analytics", "dev_events_iceberg"),
+        ("demo-prod", "prod-reporting", "prod_warehouse", "prod_sales_iceberg"),
+        ("demo-shared", "shared-insights", "shared_lake", "shared_metrics_iceberg"),
+    ],
+)
+async def test_athena_completion_schema_matches_the_same_glue_demo_table(
+    profile, workgroup, database, table
+):
+    from aws_tui.demo.seeds import seeded_demo_glue
+    from aws_tui.domain.data_catalog import TableRef
+
+    athena = seeded_demo_athena(profile)
+    metadata = await athena.get_table_columns(
+        "AwsDataCatalog", database, table, workgroup=workgroup
+    )
+    glue = seeded_demo_glue()[profile]
+    detail = await glue.get_table(
+        TableRef("AwsDataCatalog", database, table, athena.connection_name, athena.region)
+    )
+    assert metadata.columns
+    assert metadata.columns == detail.columns
+    assert not any(call.method == "start_query" for call in athena.calls)
+
+
 def test_seeded_demo_fs_dev_profile_has_etl_input_bucket() -> None:
     fs = seeded_demo_fs("demo-dev")
     # Every demo-dev seed includes ``etl-input/`` at the root.

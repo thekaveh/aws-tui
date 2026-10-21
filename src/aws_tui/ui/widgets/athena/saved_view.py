@@ -19,6 +19,7 @@ from aws_tui.ui.widgets.glue.detail_rows import (
     display_time,
     display_value,
 )
+from aws_tui.vm.athena.authoring_vm import Confirm
 from aws_tui.vm.athena.page_vm import AthenaPageVM
 from aws_tui.vm.athena.saved_vm import SavedQueryKind
 
@@ -54,9 +55,12 @@ class AthenaSavedView(DeferredWorkerMixin, Widget):
     }
     """
 
-    def __init__(self, vm: AthenaPageVM, *, id: str | None = None) -> None:
+    def __init__(
+        self, vm: AthenaPageVM, *, confirm: Confirm | None = None, id: str | None = None
+    ) -> None:
         super().__init__(id=id, classes="athena-service-view")
         self._page_vm = vm
+        self._confirm = confirm
         self._vm = vm.saved
         self._sub: DisposableBase | None = None
 
@@ -128,7 +132,7 @@ class AthenaSavedView(DeferredWorkerMixin, Widget):
     def on_button_pressed(self, event: Button.Pressed) -> None:
         if event.button.id == "athena-open-editor":
             self._run_lifecycle_worker(
-                self._page_vm.open_saved_in_editor,
+                partial(self._page_vm.open_saved_in_editor, confirm=self._confirm),
                 group="athena-open-saved",
             )
         elif event.button.id == "athena-more-named":

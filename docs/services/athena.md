@@ -27,8 +27,8 @@ clears its context selectors. Run remains disabled until you select an available
 context. Existing draft-origin restrictions still apply.
 Refresh and credential retry preserve the requirement to select a context.
 
-Focus moves through Source, Workgroup, Catalog, Database, the tabs, and the
-active view; enabled load-more controls appear immediately after their selector.
+Focus moves through Source, Workgroup, Catalog, Database, then Query's available Table selector, the tabs, and the active view.
+Enabled load-more controls appear immediately after their selector.
 The segmented frame contains Query (`1`), History (`2`), Results (`3`), and
 Saved (`4`). Unavailable controls are omitted from the active focus ring.
 
@@ -68,8 +68,8 @@ Workgroup configuration determines customer-S3 output or Athena managed
 results. Only a successful customer-S3 execution has an artifact that can be
 opened in the S3 service.
 
-The Query view orders Query controls, Query editor, then Execution detail. Run,
-Stop, and query status participate in keyboard focus traversal when available. At the minimum supported terminal size of 80×24, the app uses a one-line banner
+The Query view orders Query controls, Query editor, then Execution detail. SQL,
+Run, Stop, and query status participate in keyboard focus traversal when available. At the minimum supported terminal size of 80×24, the app uses a one-line banner
 that names the service, source, region, and demo status. Compact controls and a
 scrollable Execution detail pane leave at least three rows for the SQL editor.
 
@@ -128,7 +128,7 @@ its workgroup, catalog, and database. Recovery validates the current source and
 context afresh and refuses a missing, changed, or inaccessible context. It does
 not choose another connection or context.
 
-If the editor has unsaved text,
+If the current document is modified,
 **Replace unsaved SQL?** asks before replacement. **Keep current editor** clears
 only a failed recovery decision; it does not bypass the original-context guard
 on recovered SQL. Recovery never automatically executes SQL, loads result rows,
@@ -195,3 +195,59 @@ shutdown reset selection, filter, and sort and invalidate an open inspector. The
 These six actions can be remapped in `[keybindings]`; Help and the Athena
 command palette display their actual configured keys. They apply to the
 current Results view and yield while typing in an editor or modal.
+
+## 8. Author SQL and use local files
+
+The **SQL** menu on Query provides completion, formatting, local files, and local snippets.
+Press `Alt+E` to open it, or use the command palette.
+These actions edit SQL without submitting a query. Run still applies the read-only policy before execution.
+
+### 8.1. Complete and format SQL
+
+1. Select the source, workgroup, catalog, and database.
+2. Place the cursor where you need a keyword, table, or column.
+3. Press `Ctrl+Space`, then choose one suggestion.
+
+Completion uses the current context and cursor position, including quoted identifiers and nested columns.
+It inserts only the selected suggestion. Context changes invalidate suggestions and their metadata cache.
+Metadata reads are bounded; the status reports partial or unavailable results.
+A slow read can keep completion busy until its underlying request finishes.
+
+Press `Ctrl+Alt+F` to format the current SQL layout.
+Formatting preserves comments, literal values, quoted identifiers, and statement meaning.
+Incomplete or unsupported SQL stays unchanged, with a reason in the status.
+Completion, formatting, and snippet insertion support editor undo.
+
+### 8.2. Open and save SQL files
+
+Use `Ctrl+Alt+O` to open a local UTF-8 `.sql` file.
+Use `Ctrl+Alt+S` to save it, or `Ctrl+Alt+Shift+S` to choose another path.
+The SQL menu provides the same commands when your terminal does not transmit these shortcuts.
+Files must be regular files, at most 1 MiB; symbolic links are refused.
+
+The editor shows the filename or **Untitled**, plus a modified marker.
+The tooltip and Execution detail show a file's full path.
+
+The marker compares SQL with the current document baseline.
+Opening or saving a file, or loading an AWS query or table query, sets that baseline.
+Draft autosaves do not clear the marker. Recovered drafts start as modified untitled documents.
+
+Save asks before overwriting an existing destination.
+Changed files, permissions, invalid encoding, and size limits produce recoverable errors without clearing the editor.
+
+Open, saved-query loads, draft recovery, and table replacement ask before replacing modified SQL.
+An accepted whole-document load starts a new undo history.
+Changing the editor while a decision or load is pending invalidates that replacement.
+Saving a file preserves the current undo history.
+
+### 8.3. Keep local snippets
+
+Choose **Save local snippet…** in the SQL menu to store the current SQL with a name.
+Choose **Insert local snippet…** to insert a selection at the cursor or replace the selected text.
+Snippet choices show their local provenance, including the connection name and region.
+Provenance is descriptive; it does not switch the active AWS context.
+
+Local snippets are separate from the AWS named queries and prepared statements in Saved.
+They use plaintext `sql-snippets.json` in the app's configuration directory.
+The library holds at most 100 snippets, with 64 KiB per SQL entry and 8 MiB total.
+Do not store secrets in SQL files or snippets. Snippet actions do not create or update AWS saved queries.
