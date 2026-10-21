@@ -1225,6 +1225,9 @@ shows complete records from the prefix, including quoted multiline values.
 
 JSON and JSONL require the captured document to be complete and valid. Malformed or truncated documents fall back to raw, even when their prefix looks valid. This is a bounded preview, not full-file sampling.
 
+For JSONL, put each object on a separate LF or CRLF line. Unicode
+separators inside strings remain part of the value.
+
 Parquet uses bounded footer and column-range reads. Its footer is capped at
 512 KiB and selected chunks at 32 MiB of declared uncompressed data. These
 declarations do not impose a hard native-memory limit; decoding runs in a
