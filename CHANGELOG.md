@@ -233,6 +233,10 @@ section. The current tree must not be tagged as v0.8.0.
 
 ### Fixed
 
+- **Future Homebrew bootstrap.** The first-release recipe uses the actual
+  `poet -f` interface in a disposable environment containing the published target.
+  Temporary output and validation protect an existing formula from generator failures.
+
 - **Visible theme selection.** The theme picker scrolls the highlighted row
   into view during keyboard navigation and when opening on a late custom theme.
   Mouse scrolling, live preview and Escape rollback keep their existing behavior.
