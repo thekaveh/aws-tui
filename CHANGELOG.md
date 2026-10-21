@@ -233,6 +233,10 @@ section. The current tree must not be tagged as v0.8.0.
 
 ### Fixed
 
+- Update locked aiohttp, certifi and Pillow security releases; allow Pillow 13
+  for documentation assets. Require patched uv and development pip versions
+  that remove the compromised emSign CA certificate.
+
 - The deferred S3 move API refuses same-object destinations across endpoint
   aliases before any mutation, preventing source deletion after a self-copy.
 

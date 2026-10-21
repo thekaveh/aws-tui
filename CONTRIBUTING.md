@@ -4,6 +4,11 @@ Thanks for your interest. aws-tui is pre-release; the API and config schema may 
 
 ## 1. Quickstart
 
+Install uv 0.13.4 or newer before running checkout commands. The project and
+shell entry points reject older versions. This minimum includes the emSign CA
+trust-bundle fix; if you use pip separately, use pip 26.2.2 or newer as well.
+The locked development environment includes patched pip.
+
 ```bash
 git clone https://github.com/thekaveh/aws-tui.git
 cd aws-tui

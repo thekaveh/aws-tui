@@ -482,7 +482,7 @@ def test_pages_publication_is_main_only_including_manual_dispatch() -> None:
     main_only = "github.ref == 'refs/heads/main'"
     assert workflow["jobs"]["build"]["if"] == main_only
     assert workflow["jobs"]["wiki"]["if"] == main_only
-    assert workflow["env"]["UV_VERSION"] == "0.11.19"
+    assert workflow["env"]["UV_VERSION"] == "0.13.4"
     for job_name in ("build", "wiki"):
         setup_uv = next(
             step
@@ -574,3 +574,10 @@ def test_release_creation_does_not_depend_on_runner_gh_cli() -> None:
 
     assert "gh release create" not in release
     assert "api.github.com/repos" in release
+
+
+def test_project_and_workflows_require_patched_uv() -> None:
+    project = tomllib.loads((REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+    assert project["tool"].get("uv", {}).get("required-version") == ">=0.13.4"
+    for path in ("ci.yml", "pages.yml", "release.yml"):
+        assert _workflow(f".github/workflows/{path}")["env"]["UV_VERSION"] == "0.13.4"
