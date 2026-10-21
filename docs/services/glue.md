@@ -25,6 +25,10 @@ recent runs. Crawlers lists crawler state, configuration, metrics, and latest
 crawl detail. Access denial remains scoped to the affected pane and does not
 invalidate the AWS source for other services.
 
+Partition and statistics rows show their own loading, access and error states.
+A zero count means the read succeeded with no items.
+Refresh retries these reads; successful schema and storage remain visible when a supplement fails.
+
 `y` copies the selected table as a fully quoted, source-aware `TableRef` into the VM-owned clipboard. It then hands the reference to the single app-level clipboard writer for the operating-system clipboard. That writer's toast names the channel that
 actually accepted the text and never reports an unacknowledged OSC 52 write as
 a copy. The command palette can open a valid selected table location in S3
