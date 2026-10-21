@@ -233,6 +233,9 @@ section. The current tree must not be tagged as v0.8.0.
 
 ### Fixed
 
+- **S3Mock setup guidance.** The cookbook states checkout and Docker prerequisites,
+  separates Settings from static configuration, and ties teardown to owned resources.
+
 - **S3 directory-copy guidance.** Existing-prefix merges are documented
   separately from unsupported new-tree publication and whole-tree replacement,
   with per-child conflicts, preflight refusals and partial outcomes explained.
