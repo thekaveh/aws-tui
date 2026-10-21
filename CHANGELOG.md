@@ -233,6 +233,11 @@ section. The current tree must not be tagged as v0.8.0.
 
 ### Fixed
 
+- **Unicode JSONL previews.** Literal Unicode separators inside JSON strings
+  no longer split records or force valid JSONL/NDJSON previews into raw mode.
+  Record boundaries use LF, with CRLF supported and existing preview limits
+  and display escaping preserved.
+
 - **Readable compact EMR runs.** Narrow run lists reserve name/ID space
   instead of clipping it behind timestamps. The scrollable detail pane
   exposes full identity and keeps loaded list metadata available if a
