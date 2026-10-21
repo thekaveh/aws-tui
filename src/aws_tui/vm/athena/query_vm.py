@@ -48,7 +48,9 @@ from aws_tui.vm.athena._errors import map_provider_error, map_unexpected_error
 from aws_tui.vm.athena.drafts_vm import (
     SHUTDOWN_SECONDS,
     AthenaDraftSession,
+    AthenaDraftSessionSnapshot,
     DraftState,
+    valid_draft_session_snapshot,
 )
 from aws_tui.vm.athena.results_vm import AthenaResultsSnapshot, AthenaResultsVM
 from aws_tui.vm.file_manager.pane_vm import PaneState
@@ -84,6 +86,14 @@ class _QueryContextMismatchError(Exception):
 
 
 @dataclass(frozen=True, slots=True)
+class AthenaEditorSnapshot:
+    context: QueryContext = field(repr=False)
+    sql: str = field(repr=False)
+    draft: AthenaDraftSessionSnapshot | None = field(repr=False)
+    recovery_guard: bool = field(repr=False)
+
+
+@dataclass(frozen=True, slots=True)
 class AthenaQuerySnapshot:
     context: QueryContext = field(repr=False)
     sql: str = field(repr=False)
@@ -98,6 +108,8 @@ class AthenaQuerySnapshot:
     pane_state: PaneState = field(repr=False)
     error_text: str | None = field(repr=False)
     results: AthenaResultsSnapshot = field(repr=False)
+    draft: AthenaDraftSessionSnapshot | None = field(default=None, repr=False)
+    draft_recovery_guard: bool = field(default=False, repr=False)
 
 
 class AthenaQueryVM:
@@ -392,10 +404,59 @@ class AthenaQueryVM:
             pane_state=self._pane_state,
             error_text=self._error_text,
             results=self._results.export_snapshot(),
+            draft=self._draft_session.export_snapshot() if self._draft_session else None,
+            draft_recovery_guard=self._draft_recovery_guard,
         )
         if not self.snapshot_is_valid(snapshot, self._context):
             raise ValueError(_SNAPSHOT_ERROR)
         return snapshot
+
+    def export_editor_snapshot(self) -> AthenaEditorSnapshot:
+        if (
+            self._disposed
+            or self._shutdown_started
+            or self._input_admission_closed
+            or self._snapshot_export_is_busy()
+        ):
+            raise ValueError("Athena editor is unavailable")
+        return AthenaEditorSnapshot(
+            self._context,
+            self._sql,
+            self._draft_session.export_snapshot() if self._draft_session else None,
+            self._draft_recovery_guard,
+        )
+
+    def install_editor_snapshot(
+        self, snapshot: AthenaEditorSnapshot, *, notify: bool = True
+    ) -> None:
+        if (
+            self._disposed
+            or self._shutdown_started
+            or self._input_admission_closed
+            or self._snapshot_export_is_busy()
+            or not _valid_editor_snapshot(snapshot)
+            or snapshot.context.connection_name != self._context.connection_name
+            or snapshot.context.region != self._context.region
+        ):
+            raise ValueError("Athena editor provenance is unavailable")
+        self._install_editor(snapshot)
+        if notify:
+            self._notify("sql")
+            self._draft_changed("")
+
+    def _install_editor(self, snapshot: AthenaEditorSnapshot) -> None:
+        if not self.can_restore_draft_provenance(snapshot.draft):
+            raise ValueError("Athena editor provenance is unavailable")
+        if self._draft_session is not None and snapshot.draft is not None:
+            self._draft_session.install_snapshot(snapshot.draft, context=self._context)
+        self._sql = snapshot.sql
+        self._draft_recovery_guard = snapshot.recovery_guard or self._draft_recovery_guard
+        self._draft_recovery_guard_revision += 1
+
+    def can_restore_draft_provenance(self, draft: AthenaDraftSessionSnapshot | None) -> bool:
+        return (self._draft_session is None) == (draft is None) and (
+            self._draft_session is None or self._draft_session.is_available
+        )
 
     async def restore_snapshot(self, snapshot: AthenaQuerySnapshot) -> None:
         prepared = _prepare_query_snapshot(snapshot, self._context)
@@ -406,6 +467,8 @@ class AthenaQueryVM:
             raise ValueError(_SNAPSHOT_ERROR)
         if prepared.context != self._context:
             raise ValueError("Athena query snapshot does not match the active context")
+        if not self.can_restore_draft_provenance(prepared.draft):
+            raise ValueError("Athena editor provenance is unavailable")
         generation = self._generation
         async with self.snapshot_restore_guard(generation):
             self._install_snapshot(prepared)
@@ -432,10 +495,16 @@ class AthenaQueryVM:
         prepared = _prepare_query_snapshot(snapshot, snapshot.context)
         if prepared is None:
             raise ValueError(_SNAPSHOT_ERROR)
+        if not self.can_restore_draft_provenance(prepared.draft):
+            raise ValueError("Athena editor provenance is unavailable")
         self._context = prepared.context
         self._results._install_snapshot(prepared.results, context=prepared.context)
         self._generation += 1
-        self._sql = prepared.sql
+        self._install_editor(
+            AthenaEditorSnapshot(
+                prepared.context, prepared.sql, prepared.draft, prepared.draft_recovery_guard
+            )
+        )
         self._validation_error = prepared.validation_error
         self._execution_ref = prepared.execution_ref
         self._state = prepared.state
@@ -456,6 +525,8 @@ class AthenaQueryVM:
         self._notify("validation_error")
         self._notify_execution()
         self._notify("is_executing")
+        if self._draft_session is not None or self._draft_recovery_guard:
+            self._draft_changed("")
 
     @staticmethod
     def snapshot_is_valid(
@@ -491,6 +562,11 @@ class AthenaQueryVM:
             or not valid_query_statistics(snapshot.statistics)
             or not valid_athena_query_error(snapshot.query_error)
             or not AthenaResultsVM.snapshot_is_valid(snapshot.results)
+            or type(snapshot.draft_recovery_guard) is not bool
+            or (
+                snapshot.draft is not None
+                and not valid_draft_session_snapshot(snapshot.draft, sql=snapshot.sql)
+            )
         ):
             return False
         if snapshot.execution_ref is not None and (
@@ -1242,9 +1318,19 @@ def _prepare_query_snapshot(
     return value
 
 
+def _valid_editor_snapshot(value: object) -> bool:
+    return (
+        type(value) is AthenaEditorSnapshot
+        and valid_query_context(value.context)
+        and type(value.sql) is str
+        and type(value.recovery_guard) is bool
+        and (value.draft is None or valid_draft_session_snapshot(value.draft, sql=value.sql))
+    )
+
+
 def _request_token(context: QueryContext) -> str:
     material = "\0".join((*context.cache_key, uuid4().hex)).encode()
     return hashlib.sha256(material).hexdigest()
 
 
-__all__ = ["AthenaQuerySnapshot", "AthenaQueryVM"]
+__all__ = ["AthenaEditorSnapshot", "AthenaQuerySnapshot", "AthenaQueryVM"]

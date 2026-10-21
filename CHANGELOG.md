@@ -233,6 +233,11 @@ section. The current tree must not be tagged as v0.8.0.
 
 ### Fixed
 
+- Failed Athena navigation and credential recovery preserve local SQL draft
+  origins, recovery decisions, and save status. Draft clears keep their original
+  database target, and restoring older text does not falsely acknowledge it as
+  saved or overwrite a newer draft automatically.
+
 - Athena queries remain stoppable after polling errors. Rerunning first stops
   the prior query; a failed stop preserves its identity and prevents replacement.
 

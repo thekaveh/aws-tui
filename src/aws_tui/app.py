@@ -109,7 +109,7 @@ from aws_tui.ui.widgets.transfer_history_modal import TransferHistoryModal
 from aws_tui.ui.widgets.transfers_overlay import TransfersOverlay
 from aws_tui.version import __version__
 from aws_tui.vm.athena.history_vm import _execution_identity_belongs_to
-from aws_tui.vm.athena.page_vm import AthenaPageSnapshot, AthenaPageVM
+from aws_tui.vm.athena.page_vm import AthenaPageEditorSnapshot, AthenaPageSnapshot, AthenaPageVM
 from aws_tui.vm.chrome.action_catalog import (
     ACTION_SPECS,
     ActionPresentation,
@@ -3906,7 +3906,7 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
                 return False
 
         athena_snapshot: AthenaPageSnapshot | None = None
-        athena_fallback_sql: str | None = None
+        athena_fallback_editor: AthenaPageEditorSnapshot | None = None
         if isinstance(hosted, AthenaPageVM):
             try:
                 athena_snapshot = hosted.export_snapshot()
@@ -3915,7 +3915,7 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
                 # context snapshot yet.  Its draft SQL is still durable state,
                 # while the active view is already carried by the isolated
                 # selection-store clone used to build the candidate.
-                athena_fallback_sql = hosted.query.sql
+                athena_fallback_editor = hosted.export_editor_snapshot()
         athena_result_execution_id = (
             hosted.results.execution_id
             if isinstance(hosted, AthenaPageVM) and hosted.active_view == "results"
@@ -3949,8 +3949,8 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
                             else:
                                 state = candidate.credential_recovery_state()
                         else:
-                            if athena_fallback_sql is not None:
-                                candidate.query.set_sql(athena_fallback_sql)
+                            if athena_fallback_editor is not None:
+                                candidate.install_editor_snapshot(athena_fallback_editor)
                             state = candidate.credential_recovery_state()
                 elif isinstance(candidate, GluePageVM) and glue_snapshot is not None:
                     await candidate.setup()
@@ -3997,7 +3997,7 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
                 # execution as an incomplete page.
                 return (
                     hosted.context,
-                    query.sql,
+                    hosted.export_editor_snapshot(),
                     hosted.active_view,
                     hosted.history.selected_execution_id,
                     hosted.saved.selected_kind,
