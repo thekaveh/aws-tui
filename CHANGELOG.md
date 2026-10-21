@@ -233,6 +233,10 @@ section. The current tree must not be tagged as v0.8.0.
 
 ### Fixed
 
+- File actions use the same focused, ready-pane checks as command discovery.
+  Changed copy/delete confirmations show an expiration warning instead of
+  silently discarding the accepted operation.
+
 - Local copies, overwrites, moves and cleanup support valid long filenames.
   Internal stage, backup and quarantine names no longer include the user basename.
 
