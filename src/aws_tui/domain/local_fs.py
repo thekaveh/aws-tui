@@ -26,13 +26,13 @@ from functools import partial
 from pathlib import Path, PureWindowsPath
 from string import ascii_uppercase
 from typing import Any, Literal, cast
-from uuid import uuid4
 
 import anyio
 from aiofiles.threadpool import wrap
 from aiofiles.threadpool.binary import AsyncBufferedIOBase
 from anyio import Path as AnyioPath
 
+from aws_tui.domain._operation_names import operation_name
 from aws_tui.domain.filesystem import (
     ConflictError,
     EntryKind,
@@ -397,11 +397,7 @@ class LocalFS:
                 raise ConflictError(f"source changed: {host.as_posix()}")
             original = host
             claimed_original = original
-            quarantine = AnyioPath(
-                Path(host.as_posix()).with_name(
-                    f".{Path(host.as_posix()).name}.aws-tui-delete-{uuid4().hex}"
-                )
-            )
+            quarantine = AnyioPath(Path(host.as_posix()).with_name(operation_name("delete")))
             try:
                 await anyio.to_thread.run_sync(
                     _rename_no_replace,
@@ -420,7 +416,7 @@ class LocalFS:
             # The inner block restores the quarantine claim before the outer
             # handlers map the failure, so the error taxonomy is unchanged and
             # a failed delete no longer leaves the caller's entry renamed to a
-            # hidden `.<name>.aws-tui-delete-<uuid>` with nothing to put it
+            # hidden `.aws-tui-delete-<uuid>` with nothing to put it
             # back. The rooted sibling `_rooted_delete_empty_directory` already
             # does this; reachable in production through `CrossFsMove`, whose
             # source delete passes `expected_etag`.
@@ -502,9 +498,7 @@ class LocalFS:
                     raise ConflictError(f"directory is not empty: {path.as_posix()}") from exc
                 raise _map_os_error(exc, path.as_posix()) from exc
         host = self._resolve_leaf(path)
-        quarantine = Path(host.as_posix()).with_name(
-            f".{Path(host.as_posix()).name}.aws-tui-rmdir-{uuid4().hex}"
-        )
+        quarantine = Path(host.as_posix()).with_name(operation_name("rmdir"))
         try:
             await anyio.to_thread.run_sync(
                 _claim_and_remove_empty_directory,
@@ -1549,7 +1543,7 @@ def _windows_delete(
             attributes = api.attributes(handle, host)
             if not attributes & _WINDOWS_FILE_ATTRIBUTE_REPARSE_POINT:
                 _windows_assert_contained(api, handle, host, anchor)
-            quarantine_name = f".{name}.aws-tui-delete-{uuid4().hex}"
+            quarantine_name = operation_name("delete")
             quarantine = ntpath.join(parent, quarantine_name)
             api.rename_handle(handle, parent_handle, quarantine_name, host)
             try:
@@ -1581,7 +1575,7 @@ def _windows_delete_empty_directory(
                 api.revision(handle, host), expected_etag
             ):
                 raise ConflictError(f"source changed: {path.as_posix()}")
-            quarantine_name = f".{name}.aws-tui-rmdir-{uuid4().hex}"
+            quarantine_name = operation_name("rmdir")
             quarantine = ntpath.join(parent, quarantine_name)
             api.rename_handle(handle, parent_handle, quarantine_name, host)
             try:
@@ -2315,7 +2309,7 @@ def _rooted_delete(
             _local_etag(observed), expected_etag
         ):
             raise ConflictError(f"source changed: {path.as_posix()}")
-        quarantine = f".{name}.aws-tui-delete-{uuid4().hex}"
+        quarantine = operation_name("delete")
         _rename_no_replace_at(parent_fd, name, parent_fd, quarantine)
         try:
             claimed = os.stat(quarantine, dir_fd=parent_fd, follow_symlinks=False)
@@ -2336,7 +2330,7 @@ def _rooted_delete_empty_directory(
             _local_etag(observed), expected_etag
         ):
             raise ConflictError(f"source changed: {path.as_posix()}")
-        quarantine = f".{name}.aws-tui-rmdir-{uuid4().hex}"
+        quarantine = operation_name("rmdir")
         _rename_no_replace_at(parent_fd, name, parent_fd, quarantine)
         try:
             claimed = os.stat(quarantine, dir_fd=parent_fd, follow_symlinks=False)

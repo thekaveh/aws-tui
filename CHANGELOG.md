@@ -233,6 +233,9 @@ section. The current tree must not be tagged as v0.8.0.
 
 ### Fixed
 
+- Local copies, overwrites, moves and cleanup support valid long filenames.
+  Internal stage, backup and quarantine names no longer include the user basename.
+
 - Failed or cancelled Athena source changes restore exact outgoing SQL and its
   context, including when local draft persistence is off. Newer edits and
   navigation take priority; recovery retains draft provenance and save status.
