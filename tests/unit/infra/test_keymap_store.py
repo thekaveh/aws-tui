@@ -24,9 +24,9 @@ _APPROVED_ALIAS_PAIRS = (
 class TestDefaults:
     def test_object_details_has_unique_default_and_can_be_remapped(self) -> None:
         assert KeymapStore().resolve("pane.object_details") == ("ctrl+o",)
-        assert KeymapStore(overlay={"pane.object_details": "ctrl+i"}).resolve(
+        assert KeymapStore(overlay={"pane.object_details": "ctrl+e"}).resolve(
             "pane.object_details"
-        ) == ("ctrl+i",)
+        ) == ("ctrl+e",)
 
     def test_resolve_quit_default(self) -> None:
         store = KeymapStore()

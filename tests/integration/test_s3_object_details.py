@@ -86,6 +86,61 @@ async def test_ctrl_o_inspects_current_file_and_restores_origin(app_context_fact
         assert fs.details_paths == [PathRef(("bucket", "a.txt"))]
 
 
+@pytest.mark.parametrize("size", [(80, 24), (120, 40)])
+@pytest.mark.parametrize("action", ["pane.object_details", "app.transfer_history"])
+async def test_documented_remap_delivered_as_ansi_bytes_opens_its_real_modal(
+    app_context_factory, size, action
+):
+    from textual._xterm_parser import XTermParser
+    from textual.events import Key
+
+    from aws_tui.ui.widgets.s3_object_details import S3ObjectDetailsModal
+    from aws_tui.ui.widgets.transfer_history_modal import TransferHistoryModal
+    from tests.keybinding_examples_support import documented_migration_key, traditional_ctrl_byte
+
+    _unstarted_app, fs, ctx = await make_app(app_context_factory)
+    key = documented_migration_key(action)
+    ctx.keymap_store = KeymapStore(overlay={action: key})
+    app = AwsTuiApp(ctx)
+    fs.queue_details(S3ObjectDetails(bucket="bucket", key="a.txt", content_type="text/plain"))
+    async with app.run_test(size=size) as pilot:
+        pane = await select_file(app, pilot)
+        # File panes use the coordinator's virtual slot, not Widget focus.
+        assert ctx.focus_coordinator.focused_slot.value == "s3.left"
+        assert app.focused is None
+        selected = pane.vm.selected_entry
+        driver = app._driver
+        assert driver is not None
+        parser = XTermParser()
+        tokens = list(parser.feed(traditional_ctrl_byte(key)))
+        for token in tokens:
+            driver.process_message(token)
+        expected = S3ObjectDetailsModal if action == "pane.object_details" else TransferHistoryModal
+        await wait_until(
+            lambda: isinstance(app.screen, expected), what="ANSI byte opens real modal", timeout=2
+        )
+        assert [token.key for token in tokens if isinstance(token, Key)] == [key]
+        await drain_workers(app)
+        await pilot.press("escape")
+        await wait_until(lambda: len(app.screen_stack) == 1, what="remapped modal closed")
+        app.set_focus(None)
+        await pilot.pause()
+        before = ctx.focus_coordinator.focused_slot
+        requests = tuple(fs.details_paths)
+        tab_tokens = list(parser.feed("\x09"))
+        for token in tab_tokens:
+            driver.process_message(token)
+        await wait_until(
+            lambda: ctx.focus_coordinator.focused_slot is not before,
+            what="Tab retains focus navigation",
+        )
+        assert [token.key for token in tab_tokens if isinstance(token, Key)] == ["tab"]
+        assert len(app.screen_stack) == 1
+        assert tuple(fs.details_paths) == requests
+        assert pane.vm.selected_entry is selected
+        assert app._crash_report is None
+
+
 async def test_real_navigation_focus_refuses_previously_selected_file(app_context_factory):
     app, fs, ctx = await make_app(app_context_factory)
     async with app.run_test(size=(120, 40)) as pilot:
@@ -262,9 +317,9 @@ async def test_custom_remap_and_modal_containment_prevent_stacking(app_context_f
 
     app, fs, ctx = await make_app(app_context_factory)
     ctx.config_store.path.write_text(
-        ctx.config_store.path.read_text() + '\n[keybindings]\n"pane.object_details" = ["ctrl+i"]\n'
+        ctx.config_store.path.read_text() + '\n[keybindings]\n"pane.object_details" = ["ctrl+e"]\n'
     )
-    ctx.keymap_store = KeymapStore(overlay={"pane.object_details": "ctrl+i"})
+    ctx.keymap_store = KeymapStore(overlay={"pane.object_details": "ctrl+e"})
     app = AwsTuiApp(ctx)
     fs.queue_details(S3ObjectDetails(bucket="bucket", key="a.txt", content_type="text/plain"))
     async with app.run_test(size=(120, 40)) as pilot:
@@ -273,13 +328,13 @@ async def test_custom_remap_and_modal_containment_prevent_stacking(app_context_f
         await pilot.press("ctrl+o")
         await pilot.pause()
         assert len(app.screen_stack) == 1
-        await pilot.press("ctrl+i")
+        await pilot.press("ctrl+e")
         await wait_until(
             lambda: isinstance(app.screen, S3ObjectDetailsModal), what="remapped details"
         )
         await drain_workers(app)
         app.action_object_details()
-        await pilot.press("ctrl+i", "c", "d", "p", "r", "space", "ctrl+k")
+        await pilot.press("ctrl+e", "c", "d", "p", "r", "space", "ctrl+k")
         await pilot.pause()
         assert len(app.screen_stack) == 2
         assert pane.vm.selected_entry is row
