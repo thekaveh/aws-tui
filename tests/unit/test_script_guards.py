@@ -69,20 +69,21 @@ def test_run_with_uv_rejects_missing_uv(tmp_path: Path) -> None:
     result = _run_script("scripts/run-with-uv.sh", "pytest", path=f"{tmp_path}:{BASE_PATH}")
 
     assert result.returncode == 127
-    assert "uv >= 0.11.19 is required; found: not installed" in result.stderr
+    assert "uv >= 0.13.4 is required; found: not installed" in result.stderr
 
 
-def test_run_with_uv_rejects_stale_uv(tmp_path: Path) -> None:
-    _fake_uv(tmp_path, version="0.5.7")
+@pytest.mark.parametrize("version", ["0.5.7", "0.13.3"])
+def test_run_with_uv_rejects_stale_uv(tmp_path: Path, version: str) -> None:
+    _fake_uv(tmp_path, version=version)
 
     result = _run_script("scripts/run-with-uv.sh", "pytest", path=f"{tmp_path}:{BASE_PATH}")
 
     assert result.returncode == 127
-    assert "uv >= 0.11.19 is required; found 0.5.7" in result.stderr
+    assert f"uv >= 0.13.4 is required; found {version}" in result.stderr
 
 
 def test_run_with_uv_forwards_arguments_to_current_uv(tmp_path: Path) -> None:
-    _fake_uv(tmp_path, version="0.11.19")
+    _fake_uv(tmp_path, version="0.13.4")
 
     result = _run_script(
         "scripts/run-with-uv.sh",
@@ -95,13 +96,14 @@ def test_run_with_uv_forwards_arguments_to_current_uv(tmp_path: Path) -> None:
     assert result.stdout.strip() == "run python --version"
 
 
-def test_bootstrap_rejects_stale_uv_before_sync(tmp_path: Path) -> None:
-    _fake_uv(tmp_path, version="0.5.7")
+@pytest.mark.parametrize("version", ["0.5.7", "0.13.3"])
+def test_bootstrap_rejects_stale_uv_before_sync(tmp_path: Path, version: str) -> None:
+    _fake_uv(tmp_path, version=version)
 
     result = _run_script("scripts/bootstrap.sh", path=f"{tmp_path}:{BASE_PATH}")
 
     assert result.returncode == 1
-    assert "aws-tui requires uv >= 0.11.19; found 0.5.7" in result.stderr
+    assert f"aws-tui requires uv >= 0.13.4; found {version}" in result.stderr
     assert "uv sync --locked --all-groups" not in result.stdout
 
 
@@ -109,7 +111,7 @@ def test_bootstrap_installs_all_groups_before_pre_commit(tmp_path: Path) -> None
     calls = tmp_path / "uv-calls.txt"
     _fake_uv(
         tmp_path,
-        version="0.11.19",
+        version="0.13.4",
         body=f"""printf "%s\\n" "$*" >> {calls}
 exit 0
 """,
@@ -161,7 +163,7 @@ def test_bootstrap_installs_hooks_from_a_linked_worktree(tmp_path: Path) -> None
     calls = tmp_path / "uv-calls.txt"
     _fake_uv(
         tmp_path,
-        version="0.11.19",
+        version="0.13.4",
         body=f"""printf "%s\\n" "$*" >> {calls}
 exit 0
 """,
@@ -202,7 +204,7 @@ def test_bootstrap_skips_hooks_without_a_git_checkout(tmp_path: Path) -> None:
     calls = tmp_path / "uv-calls.txt"
     _fake_uv(
         tmp_path,
-        version="0.11.19",
+        version="0.13.4",
         body=f"""printf "%s\\n" "$*" >> {calls}
 exit 0
 """,
@@ -232,7 +234,7 @@ def test_bootstrap_archive_does_not_install_hooks_for_its_parent_repo(tmp_path: 
     calls = tmp_path / "uv-calls.txt"
     _fake_uv(
         tmp_path,
-        version="0.11.19",
+        version="0.13.4",
         body=f'printf "%s\\n" "$*" >> "{calls}"\nexit 0\n',
     )
 
@@ -269,7 +271,7 @@ def test_bootstrap_invalid_local_marker_does_not_select_parent_repo(
     calls = tmp_path / "uv-calls.txt"
     _fake_uv(
         tmp_path,
-        version="0.11.19",
+        version="0.13.4",
         body=f'printf "%s\\n" "$*" >> "{calls}"\nexit 0\n',
     )
 
@@ -291,7 +293,7 @@ def test_bootstrap_installs_hooks_through_a_symlinked_checkout_path(tmp_path: Pa
     calls = tmp_path / "uv-calls.txt"
     _fake_uv(
         tmp_path,
-        version="0.11.19",
+        version="0.13.4",
         body=f'printf "%s\\n" "$*" >> "{calls}"\nexit 0\n',
     )
 
@@ -325,7 +327,7 @@ def test_bootstrap_installs_hooks_for_a_git_file_with_explicit_worktree(tmp_path
     calls = tmp_path / "uv-calls.txt"
     _fake_uv(
         tmp_path,
-        version="0.11.19",
+        version="0.13.4",
         body=f'printf "%s\\n" "$*" >> "{calls}"\nexit 0\n',
     )
 
@@ -347,7 +349,7 @@ def test_bootstrap_installs_hooks_for_its_own_git_directory(tmp_path: Path) -> N
     calls = tmp_path / "uv-calls.txt"
     _fake_uv(
         tmp_path,
-        version="0.11.19",
+        version="0.13.4",
         body=f'printf "%s\\n" "$*" >> "{calls}"\nexit 0\n',
     )
 
@@ -371,7 +373,7 @@ def test_bootstrap_skips_hooks_when_git_is_missing(tmp_path: Path) -> None:
     calls = tmp_path / "uv-calls.txt"
     _fake_uv(
         tmp_path,
-        version="0.11.19",
+        version="0.13.4",
         body=f'printf "%s\\n" "$*" >> "{calls}"\nexit 0\n',
     )
 
@@ -396,7 +398,7 @@ def test_bootstrap_skips_hooks_when_the_git_pointer_dangles(tmp_path: Path) -> N
     calls = tmp_path / "uv-calls.txt"
     _fake_uv(
         tmp_path,
-        version="0.11.19",
+        version="0.13.4",
         body=f"""printf "%s\\n" "$*" >> {calls}
 exit 0
 """,
@@ -430,7 +432,7 @@ def test_dev_script_routes_through_stale_uv_guard(tmp_path: Path) -> None:
     result = _run_script("scripts/dev.sh", path=f"{tmp_path}:{BASE_PATH}")
 
     assert result.returncode == 127
-    assert "uv >= 0.11.19 is required; found 0.5.7" in result.stderr
+    assert "uv >= 0.13.4 is required; found 0.5.7" in result.stderr
     assert "textual run --dev" not in result.stdout
 
 
@@ -442,7 +444,7 @@ def test_s3_up_script_routes_seed_through_stale_uv_guard(tmp_path: Path) -> None
 
     assert result.returncode == 127
     assert "==> seeding buckets" in result.stdout
-    assert "uv >= 0.11.19 is required; found 0.5.7" in result.stderr
+    assert "uv >= 0.13.4 is required; found 0.5.7" in result.stderr
     assert "dev S3 is up" not in result.stdout
 
 
@@ -457,13 +459,13 @@ exit 1
     result = _run_script("scripts/check-layers.sh", path=f"{tmp_path}:{BASE_PATH}")
 
     assert result.returncode == 127
-    assert "uv >= 0.11.19 or python3 >= 3.11 is required" in result.stderr
+    assert "uv >= 0.13.4 or python3 >= 3.11 is required" in result.stderr
 
 
 def test_check_layers_uses_current_uv_runner(tmp_path: Path) -> None:
     _fake_uv(
         tmp_path,
-        version="0.11.19",
+        version="0.13.4",
         body=f"""if [ "$1" = "run" ] && [ "$2" = "python" ]; then
   shift 2
   exec {sys.executable} "$@"

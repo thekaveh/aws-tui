@@ -35,7 +35,7 @@ See the [service guides](#6-documentation) for each operation's conditions.
 - Python 3.11, 3.12 or 3.13.
 - Git available on `PATH` for installation from the repository.
 - macOS, Linux or Windows with a supported terminal.
-- `uv` for the checkout workflow. Standalone installation uses `uv` or
+- `uv` 0.13.4 or newer for the checkout workflow. Standalone installation uses `uv` or
   optional `pipx`.
 - Existing AWS profiles and service permissions for AWS access, or a configured
   S3-compatible endpoint. The demo needs no AWS credentials.

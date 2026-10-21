@@ -2,7 +2,7 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-UV_MIN_VERSION=${UV_MIN_VERSION:-0.11.19}
+UV_MIN_VERSION=${UV_MIN_VERSION:-0.13.4}
 
 version_ge() {
   local minimum="$1"
