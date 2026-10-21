@@ -726,3 +726,21 @@ an isolated versioned Moto HTTP endpoint, and actual application keyboard flows.
 Moto 5.2.3 rejects explicit-version HEAD in never-versioned and suspended buckets;
 those HTTP combinations remain unverified. Unit request tests and enabled-bucket
 retained-null HTTP tests do not establish live AWS parity.
+
+**Reviewed recursive S3 folder uploads**
+
+`botocore==1.40.61`, S3 API `2006-03-01`; Textual `8.2.8`
+
+The separate `pane.upload_folder` workflow plans at most 10,000 entries and 128 levels, with no payload reads or mutations during review.
+Four workers publish objects independently. Empty directories and unsupported local entries produce no marker objects.
+Default publication uses `IfNoneMatch=*`; explicit replacement binds the reviewed ETag through `IfMatch`.
+These conditions apply to `PutObject` and `CompleteMultipartUpload`; unsupported endpoints fail without an unconditional fallback.
+
+Each attempt records publication certainty separately from cancellation and cleanup.
+Cancellation aborts only owned unfinished multipart uploads and never deletes published objects.
+Retry rechecks failed/unattempted objects, preserves prior destinations, and excludes successful or uncertain publications.
+Fresh pane and generation fences guard every unaccepted review; accepted work retains its captured providers independently of the modal.
+The diagnostic journal does not supply durable per-object History or Recovery records.
+
+Checks cover installed SDK request models, isolated Moto HTTP publication/cancellation, controlled races, and mounted application keyboard flows.
+These checks do not establish live AWS parity or native Windows/Linux behavior.

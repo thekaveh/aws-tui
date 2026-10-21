@@ -103,6 +103,7 @@ from aws_tui.ui.widgets.nav_menu import NavMenu
 from aws_tui.ui.widgets.pane import EntryRow, Pane
 from aws_tui.ui.widgets.pane_listing_controls import FilterPaneModal, FindPaneModal, SortPaneModal
 from aws_tui.ui.widgets.quick_look import QuickLook
+from aws_tui.ui.widgets.recursive_upload import RecursiveUploadModal
 from aws_tui.ui.widgets.s3_object_details import S3ObjectDetailsModal
 from aws_tui.ui.widgets.s3_versions import S3VersionsModal
 from aws_tui.ui.widgets.service_source_header import ServiceSourceHeader
@@ -142,6 +143,7 @@ from aws_tui.vm.credential_recovery import (
 from aws_tui.vm.emr_serverless.page_vm import EmrServerlessPageVM
 from aws_tui.vm.file_manager.dual_pane_vm import DualPaneVM, FocusedPane
 from aws_tui.vm.file_manager.pane_vm import PaneState
+from aws_tui.vm.file_manager.recursive_upload_vm import PreparedUpload, RecursiveUploadVM
 from aws_tui.vm.file_manager.s3_object_details_vm import S3ObjectDetailsVM
 from aws_tui.vm.file_manager.s3_version_transfer import execute_version_transfer
 from aws_tui.vm.file_manager.s3_versions_vm import S3VersionsVM, VersionTransferRequest
@@ -343,6 +345,16 @@ class _VersionBrowserOrigin:
 
 
 @dataclass(frozen=True, slots=True)
+class _FolderUploadOrigin:
+    dual: DualPaneVM
+    source: PaneVM
+    destination: PaneVM
+    bindings: tuple[object, ...]
+    selected: object
+    providers: tuple[object, object]
+
+
+@dataclass(frozen=True, slots=True)
 class _DiscoveryOrigin:
     service_id: str | None
     vm: object
@@ -352,6 +364,7 @@ class _DiscoveryOrigin:
     object_details: tuple[PaneVM, object, object, object, int, EntryRow] | None
     result_generation: int | None = None
     object_versions: _VersionBrowserOrigin | None = None
+    folder_upload: _FolderUploadOrigin | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -847,6 +860,7 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
         self._actions.register("pane.quick_look", self.action_quick_look)
         self._actions.register("pane.object_details", self.action_object_details)
         self._actions.register("pane.object_versions", self.action_object_versions)
+        self._actions.register("pane.upload_folder", self.action_upload_folder)
         self._actions.register("pane.enter_multiselect", self.action_enter_multiselect)
         self._actions.register("pane.toggle_select", self.action_toggle_select)
         self._actions.register("pane.select_all", self.action_select_all)
@@ -897,6 +911,7 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
         self._object_details_focus_restoration: Callable[[], None] | None = None
         self._versions_focus_restoration: Callable[[], None] | None = None
         self._version_browsers: set[S3VersionsModal] = set()
+        self._upload_reviews: set[RecursiveUploadModal] = set()
         self._pane_state_sub: DisposableBase | None = None
         self._connection_state_sub: DisposableBase | None = None
         self._connection_list_sub: DisposableBase | None = None
@@ -2554,6 +2569,217 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
     def action_exit_multiselect(self) -> None:
         self._execute_pane_selection("pane.exit_multiselect", "exit_multiselect_command")
 
+    @staticmethod
+    def _upload_bindings(source: PaneVM, destination: PaneVM) -> tuple[object, ...]:
+        return tuple(
+            value
+            for pane in (source, destination)
+            for value in (
+                pane.path,
+                pane.current_connection_key,
+                pane.listing_revision,
+                pane.status,
+                pane.state,
+                pane.path_protocol,
+            )
+        )
+
+    def _upload_panes_mounted(self, source: PaneVM, destination: PaneVM) -> bool:
+        root = self.screen_stack[0]
+        return all(
+            any(
+                view.vm is pane
+                and view.is_attached
+                and view.is_mounted
+                and not view.is_disabled
+                and all(node.display and node.visible for node in view.ancestors_with_self)
+                for view in root.query(Pane)
+            )
+            for pane in (source, destination)
+        )
+
+    def _folder_upload_origin(self) -> _FolderUploadOrigin | None:
+        dual = self._dual_pane()
+        source = self._file_pane_at_focus(
+            self.focused, self._app_ctx.focus_coordinator.focused_slot
+        )
+        if dual is None or source is None:
+            return None
+        destination = dual.right if source is dual.left else dual.left
+        if not self._upload_panes_mounted(source, destination):
+            return None
+        selected = source.selected_entry
+        if (
+            source.path_protocol not in {"", "file:", "local:"}
+            or selected is None
+            or selected.is_parent_link
+            or selected.kind is not EntryKind.DIRECTORY
+            or destination.path_protocol != "s3:"
+            or not destination.path.segments
+            or destination.current_connection_key is None
+            or not all(
+                pane.is_constructed and pane.state in {PaneState.IDLE, PaneState.EMPTY}
+                for pane in (source, destination)
+            )
+        ):
+            return None
+        for provider, methods in (
+            (
+                source.provider,
+                ("inspect_upload_entry", "list_upload_directory", "read_upload_stream"),
+            ),
+            (
+                destination.provider,
+                ("upload_location", "inspect_upload_destination", "write_upload_stream"),
+            ),
+        ):
+            if any(not callable(getattr(provider, method, None)) for method in methods):
+                return None
+        return _FolderUploadOrigin(
+            dual,
+            source,
+            destination,
+            self._upload_bindings(source, destination),
+            selected,
+            (source.provider, destination.provider),
+        )
+
+    def _folder_upload_origin_current(self, origin: _FolderUploadOrigin | None) -> bool:
+        return origin is not None and (
+            self._shutdown_task is None
+            and self._dual_pane() is origin.dual
+            and origin.source.provider is origin.providers[0]
+            and origin.destination.provider is origin.providers[1]
+            and self._upload_panes_mounted(origin.source, origin.destination)
+            and self._upload_bindings(origin.source, origin.destination) == origin.bindings
+            and origin.source.selected_entry is origin.selected
+        )
+
+    def action_upload_folder(self) -> None:
+        self._open_folder_upload(self._folder_upload_origin())
+
+    def _open_folder_upload(self, origin: _FolderUploadOrigin | None) -> None:
+        if (
+            len(self.screen_stack) != 1
+            or self._app_ctx.focus_coordinator.is_modal
+            or not self._folder_upload_origin_current(origin)
+        ):
+            return
+        current = self._folder_upload_origin()
+        if (
+            current is None
+            or origin is None
+            or current.source is not origin.source
+            or current.selected is not origin.selected
+        ):
+            return
+        ctx = self._app_ctx
+        self.record_action("pane.upload_folder")
+        vm = RecursiveUploadVM(source=origin.source, destination=origin.destination, hub=ctx.hub)
+        vm.construct()
+        screen: RecursiveUploadModal
+
+        def submit() -> None:
+            if self._confirmation_pending or ctx.confirm_vm.is_open or vm.state != "ready":
+                return
+            self._confirmation_pending = True
+            self._run_lifecycle_worker(
+                partial(self._confirm_folder_upload, screen, origin.dual),
+                group="confirmation",
+                exit_on_error=False,
+            )
+
+        screen = RecursiveUploadModal(
+            vm, submit=submit, on_drained=lambda: self._upload_reviews.discard(screen)
+        )
+        self._upload_reviews.add(screen)
+        focused, slot = self.focused, ctx.focus_coordinator.focused_slot
+
+        def dismissed(_result: None) -> None:
+            def restore() -> None:
+                if self._shutdown_task is None and self._dual_pane() is origin.dual:
+                    ctx.focus_coordinator.set_focused_slot(slot)
+                    if focused is None or (focused.is_attached and focused.screen is self.screen):
+                        self.set_focus(focused)
+
+            self._versions_focus_restoration = restore
+
+        self.push_screen(screen, dismissed)
+
+    async def _confirm_folder_upload(self, screen: RecursiveUploadModal, dual: DualPaneVM) -> None:
+        ctx = self._app_ctx
+        vm = screen.vm
+        try:
+            prepared = vm.prepare()
+            if (
+                self._shutdown_task is not None
+                or self._dual_pane() is not dual
+                or not self._upload_panes_mounted(vm.source_pane, vm.destination_pane)
+                or not vm.accepts(prepared)
+            ):
+                self._file_confirmation_invalidated()
+                return
+            request = ConfirmRequest(
+                title="Upload reviewed folder objects?",
+                paths=(
+                    ConfirmPath("Local source", vm.source_label),
+                    ConfirmPath("S3 prefix", vm.destination_label),
+                ),
+                body_lines=(
+                    f"{len(prepared.plan.objects)} objects · {prepared.plan.known_bytes} bytes · {prepared.plan.conflicts} conflicts · {prepared.plan.policy.value}",
+                    "Empty folders omitted. Published objects remain on cancel.",
+                ),
+                confirm_label="Upload",
+                danger=prepared.plan.policy.value == "overwrite",
+            )
+            dialogs = TextualDialogService(self, ctx.confirm_vm, hub=ctx.hub)
+            if not await ctx.confirm_vm.ask(request, dialog_service=dialogs):
+                return
+            if (
+                self._shutdown_task is not None
+                or self._dual_pane() is not dual
+                or not self._upload_panes_mounted(vm.source_pane, vm.destination_pane)
+                or not vm.accepts(prepared)
+            ):
+                self._file_confirmation_invalidated()
+                return
+            vm.accept(prepared)
+            self._run_lifecycle_worker(
+                partial(self._run_folder_upload, vm, prepared, dual),
+                group=_TRANSFER_COPY_GROUP,
+                exclusive=False,
+                exit_on_error=False,
+            )
+        except Exception as error:
+            notifications.error(
+                ctx.root_vm.chrome.toast_stack,
+                subject="Transfer",
+                message=redact_text(str(error)) or "Upload review unavailable",
+            )
+        finally:
+            self._confirmation_pending = False
+
+    async def _run_folder_upload(
+        self, vm: RecursiveUploadVM, prepared: PreparedUpload, dual: DualPaneVM
+    ) -> None:
+        try:
+            await vm.execute(prepared, dual.transfer_runtime)
+        except Exception as error:
+            notifications.error(
+                self._app_ctx.root_vm.chrome.toast_stack,
+                subject="Transfer",
+                message=redact_text(str(error)) or "Folder upload failed",
+            )
+        finally:
+            self._refresh_transfer_history()
+            pane = vm.destination_pane
+            if (
+                self._shutdown_task is None
+                and pane.provider is cast(object, prepared.plan.destination)
+                and pane.path == prepared.plan.destination_prefix.parent()
+            ):
+                await pane.refresh()
+
     def _versions_origin(self) -> _VersionBrowserOrigin | None:
         dual = self._dual_pane()
         pane = self._file_pane_at_focus(self.focused, self._app_ctx.focus_coordinator.focused_slot)
@@ -2948,6 +3174,7 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
             self._object_details_origin(),
             page.vm.results.projection_generation if page and page.vm is host.current else None,
             self._versions_origin(),
+            self._folder_upload_origin(),
         )
 
     def _discovery_origin_owned(self, origin: _DiscoveryOrigin) -> bool:
@@ -3154,6 +3381,8 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
                 reasons["pane.object_details"] = "selection_required"
             if origin.object_versions is None:
                 reasons["pane.object_versions"] = "selection_required"
+            if not self._folder_upload_origin_current(origin.folder_upload):
+                reasons["pane.upload_folder"] = "selection_required"
             if len(_build_swap_candidates(self._app_ctx)[0]) <= 1:
                 reasons["app.swap_source"] = "source_missing"
         athena = self._athena_page()
@@ -3492,6 +3721,14 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
             (row for row in self._project_discovery_actions(origin) if row.id == action_id), None
         )
         if row is None or not row.available:
+            return
+        if action_id == "pane.upload_folder":
+            if self._folder_upload_origin_current(origin.folder_upload) and (
+                origin.focus is None or origin.focus.is_attached
+            ):
+                self._app_ctx.focus_coordinator.set_focused_slot(origin.slot)
+                self.set_focus(origin.focus)
+                self._open_folder_upload(origin.folder_upload)
             return
         if action_id == "pane.object_versions":
             if self._versions_origin_current(origin.object_versions) and (
@@ -8384,6 +8621,8 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
         # Keep ownership until unmount reports actual drainage, not just pop.
         for browser in tuple(getattr(self, "_version_browsers", ())):
             await await_cleanup("s3_versions.shutdown", browser.shutdown)
+        for review in tuple(getattr(self, "_upload_reviews", ())):
+            await await_cleanup("recursive_upload.shutdown", review.shutdown)
 
         run_cleanup("service_navigation.close_intake", self._close_service_navigation_intake)
         recovery_task = getattr(self, "_auth_recovery_task", None)

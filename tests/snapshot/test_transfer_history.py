@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import asyncio
 import os
+import time
 from html import unescape
 from pathlib import Path
 
@@ -40,22 +42,45 @@ async def _settle_boot_success(app, pilot):
 
 
 @pytest.mark.asyncio
-async def test_history_snapshot_settles_only_its_success(tmp_path):
+@pytest.mark.parametrize("delay_grace_task", [False, True], ids=["normal", "late-grace"])
+async def test_history_snapshot_settles_only_its_success(tmp_path, monkeypatch, delay_grace_task):
     app = snapshot_history_app(tmp_path)
+    if delay_grace_task:
+        mount = type(app)._initial_mount_worker
+
+        async def delayed_mount(self, **kwargs):
+            # A ready callback can postpone the new grace task's first turn.
+            asyncio.get_running_loop().call_soon(time.sleep, 0.85)
+            return await mount(self, **kwargs)
+
+        monkeypatch.setattr(type(app), "_initial_mount_worker", delayed_mount)
     connect = app._try_connection
+    entered = asyncio.Event()
+    release = asyncio.Event()
 
-    async def slow_connect(connection, *, timeout):
-        import asyncio
-
-        await asyncio.sleep(0.7)  # Cross the production startup-toast grace period.
+    async def held_connect(connection, *, timeout):
+        entered.set()
+        await release.wait()
         return await connect(connection, timeout=timeout)
 
-    app._try_connection = slow_connect
+    app._try_connection = held_connect
     async with app.run_test(size=(120, 40)) as pilot:
+        try:
+            await asyncio.wait_for(entered.wait(), timeout=3)
+            stack = app.app_ctx.root_vm.chrome.toast_stack
+            connection = app.app_ctx.root_vm.active_connection
+            assert connection is not None
+            attempt_id = app._attempt_toast_id(connection)
+            await wait_until(
+                lambda: (
+                    any(toast.model.id == attempt_id for toast in stack.toasts)
+                    and any(widget.toast_vm.model.id == attempt_id for widget in app.query(Toast))
+                ),
+                what="startup progress toast in model and rendered history fixture",
+            )
+        finally:
+            release.set()
         await drain_workers(app)
-        stack = app.app_ctx.root_vm.chrome.toast_stack
-        connection = app.app_ctx.root_vm.active_connection
-        assert connection is not None
         outcome_id = app._outcome_toast_id(connection)
         assert any(
             toast.model.id == outcome_id and toast.model.level is ToastLevel.SUCCESS
