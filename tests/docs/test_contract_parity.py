@@ -55,6 +55,8 @@ _MODELED_OPERATIONS = {
         "HeadBucket",
         "ListBuckets",
         "ListObjectsV2",
+        "ListObjectVersions",
+        "GetBucketVersioning",
         "HeadObject",
         "GetObject",
         "GetObjectTagging",
@@ -124,7 +126,10 @@ _CONSUMED_INPUT_MEMBERS = {
     ("s3", "ListObjectsV2"): {"Bucket", "Prefix", "Delimiter", "ContinuationToken"},
     ("s3", "DeleteObjects"): {"Bucket", "Delete"},
     ("s3", "GetObjectTagging"): {"Bucket", "Key", "VersionId"},
-    ("s3", "HeadObject"): {"Bucket", "Key", "ChecksumMode"},
+    ("s3", "HeadObject"): {"Bucket", "Key", "ChecksumMode", "VersionId", "IfMatch"},
+    ("s3", "GetObject"): {"Bucket", "Key", "VersionId", "IfMatch"},
+    ("s3", "GetBucketVersioning"): {"Bucket"},
+    ("s3", "ListObjectVersions"): {"Bucket", "Prefix", "KeyMarker", "VersionIdMarker"},
     ("s3", "UploadPartCopy"): {
         "Bucket",
         "Key",
@@ -363,7 +368,9 @@ def test_numbered_section_excludes_historical_dependency_decoys() -> None:
 
 
 def test_s3_operation_ledger_matches_locked_model_contract() -> None:
-    ledger = _text("docs/contract-ledger.md")
+    ledger = _numbered_section(
+        _text("docs/contract-ledger.md"), "2026-10-17 dependency maintenance pass"
+    )
     assert set(_text_ledger_block(ledger, "Exact S3 boto operation ledger")) == set(
         _MODELED_OPERATIONS["s3"]
     )

@@ -62,6 +62,7 @@ SAFE_CONTINUE_ACTIONS: Final[frozenset[str]] = frozenset(
         "pane.switch_focus",
         "pane.switch_focus_back",
         "pane.quick_look",
+        "pane.object_versions",
         "pane.modal_left",
         "pane.modal_right",
         # Chrome and display.

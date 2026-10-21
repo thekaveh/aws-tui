@@ -53,6 +53,7 @@ from aws_tui.domain.preview_limits import RAW_PREVIEW_BYTES
 from aws_tui.domain.query import QueryState
 from aws_tui.domain.s3_object_details import S3ObjectDetailsProvider
 from aws_tui.domain.s3_uri import parse_s3_uri
+from aws_tui.domain.s3_versions import S3VersionProvider
 from aws_tui.infra.aws_session import TokenState
 from aws_tui.infra.connection_resolver import Connection, ConnectionDiscovery, ConnectionNotFound
 from aws_tui.infra.crash_dump import CrashDump
@@ -103,6 +104,7 @@ from aws_tui.ui.widgets.pane import EntryRow, Pane
 from aws_tui.ui.widgets.pane_listing_controls import FilterPaneModal, FindPaneModal, SortPaneModal
 from aws_tui.ui.widgets.quick_look import QuickLook
 from aws_tui.ui.widgets.s3_object_details import S3ObjectDetailsModal
+from aws_tui.ui.widgets.s3_versions import S3VersionsModal
 from aws_tui.ui.widgets.service_source_header import ServiceSourceHeader
 from aws_tui.ui.widgets.service_tab_strip import ServiceTabStrip
 from aws_tui.ui.widgets.service_view_factory import build_service_view
@@ -141,6 +143,8 @@ from aws_tui.vm.emr_serverless.page_vm import EmrServerlessPageVM
 from aws_tui.vm.file_manager.dual_pane_vm import DualPaneVM, FocusedPane
 from aws_tui.vm.file_manager.pane_vm import PaneState
 from aws_tui.vm.file_manager.s3_object_details_vm import S3ObjectDetailsVM
+from aws_tui.vm.file_manager.s3_version_transfer import execute_version_transfer
+from aws_tui.vm.file_manager.s3_versions_vm import S3VersionsVM, VersionTransferRequest
 from aws_tui.vm.glue.catalog_vm import GlueSelectionSuperseded
 from aws_tui.vm.glue.iceberg_vm import IcebergView
 from aws_tui.vm.glue.page_vm import GluePageVM, GlueView
@@ -328,6 +332,17 @@ _PANE_SELECTION_ACTIONS = frozenset(
 
 
 @dataclass(frozen=True, slots=True)
+class _VersionBrowserOrigin:
+    dual: DualPaneVM
+    pane: PaneVM
+    provider: object
+    source: tuple[str, str]
+    path: PathRef
+    revision: int
+    selected: object
+
+
+@dataclass(frozen=True, slots=True)
 class _DiscoveryOrigin:
     service_id: str | None
     vm: object
@@ -336,6 +351,7 @@ class _DiscoveryOrigin:
     focused_ids: frozenset[str]
     object_details: tuple[PaneVM, object, object, object, int, EntryRow] | None
     result_generation: int | None = None
+    object_versions: _VersionBrowserOrigin | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -830,6 +846,7 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
         self._actions.register("pane.mark_down", self.action_mark_down)
         self._actions.register("pane.quick_look", self.action_quick_look)
         self._actions.register("pane.object_details", self.action_object_details)
+        self._actions.register("pane.object_versions", self.action_object_versions)
         self._actions.register("pane.enter_multiselect", self.action_enter_multiselect)
         self._actions.register("pane.toggle_select", self.action_toggle_select)
         self._actions.register("pane.select_all", self.action_select_all)
@@ -878,6 +895,8 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
         self._discovery_source_counter = 0
         self._refreshing_discovery = False
         self._object_details_focus_restoration: Callable[[], None] | None = None
+        self._versions_focus_restoration: Callable[[], None] | None = None
+        self._version_browsers: set[S3VersionsModal] = set()
         self._pane_state_sub: DisposableBase | None = None
         self._connection_state_sub: DisposableBase | None = None
         self._connection_list_sub: DisposableBase | None = None
@@ -1184,6 +1203,7 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
         coordinator = self._app_ctx.focus_coordinator
         if len(self.screen_stack) > 1:
             self._object_details_focus_restoration = None
+            self._versions_focus_restoration = None
             coordinator.modal_open()
         else:
             was_modal = coordinator.is_modal
@@ -1194,6 +1214,8 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
     def _restore_focus_after_modal(self, slot: FocusSlot) -> None:
         details_restore = getattr(self, "_object_details_focus_restoration", None)
         self._object_details_focus_restoration = None
+        versions_restore = self._versions_focus_restoration
+        self._versions_focus_restoration = None
         coordinator = self._app_ctx.focus_coordinator
         if len(self.screen_stack) > 1 or coordinator.is_modal:
             return
@@ -1205,6 +1227,8 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
         self._project_focus_slot(slot)
         if details_restore is not None:
             details_restore()
+        if versions_restore is not None:
+            versions_restore()
 
     def _dispose_table_clipboard_subscription(self) -> None:
         subscription = getattr(self, "_table_clipboard_sub", None)
@@ -2396,22 +2420,25 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
 
     def _discovery_file_pane(self, origin: _DiscoveryOrigin) -> PaneVM | None:
         """Resolve physical focus before inheriting a retained pane cursor."""
+        return self._file_pane_at_focus(origin.focus, origin.slot)
+
+    def _file_pane_at_focus(self, focus: Widget | None, slot: FocusSlot) -> PaneVM | None:
         dual = self._dual_pane()
         if dual is None:
             return None
-        if origin.focus is not None:
-            if isinstance(origin.focus, (Input, TextArea, Button, ModalButton)):
+        if focus is not None:
+            if isinstance(focus, (Input, TextArea, Button, ModalButton)):
                 return None
             owner = next(
-                (node for node in origin.focus.ancestors_with_self if isinstance(node, Pane)),
+                (node for node in focus.ancestors_with_self if isinstance(node, Pane)),
                 None,
             )
             return owner.vm if owner is not None and owner.vm in (dual.left, dual.right) else None
         return (
             dual.left
-            if origin.slot is FocusSlot.S3_LEFT
+            if slot is FocusSlot.S3_LEFT
             else dual.right
-            if origin.slot is FocusSlot.S3_RIGHT
+            if slot is FocusSlot.S3_RIGHT
             else None
         )
 
@@ -2526,6 +2553,219 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
 
     def action_exit_multiselect(self) -> None:
         self._execute_pane_selection("pane.exit_multiselect", "exit_multiselect_command")
+
+    def _versions_origin(self) -> _VersionBrowserOrigin | None:
+        dual = self._dual_pane()
+        pane = self._file_pane_at_focus(self.focused, self._app_ctx.focus_coordinator.focused_slot)
+        if (
+            dual is None
+            or pane is None
+            or pane.state not in {PaneState.IDLE, PaneState.EMPTY}
+            or pane.path_protocol != "s3:"
+            or pane.current_connection_key is None
+            or pane.current_connection_key[0] not in {"aws", "s3-compatible"}
+            or not isinstance(pane.provider, S3VersionProvider)
+        ):
+            return None
+        try:
+            pane.provider.version_location(pane.path)
+        except Exception:
+            return None
+        return _VersionBrowserOrigin(
+            dual,
+            pane,
+            pane.provider,
+            pane.current_connection_key,
+            pane.path,
+            pane.listing_revision,
+            pane.selected_entry,
+        )
+
+    def _versions_origin_current(self, origin: _VersionBrowserOrigin | None) -> bool:
+        return origin is not None and (
+            self._shutdown_task is None
+            and self._dual_pane() is origin.dual
+            and origin.pane.provider is origin.provider
+            and origin.pane.path == origin.path
+            and origin.pane.current_connection_key == origin.source
+            and origin.pane.listing_revision == origin.revision
+            and origin.pane.selected_entry is origin.selected
+            and origin.pane.is_constructed
+            and origin.pane.state in {PaneState.IDLE, PaneState.EMPTY}
+        )
+
+    def action_object_versions(self) -> None:
+        self._open_versions(self._versions_origin())
+
+    def _open_versions(self, origin: _VersionBrowserOrigin | None) -> None:
+        if (
+            len(self.screen_stack) != 1
+            or self._app_ctx.focus_coordinator.is_modal
+            or not self._versions_origin_current(origin)
+            or self._versions_origin() != origin
+        ):
+            return
+        assert origin is not None
+        ctx = self._app_ctx
+        self.record_action("pane.object_versions")
+        vm = S3VersionsVM(pane=origin.pane, hub=ctx.hub, dispatcher=ctx.dispatcher)
+        vm.construct()
+        destination = origin.dual.right if origin.pane is origin.dual.left else origin.dual.left
+        local_scope = (
+            destination.viewmodel.border_title
+            if destination.path_protocol in {"", "file:", "local:"}
+            else None
+        )
+        screen: S3VersionsModal
+
+        def submit(mode: str, value: str) -> None:
+            if (
+                self._confirmation_pending
+                or ctx.confirm_vm.is_open
+                or not self._versions_origin_current(origin)
+            ):
+                return
+            self._confirmation_pending = True
+            self._run_lifecycle_worker(
+                partial(self._confirm_version_transfer, screen, origin, destination, mode, value),
+                group="confirmation",
+                exit_on_error=False,
+            )
+
+        screen = S3VersionsModal(
+            vm,
+            local_scope=local_scope,
+            submit=submit,
+            on_drained=lambda: self._version_browsers.discard(screen),
+        )
+        self._version_browsers.add(screen)
+        focused, slot = self.focused, ctx.focus_coordinator.focused_slot
+
+        def lifetime_changed(_message: object) -> None:
+            if not self._versions_origin_current(origin):
+                screen.action_close()
+
+        subscription = ctx.hub.messages.subscribe(lifetime_changed)
+        screen._source_subscription = subscription
+
+        def dismissed(_result: None) -> None:
+            subscription.dispose()
+
+            def restore() -> None:
+                if self._versions_origin_current(origin):
+                    ctx.focus_coordinator.set_focused_slot(slot)
+                    if focused is None or (focused.is_attached and focused.screen is self.screen):
+                        self.set_focus(focused)
+
+            # Textual calls the dismissal callback before popping this screen.
+            # _restore_focus_after_modal applies this guarded owner after pop.
+            self._versions_focus_restoration = restore
+
+        self.push_screen(screen, dismissed)
+
+    async def _confirm_version_transfer(
+        self,
+        screen: S3VersionsModal,
+        origin: _VersionBrowserOrigin,
+        destination: PaneVM,
+        mode: str,
+        value: str,
+    ) -> None:
+        ctx = self._app_ctx
+        try:
+            if not self._versions_origin_current(origin) or screen.vm.state == "closed":
+                return
+            prepared = (
+                screen.vm.prepare_download(destination, value)
+                if mode == "download"
+                else await screen.vm.prepare_recovery(value)
+            )
+            if not screen.vm.accepts(prepared) or not self._versions_origin_current(origin):
+                self._file_confirmation_invalidated()
+                return
+            request = prepared.request
+            body: tuple[str, ...] = (
+                "Current key is not replaced; existing destinations are refused.",
+            )
+            if mode == "recovery":
+                body += (
+                    "Copies content/user metadata + tags. Destination policy defaults apply.",
+                    "ACL, encryption, lock and storage policy are not copied.",
+                    "Cancel may leave a published NEW key; inspect it before retrying.",
+                )
+            confirm = ConfirmRequest(
+                title="Download historical version?"
+                if mode == "download"
+                else "Recover historical version to a new key?",
+                paths=(
+                    ConfirmPath("Historical source", request.source_uri),
+                    ConfirmPath("New destination", request.destination_label),
+                ),
+                body_lines=body,
+                confirm_label="Download" if mode == "download" else "Create new key",
+            )
+            dialogs = TextualDialogService(self, ctx.confirm_vm, hub=ctx.hub)
+            if not await ctx.confirm_vm.ask(confirm, dialog_service=dialogs):
+                return
+            if not screen.vm.accepts(prepared) or not self._versions_origin_current(origin):
+                self._file_confirmation_invalidated()
+                return
+            screen.action_close()
+            self.record_action("pane.copy")
+            self._run_lifecycle_worker(
+                partial(self._run_version_transfer, request, origin, destination),
+                group=_TRANSFER_COPY_GROUP,
+                exclusive=False,
+                exit_on_error=False,
+            )
+        except Exception as error:
+            notifications.error(
+                ctx.root_vm.chrome.toast_stack,
+                subject="Transfer",
+                message=redact_text(str(error)) or "Historical transfer unavailable",
+            )
+        finally:
+            self._confirmation_pending = False
+
+    async def _run_version_transfer(
+        self, request: VersionTransferRequest, origin: _VersionBrowserOrigin, destination: PaneVM
+    ) -> None:
+        completed = False
+        ctx = self._app_ctx
+        try:
+            completed = await execute_version_transfer(request, origin.dual.transfer_runtime)
+        except Exception as error:
+            safe = redact_text(str(error)) or "Historical transfer failed"
+            ctx.log_sink.error(
+                "app.version_transfer.failed", error=safe, error_type=type(error).__name__
+            )
+            notifications.error(ctx.root_vm.chrome.toast_stack, subject="Transfer", message=safe)
+        finally:
+            self._refresh_transfer_history()
+            if self._shutdown_task is None:
+                if not completed and request.warning:
+                    notifications.advise(
+                        ctx.root_vm.chrome.toast_stack, subject="Transfer", message=request.warning
+                    )
+                pane = destination if request.kind == "download" else origin.pane
+                provider = request.destination if request.kind == "download" else request.source
+                path = (
+                    request.destination_path.parent() if request.kind == "download" else origin.path
+                )
+                if (
+                    self._dual_pane() is origin.dual
+                    and pane.provider is provider
+                    and pane.path == path
+                ):
+                    try:
+                        await pane.refresh()
+                    except Exception as error:
+                        notifications.advise(
+                            ctx.root_vm.chrome.toast_stack,
+                            subject="Transfer",
+                            message="Destination refresh failed: "
+                            + (redact_text(str(error)) or "read unavailable"),
+                        )
 
     def _object_details_origin(self) -> tuple[PaneVM, object, object, object, int, EntryRow] | None:
         """Resolve physical ownership before consulting the pane cursor.
@@ -2707,6 +2947,7 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
             ids,
             self._object_details_origin(),
             page.vm.results.projection_generation if page and page.vm is host.current else None,
+            self._versions_origin(),
         )
 
     def _discovery_origin_owned(self, origin: _DiscoveryOrigin) -> bool:
@@ -2911,6 +3152,8 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
                 reasons["app.swap_source"] = "focus_required"
             if origin.object_details is None:
                 reasons["pane.object_details"] = "selection_required"
+            if origin.object_versions is None:
+                reasons["pane.object_versions"] = "selection_required"
             if len(_build_swap_candidates(self._app_ctx)[0]) <= 1:
                 reasons["app.swap_source"] = "source_missing"
         athena = self._athena_page()
@@ -3249,6 +3492,14 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
             (row for row in self._project_discovery_actions(origin) if row.id == action_id), None
         )
         if row is None or not row.available:
+            return
+        if action_id == "pane.object_versions":
+            if self._versions_origin_current(origin.object_versions) and (
+                origin.focus is None or origin.focus.is_attached
+            ):
+                self._app_ctx.focus_coordinator.set_focused_slot(origin.slot)
+                self.set_focus(origin.focus)
+                self._open_versions(origin.object_versions)
             return
         if action_id == "pane.object_details":
             self._palette_object_details_origin = origin.object_details
@@ -8128,6 +8379,11 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
             if isinstance(screen, GlueComparisonModal):
                 run_cleanup("glue_comparison.close", screen.close)
                 await await_cleanup("glue_comparison.shutdown", screen.shutdown)
+
+        # Popped screens can still be draining cancellation-resistant reads.
+        # Keep ownership until unmount reports actual drainage, not just pop.
+        for browser in tuple(getattr(self, "_version_browsers", ())):
+            await await_cleanup("s3_versions.shutdown", browser.shutdown)
 
         run_cleanup("service_navigation.close_intake", self._close_service_navigation_intake)
         recovery_task = getattr(self, "_auth_recovery_task", None)
