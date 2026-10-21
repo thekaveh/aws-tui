@@ -150,6 +150,66 @@ async def _open_file(app, pilot):
     )
 
 
+@pytest.mark.parametrize("separator", ["\u0085", "\u2028", "\u2029"])
+@pytest.mark.parametrize("newline", ["\n", "\r\n"], ids=["LF", "CRLF"])
+async def test_actual_app_jsonl_separators_render_safely_and_toggle_without_reads(
+    app_context_factory, separator, newline
+):
+    import json
+
+    from rich.console import Console
+    from textual.widgets import Static
+
+    from aws_tui.domain.preview import PreviewFormat
+
+    values = [f"left{separator}\x1b[red]literal", "second"]
+    raw = (
+        newline.join(json.dumps({"value": v}, ensure_ascii=False) for v in values) + newline
+    ).encode()
+    fs = RecordingFS()
+    await fs.write_stream(PathRef(("sample.jsonl",)), _stream(raw))
+    writes = fs.writes
+    ctx = app_context_factory(fs=fs)
+    _inject_connection(ctx)
+    app = AwsTuiApp(ctx)
+    async with app.run_test(size=(120, 40)) as pilot:
+        await _open_file(app, pilot)
+        await wait_until(lambda: app.screen._result is not None, what="JSONL preview loaded")
+        await wait_until(fs.closed.is_set, what="JSONL read session closed")
+        await pilot.pause()
+        screen = app.screen
+        assert screen._result.format is PreviewFormat.JSONL
+        assert screen._result.raw == raw
+        assert len(screen._result.rows) == 2
+        requests = tuple(fs.requests)
+        mode = screen.query_one("#quicklook-mode", Static)
+        for toggle, raw_mode in enumerate([False, True, False]):
+            if toggle:
+                await pilot.press("r")
+                await pilot.pause()
+            assert ("Raw" if raw_mode else "Structured") in str(mode.render())
+            console = Console(width=1000, force_terminal=False)
+            with console.capture() as capture:
+                console.print(screen.query_one("#quicklook-body", Static).content)
+            rendered = capture.get()
+            assert "[red]literal" in rendered
+            assert "second" in rendered
+            assert "\x1b" not in rendered
+            assert "\u0085" not in rendered
+            if not raw_mode:
+                expected = values[0].replace("\u0085", r"\x85").replace("\x1b", r"\x1b")
+                assert expected in rendered
+                # Headers, rules and two records: Unicode separators are cell
+                # content, not extra physical table/terminal lines.
+                assert len(rendered.split("\n")) == 7
+                svg = app.export_screenshot()
+                assert "literal" in svg
+                assert "second" in svg
+            assert tuple(fs.requests) == requests
+            assert fs.writes == writes
+        assert app._crash_report is None
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("format_name", ["csv", "csv-bracket", "json", "parquet"])
 async def test_actual_app_structured_toggle_cached_and_horizontal_scroll(

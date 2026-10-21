@@ -264,7 +264,8 @@ def parse_text(
             if jsonl_hint:
                 value = [
                     json.loads(line, parse_constant=_reject_constant)
-                    for line in text.splitlines()
+                    # JSONL records end at LF, not Unicode string separators.
+                    for line in text.split("\n")
                     if line.strip()
                 ]
                 if not value or not all(isinstance(row, dict) for row in value):
