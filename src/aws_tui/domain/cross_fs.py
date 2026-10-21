@@ -5,26 +5,36 @@ writes to any other (or the same) provider. The two roles are
 symmetric: the same code path runs for local↔local, local↔s3, s3↔s3,
 and any future pair.
 
-For directories, the copy is recursive, but ONLY when the destination
-provider can publish a directory transactionally. ``_require_directory_transaction``
-demands :class:`AtomicNoReplacePublisher`, :class:`AtomicDirectoryPublisher`
-and :class:`ExclusiveDirectoryClaimer`; :class:`LocalFS` implements all three
-and :class:`S3FS` implements none. Copying a directory TO an S3 destination
-therefore raises :class:`ProviderError` before any bytes move, while the
-S3-to-local direction works. See ``docs/services/s3.md`` §1.2.
+Directory copies merge recursively into matching existing directories under
+``ERROR``, ``SKIP`` and ``RENAME``. This includes existing S3 prefixes, with
+the policy applied independently to each child. Matching directories recurse;
+``SKIP`` does not skip them and ``RENAME`` does not rename them.
+
+Creating an absent directory or replacing a whole tree requires transactional
+publication. ``_require_directory_transaction`` checks the atomic publisher,
+manifest validation, exclusive claims and directory revision capabilities.
+:class:`LocalFS` supports them; :class:`S3FS` does not. An absent nested subtree
+(even empty) therefore refuses an S3 merge during preflight, before any child
+payload transfers. Metadata reads can still occur. A source directory blocked
+by a destination file is skipped under ``SKIP``, conflicts under ``ERROR``,
+and requires unsupported new-tree publication under ``RENAME``.
+
+An existing-directory merge is not whole-tree atomic: later failures,
+cancellation or races can leave earlier children published. Known ``ERROR``
+conflicts and unsupported directory topology are checked before payload starts.
+See ``docs/services/s3.md`` §2.
 
 Conflict resolution is configurable per call:
 
 - ``ERROR``: raise :class:`ConflictError` if a destination file exists.
-- ``OVERWRITE``: replace whatever is at the destination.
+- ``OVERWRITE``: overwrite a file, or replace a directory tree transactionally
+  when the destination provider supports that operation.
 - ``SKIP``: no-op if a destination file exists.
 - ``RENAME``: append ``" (1)"``, ``" (2)"``, ... to a conflicting leaf name
   until a free slot is found.
 
-An existing destination directory is a merge root for ``ERROR``, ``SKIP``,
-and ``RENAME``; the selected policy is applied independently to each child.
 ``OVERWRITE`` replaces the complete destination tree when the provider can do
-so atomically.
+so atomically; it is not a per-child overwrite merge and is unsupported on S3.
 """
 
 from __future__ import annotations
