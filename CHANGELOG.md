@@ -233,6 +233,11 @@ section. The current tree must not be tagged as v0.8.0.
 
 ### Fixed
 
+- **Responsive connection Settings.** Listing S3-compatible connections does
+  not read keychain secrets. Editing loads only the selected connection's
+  credentials in a worker. Failed or superseded reads preserve current input
+  and show safe recovery guidance without replacing a newer form or page.
+
 - Glue table detail shows scoped partition and statistics loading or failures
   instead of false zero counts. Successful schema and storage remain visible,
   and Refresh replaces recovered statuses with actual counts.

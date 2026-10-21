@@ -176,6 +176,11 @@ async def test_edit_preserves_hidden_session_token(tmp_path: Path) -> None:
             await pilot.pause()
             form = panel.query_one(ConnectionFormInline)
             panel._on_edit_clicked("sts")
+            await _settle_until(
+                lambda: form.has_class("-open") and form._form_vm.model.name == "sts",
+                pilot,
+                what="selected edit credentials loaded",
+            )
             submitted = form._form_vm.model
             assert submitted.session_token == "TOK"
             panel.post_message(
@@ -220,6 +225,11 @@ async def test_edit_accepts_virtual_hosted_r2_connection(tmp_path: Path) -> None
             await pilot.pause()
             form = panel.query_one(ConnectionFormInline)
             panel._on_edit_clicked("r2-prod")
+            await _settle_until(
+                lambda: form.has_class("-open") and form._form_vm.model.name == "r2-prod",
+                pilot,
+                what="R2 edit credentials loaded",
+            )
 
             assert form._form_vm.errors == {}
             assert form._form_vm.can_submit is True
@@ -290,17 +300,10 @@ async def test_duplicate_name_keeps_form_open_and_surfaces_error(tmp_path: Path)
 async def test_unusable_keychain_renders_a_notice_instead_of_killing_the_app(
     tmp_path: Path,
 ) -> None:
-    """An unusable OS keyring must not tear the session down from ``compose()``.
+    """Locked credentials leave metadata listable and Edit reports a safe error.
 
-    ``S3ConnectionsVM.connections`` reaches the keyring through
-    ``ConnectionResolver``, which deliberately propagates a backend failure
-    rather than reporting "no credentials" -- silently returning ``None`` would
-    let the app fall back to different credentials. But this read happens inside
-    ``compose()``, and a ``compose()`` failure is not delivered to the mount
-    awaiter, so it bypassed the mount guard and reached ``_handle_exception``:
-    opening Settings, the one screen that could repair the connection, killed
-    the app. Reproduces a headless Linux box with no Secret Service, or a
-    cancelled macOS unlock prompt.
+    The resolver still raises instead of silently falling back to another
+    credential source. Settings must survive both listing and editing.
     """
     from aws_tui.infra.keychain import InMemoryKeychain
 
@@ -337,8 +340,21 @@ async def test_unusable_keychain_renders_a_notice_instead_of_killing_the_app(
             from textual.widgets import Static as _Static
 
             rendered = " ".join(str(node.render()) for node in app.query(_Static))
-        assert "S3-compatible connections are unavailable" in rendered, rendered
-        assert "RuntimeError" in rendered, rendered
+            assert "minio-local" in rendered
+            assert "S3-compatible connections are unavailable" not in rendered
+            panel._on_edit_clicked("minio-local")
+            await _settle_until(
+                lambda: (
+                    "Could not load"
+                    in str(panel.query_one("#connection-read-status", _Static).render())
+                ),
+                pilot,
+                what="locked credential error rendered",
+            )
+            rendered = str(panel.query_one("#connection-read-status", _Static).render())
+            assert "keychain" in rendered
+            assert "try Edit again" in rendered
+            assert len(panel.query(".connection-row")) == 1
         # The resolver itself must still refuse to disguise the failure.
         with pytest.raises(RuntimeError, match="keychain locked"):
             resolver.resolve("minio-local")

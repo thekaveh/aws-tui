@@ -37,6 +37,61 @@ def _write_aws_files(
     return aws_config, aws_credentials
 
 
+@pytest.mark.parametrize("read_credentials", [False, True])
+def test_metadata_listing_never_materializes_secrets_or_changes_resolution_mode(
+    tmp_path, read_credentials
+):
+    class NoReadKeychain(InMemoryKeychain):
+        def get(self, service, key):
+            raise AssertionError("metadata attempted keychain access")
+
+    store = ConfigStore(path=tmp_path / "config.toml")
+    for name, source in [
+        ("stored", "keychain:synthetic-service"),
+        ("environment", "env:SYNTHETIC"),
+        ("profile", "aws-profile:synthetic-profile"),
+        ("inline", "static"),
+    ]:
+        store.add_connection(
+            ConnectionEntry(
+                name=name,
+                kind="s3-compatible",
+                credentials=source,
+                endpoint_url="https://objects.example.test",
+                region="us-east-1",
+                access_key_id="synthetic-id" if source == "static" else None,
+                secret_access_key="synthetic-secret" if source == "static" else None,
+            )
+        )
+    config, credentials = _write_aws_files(
+        tmp_path,
+        config_body="[profile synthetic-profile]\nregion=us-west-2\n",
+        credentials_body="[synthetic-profile]\naws_access_key_id=SYNTHETIC\naws_secret_access_key=SYNTHETIC\n",
+    )
+    resolver = ConnectionResolver(
+        config_store=store,
+        keychain=NoReadKeychain(),
+        read_credentials=read_credentials,
+        aws_config_path=config,
+        aws_credentials_path=credentials,
+    )
+    rows = resolver.list_metadata()
+    assert [row.name for row in rows] == [
+        "stored",
+        "environment",
+        "profile",
+        "inline",
+        "synthetic-profile",
+    ]
+    assert all(
+        (row.access_key_id, row.secret_access_key, row.session_token) == (None, None, None)
+        for row in rows
+    )
+    selected = resolver.resolve_selected("inline")
+    assert selected.access_key_id == ("synthetic-id" if read_credentials else None)
+    assert selected.secret_access_key == ("synthetic-secret" if read_credentials else None)
+
+
 @pytest.fixture
 def store(tmp_path: Path) -> ConfigStore:
     return ConfigStore(path=tmp_path / "config.toml")

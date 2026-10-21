@@ -219,6 +219,14 @@ The `,` key opens **Settings** where you can add, edit, or delete
 AWS profiles are read-only from aws-tui's perspective — manage those
 through the standard `~/.aws/` tooling.
 
+The Settings connection list does not read keychain secrets. **Edit** loads
+credentials only for the selected connection, while the interface remains responsive.
+If the keychain requests access, complete its prompt. If loading fails, check
+the connection configuration or unlock the keychain, then choose **Edit** again.
+
+Your current form input remains available. New input, another selection, or
+navigation prevents an older credential read from replacing the current form.
+
 `Shift+S` filters out connections that have been observed unreachable
 during the session in S3 panes (e.g. a stopped MinIO container). A
 one-line info toast names what was skipped on the first press. Selecting S3 from the nav after a local-only fallback retries the initial connection and clears that connection's unreachable mark. Pressing `r` on an unreachable pane and recovering it also clears the mark.
