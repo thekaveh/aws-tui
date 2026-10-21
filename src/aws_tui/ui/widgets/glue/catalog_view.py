@@ -17,9 +17,20 @@ from aws_tui.ui.widgets.glue.detail_rows import (
     ResourceListPane,
     display_time,
     display_value,
+    state_placeholder,
 )
 from aws_tui.ui.widgets.glue.iceberg_view import GlueIcebergView
+from aws_tui.vm.file_manager.pane_vm import PaneState
 from aws_tui.vm.glue.page_vm import GluePageVM
+
+
+def _supplement_value(
+    label: str, count: str, *, state: PaneState, error_text: str | None
+) -> DetailValue:
+    placeholder = state_placeholder(state, error_text=error_text, empty_text=count)
+    value, classes = placeholder if placeholder is not None else (count, "")
+    # Detail rows use the existing danger class; -error styles placeholders.
+    return DetailValue(label, value, "-state-failed" if classes == "-error" else classes)
 
 
 class GlueCatalogView(DeferredWorkerMixin, Widget):
@@ -172,10 +183,24 @@ class GlueCatalogView(DeferredWorkerMixin, Widget):
             partition_count += " (safety limit)"
         elif self._vm.has_more_partitions:
             partition_count += " (more available)"
-        rows.append(DetailValue("Partitions", partition_count))
+        rows.append(
+            _supplement_value(
+                "Partitions",
+                partition_count,
+                state=self._vm.partitions_state,
+                error_text=self._vm.partitions_error_text,
+            )
+        )
         for partition in self._vm.partitions:
             rows.append(DetailValue("partition", " / ".join(partition.values)))
-        rows.append(DetailValue("Statistics", str(len(self._vm.column_statistics))))
+        rows.append(
+            _supplement_value(
+                "Statistics",
+                str(len(self._vm.column_statistics)),
+                state=self._vm.statistics_state,
+                error_text=self._vm.statistics_error_text,
+            )
+        )
         return tuple(rows)
 
 
