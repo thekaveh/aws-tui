@@ -1114,7 +1114,12 @@ complete metadata export tool.
 
 ### 7.4. Local row preview with DuckDB (Peek)
 
-The **Peek** tab previews rows of the selected Iceberg table by querying its S3 location directly with a local DuckDB engine. There is no Athena workgroup, query execution, or AWS query bill. It needs the optional `duckdb` extra
+The **Peek** tab previews rows of the selected Iceberg table by reading its S3 location with local DuckDB.
+It incurs no Athena query charge and needs no Athena workgroup or result-output location.
+These savings apply to the Peek scan.
+Loading **Snaps** or another metadata tab can still run an Athena query.
+
+Peek needs the optional `duckdb` extra
 (the [Git installation with the DuckDB extra](install.md#2-optional-extras)) and an AWS profile connection; it is not
 available on `s3-compatible` connections.
 
@@ -1132,14 +1137,33 @@ Without the extra installed, the tab is still present and selectable. Choosing i
 4. `↻` retries the current query, honoring the active snapshot pin and row
    limit.
 
+The row limit bounds returned rows, not S3 bytes read, requests or charges.
+Retry and load more can read S3 again.
+
 DuckDB resolves AWS credentials through a new `credential_chain` secret for every query.
 The secret specifies the selected connection's profile and region.
 DuckDB can read cached SSO credentials supplied by that profile.
 After `aws sso login` in another terminal, press `↻` to query with refreshed credentials.
 
-Queries run entirely on your machine. The engine reads S3 objects directly with whatever permissions your profile already grants on that bucket. It never touches Athena, a workgroup, or a query-result location. Thus, it incurs none of the costs or setup in §6 and §7.1.
+Local execution still reads remote S3 metadata and data objects.
+The selected profile needs `s3:GetObject` on those objects and `s3:ListBucket` for the required source bucket/prefix operations.
+Source objects encrypted with SSE-KMS also require authorized `kms:Decrypt` access to their key, including its key policy.
+See [S3 encryption permissions](https://docs.aws.amazon.com/AmazonS3/latest/userguide/UsingKMSEncryption.html).
 
-The one exception is setup, not querying. The first Peek query on a machine downloads DuckDB's `httpfs`, `aws`, and `iceberg` extensions from `extensions.duckdb.org`. It caches them under `~/.duckdb/`. On a host without egress to that domain, the first query fails until the cache is populated (see [Installation](install.md)). Forbidden, not-found, not-Iceberg, and expired-credential failures
+Keep the Glue permissions in [§5.1](#51-least-privilege-glue-permissions) to open the table.
+Athena or Lake Formation query grants alone do not authorize Peek's direct S3 reads.
+Peek uses the profile's credential chain; it does not obtain Lake Formation-vended credentials through Athena.
+
+Direct reads can incur S3 request, retrieval and data transfer charges; see [Amazon S3 pricing](https://aws.amazon.com/s3/pricing/).
+Applicable KMS charges are separate. Local execution does not make remote access free.
+
+Network access is required to S3 and any endpoints used by the profile's credential providers.
+Cached extensions avoid their download; they do not make source queries offline.
+
+The first Peek query on a machine downloads DuckDB's `httpfs`, `aws`, and `iceberg` extensions from `extensions.duckdb.org`.
+It caches them under `~/.duckdb/`.
+Without egress to that domain, the first query fails until compatible extensions are cached (see [Installation](install.md)).
+Forbidden, not-found, not-Iceberg, and expired-credential failures
 surface through the same placeholder styling as the six metadata tabs.
 
 ## 8. Diagnose local setup and source access

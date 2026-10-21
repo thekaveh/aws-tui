@@ -233,6 +233,10 @@ section. The current tree must not be tagged as v0.8.0.
 
 ### Fixed
 
+- **Peek access and cost guidance.** Local DuckDB preview avoids Athena query
+  charges and workgroup/output setup. Direct S3 reads remain subject to source
+  permissions, encryption access, connectivity and applicable remote-read charges.
+
 - **Future Homebrew bootstrap.** The first-release recipe uses the actual
   `poet -f` interface in a disposable environment containing the published target.
   Temporary output and validation protect an existing formula from generator failures.
