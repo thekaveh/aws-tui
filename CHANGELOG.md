@@ -27,6 +27,10 @@ section. The current tree must not be tagged as v0.8.0.
 
 ### Added
 
+- Reviewed recursive local-folder uploads to S3 from the command palette,
+  with explicit conflict policies, per-object results, bounded concurrency,
+  cancellation that preserves published objects, and fresh failed/unattempted-only retries.
+
 - S3 object-version browsing from the command palette, including exact-key entry
   for deleted current objects. Inspect and download a selected historical version,
   or recover its content, supported metadata and tags to a different new key.

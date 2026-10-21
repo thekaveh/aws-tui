@@ -25,7 +25,7 @@ from __future__ import annotations
 import asyncio
 import json
 from collections.abc import AsyncIterator, Callable
-from contextlib import AsyncExitStack
+from contextlib import AsyncExitStack, suppress
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
@@ -57,7 +57,9 @@ from aws_tui.domain.filesystem import (
     TransferProgress,
 )
 from aws_tui.domain.preview_limits import PreviewBudget, PreviewLimitExceeded, PreviewRequestKind
+from aws_tui.domain.recursive_upload import UploadPlanError, UploadSourceChangedError
 from aws_tui.domain.s3_object_details import S3ObjectDetails
+from aws_tui.domain.s3_upload import S3UploadWrite, UploadPublication, UploadPublicationUnknownError
 from aws_tui.domain.s3_versions import (
     BucketVersioning,
     S3ObjectVersion,
@@ -232,6 +234,21 @@ class S3FS:
         if self._endpoint_url is not None:
             kwargs["endpoint_url"] = self._endpoint_url
         kwargs["verify"] = self._verify_tls
+        return self._session.client("s3", **kwargs)
+
+    def _upload_client(self) -> Any:
+        """One final-write attempt: a lost success must not become a retry's 412.
+
+        This does not alter the shared session or legacy/recovery retry policy.
+        """
+        kwargs: dict[str, Any] = {
+            "config": self._config.merge(
+                BotoConfig(retries={"total_max_attempts": 1, "mode": "standard"})
+            ),
+            "verify": self._verify_tls,
+        }
+        if self._endpoint_url is not None:
+            kwargs["endpoint_url"] = self._endpoint_url
         return self._session.client("s3", **kwargs)
 
     def _key_for(self, path: PathRef) -> str:
@@ -474,6 +491,72 @@ class S3FS:
                         modified=None,
                     )
                 raise NotFoundError(path.as_posix())
+        except _AUTH_FAILURE_EXCEPTIONS as exc:
+            raise _auth_error(exc) from exc
+        except _TRANSPORT_FAILURE_EXCEPTIONS as exc:
+            raise ProviderUnreachableError(str(exc)) from exc
+        except ClientError as exc:
+            raise _map_client_error(exc, key) from exc
+
+    def upload_location(self, path: PathRef) -> tuple[str, str]:
+        """Pure literal mapping for a reviewed upload prefix or object key."""
+        return self._resolve(path)
+
+    async def inspect_upload_destination(self, path: PathRef) -> FileEntry | None:
+        """Observe one exact key without treating a prefix as a missing file.
+
+        Prefix collisions would make the uploaded object ambiguous in the file
+        pane. Refuse them during review rather than creating that ambiguity.
+        Permission failures are never converted into absence.
+        """
+        bucket, key = self._resolve_file(path)
+        try:
+            async with self._client() as s3:
+                try:
+                    head = await s3.head_object(Bucket=bucket, Key=key)
+                except ClientError as exc:
+                    if _error_code(exc) not in {"404", "NoSuchKey", "NotFound"}:
+                        raise _map_client_error(exc, key) from exc
+                    head = None
+                probe = await s3.list_objects_v2(Bucket=bucket, Prefix=f"{key}/", MaxKeys=1)
+                count, contents = probe.get("KeyCount"), probe.get("Contents", [])
+                if (
+                    type(count) is not int
+                    or count < 0
+                    or not isinstance(contents, list)
+                    or count != len(contents)
+                    or (probe.get("IsTruncated", False) and not count)
+                    or any(
+                        not isinstance(row, dict)
+                        or not isinstance(row.get("Key"), str)
+                        or not row["Key"].startswith(f"{key}/")
+                        for row in contents
+                    )
+                ):
+                    raise UploadPlanError(f"Invalid S3 upload prefix observation: {key!r}")
+                if contents or probe.get("CommonPrefixes"):
+                    raise UploadPlanError(
+                        f"Upload destination conflicts with an existing S3 prefix: {key!r}"
+                    )
+                if head is None:
+                    return None
+                size, etag = head.get("ContentLength"), head.get("ETag")
+                modified = head.get("LastModified")
+                if (
+                    type(size) is not int
+                    or size < 0
+                    or not isinstance(etag, str)
+                    or not _clean_etag(etag)
+                    or (modified is not None and not isinstance(modified, datetime))
+                ):
+                    raise UploadPlanError(f"Invalid S3 upload destination observation: {key!r}")
+                return FileEntry(
+                    name=path.name,
+                    kind=EntryKind.FILE,
+                    size=size,
+                    modified=_to_aware(head.get("LastModified")),
+                    etag=_s3_revision_token(head),
+                )
         except _AUTH_FAILURE_EXCEPTIONS as exc:
             raise _auth_error(exc) from exc
         except _TRANSPORT_FAILURE_EXCEPTIONS as exc:
@@ -1288,6 +1371,54 @@ class S3FS:
         except _TRANSPORT_FAILURE_EXCEPTIONS as exc:
             raise ProviderUnreachableError(str(exc)) from exc
 
+    async def write_upload_stream(
+        self,
+        path: PathRef,
+        source: AsyncIterator[bytes],
+        *,
+        total_size: int,
+        publication: UploadPublication,
+        reviewed: FileEntry | None = None,
+        overwrite: bool = False,
+        progress: ProgressCallback | None = None,
+    ) -> None:
+        """Publish one reviewed object, preserving it even if the caller cancels.
+
+        A reviewed existing object requires explicit overwrite and its ETag.
+        A reviewed absent object always uses conditional creation. The receipt
+        survives cancellation and must be inspected before considering retry.
+        """
+        if (
+            publication.started
+            or publication.attempted
+            or publication.published
+            or publication.uncertain
+        ):
+            raise ConflictError("An upload publication receipt cannot be replayed")
+        if type(total_size) is not int or total_size < 0:
+            raise UploadPlanError("Reviewed upload requires a known nonnegative byte count")
+        bucket, key = self._resolve_file(path)
+        if_match = None
+        if reviewed is not None:
+            if not overwrite:
+                raise ConflictError("Existing upload destination requires explicit overwrite")
+            if reviewed.kind != EntryKind.FILE or not reviewed.etag:
+                raise ConflictError("Upload overwrite requires a reviewed object revision")
+            revision = _parse_s3_revision(reviewed.etag)
+            if revision.etag is None:
+                raise ConflictError("Upload overwrite requires a reviewed object ETag")
+            if_match = _quoted_etag(revision.etag)
+        context = S3UploadWrite(path, bucket, key, if_match, publication)
+        publication.started = True
+        await self.write_stream(
+            path,
+            source,
+            total_size=total_size,
+            progress=progress,
+            overwrite=False,
+            _upload=context,
+        )
+
     async def write_stream(
         self,
         path: PathRef,
@@ -1298,15 +1429,30 @@ class S3FS:
         overwrite: bool = True,
         stage_claim: Callable[[str], None] | None = None,
         _recovery: S3RecoveryWrite | None = None,
+        _upload: S3UploadWrite | None = None,
     ) -> None:
         if stage_claim is not None:
             raise ProviderError("S3 streaming writes do not support local stage ownership claims")
         if _recovery is not None and (overwrite or path != _recovery.destination):
             raise ConflictError("recovery writer cannot overwrite or change its bound destination")
+        if _upload is not None and (
+            _recovery is not None
+            or overwrite
+            or path != _upload.destination
+            or self._resolve_file(path) != (_upload.bucket, _upload.key)
+        ):
+            raise ConflictError("Upload writer cannot change its bound destination")
         if path.is_root:
             raise ConflictError("cannot write to root")
         bucket, key = self._resolve_file(path) if _recovery is None else self.version_location(path)
         creation_metadata = {} if _recovery is None else _recovery.metadata.creation_args()
+        publication = (
+            _recovery.publication
+            if _recovery is not None
+            else _upload.publication
+            if _upload is not None
+            else None
+        )
 
         reader = _AsyncStreamReader(source)
         part_size = _multipart_part_size(total_size)
@@ -1319,32 +1465,51 @@ class S3FS:
                 progress(TransferProgress(bytes_transferred=bytes_written, bytes_total=total_size))
 
         try:
-            async with self._client() as s3:
+            async with self._client() if _upload is None else self._upload_client() as s3:
                 upload_id: str | None = None
                 try:
                     chunk = await reader.read(part_size)
                     if not chunk:
+                        if _upload is not None and total_size != 0:
+                            raise UploadSourceChangedError(
+                                "Upload source ended before its reviewed byte count"
+                            )
                         put_args: dict[str, Any] = {
                             "Bucket": bucket,
                             "Key": key,
                             "Body": b"",
                             **creation_metadata,
                         }
-                        if not overwrite:
+                        if _upload is not None and _upload.if_match is not None:
+                            put_args["IfMatch"] = _upload.if_match
+                        elif not overwrite:
                             put_args["IfNoneMatch"] = "*"
+                        if _upload is not None:
+                            _upload.publication.attempted = True
                         put_task = asyncio.create_task(s3.put_object(**put_args))
                         try:
                             put_response, put_cancelled = await _drain_publication_task(put_task)
-                        except BaseException:
-                            if _recovery is not None:
-                                _recovery.publication.uncertain = True
+                        except BaseException as exc:
+                            if publication is not None:
+                                publication.uncertain = _upload is None or not _upload_rejected(exc)
+                            if (
+                                _upload is not None
+                                and publication is not None
+                                and publication.uncertain
+                                and not isinstance(exc, asyncio.CancelledError)
+                            ):
+                                raise UploadPublicationUnknownError(
+                                    "Upload publication outcome is unknown; inspect the destination before retrying"
+                                ) from exc
                             raise
-                        if _recovery is not None:
-                            _recovery.publication.published = True
-                            _recovery.publication.version_id = put_response.get("VersionId")
+                        if _upload is not None:
+                            _validate_upload_publication(put_response, _upload.publication)
+                        if publication is not None:
+                            publication.published = True
+                            publication.version_id = put_response.get("VersionId")
                         if put_cancelled:
                             cancellation = asyncio.CancelledError()
-                            if _recovery is None:
+                            if publication is None:
                                 await _rollback_cancelled_upload(
                                     s3,
                                     bucket=bucket,
@@ -1367,12 +1532,27 @@ class S3FS:
                                 continue
                         if not create_task.cancelled():
                             created = create_task.result()
-                            upload_id = str(created["UploadId"])
+                            if _upload is not None:
+                                # Preserve cancellation and any invalid-ID warning.
+                                with suppress(UploadPlanError):
+                                    upload_id = _claim_upload_id(created, _upload.publication)
+                            else:
+                                upload_id = str(created["UploadId"])
                         raise
-                    upload_id = str(created["UploadId"])
+                    upload_id = (
+                        _claim_upload_id(created, _upload.publication)
+                        if _upload is not None
+                        else str(created["UploadId"])
+                    )
                     parts: list[dict[str, Any]] = []
                     part_number = 1
                     while chunk:
+                        if _upload is not None and (
+                            total_size is None or bytes_written + len(chunk) > total_size
+                        ):
+                            raise UploadSourceChangedError(
+                                "Upload source exceeded its reviewed byte count"
+                            )
                         if part_number > _MAX_MULTIPART_PARTS:
                             raise ProviderError(
                                 "S3 multipart upload exceeded 10,000 parts; provide total_size "
@@ -1385,6 +1565,14 @@ class S3FS:
                             PartNumber=part_number,
                             Body=chunk,
                         )
+                        if _upload is not None and (
+                            not isinstance(response, dict)
+                            or not isinstance(response.get("ETag"), str)
+                            or not _clean_etag(response["ETag"])
+                        ):
+                            raise UploadPlanError(
+                                "S3 returned an invalid multipart part observation"
+                            )
                         etag = response.get("ETag")
                         if not etag:
                             raise ProviderError(
@@ -1394,14 +1582,22 @@ class S3FS:
                         _on_progress(len(chunk))
                         part_number += 1
                         chunk = await reader.read(part_size)
+                    if _upload is not None and bytes_written != total_size:
+                        raise UploadSourceChangedError(
+                            "Upload source ended before its reviewed byte count"
+                        )
                     complete_args: dict[str, Any] = {
                         "Bucket": bucket,
                         "Key": key,
                         "UploadId": upload_id,
                         "MultipartUpload": {"Parts": parts},
                     }
-                    if not overwrite:
+                    if _upload is not None and _upload.if_match is not None:
+                        complete_args["IfMatch"] = _upload.if_match
+                    elif not overwrite:
                         complete_args["IfNoneMatch"] = "*"
+                    if _upload is not None:
+                        _upload.publication.attempted = True
                     complete_task = asyncio.create_task(
                         s3.complete_multipart_upload(**complete_args)
                     )
@@ -1409,17 +1605,28 @@ class S3FS:
                         complete_response, complete_cancelled = await _drain_publication_task(
                             complete_task
                         )
-                    except BaseException:
-                        if _recovery is not None:
-                            _recovery.publication.uncertain = True
+                    except BaseException as exc:
+                        if publication is not None:
+                            publication.uncertain = _upload is None or not _upload_rejected(exc)
+                        if (
+                            _upload is not None
+                            and publication is not None
+                            and publication.uncertain
+                            and not isinstance(exc, asyncio.CancelledError)
+                        ):
+                            raise UploadPublicationUnknownError(
+                                "Upload publication outcome is unknown; inspect the destination before retrying"
+                            ) from exc
                         raise
-                    if _recovery is not None:
-                        _recovery.publication.published = True
-                        _recovery.publication.version_id = complete_response.get("VersionId")
+                    if _upload is not None:
+                        _validate_upload_publication(complete_response, _upload.publication)
+                    if publication is not None:
+                        publication.published = True
+                        publication.version_id = complete_response.get("VersionId")
                     upload_id = None
                     if complete_cancelled:
                         cancellation = asyncio.CancelledError()
-                        if _recovery is None:
+                        if publication is None:
                             await _rollback_cancelled_upload(
                                 s3,
                                 bucket=bucket,
@@ -1458,14 +1665,19 @@ class S3FS:
                             if not abort_task.cancelled():
                                 abort_task.result()
                         except Exception as cleanup_exc:
-                            abort_error = cleanup_exc
+                            if not (
+                                _upload is not None
+                                and isinstance(cleanup_exc, ClientError)
+                                and _error_code(cleanup_exc) == "NoSuchUpload"
+                            ):
+                                abort_error = cleanup_exc
                     if abort_error is not None:
                         message = (
                             "S3 multipart upload failed and cleanup also failed; "
                             f"upload ID {upload_id!r} may require manual abort: {abort_error}"
                         )
-                        if _recovery is not None:
-                            _recovery.publication.cleanup_error = message
+                        if publication is not None:
+                            publication.cleanup_error = message
                         if isinstance(exc, asyncio.CancelledError):
                             exc.add_note(message)
                             raise
@@ -1672,6 +1884,66 @@ class _S3PreviewSession:
 
             self._closing = asyncio.create_task(close())
         await asyncio.shield(self._closing)
+
+
+def _claim_upload_id(response: Any, publication: UploadPublication) -> str:
+    upload_id = response.get("UploadId") if isinstance(response, dict) else None
+    if not isinstance(upload_id, str) or not upload_id:
+        message = (
+            "S3 returned no valid multipart upload identity; "
+            "an incomplete upload may require manual inspection"
+        )
+        publication.cleanup_error = message
+        raise UploadPlanError(message)
+    return upload_id
+
+
+def _validate_upload_publication(response: Any, publication: UploadPublication) -> None:
+    etag = response.get("ETag") if isinstance(response, dict) else None
+    version_id = response.get("VersionId") if isinstance(response, dict) else None
+    if (
+        not isinstance(etag, str)
+        or not _clean_etag(etag)
+        or (version_id is not None and (not isinstance(version_id, str) or not version_id))
+    ):
+        publication.uncertain = True
+        raise UploadPublicationUnknownError(
+            "S3 returned an invalid publication response; inspect the destination before retrying"
+        )
+
+
+def _upload_rejected(error: BaseException) -> bool:
+    """A single authoritative rejection proves this publication did not commit.
+
+    Timeouts, transport failures and server errors remain unknown. There is no
+    transparent SDK retry on this path that could hide a previous success.
+    """
+    return isinstance(error, ClientError) and _error_code(error) in (
+        AWS_AUTH_ERROR_CODES
+        | {
+            "AccessDenied",
+            "Forbidden",
+            "NoSuchBucket",
+            "NoSuchKey",
+            "NoSuchUpload",
+            "NotFound",
+            "InvalidRequest",
+            "InvalidArgument",
+            "InvalidPart",
+            "InvalidPartOrder",
+            "BadDigest",
+            "EntityTooLarge",
+            "EntityTooSmall",
+            "PreconditionFailed",
+            "ConditionalRequestConflict",
+            "SlowDown",
+            "400",
+            "403",
+            "404",
+            "409",
+            "412",
+        }
+    )
 
 
 def _s3_revision_token(response: dict[str, Any]) -> str | None:
