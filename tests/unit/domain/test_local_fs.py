@@ -300,8 +300,10 @@ def test_windows_stage_writer_can_query_its_original_handle_revision(
     assert not access_requests[0] & local_fs._WINDOWS_GENERIC_READ
 
 
+@pytest.mark.parametrize("name", ["file.txt", "n" * 255, "é" * 255])
 def test_windows_delete_claims_and_removes_the_same_open_handle(
     monkeypatch: pytest.MonkeyPatch,
+    name: str,
 ) -> None:
     from aws_tui.domain import local_fs
 
@@ -330,7 +332,7 @@ def test_windows_delete_claims_and_removes_the_same_open_handle(
 
     @contextmanager
     def locked_parent(_root: Path | None, _path: PathRef) -> Iterator[tuple[str, int, str, str]]:
-        yield r"C:\root", 11, "file.txt", r"c:\root"
+        yield r"C:\root", 11, name, r"c:\root"
 
     def remove_tree(handle: int, path: str, anchor: str) -> None:
         events.append(("remove", handle, path, anchor))
@@ -341,7 +343,7 @@ def test_windows_delete_claims_and_removes_the_same_open_handle(
 
     local_fs._windows_delete(
         None,
-        PathRef(("C:", "file.txt")),
+        PathRef(("C:", name)),
         "change-time-revision",
     )
 
@@ -351,9 +353,11 @@ def test_windows_delete_claims_and_removes_the_same_open_handle(
     assert isinstance(access, int)
     assert access & local_fs._WINDOWS_DELETE_ACCESS
     assert not access & local_fs._WINDOWS_GENERIC_WRITE
-    assert events[1] == ("revision", 22, r"C:\root\file.txt")
+    assert events[1] == ("revision", 22, rf"C:\root\{name}")
     assert events[2][0:3] == ("rename", 22, 11)
-    assert str(events[2][3]).startswith(".file.txt.aws-tui-delete-")
+    assert str(events[2][3]).startswith(".aws-tui-delete-")
+    assert len(str(events[2][3]).encode("utf-16-le")) // 2 <= 48
+    assert str(events[2][3]).isascii()
     assert events[3][0] == "remove"
     assert events[3][1] == 22
     assert events[-1] == ("close", 22)
@@ -1675,7 +1679,7 @@ async def test_failed_etag_delete_restores_the_quarantined_original(tmp_path: Pa
     """A failed delete must not leave the entry renamed to its hidden claim.
 
     The ``expected_etag`` path renames the target to
-    ``.<name>.aws-tui-delete-<uuid>`` to claim it. If the removal then fails
+    ``.aws-tui-delete-<uuid>`` to claim it. If the removal then fails
     partway, returning without restoring left the caller's directory gone from
     the listing and present only as a dotfile, while the operation reported an
     error. Reachable in production through ``CrossFsMove``, whose source delete
@@ -1767,7 +1771,7 @@ async def test_unrooted_delete_empty_directory_refuses_a_non_empty_one(tmp_path:
     """A non-empty directory must survive, visibly.
 
     Two mutations made this report success while renaming the directory to a
-    hidden `.<name>.aws-tui-rmdir-<uuid>` quarantine — so the user's directory
+    hidden `.aws-tui-rmdir-<uuid>` quarantine — so the user's directory
     and everything in it appeared to vanish while the operation claimed to have
     worked.
     """
@@ -1936,7 +1940,7 @@ async def test_rooted_delete_restores_claim_on_permission_failure(tmp_path: Path
         with pytest.raises(PermissionDeniedError):
             await provider.delete(PathRef(("payload",)), expected_etag=revision)
         assert (locked / "file.txt").read_bytes() == b"retained"
-        assert not list(tmp_path.glob(".payload.aws-tui-delete-*"))
+        assert not list(tmp_path.glob(".aws-tui-delete-*"))
     finally:
         for path in tmp_path.rglob("locked"):
             path.chmod(0o700)
@@ -2020,7 +2024,7 @@ async def test_delete_restores_claim_when_post_rename_metadata_fails(
 
     def fail_claim_metadata(path) -> None:
         nonlocal replacement_created
-        if isinstance(path, (str, Path)) and Path(path).name.startswith(".source.aws-tui-"):
+        if isinstance(path, (str, Path)) and Path(path).name.startswith(".aws-tui-"):
             if replacement and not replacement_created:
                 if empty_directory:
                     source.mkdir()

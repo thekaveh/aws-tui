@@ -2455,7 +2455,7 @@ async def test_failed_directory_stage_preserves_replacement_directory(
         calls += 1
         if calls != 2:
             return
-        container = next(tmp_path.glob(".dst.aws-tui-stage-*"))
+        container = next(tmp_path.glob(".aws-tui-stage-*"))
         replacement = container if replace_container else container / "payload"
         replacement.rename(tmp_path / "retained-stage")
         replacement.mkdir()
@@ -2490,7 +2490,7 @@ async def test_file_stage_never_adopts_replacement_payload(
 
     def replace_stage(progress: TransferProgress) -> None:
         nonlocal replacement
-        container = next(tmp_path.glob(".target.txt.aws-tui-stage-*"))
+        container = next(tmp_path.glob(".aws-tui-stage-*"))
         original = container if replace_container else container / "payload"
         original.rename(retained)
         if replace_container:
@@ -2574,7 +2574,7 @@ async def test_cancelled_late_stage_opener_drains_claim_before_cleanup(
         release.set()
         with pytest.raises(asyncio.CancelledError):
             await operation
-        assert not list(tmp_path.glob(".target.txt.aws-tui-stage-*"))
+        assert not list(tmp_path.glob(".aws-tui-stage-*"))
         assert not (tmp_path / "target.txt").exists()
         assert source_file.read_bytes() == b"source"
         assert opened
@@ -2618,7 +2618,7 @@ async def test_directory_stage_never_adopts_replacement_after_identity_check(
     class ReplacedAfterCheck(LocalFS):
         async def capture_directory_revision(self, path: PathRef, revision: str) -> str:
             observed = await super().capture_directory_revision(path, revision)
-            is_container = path.name.startswith(".target.aws-tui-stage-")
+            is_container = path.name.startswith(".aws-tui-stage-")
             if not replaced and is_container == replace_container:
                 host = tmp_path.joinpath(*path.segments)
                 host.rename(tmp_path / "retained-owned-stage")
