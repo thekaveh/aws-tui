@@ -294,6 +294,11 @@ def test_cloudwatch_compact_page_content(theme):
     )
     svg = html.unescape(p.read_text()).replace("\u00a0", " ")
     for expected in (
+        "Name",
+        "nightly-2026-06-25",
+        "Run ID",
+        "r-001",
+        "NAME",
         "ERROR CloudWatch demo failure",
         "CloudWatch: configured",
         "filter: loaded data only",

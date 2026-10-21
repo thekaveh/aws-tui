@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import replace
 
 import pytest
-from textual.containers import Container
+from textual.containers import Container, VerticalScroll
 from vmx import NULL_DISPATCHER
 
 from aws_tui.app import AwsTuiApp
@@ -1567,13 +1567,17 @@ async def test_hosted_emr_inert_targets_are_omitted_and_restore_focus(tmp_path, 
             control.focus()
             await pilot.pause()
             slot = ctx.focus_coordinator.focused_slot
-            assert app.focused is control
+            # The details pane forwards focus to its keyboard-scrollable body.
+            expected_focus = (
+                control.query_one("#detail-body", VerticalScroll) if target == "detail" else control
+            )
+            assert app.focused is expected_focus
             await pilot.press("question_mark")
             await wait_until(lambda: isinstance(app.screen, HelpModal), what="inert EMR Help")
             assert "pane.descend" not in {row.action_id for row in app.screen.query(HelpActionRow)}
             await pilot.press("escape")
             await pilot.pause()
-            assert app.focused is control
+            assert app.focused is expected_focus
             await pilot.press("ctrl+k")
             await pilot.pause()
             assert "pane.descend" not in {
@@ -1581,7 +1585,7 @@ async def test_hosted_emr_inert_targets_are_omitted_and_restore_focus(tmp_path, 
             }
             await pilot.press("escape")
             await pilot.pause()
-            assert app.focused is control
+            assert app.focused is expected_focus
             assert ctx.focus_coordinator.focused_slot is slot
             assert ctx.root_vm.content_host.current is vm
     finally:
