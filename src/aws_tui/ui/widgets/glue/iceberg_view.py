@@ -274,10 +274,8 @@ class GlueIcebergView(DeferredWorkerMixin, Widget):
         view = event.view
         if view == "preview":
             self._preview_active = True
-            # Load-once-then-cache, exactly like the six sibling panes'
-            # ``select_view``: a re-click on an already-loaded Peek tab is a
-            # no-op here too. Recovery from an error goes through the retry
-            # button (see ``on_button_pressed``), not a silent re-run.
+            # Cache the current binding/snapshot request. Changing the Snaps
+            # selection needs a new scan; unchanged failed attempts use Retry.
             self._request_preview_load()
             self._schedule_refresh()
             return
@@ -345,13 +343,13 @@ class GlueIcebergView(DeferredWorkerMixin, Widget):
         )
 
     def _request_preview_load(self) -> None:
-        """Start the first scan for the current binding, if it needs one.
+        """Start the first scan for the current binding/snapshot request.
 
-        ``ensure_loaded`` is idempotent per binding, so this is safe to call
+        ``ensure_loaded`` is idempotent per request, so this is safe to call
         from ``_refresh``; the guard here only avoids spawning a worker that
         would immediately return.
         """
-        if not self._vm.preview.needs_load:
+        if not self._vm.preview.needs_load_for(self._vm.selected_snapshot_id):
             return
         self._run_lifecycle_worker(
             partial(self._vm.preview.ensure_loaded, self._vm.selected_snapshot_id),
@@ -475,12 +473,12 @@ class GlueIcebergView(DeferredWorkerMixin, Widget):
                 f" · snapshot {preview.snapshot_id}" if preview.snapshot_id is not None else ""
             )
             footer.update(
-                Text(preview.error_text)
+                Text(f"{preview.error_text}{snapshot_suffix}")
                 if preview.state is PaneState.ERROR and preview.error_text
                 else f"{len(preview.rows)} rows · limit {preview.limit}{snapshot_suffix}"
             )
             more.disabled = not preview.has_more or preview.state is PaneState.LOADING
-            retry.display = preview.state in {
+            retry.display = preview.snapshot_id != selected_snapshot_id or preview.state in {
                 PaneState.AUTH_REQUIRED,
                 PaneState.FORBIDDEN,
                 PaneState.ERROR,
