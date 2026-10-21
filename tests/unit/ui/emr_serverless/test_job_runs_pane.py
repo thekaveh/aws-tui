@@ -178,7 +178,7 @@ async def test_unreachable_state_renders_endpoint_unreachable_placeholder() -> N
         pane = pilot.app.query_one(JobRunsPane)
         vm._state = PaneState.UNREACHABLE  # type: ignore[attr-defined]
         vm._error_text = None  # type: ignore[attr-defined]
-        pane._refresh_rows()  # type: ignore[attr-defined]
+        await pane._refresh_rows()  # type: ignore[attr-defined]
         await pilot.pause()
         text = _placeholder_text(pane)
         assert "unreachable" in text
@@ -192,7 +192,7 @@ async def test_unreachable_uses_vm_error_text_when_set() -> None:
         pane = pilot.app.query_one(JobRunsPane)
         vm._state = PaneState.UNREACHABLE  # type: ignore[attr-defined]
         vm._error_text = "boom: dns lookup failed"  # type: ignore[attr-defined]
-        pane._refresh_rows()  # type: ignore[attr-defined]
+        await pane._refresh_rows()  # type: ignore[attr-defined]
         await pilot.pause()
         text = _placeholder_text(pane)
         assert "boom: dns lookup failed" in text
@@ -204,7 +204,7 @@ async def test_auth_required_state_renders_sso_login_placeholder() -> None:
         await pilot.pause()
         pane = pilot.app.query_one(JobRunsPane)
         vm._state = PaneState.AUTH_REQUIRED  # type: ignore[attr-defined]
-        pane._refresh_rows()  # type: ignore[attr-defined]
+        await pane._refresh_rows()  # type: ignore[attr-defined]
         await pilot.pause()
         text = _placeholder_text(pane)
         assert "authentication required" in text
@@ -218,7 +218,7 @@ async def test_forbidden_state_renders_permission_denied_placeholder() -> None:
         pane = pilot.app.query_one(JobRunsPane)
         vm._state = PaneState.FORBIDDEN  # type: ignore[attr-defined]
         vm._error_text = None  # type: ignore[attr-defined]
-        pane._refresh_rows()  # type: ignore[attr-defined]
+        await pane._refresh_rows()  # type: ignore[attr-defined]
         await pilot.pause()
         text = _placeholder_text(pane)
         assert "permission denied" in text
@@ -232,7 +232,7 @@ async def test_error_state_renders_generic_error_placeholder() -> None:
         pane = pilot.app.query_one(JobRunsPane)
         vm._state = PaneState.ERROR  # type: ignore[attr-defined]
         vm._error_text = None  # type: ignore[attr-defined]
-        pane._refresh_rows()  # type: ignore[attr-defined]
+        await pane._refresh_rows()  # type: ignore[attr-defined]
         await pilot.pause()
         text = _placeholder_text(pane)
         assert "error" in text
@@ -245,7 +245,7 @@ async def test_loading_state_renders_loading_placeholder() -> None:
         await pilot.pause()
         pane = pilot.app.query_one(JobRunsPane)
         vm._state = PaneState.LOADING  # type: ignore[attr-defined]
-        pane._refresh_rows()  # type: ignore[attr-defined]
+        await pane._refresh_rows()  # type: ignore[attr-defined]
         await pilot.pause()
         text = _placeholder_text(pane)
         assert "loading" in text
