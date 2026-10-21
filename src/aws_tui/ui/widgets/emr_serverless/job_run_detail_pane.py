@@ -19,6 +19,7 @@ from textual.widget import Widget
 from textual.widgets import Static
 
 from aws_tui.domain.emr_serverless import JobRunDetail
+from aws_tui.ui.widgets._focus_guard import is_on_active_screen
 from aws_tui.vm.emr_serverless.job_run_detail_vm import JobRunDetailVM
 from aws_tui.vm.file_manager.pane_vm import PaneState
 
@@ -85,6 +86,18 @@ class JobRunDetailPane(Widget, can_focus=True):
         if self._sub is not None:
             self._sub.dispose()
             self._sub = None
+
+    def on_focus(self) -> None:
+        # Keep the page's detail slot while native page/home/end bindings
+        # operate on its stable scroll body. Ignore superseded focus events.
+        if is_on_active_screen(self) and self.screen.focused is self:
+            self.app.set_focus(self.query_one("#detail-body", VerticalScroll))
+
+    def action_scroll_up(self) -> None:
+        self.query_one("#detail-body", VerticalScroll).scroll_up(animate=False)
+
+    def action_scroll_down(self) -> None:
+        self.query_one("#detail-body", VerticalScroll).scroll_down(animate=False)
 
     def action_request_refresh(self) -> None:
         self.post_message(self.RefreshRequested())

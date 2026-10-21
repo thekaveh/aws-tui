@@ -233,6 +233,11 @@ section. The current tree must not be tagged as v0.8.0.
 
 ### Fixed
 
+- **Keyboard access to EMR details.** The detail focus slot scrolls overflowing
+  arguments and Spark settings with arrows, vi keys, page keys and Home/End.
+  Reverse Tab from the navigation rail returns to logs, completing the
+  six-slot cycle without trapping focus or changing the selected run.
+
 - **EMR filter recovery.** Restoring a state filter after refresh immediately
   reveals retained runs without another provider request. Hidden retained
   selections keep their details and log targets; genuine provider removals
