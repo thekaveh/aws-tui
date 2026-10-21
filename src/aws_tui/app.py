@@ -93,6 +93,7 @@ from aws_tui.ui.widgets.first_run import (
     FirstRunView,
 )
 from aws_tui.ui.widgets.glue.comparison_modal import GlueComparisonModal
+from aws_tui.ui.widgets.glue.iceberg_view import GlueIcebergView
 from aws_tui.ui.widgets.glue.page import GluePage
 from aws_tui.ui.widgets.help_modal import HelpModal
 from aws_tui.ui.widgets.hint_legend import HintLegend
@@ -768,6 +769,7 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
         self._actions.register("glue.open_s3_location", self.action_open_glue_s3_location)
         self._actions.register("glue.query_in_athena", self.action_query_glue_table_in_athena)
         self._actions.register("glue.load_more", self.action_load_more_glue)
+        self._actions.register("glue.iceberg_info", self.action_glue_iceberg_info)
         self._actions.register(
             "glue.time_travel_in_athena",
             self.action_time_travel_glue_table_in_athena,
@@ -2767,6 +2769,10 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
                 ("glue.copy_table_ref", glue.vm.can_copy_table_reference),
                 ("glue.query_in_athena", glue.vm.can_query_in_athena),
                 ("glue.time_travel_in_athena", glue.vm.can_time_travel_in_athena),
+                (
+                    "glue.iceberg_info",
+                    any(view.info_available for view in glue.query(GlueIcebergView)),
+                ),
                 ("glue.load_more", glue.can_load_more(focused_ids=focused_ids)),
             ):
                 if not ready:
@@ -5466,6 +5472,12 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
             message="inserted copied table reference",
             toast_id="athena-table-reference-inserted",
         )
+
+    def action_glue_iceberg_info(self) -> None:
+        self.record_action("glue.iceberg_info")
+        page = self._glue_page()
+        if page is not None and page.vm.actions_available:
+            page.query_one(GlueIcebergView).show_info()
 
     async def action_time_travel_glue_table_in_athena(self) -> None:
         self.record_action("glue.time_travel_in_athena")
