@@ -1,62 +1,88 @@
 # Homebrew Bootstrap
 
-Run this **once**, immediately after the first PyPI release lands.
-The v0.9.0 development work is present in the repository, but the tag and PyPI publish are still pending. Do not run this bootstrap until the wheel and sdist are visible on PyPI. After that, the `bump-homebrew` job in
-`.github/workflows/release.yml` opens PRs against the tap
-automatically — bootstrapping just gets the first formula in
-place.
+This maintainer procedure prepares the first Homebrew formula after a PyPI release.
+It is not an installation method available today.
+The v0.9.0 development work is present in the repository; package publication remains pending.
+Do not run the recipe until the intended wheel and source distribution (sdist) are available on PyPI.
+
+The first complete recipe execution is **gated** on that publication prerequisite under [#267](https://github.com/thekaveh/aws-tui/issues/267).
+Local command and failure-path checks do not establish a valid released formula.
 
 ## 1. Prerequisites
 
-- First `aws-tui` wheel + sdist visible on PyPI.
-- The `thekaveh/homebrew-aws-tui` repo exists and is empty.
-- `brew` installed locally for the smoke test.
+- The intended `aws-tui` version has both a wheel and sdist on PyPI.
+- You have write access to `thekaveh/homebrew-aws-tui` and a local checkout.
+- Bash, Python 3.12 with `venv`/pip, Ruby and Homebrew are installed locally.
+- Release publication and any later hosted automation have separate authorization under [Releasing](RELEASING.md).
 
 ## 2. Steps
 
 ```bash
-# 1. Clone the tap repo.
 git clone https://github.com/thekaveh/homebrew-aws-tui ~/repos/homebrew-aws-tui
 cd ~/repos/homebrew-aws-tui
-
-mkdir -p Formula
-
-# 2. Compute the published sdist's sha256.
-PKG_URL="https://files.pythonhosted.org/packages/source/a/aws-tui/aws_tui-0.9.0.tar.gz"
-curl --fail --location --silent -o /tmp/aws-tui.tar.gz "$PKG_URL"
-PKG_SHA="$(shasum -a 256 /tmp/aws-tui.tar.gz | awk '{print $1}')"
-echo "PKG_URL=$PKG_URL"
-echo "PKG_SHA=$PKG_SHA"
-
-# 3. Generate the resource stanzas for runtime deps. brew has a
-#    helper for this; without it you'd hand-enumerate every transitive.
-#    pip-audit / pipgrip can produce equivalent output if brew's
-#    bundled tooling isn't preferred.
-brew install pipgrip || true
-pipgrip --tree aws-tui  # inspect to confirm the closure
-# Pour the auto-generated formula into ./Formula/aws-tui.rb.
-poet-py3.12 -f aws-tui > Formula/aws-tui.rb || \
-    homebrew-pypi-poet aws-tui > Formula/aws-tui.rb
 ```
 
-If `homebrew-pypi-poet` isn't on PATH:
+Use the existing checkout if you already have one. Run the following block with Bash from its root.
+Set `AWS_TUI_VERSION` to the exact published version; `0.9.0` is the intended first release.
+
+The [upstream helper](https://github.com/tdsmith/homebrew-pypi-poet) installs the `poet` command.
+Its `-f` option generates a formula from the target and runtime dependencies installed in the same environment.
+The disposable environment below contains all three requirements: the target, its dependency closure and the helper.
+The helper uses `pkg_resources`; the Setuptools pin retains that API.
 
 ```bash
-pipx install homebrew-pypi-poet
-homebrew-pypi-poet aws-tui > Formula/aws-tui.rb
+(
+  set -euo pipefail
+  AWS_TUI_VERSION=0.9.0
+  bootstrap_dir=$(mktemp -d "${TMPDIR:-/tmp}/aws-tui-homebrew.XXXXXX")
+  formula_tmp=
+  trap 'rm -rf "$bootstrap_dir"; if [ -n "$formula_tmp" ]; then rm -f "$formula_tmp"; fi' EXIT
+
+  python3.12 -m venv "$bootstrap_dir/venv"
+  "$bootstrap_dir/venv/bin/python" -m pip install \
+    "aws-tui==$AWS_TUI_VERSION" "homebrew-pypi-poet==0.10.0" "setuptools==80.9.0"
+  "$bootstrap_dir/venv/bin/python" -m pip check
+  "$bootstrap_dir/venv/bin/python" -m pip freeze
+
+  mkdir -p Formula
+  formula_tmp=$(mktemp "Formula/.aws-tui.XXXXXX")
+  "$bootstrap_dir/venv/bin/poet" -f aws-tui > "$formula_tmp"
+  test -s "$formula_tmp"
+  ruby -c "$formula_tmp"
+  chmod 644 "$formula_tmp"
+  mv -f "$formula_tmp" Formula/aws-tui.rb
+)
 ```
 
-Then **manually clean up** the generated formula. The two
-fields that the auto-bump workflow expects to be on their own
-top-level lines before any `resource` blocks are:
+The temporary output stays beside the destination, so the final rename uses the same filesystem.
+Generator failure, empty output or failed syntax validation leaves an existing formula unchanged.
+The trap removes the disposable environment and temporary output.
+
+Review the generated formula before committing or installing it.
+Nonempty output and Ruby syntax checks do not verify its dependency resources or Homebrew behavior.
+For the first published package, run this exact recipe in a fresh environment and record:
+
+- The installed versions printed by `pip freeze`.
+- The top-level sdist URL and SHA-256, checked against the intended version's PyPI metadata and downloaded sdist.
+- Every runtime dependency and transitive resource required on the Homebrew platform, excluding helper-only dependencies.
+- Each resource's installed version, sdist URL and SHA-256, checked against its published artifacts.
+- Correct description, homepage and license instead of generated placeholders.
+- A supported versioned Python dependency and matching virtualenv interpreter, plus any required native build dependencies.
+- Any manual formula adjustments, followed by the local smoke test below.
+
+The helper can fall back to a newer version or emit empty artifact fields without failing.
+Treat those results as invalid; resolve them before installation or commit.
+
+Keep the top-level `url` and `sha256` on separate lines before any `resource` blocks.
+The release workflow updates these fields. Replace the placeholders with verified published values:
 
 ```ruby
-url "https://files.pythonhosted.org/packages/source/a/aws-tui/aws_tui-0.9.0.tar.gz"
-sha256 "<PKG_SHA from step 2>"
+url "<verified published sdist URL>"
+sha256 "<verified published sdist SHA-256>"
 ```
 
-Add a test stanza at the bottom that smoke-tests the CLI entry
-point:
+Replace the generated `test do false end` placeholder with a CLI smoke test.
+Do not append a second test block:
 
 ```ruby
 test do
@@ -102,10 +128,10 @@ bumps are opened automatically by the upstream release workflow.
 
 ## 6. After bootstrap
 
-Enable that job in `thekaveh/aws-tui` under **Settings** →
-**Secrets and variables** → **Actions** → **Variables** by setting
-the repository variable `HOMEBREW_TAP_ENABLED` to `true`. The workflow
-intentionally skips Homebrew updates until this switch is enabled.
+When hosted release automation is available and authorized, open the repository's **Settings**.
+Select **Secrets and variables** → **Actions** → **Variables**.
+Set `HOMEBREW_TAP_ENABLED` to `true`.
+The workflow skips Homebrew updates until this switch is enabled.
 
-Tag v0.9.1 in the main repo (whenever the next patch ships). Confirm the `bump-homebrew` job opens a PR against the tap within a few minutes of the PyPI publish. From here it's
-fully automated; you just merge the PR.
+At the next authorized patch release, confirm that `bump-homebrew` opens a tap PR after PyPI publication.
+Review and merge that PR. Do not enable or dispatch hosted workflows while the local-only maintenance policy applies.
