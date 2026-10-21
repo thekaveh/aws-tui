@@ -22,7 +22,7 @@ from typing import ClassVar, Literal
 from reactivex.abc import DisposableBase
 from textual.app import ComposeResult
 from textual.binding import Binding, BindingType
-from textual.containers import Horizontal, Vertical
+from textual.containers import Horizontal, VerticalScroll
 from textual.css.query import NoMatches
 from textual.widget import Widget
 from textual.widgets import Button, Static
@@ -330,16 +330,24 @@ class TransfersOverlay(Widget, can_focus=True):
         padding: 1 0;
     }
     TransfersOverlay #transfers-history-controls { height: 1; padding: 0 1; }
-    TransfersOverlay #transfers-history-controls Button { width: 1fr; min-width: 9; height: 1; }
+    TransfersOverlay #transfers-history-controls Button {
+        width: 1fr;
+        min-width: 9;
+        height: 1;
+        min-height: 1;
+        border: none;
+        padding: 0;
+    }
     TransfersOverlay.-hidden { display: none; }
     TransfersOverlay #transfers-overlay-inner {
         width: 100%;
-        height: auto;
+        height: 1fr;
+        min-height: 1;
     }
     TransfersOverlay #transfers-overlay-title {
         height: 1;
         width: 100%;
-        padding: 0 2 1 2;
+        padding: 0 2;
         text-style: bold;
     }
     """
@@ -378,20 +386,46 @@ class TransfersOverlay(Widget, can_focus=True):
 
     def compose(self) -> ComposeResult:
         yield Static("▌ TRANSFERS", id="transfers-overlay-title", markup=False)
-        yield Vertical(id="transfers-overlay-inner")
+        yield VerticalScroll(id="transfers-overlay-inner")
         if self._history_vm is not None:
             with Horizontal(id="transfers-history-controls"):
                 yield Button("History", id="transfer-history-open", compact=True, flat=True)
                 yield Button("Recovery", id="transfer-recovery-open", compact=True, flat=True)
 
-    def on_mount(self) -> None:
+    async def on_mount(self) -> None:
         self._sub = self._hub.messages.subscribe(on_next=self._on_hub_message)
-        self._rebuild()
+        await self._rebuild()
 
     def on_unmount(self) -> None:
         if self._sub is not None:
             self._sub.dispose()
             self._sub = None
+
+    def on_resize(self) -> None:
+        if self.is_mounted:
+            self.call_after_refresh(self._fit_content_height)
+            self.call_after_refresh(self._reveal_focused_transfer)
+
+    def _fit_content_height(self) -> None:
+        if not self.is_attached or self.has_class("-hidden"):
+            return
+        container = self.query_one("#transfers-overlay-inner", VerticalScroll)
+        # A fractional viewport fills the height cap even with one or no
+        # cards. Fit measured content and fixed chrome first; max-height
+        # still bounds large batches and leaves the viewport scrollable.
+        chrome_height = sum(
+            child.outer_size.height for child in self.children if child is not container
+        )
+        card_height = sum(child.outer_size.height for child in container.children)
+        self.styles.height = max(1, card_height) + chrome_height + self.styles.gutter.height
+
+    def _reveal_focused_transfer(self) -> None:
+        if not self.is_attached:
+            return
+        focused = self.screen.focused
+        container = self.query_one("#transfers-overlay-inner", VerticalScroll)
+        if focused is not None and container in focused.ancestors:
+            container.scroll_to_widget(focused, animate=False, immediate=True)
 
     def _on_hub_message(self, msg: object) -> None:
         if not isinstance(msg, PropertyChangedMessage):
@@ -405,11 +439,11 @@ class TransfersOverlay(Widget, can_focus=True):
             return
         self.call_after_refresh(self._rebuild)
 
-    def _rebuild(self) -> None:
+    async def _rebuild(self) -> None:
         represented_ids = {transfer.id for transfer in self._vm.transfers}
         self._expired_ids.intersection_update(represented_ids)
         try:
-            container = self.query_one("#transfers-overlay-inner", Vertical)
+            container = self.query_one("#transfers-overlay-inner", VerticalScroll)
         except NoMatches:
             return
 
@@ -426,15 +460,16 @@ class TransfersOverlay(Widget, can_focus=True):
         new_ids = {t.id for t in visible}
         for row in list(container.query(TransferRowWidget)):
             if row.transfer_vm.id not in new_ids:
-                row.remove()
+                await row.remove()
 
         currently_mounted = {row.transfer_vm.id for row in container.query(TransferRowWidget)}
         for t in visible:
             if t.id not in currently_mounted:
-                container.mount(TransferRowWidget(t, hub=self._hub))
+                await container.mount(TransferRowWidget(t, hub=self._hub))
 
         if visible or (self._history_vm is not None and self._history_vm.records):
             self.remove_class("-hidden")
+            self.call_after_refresh(self._fit_content_height)
         else:
             focused = self.app.focused
             if focused is not None and self in focused.ancestors_with_self:

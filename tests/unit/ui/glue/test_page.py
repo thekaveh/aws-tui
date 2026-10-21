@@ -60,6 +60,7 @@ def _build_vm(fake: InMemoryGlue | None = None) -> tuple[GluePageVM, InMemoryGlu
 
 class _GlueApp(App[None]):
     _first_run_view = AwsTuiApp._first_run_view
+    _focused_transfer_overlay = AwsTuiApp._focused_transfer_overlay
 
     CSS = """
     Screen { layout: horizontal; }
