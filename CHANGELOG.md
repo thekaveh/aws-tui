@@ -233,6 +233,11 @@ section. The current tree must not be tagged as v0.8.0.
 
 ### Fixed
 
+- **Terminal-safe remap examples.** Object details, log follow and history
+  examples use distinct ANSI control bytes. The keybinding guide explains
+  protocol-dependent Ctrl+I/Tab and Ctrl+H/Backspace aliases and the limits
+  of key-name collision validation.
+
 - **Unicode JSONL previews.** Literal Unicode separators inside JSON strings
   no longer split records or force valid JSONL/NDJSON previews into raw mode.
   Record boundaries use LF, with CRLF supported and existing preview limits

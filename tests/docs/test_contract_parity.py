@@ -563,7 +563,8 @@ def test_s3_object_details_documented_read_only_contract() -> None:
     ):
         assert value in service
     assert "`pane.object_details` | `ctrl+o`" in keys
-    assert "Existing custom" in keys
+    # Executable remaps are covered at the byte/parser/driver boundary by
+    # test_documented_ansi_shortcuts and the S3 object-details integration tests.
     for value in (
         "ChecksumMode=ENABLED",
         "VersionId",
