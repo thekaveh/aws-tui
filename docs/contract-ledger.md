@@ -676,7 +676,7 @@ Errors consumed as `duckdb.HTTPException` with `.status_code`, and `duckdb.Inter
 
 Existing checks: Port unit tests use injected fake connections. The optional floor test under `tests/minimum_runtime/` uses a real engine for extension loading, settings, credential-secret preparation, and `SELECT 1`. It does not scan a real Iceberg table.
 
-Exact S3 boto operation ledger (16):
+Exact S3 boto operation ledger (18):
 
 ```text
 AbortMultipartUpload
@@ -686,13 +686,43 @@ CreateBucket
 CreateMultipartUpload
 DeleteObject
 DeleteObjects
+GetBucketVersioning
 GetObject
 GetObjectTagging
 HeadBucket
 HeadObject
 ListBuckets
 ListObjectsV2
+ListObjectVersions
 PutObject
 UploadPart
 UploadPartCopy
 ```
+
+
+**Exact historical S3 versions**
+
+`botocore==1.40.61`, S3 API `2006-03-01`; Textual `8.2.8`
+
+`ListObjectVersions` uses both key and version markers, filters exact keys and
+rejects repeated or missing continuation markers.
+Every selected-version HEAD, fallback HEAD, tagging and GET carries its exact
+`VersionId`, including literal `null`.
+Reads refuse changed observations and never fall back to current content.
+Delete markers have no file content; directory buckets are unsupported.
+
+Recovery binds supported content headers, user metadata and tags to one new key.
+Conditional PUT or multipart completion refuses replacement.
+Recovery never calls DeleteObject; cancellation drains unfinished upload cleanup
+and preserves published or uncertain destinations.
+The version-bearing transfer label cannot become a generic current-content retry.
+
+The palette action `pane.object_versions` has no default key.
+Captured pane ownership and browser generations guard read publication and
+confirmation. Accepted transfers use the shared runtime independently of modal lifetime.
+
+Checks include recorded SDK requests, error and cancellation boundaries,
+an isolated versioned Moto HTTP endpoint, and actual application keyboard flows.
+Moto 5.2.3 rejects explicit-version HEAD in never-versioned and suspended buckets;
+those HTTP combinations remain unverified. Unit request tests and enabled-bucket
+retained-null HTTP tests do not establish live AWS parity.

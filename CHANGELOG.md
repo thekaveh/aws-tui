@@ -27,6 +27,11 @@ section. The current tree must not be tagged as v0.8.0.
 
 ### Added
 
+- S3 object-version browsing from the command palette, including exact-key entry
+  for deleted current objects. Inspect and download a selected historical version,
+  or recover its content, supported metadata and tags to a different new key.
+  Existing destinations are refused; published recovery keys survive cancellation.
+
 - Durable transfer summaries and explicit History / Recovery from `Ctrl+T`,
   `app.transfer_history`, the palette, and the Transfers overlay. The 100 newest
   safe summaries survive restart; background startup scanning preserves unknown
