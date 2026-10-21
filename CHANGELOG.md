@@ -233,6 +233,11 @@ section. The current tree must not be tagged as v0.8.0.
 
 ### Fixed
 
+- **EMR filter recovery.** Restoring a state filter after refresh immediately
+  reveals retained runs without another provider request. Hidden retained
+  selections keep their details and log targets; genuine provider removals
+  still reconcile the selection.
+
 - **Visible EMR run selection.** Keyboard navigation keeps the selected run
   inside its scroll viewport without rebuilding rows. Refresh, pagination and
   terminal resizing reveal the current selection after layout.

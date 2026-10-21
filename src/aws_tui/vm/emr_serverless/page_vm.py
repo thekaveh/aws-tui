@@ -494,7 +494,9 @@ class EmrServerlessPageVM:
             return
         runs = self.job_runs.runs
         selected = self.job_runs.selected_id
-        if selected is not None and any(run.job_run_id == selected for run in runs):
+        # Canonical selection belongs to the complete retained collection.
+        # A local filter can hide it without removing its detail/log targets.
+        if selected is not None:
             return
         if runs:
             await self.select_job_run(runs[0].job_run_id)

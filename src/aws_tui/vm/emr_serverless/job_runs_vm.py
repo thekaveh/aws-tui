@@ -338,7 +338,8 @@ class JobRunsVM:
         # Success path — drop any error text carried forward from a
         # prior failed poll (sibling parity with PaneVM._reload).
         self._error_text = None
-        self._set_state(PaneState.IDLE if self.runs else PaneState.EMPTY)
+        # Provider emptiness is independent of the local state-filter projection.
+        self._set_state(PaneState.IDLE if self._items else PaneState.EMPTY)
 
     async def load_more(self) -> None:
         async with self._paging_lock:
