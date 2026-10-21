@@ -138,7 +138,14 @@ async def test_staged_draft_editor_writes_only_after_commit_and_next_edit(tmp_pa
     await page.setup()
     from tests.unit.vm.athena.test_page_vm import make_page_vm
 
-    source = make_page_vm(PageClient())
+    async def source_current():
+        return True
+
+    # A draft-enabled destination requires provenance from the source editor.
+    # Keep this fixture inactive so it cannot schedule a save during staging.
+    source = make_page_vm(
+        PageClient(), drafts=runtime, drafts_active=False, source_is_current=source_current
+    )
     await source.setup()
     source.query.set_sql("SELECT 'SNAPSHOT'")
     snapshot = source.export_snapshot()

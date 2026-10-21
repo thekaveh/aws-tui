@@ -27,6 +27,7 @@ from aws_tui.infra.athena_draft_store import (
 )
 from aws_tui.infra.draft_worker import DraftWorker
 from aws_tui.vm._observable import ObserverSafeSubject, send_value_free
+from aws_tui.vm.athena._domain_validation import optional_exact_string, valid_query_context
 
 DEBOUNCE_SECONDS = 0.500
 SHUTDOWN_SECONDS = 2.000
@@ -46,6 +47,82 @@ class DraftFlushReport:
 
 
 @dataclass(frozen=True, slots=True)
+class AthenaDraftSessionSnapshot:
+    sql: str = field(repr=False)
+    context: QueryContext | None = field(repr=False)
+    bound_context: QueryContext | None = field(repr=False)
+    saved_sql: str | None = field(repr=False)
+    saved_context: QueryContext | None = field(repr=False)
+    editor_revision: int = field(repr=False)
+    deleted: bool = field(repr=False)
+    save_failed: bool = field(repr=False)
+    state: DraftState = field(repr=False)
+    origin_revision: tuple[str, int] | None = field(repr=False)
+    pending_context: QueryContext | None = field(default=None, repr=False)
+
+
+def valid_draft_session_snapshot(value: object, *, sql: str) -> bool:
+    if type(value) is not AthenaDraftSessionSnapshot:
+        return False
+    origin = value.origin_revision
+    if origin is not None and not (
+        type(origin) is tuple
+        and len(origin) == 2
+        and type(origin[0]) is str
+        and type(origin[1]) is int
+        and origin[1] > 0
+    ):
+        return False
+    return (
+        type(value.sql) is str
+        and value.sql == sql
+        and (value.context is None or valid_query_context(value.context))
+        and (value.bound_context is None or valid_query_context(value.bound_context))
+        and (value.pending_context is None or valid_query_context(value.pending_context))
+        and optional_exact_string(value.saved_sql)
+        and (value.saved_context is None or valid_query_context(value.saved_context))
+        and ((value.saved_sql is None) == (value.saved_context is None))
+        and type(value.editor_revision) is int
+        and value.editor_revision >= 0
+        and type(value.deleted) is bool
+        and type(value.save_failed) is bool
+        and type(value.state) is str
+        and value.state in {"off", "empty", "pending", "saved", "error", "context_required"}
+        and (
+            value.pending_context is None
+            or (
+                origin is not None
+                and origin[0] == context_draft_id(value.pending_context.cache_key)
+                and (
+                    not value.sql.strip()
+                    or value.pending_context == (value.bound_context or value.context)
+                )
+            )
+        )
+        and (
+            value.state != "saved"
+            or (value.sql == value.saved_sql and value.context == value.saved_context)
+        )
+        and (
+            origin is None
+            or (
+                origin[0]
+                in {
+                    context_draft_id(context.cache_key)
+                    for context in (
+                        value.bound_context,
+                        value.context,
+                        value.saved_context,
+                        value.pending_context,
+                    )
+                    if context is not None
+                }
+            )
+        )
+    )
+
+
+@dataclass(frozen=True, slots=True)
 class _EditCapture:
     record: SqlDraft = field(repr=False)
     captured_editor_revision: int
@@ -62,6 +139,7 @@ class _WriteCoordinator:
         self.latest_revision: dict[str, int] = {}
         self.current: dict[str, _EditCapture] = {}
         self.unconfirmed: dict[str, int] = {}
+        self.retained_unconfirmed: dict[str, set[int]] = {}
         self.timers: dict[str, asyncio.TimerHandle] = {}
         self.launches: dict[str, Callable[[], None]] = {}
         self.futures: set[Future[DraftStoreResult]] = set()
@@ -165,11 +243,21 @@ class _WriteCoordinator:
 
     def track(self, identity: str, *, unconfirmed: bool) -> int:
         """Own an editor revision even when no physical save can be accepted."""
-        self.fence({identity})
+        self.fence({identity}, discard_retained=False)
         self.sequence += 1
         self.latest_revision[identity] = self.sequence
         if unconfirmed:
             self.unconfirmed[identity] = self.sequence
+        return self.sequence
+
+    def retain_unconfirmed(self, identity: str, previous_revision: int) -> int:
+        """Retain unsaved text without cancelling or impersonating its newer writer."""
+        tokens = self.retained_unconfirmed.setdefault(identity, set())
+        # Transfer an existing obligation instead of accumulating one per page.
+        # A fresh token also prevents the old presentation releasing its successor.
+        tokens.discard(previous_revision)
+        self.sequence += 1
+        tokens.add(self.sequence)
         return self.sequence
 
     def launch(self, capture: _EditCapture) -> None:
@@ -182,8 +270,16 @@ class _WriteCoordinator:
         if launch is not None:
             launch()
 
-    def fence(self, ids: set[str] | None, *, discard_unconfirmed: bool = True) -> None:
-        for identity in self.current.keys() | self.unconfirmed.keys():
+    def fence(
+        self,
+        ids: set[str] | None,
+        *,
+        discard_unconfirmed: bool = True,
+        discard_retained: bool = True,
+    ) -> None:
+        for identity in (
+            self.current.keys() | self.unconfirmed.keys() | self.retained_unconfirmed.keys()
+        ):
             if ids is not None and identity not in ids:
                 continue
             capture = self.current.get(identity)
@@ -196,6 +292,8 @@ class _WriteCoordinator:
             self.current.pop(identity, None)
             if discard_unconfirmed:
                 self.unconfirmed.pop(identity, None)
+            if discard_retained:
+                self.retained_unconfirmed.pop(identity, None)
 
     async def mutate(
         self,
@@ -209,6 +307,11 @@ class _WriteCoordinator:
         async with self.mutation_lock:
             if self.terminal is not None or not self.intake:
                 return DraftStoreResult(code="cancelled")
+            # A snapshot predating deletion/clear no longer has a current save
+            # acknowledgement, even if its presentation was already detached.
+            for identity in self.latest_revision if ids is None else ids:
+                self.sequence += 1
+                self.latest_revision[identity] = self.sequence
             self.fence(ids)
             tombstone()
             accepted()
@@ -412,11 +515,18 @@ class AthenaDraftsVM:
             )
 
     def _release_session_obligation(self, session: AthenaDraftSession) -> None:
+        if not session._active:
+            return  # An inactive candidate has only borrowed snapshot provenance.
         coordinator, origin = self._coordinator, session._origin_revision
         if coordinator is not None and origin is not None:
             identity, revision = origin
+            retained = coordinator.retained_unconfirmed.get(identity)
+            if retained is not None:
+                retained.discard(revision)
+                if not retained:
+                    coordinator.retained_unconfirmed.pop(identity, None)
             if coordinator.latest_revision.get(identity) == revision:
-                coordinator.fence({identity})
+                coordinator.fence({identity}, discard_retained=False)
 
     def _retain_unscheduled(self, session: AthenaDraftSession) -> None:
         if self._disposed or self._terminal is not None or not self.enabled or not session._active:
@@ -445,7 +555,7 @@ class AthenaDraftsVM:
                 capture.record.id, capture.captured_write_revision, capture.permit
             )
         ):
-            coordinator.fence({capture.record.id})
+            coordinator.fence({capture.record.id}, discard_retained=False)
 
     def _prepare_final(self, session: AthenaDraftSession) -> None:
         coordinator, capture = self._coordinator, session._capture
@@ -487,7 +597,11 @@ class AthenaDraftsVM:
         origin = session._origin_revision
         if origin is not None and self._coordinator is not None:
             latest = self._coordinator.latest_revision.get(origin[0])
-            if latest is not None and latest != origin[1]:
+            if (
+                latest is not None
+                and latest != origin[1]
+                and origin[1] not in self._coordinator.retained_unconfirmed.get(origin[0], set())
+            ):
                 return False
         return True
 
@@ -495,6 +609,8 @@ class AthenaDraftsVM:
         # Persistence obligations outlive presentation sessions. Count each origin
         # once, including edits without a schedulable capture (incomplete context).
         identities = set(self._coordinator.unconfirmed) if self._coordinator else set()
+        if self._coordinator is not None:
+            identities.update(self._coordinator.retained_unconfirmed)
         for session in self._sessions:
             if self._session_is_unconfirmed(session):
                 context = session._bound_context or session._context
@@ -611,7 +727,7 @@ class AthenaDraftsVM:
                 async with coordinator.mutation_lock:
                     if not coordinator.intake:
                         return False
-                    coordinator.fence(None, discard_unconfirmed=False)
+                    coordinator.fence(None, discard_unconfirmed=False, discard_retained=False)
                     self._begin_mutation()
                     waiter = coordinator.observe(
                         self._worker.submit(lambda: self._store.set_enabled(True))
@@ -709,6 +825,8 @@ class AthenaDraftSession:
         self._detached = False
         self._active = active
         self._state: DraftState = "off"
+        self._transferred = False
+        self._transfer_pending_context: QueryContext | None = None
         self._on_property_changed = ObserverSafeSubject[str]()
 
     @property
@@ -736,11 +854,24 @@ class AthenaDraftSession:
         return self._bound_context
 
     @property
+    def is_available(self) -> bool:
+        return (
+            not self._detached and not self._runtime._disposed and self._runtime._terminal is None
+        )
+
+    @property
     def on_property_changed(self) -> rx.Observable[str]:
         return self._on_property_changed
 
     def activate(self, sql: str, context: QueryContext) -> None:
         if self._detached:
+            return
+        if self._transferred and self._sql == sql:
+            self._context = context
+            self._active = True
+            self._claim_transferred_editor()
+            self._notify("state")
+            self._notify("error_text")
             return
         self._sql = sql
         self._context = context
@@ -749,9 +880,100 @@ class AthenaDraftSession:
         if sql.strip():
             self._runtime._retain_unscheduled(self)
 
+    def export_snapshot(self) -> AthenaDraftSessionSnapshot:
+        return AthenaDraftSessionSnapshot(
+            self._sql,
+            self._context,
+            self._bound_context,
+            self._saved_sql,
+            self._saved_context,
+            self._editor_revision,
+            self._deleted_revision == self._editor_revision,
+            self._save_failed_revision == self._editor_revision,
+            self._state,
+            self._origin_revision,
+            (
+                QueryContext(*self._capture.record.context)
+                if self._capture is not None
+                and self._capture.captured_editor_revision == self._editor_revision
+                else self._transfer_pending_context
+            ),
+        )
+
+    def install_snapshot(
+        self, snapshot: AthenaDraftSessionSnapshot, *, context: QueryContext
+    ) -> None:
+        if (
+            not self.is_available
+            or type(snapshot) is not AthenaDraftSessionSnapshot
+            or not valid_draft_session_snapshot(snapshot, sql=snapshot.sql)
+        ):
+            raise ValueError("Athena editor provenance is unavailable")
+        self._runtime._revoke_session_capture(self)
+        self._runtime._release_session_obligation(self)
+        # Editor revisions are session-local. Coordinator write revisions and
+        # permits fence the old writer; a fresh replacement retains this value.
+        self._editor_revision = max(self._editor_revision, snapshot.editor_revision)
+        self._sql = snapshot.sql
+        self._context = context
+        self._bound_context = snapshot.bound_context
+        self._saved_sql = snapshot.saved_sql
+        self._saved_context = snapshot.saved_context
+        self._deleted_revision = self._editor_revision if snapshot.deleted else None
+        self._save_failed_revision = self._editor_revision if snapshot.save_failed else None
+        self._state = snapshot.state
+        self._origin_revision = snapshot.origin_revision
+        self._capture = None
+        self._transferred = True
+        self._transfer_pending_context = snapshot.pending_context
+        if self._runtime.enabled and self._context_needs_guard():
+            self._state = "context_required"
+        if self._active:
+            self._claim_transferred_editor()
+
+    def _claim_transferred_editor(self) -> None:
+        self._transferred = False
+        runtime = self._runtime
+        if not runtime.enabled or runtime._disposed or runtime._terminal is not None:
+            return
+        coordinator = runtime._ensure_coordinator()
+        origin = self._origin_revision
+        if not coordinator.intake:
+            return
+        if self._deleted_revision == self._editor_revision:
+            return
+        if origin is not None and coordinator.latest_revision.get(origin[0]) != origin[1]:
+            if self._sql.strip():
+                # This SQL's old acknowledgement no longer describes the stored
+                # draft. Keep an unsaved obligation, but leave the newer writer's
+                # permit, capture and revision intact. Its callback cannot clear
+                # this distinct obligation or acknowledge this editor.
+                self._saved_sql = None
+                self._saved_context = None
+                self._save_failed_revision = self._editor_revision
+                self._state = "context_required" if self._context_needs_guard() else "error"
+                self._origin_revision = origin[0], coordinator.retain_unconfirmed(*origin)
+            return
+        context = (
+            self._bound_context or self._context
+            if self._sql.strip()
+            else self._transfer_pending_context or self._bound_context or self._context
+        )
+        if (
+            self._state == "pending"
+            and not runtime._saving_suspended
+            and context is not None
+            and all(context.cache_key)
+            and not self._context_needs_guard()
+        ):
+            runtime.schedule_session(self, self._sql, context, self._editor_revision)
+        else:
+            runtime._retain_unscheduled(self)
+
     def edited(self, sql: str, context: QueryContext) -> None:
         if self._detached:
             return
+        self._transfer_pending_context = None
         bound_origin = self._bound_context
         coordinator, capture = self._runtime._coordinator, self._capture
         if (
@@ -826,6 +1048,7 @@ class AthenaDraftSession:
     def recovered(self, record: SqlDraft) -> None:
         if self._detached:
             return
+        self._transfer_pending_context = None
         self._runtime._release_session_obligation(self)
         coordinator = self._runtime._coordinator
         if coordinator is not None and coordinator.intake and self._active:
@@ -853,6 +1076,7 @@ class AthenaDraftSession:
         ):
             return
         self._deleted_revision = self._editor_revision
+        self._transfer_pending_context = None
         self._saved_sql = None
         self._saved_context = None
         self._state = "empty"
@@ -902,4 +1126,10 @@ class AthenaDraftSession:
         self._on_property_changed.on_next(property_name)
 
 
-__all__ = ["AthenaDraftSession", "AthenaDraftsVM", "DraftFlushReport", "DraftState"]
+__all__ = [
+    "AthenaDraftSession",
+    "AthenaDraftSessionSnapshot",
+    "AthenaDraftsVM",
+    "DraftFlushReport",
+    "DraftState",
+]

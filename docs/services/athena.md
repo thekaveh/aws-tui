@@ -119,6 +119,15 @@ only a failed recovery decision; it does not bypass the original-context guard
 on recovered SQL. Recovery never automatically executes SQL, loads result rows,
 or creates AWS named queries. Recovered SQL is validated again before execution.
 
+Failed navigation and credential refresh preserve the editor's original context,
+recovery decision, and save status. Returning to Athena does not make SQL from
+another database runnable. Unsaved text remains unconfirmed until its save is
+acknowledged. Clearing such text still removes the draft from its original
+context, rather than deleting a draft for the currently selected database.
+If another editor has replaced the stored draft, restored text is shown as
+unsaved and is not saved over that newer draft automatically. Edit to save it,
+recover the current stored draft, or delete the draft explicitly.
+
 The five persisted context fields cannot attest same-name AWS credential-account
 changes across restarts. Verify the account behind the selected profile before
 running recovered SQL. Completed autosaves can be recovered after an abrupt
