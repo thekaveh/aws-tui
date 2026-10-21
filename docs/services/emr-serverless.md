@@ -20,6 +20,10 @@ region, and application identity.
 ## 2. Runs, details, and logs
 
 The runs pane provides state filters and drives the selected-run detail.
+Use Up and Down to move between runs. The selected row stays visible as the
+list scrolls, and its details follow the selection. Refresh and additional
+pages restore visibility when the selected run remains in the loaded list.
+
 Independent pollers refresh applications, runs, and active-run detail, with a
 slower cadence when no run is active and terminal-state suppression for
 detail. Application discovery requests at most 50 records per page and fails
