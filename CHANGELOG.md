@@ -233,6 +233,10 @@ section. The current tree must not be tagged as v0.8.0.
 
 ### Fixed
 
+- Transfer cards scroll within the overlay at compact terminal sizes. Later
+  Cancel controls remain reachable, title and history controls stay visible,
+  and resizing preserves the focused transfer. Small batches retain a compact
+  overlay height.
 - Active transfers have a keyboard-accessible palette route. Enter and Space
   activate the chosen cancellation control without activating the file pane;
   Escape returns to the service focus.
