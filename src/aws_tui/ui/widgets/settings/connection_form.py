@@ -180,6 +180,7 @@ class ConnectionFormInline(Widget):
         self._errors_sub: DisposableBase | None = None
         # Re-entrancy guard for _submit — see _submit docstring.
         self._submitting: bool = False
+        self._intent_revision = 0
 
     @staticmethod
     def _build_form_vm() -> S3ConnectionFormVM:
@@ -244,6 +245,13 @@ class ConnectionFormInline(Widget):
         self._errors_sub = self._form_vm.on_errors_changed.subscribe(
             on_next=self._on_errors_changed
         )
+        for field in self.query(Input):
+            self.watch(field, "value", self._advance_intent, init=False)
+
+    def _advance_intent(self) -> None:
+        # Reactive changes are synchronous, including input that changes back
+        # before queued Input.Changed messages have been processed.
+        self._intent_revision += 1
 
     def on_unmount(self) -> None:
         if self._errors_sub is not None:
@@ -254,12 +262,18 @@ class ConnectionFormInline(Widget):
     # ── Public API ─────────────────────────────────────────────────────────
 
     @property
+    def intent_revision(self) -> int:
+        """Changes whenever a form session or newer input supersedes a read."""
+        return self._intent_revision
+
+    @property
     def has_errors(self) -> bool:
         """Whether the existing validation model currently rejects submission."""
         return self._form_vm.has_errors
 
     def open_for_add(self) -> None:
         """Show the form in Add mode (all fields empty, name unlocked)."""
+        self._intent_revision += 1
         self._ctx = _OpenContext(mode="add", original_name=None)
         self._submitting = False
         self.query_one("#form-title", Static).update("New s3-compatible connection")
@@ -294,6 +308,7 @@ class ConnectionFormInline(Widget):
 
     def open_for_edit(self, *, name: str, defaults: S3CompatForm) -> None:
         """Show the form in Edit mode (pre-filled, name locked)."""
+        self._intent_revision += 1
         self._ctx = _OpenContext(mode="edit", original_name=name)
         self._submitting = False
         self.query_one("#form-title", Static).update(f"Edit {name!r}")
@@ -314,6 +329,7 @@ class ConnectionFormInline(Widget):
 
     def close(self) -> None:
         """Hide the form and clear state."""
+        self._intent_revision += 1
         self.remove_class("-open")
         self._submitting = False
         self._ctx = None
@@ -375,6 +391,8 @@ class ConnectionFormInline(Widget):
             "secret_access_key",
             "session_token",
         }:
+            return
+        if event.value != event.input.value:
             return
         # Drive the form VM — re-runs all validators and updates
         # ``errors`` / ``can_submit`` reactively.
@@ -523,6 +541,7 @@ class ConnectionFormInline(Widget):
             return
         if self._submitting:
             return
+        self._intent_revision += 1
         self._submitting = True
         self._refresh_save_button()
         # Pull the live model from the form VM. set_field has been

@@ -63,6 +63,14 @@ class DemoConnectionResolver:
     def list(self) -> tuple[Connection, ...]:
         return demo_connections()
 
+    def list_metadata(self) -> tuple[Connection, ...]:
+        """Synthetic sources carry no secrets to materialize."""
+        return self.list()
+
+    def resolve_selected(self, name: str) -> Connection:
+        """Match production selected-source lookup without external reads."""
+        return self.resolve(name)
+
     def discover(self) -> ConnectionDiscovery:
         """Return the actual demo connections with no invalid local sources."""
         return ConnectionDiscovery(connections=tuple(self.list()))
