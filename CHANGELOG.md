@@ -233,6 +233,9 @@ section. The current tree must not be tagged as v0.8.0.
 
 ### Fixed
 
+- The deferred S3 move API refuses same-object destinations across endpoint
+  aliases before any mutation, preventing source deletion after a self-copy.
+
 - Failed Athena navigation and credential recovery preserve local SQL draft
   origins, recovery decisions, and save status. Draft clears keep their original
   database target, and restoring older text does not falsely acknowledge it as

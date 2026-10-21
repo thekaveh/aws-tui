@@ -159,6 +159,27 @@ VMs to build service pages, but it cannot import Textual widgets.
 layers. Demo mode selects in-memory service adapters at the composition root;
 production modules do not import the demo package.
 
+### 1.1. Destructive move identity
+
+The deferred `CrossFsMove` API checks storage identity before publication or
+source deletion. `MoveNamespaceResolver` resolves a concrete resource without
+I/O; `S3FS` includes the bucket and literal key components, preserving configured
+prefixes and repeated separators. A virtual service root has no single resource
+and is refused, including in mixed local/S3 moves.
+
+Different endpoint URLs do not establish separate backends. By default, S3
+namespaces are unknown: a move onto the same bucket/key, or into its own
+directory descendant, is refused across endpoint aliases. Different-key moves
+retain the existing revision and conflict checks. Copy behavior is unchanged.
+
+Provider API callers can supply `S3FS(move_namespace="trusted-store-id", ...)`
+after independently verifying the backend namespace. Only two distinct,
+explicit IDs establish disjoint stores; one unknown ID remains ambiguous.
+These IDs are caller assertions, never inferred from URLs, DNS, profiles or
+credentials. They cannot override an already-known same canonical endpoint/path.
+This is not a connection-config option, backend discovery, or authorization
+mechanism. Move commands remain unavailable in the UI.
+
 ## 2. Composition root
 The two top-level files `src/aws_tui/composition.py` and
 `src/aws_tui/app.py` are the only modules permitted to import from
