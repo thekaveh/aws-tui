@@ -294,10 +294,19 @@ A binding can be a single keystroke or a list of fallback keystrokes:
 The default map is declared in `infra/keymap_store.py`. At composition
 time, aws-tui validates the overlay and `BindingResolver` installs keys
 only for registered actions. Unknown action IDs are logged and the app
-continues with the default keymap so a typo does not crash startup. The new `pane.object_details` action defaults to `ctrl+o`.
+continues with the default keymap so a typo does not crash startup.
 
-Existing custom keybinding overlays inherit this default. If an existing action already uses `ctrl+o`, move that action or remap `"pane.object_details" = "ctrl+i"` in `[keybindings]`. This avoids a collision. The named **S3 object details** palette
-entry follows the same focused-row and read-only guards.
+S3 object details defaults to `Ctrl+O`. To preserve an existing `Ctrl+O`
+shortcut, set `"pane.object_details" = "ctrl+e"` in `[keybindings]`.
+`Ctrl+E` is unused by the default map and has a distinct ANSI byte from `Tab`.
+Choose another unused key if your overlay already uses `Ctrl+E`.
+The named **S3 object details** palette entry keeps the same focused-row and
+read-only guards.
+
+Traditional ANSI input does not distinguish `Ctrl+I` from `Tab`, `Ctrl+H`
+from `Backspace`, or `Ctrl+M` from `Enter`. Enhanced keyboard protocols can
+distinguish them. Collision validation compares key names and does not detect
+these byte aliases. Test custom shortcuts in your terminal.
 
 For example, use `"pane.copy" = "ctrl+y"` to move pane copy without
 claiming bare `y`, which is reserved by `glue.copy_table_ref`.
@@ -342,8 +351,8 @@ Custom keybindings replace defaults, for example:
 
 ```toml
 [keybindings]
-"emr.logs.source" = ["ctrl+alt+s"]
-"emr.logs.follow" = ["ctrl+h"]
+"emr.logs.source" = ["ctrl+f"]
+"emr.logs.follow" = ["ctrl+n"]
 ```
 
 Choose keys unused by the rest of your overlay. Existing collision validation
@@ -520,9 +529,10 @@ that key must move to another key, or explicitly remap/disable the new action:
 
 ```toml
 [keybindings]
-"app.transfer_history" = ["ctrl+h"]
+"app.transfer_history" = ["ctrl+b"]
 ```
 
 Custom bindings replace defaults. A new collision is rejected under the same
 strict rules as other actions; invalid overrides fall back to the default map
 with a startup warning. Choose a free key before saving the override.
+Check the [terminal alias guidance](#2-customizing) before choosing that key.
