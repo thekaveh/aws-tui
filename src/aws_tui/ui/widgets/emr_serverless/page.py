@@ -464,8 +464,13 @@ class EmrServerlessPage(DeferredWorkerMixin, Widget):
             else:
                 self._right_logs.action_scroll_down()
             return True
-        # Detail has no cursor action but must consume Up and Down.
-        return self._right_detail is not None and self._is_within(focused, self._right_detail)
+        if self._right_detail is not None and self._is_within(focused, self._right_detail):
+            if delta < 0:
+                self._right_detail.action_scroll_up()
+            else:
+                self._right_detail.action_scroll_down()
+            return True
+        return False
 
     async def action_clone_selected_run(self) -> None:
         """Start one lifecycle-owned worker; push_screen_wait requires one."""
@@ -727,7 +732,8 @@ class EmrServerlessPage(DeferredWorkerMixin, Widget):
                 self._focus_nav_menu()
                 return
         else:
-            next_idx = focused_idx - 1
+            # NAV (outside this page) reverses into the last page slot.
+            next_idx = len(slots) - 1 if focused_idx < 0 else focused_idx - 1
             if next_idx < 0:
                 # First slot → NAV (Shift+Tab wraps backwards).
                 self._close_departed_selector(focused_idx)

@@ -29,6 +29,11 @@ A refresh preserves the selected run's details while that run remains loaded,
 even if a filter hides its row. Restoring the filter reveals it again.
 Filters do not clear a loading or provider error state.
 
+From the runs pane, press Tab to focus the detail scroll area. Use Up/Down
+or `k`/`j` to scroll without changing the selected run. PageUp/PageDown move
+by pages; Home/End reach the first and last content. Tab and Shift+Tab
+continue through the six page slots in either direction.
+
 Independent pollers refresh applications, runs, and active-run detail, with a
 slower cadence when no run is active and terminal-state suppression for
 detail. Application discovery requests at most 50 records per page and fails
