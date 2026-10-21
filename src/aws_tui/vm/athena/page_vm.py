@@ -64,6 +64,9 @@ T = TypeVar("T")
 _VIEWS = frozenset({"query", "history", "results", "saved"})
 _CONTEXT_ERROR = "Athena context request failed"
 _WORKGROUP_DETAIL_ERROR = "Athena workgroup request failed"
+_SOURCE_CONTEXT_ERROR = (
+    "Previous query context is unavailable. Select the original context before running this SQL."
+)
 _DISCOVERY_PAGE_LIMIT = 64
 _DISCOVERY_EMPTY_PAGE_LIMIT = 3
 _MAX_CONTEXT_ITEMS = 1_000
@@ -81,6 +84,7 @@ _RECOVERY_FAILURE_STATES = frozenset(
 class AthenaPageEditorSnapshot:
     editor: AthenaEditorSnapshot = field(repr=False)
     recovery_error: str | None = field(repr=False)
+    context_selection_required: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -144,6 +148,7 @@ class AthenaPageVM:
         self._source_is_current = source_is_current or _unverified_source
         self._draft_restore_running = False
         self._draft_recovery_error: str | None = None
+        self._context_selection_required = False
         self._client = client
         self._policy = policy
         self._connection = connection
@@ -244,6 +249,11 @@ class AthenaPageVM:
     @property
     def selected_table_ref(self) -> TableRef | None:
         return self._selected_table_ref
+
+    @property
+    def context_choice_revision(self) -> int:
+        """Count explicit context choices, excluding background discovery."""
+        return self._context_choice_revision
 
     async def select_table(self, table_name: str) -> None:
         if (
@@ -585,7 +595,7 @@ class AthenaPageVM:
             self._notify("active_view")
 
     def export_snapshot(self) -> AthenaPageSnapshot:
-        if not self._is_alive():
+        if not self._is_alive() or self._context_selection_required:
             raise ValueError("Athena page is unavailable")
         detail = self._workgroup_detail
         if detail is None:
@@ -623,7 +633,9 @@ class AthenaPageVM:
         if not self._is_alive():
             raise ValueError("Athena page is unavailable")
         return AthenaPageEditorSnapshot(
-            self.query.export_editor_snapshot(), self._draft_recovery_error
+            self.query.export_editor_snapshot(),
+            self._draft_recovery_error,
+            self._context_selection_required,
         )
 
     def install_editor_snapshot(self, snapshot: AthenaPageEditorSnapshot) -> None:
@@ -631,6 +643,7 @@ class AthenaPageVM:
             not self._is_alive()
             or type(snapshot) is not AthenaPageEditorSnapshot
             or not optional_exact_string(snapshot.recovery_error)
+            or type(snapshot.context_selection_required) is not bool
         ):
             raise ValueError("Athena editor provenance is unavailable")
         recovery_error = (
@@ -639,9 +652,25 @@ class AthenaPageVM:
             else snapshot.recovery_error
         )
         self.query.install_editor_snapshot(snapshot.editor, notify=False)
+        self._context_selection_required |= snapshot.context_selection_required
         self._draft_recovery_error = recovery_error
         self.query._notify_snapshot_restored()
         self._notify("draft_recovery_error")
+
+    async def restore_source_editor(self, snapshot: AthenaPageEditorSnapshot) -> None:
+        """Restore an off-screen editor without substituting another context.
+
+        Source rollback uses this when complete context restoration is
+        unavailable. Validate the editor before clearing any selectors.
+        """
+        original_context = self._context
+        self.install_editor_snapshot(snapshot)
+        if self._context_selection_required or snapshot.editor.context != original_context:
+            await self._clear_query_context()
+            self._context_selection_required = True
+            self._workgroup_detail_state = PaneState.ERROR
+            self._workgroup_detail_error_text = _SOURCE_CONTEXT_ERROR
+            self._notify_workgroup_detail()
 
     async def restore_snapshot(self, snapshot: AthenaPageSnapshot) -> None:
         prepared, issue = _prepare_page_snapshot(
@@ -954,6 +983,7 @@ class AthenaPageVM:
         self._catalog_generation += 1
         self._database_generation += 1
         self._context = context.context
+        self._context_selection_required = False
         self.tables.replace_context(self._context, notify=False)
         self._loaded_views = set(snapshot.loaded_views)
         self._active_view = snapshot.active_view
@@ -1024,6 +1054,7 @@ class AthenaPageVM:
     def _snapshot_restore_token(self) -> tuple[object, ...]:
         return (
             self._context,
+            self._context_selection_required,
             self._active_view,
             frozenset(self._loaded_views),
             self._lifecycle_generation,
@@ -1071,6 +1102,7 @@ class AthenaPageVM:
         if not any(row.name == workgroup for row in self.workgroups):
             return
         self._context_choice_revision += 1
+        self._context_selection_required = False
         await self._select_workgroup(
             workgroup,
             preferred_catalog=self._selection_store.get(
@@ -1154,11 +1186,23 @@ class AthenaPageVM:
             ):
                 self._select_view_state(previous_view)
                 self.query.set_sql(previous_sql)
+                if self._context_selection_required:
+                    self._workgroup_detail_error_text = _SOURCE_CONTEXT_ERROR
+                    self._notify_workgroup_detail()
 
         try:
             await self._resolve_table_context(
                 table_ref, choice_revision=choice_revision, prime_token=prime_token
             )
+            if (
+                owns_resolution()
+                and self.query.sql == primed_sql
+                and self._context.catalog == table_ref.catalog_name
+                and self._context.database == table_ref.database_name
+                and self._enabled_workgroup_available()
+            ):
+                self._context_selection_required = False
+                self.query.refresh_execution_availability()
         except asyncio.CancelledError:
             restore_previous_editor()
             raise
@@ -1233,7 +1277,7 @@ class AthenaPageVM:
             and self._workgroup_detail.summary.state == "DISABLED"
         ):
             attempted.add(self._workgroup_detail.summary.name)
-        while not self._workgroup_allows_execution():
+        while not self._enabled_workgroup_available():
 
             def eligible() -> tuple[str, ...]:
                 return tuple(
@@ -1464,6 +1508,8 @@ class AthenaPageVM:
             PaneState.IDLE,
             PaneState.EMPTY,
         }:
+            return
+        if self._context_selection_required:
             return
         if workgroup:
             available = await self._load_until_discovered(
@@ -2343,6 +2389,9 @@ class AthenaPageVM:
             self._notify(property_name)
 
     def _workgroup_allows_execution(self) -> bool:
+        return not self._context_selection_required and self._enabled_workgroup_available()
+
+    def _enabled_workgroup_available(self) -> bool:
         detail = self._workgroup_detail
         return (
             self._workgroup_detail_state is PaneState.IDLE

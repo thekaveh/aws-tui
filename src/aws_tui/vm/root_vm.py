@@ -17,7 +17,7 @@ caller so we can keep the test surface free of boto3.
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 
 from reactivex.abc import DisposableBase
 from vmx import ComponentVM, Message, MessageHub, RxDispatcher
@@ -215,8 +215,14 @@ class RootVM:
         service_id: str,
         *,
         prepare_vm: Callable[[object], None] | None = None,
-    ) -> None:
-        """Atomically switch connection and rebuild one supported service."""
+        ownership_is_current: Callable[[], bool] | None = None,
+        claim_input: Callable[[], bool] | None = None,
+    ) -> bool:
+        """Switch a supported service, returning whether adoption succeeded.
+
+        Rejection keeps the outgoing connection; ownership lost during shutdown
+        can leave the host empty. Retire the internally built, rejected candidate.
+        """
         service = self._registry.get(service_id)
         if not service.supports(connection):
             raise RuntimeError(
@@ -227,16 +233,31 @@ class RootVM:
         # constructs candidates before it tears down outgoing content, so a
         # factory or construction failure leaves the old state intact.
         vm = service.build_vm(connection)
-        await self._adopt_service_vm(
+        adopted = await self._adopt_service_vm(
             service_id,
             vm,
             prepare_vm=prepare_vm,
             before_publish=lambda: self._set_connection_state(connection, auth_state),
+            ownership_is_current=ownership_is_current,
+            claim_input=claim_input,
         )
+        if not adopted:
+            # ContentHost leaves a rejected candidate with its caller. This
+            # method built it, so retire it without publishing a connection.
+            try:
+                shutdown = getattr(vm, "shutdown", None)
+                if callable(shutdown):
+                    result = shutdown()
+                    if isinstance(result, Awaitable):
+                        await result
+            finally:
+                vm.dispose()
+            return False
         self._hub.send(ConnectionChangedMessage(connection=connection, auth_state=auth_state))
         # A connection change may rebuild the menu when support differs (for
         # example AWS -> S3-compatible), clearing the tentative selection.
         self._services_menu.switch_service_command.execute(service_id)
+        return True
 
     async def switch_service(self, service_id: str) -> None:
         """Build the named service's VM tree and host it.

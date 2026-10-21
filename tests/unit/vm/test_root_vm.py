@@ -595,3 +595,148 @@ async def test_switch_service_reverts_menu_when_content_host_raises() -> None:
     # Ribbon reverted; nav-rail still reflects the live host.
     assert root.services_menu.selected_id == "s3"
     root.dispose()
+
+
+@pytest.mark.parametrize("decision", ["ownership", "claim", "accept"])
+async def test_source_adoption_rejection_keeps_connection_and_drains_candidate(
+    monkeypatch, decision
+):
+    service = _FakeService("athena")
+    root = _build_root(service)
+    prior = _aws_conn("dev")
+    await root.switch_connection_with(prior, TokenState.CONNECTED)
+    await root.switch_service("athena")
+    outgoing = root.content_host.current
+    calls = []
+    messages = []
+
+    class Candidate:
+        constructed = False
+        shutdown_complete = False
+        disposed = False
+
+        def construct(self):
+            self.constructed = True
+
+        async def shutdown(self):
+            await asyncio.sleep(0)
+            self.shutdown_complete = True
+
+        def dispose(self):
+            self.disposed = True
+
+    candidate = Candidate()
+    monkeypatch.setattr(service, "build_vm", lambda _connection: candidate)
+
+    def owns():
+        assert root.content_host.current is (outgoing if not calls else None)
+        assert root.active_connection == prior
+        calls.append("ownership")
+        return decision != "ownership"
+
+    def claim():
+        assert root.content_host.current is outgoing
+        assert root.active_connection == prior
+        calls.append("claim")
+        return decision != "claim"
+
+    subscription = root.message_hub.messages.subscribe(
+        lambda message: (
+            messages.append(message) if isinstance(message, ConnectionChangedMessage) else None
+        )
+    )
+    try:
+        accepted = await root.switch_connection_and_service(
+            _aws_conn("prod"),
+            TokenState.CONNECTED,
+            "athena",
+            ownership_is_current=owns,
+            claim_input=claim,
+        )
+        assert accepted is (decision == "accept")
+        assert candidate.constructed
+        assert calls == (
+            ["ownership"]
+            if decision == "ownership"
+            else ["ownership", "claim", "ownership"]
+            if decision == "accept"
+            else ["ownership", "claim"]
+        )
+        if accepted:
+            assert root.content_host.current is candidate
+            assert root.active_connection == _aws_conn("prod")
+            assert len(messages) == 1
+            assert not candidate.shutdown_complete
+            assert not candidate.disposed
+        else:
+            assert root.content_host.current is outgoing
+            assert root.active_connection == prior
+            assert messages == []
+            assert candidate.shutdown_complete
+            assert candidate.disposed
+    finally:
+        subscription.dispose()
+        root.dispose()
+
+
+async def test_source_adoption_rechecks_owner_after_outgoing_shutdown(monkeypatch):
+    service = _FakeService("athena")
+    root = _build_root(service)
+    prior = _aws_conn("dev")
+    await root.switch_connection_with(prior, TokenState.CONNECTED)
+    await root.switch_service("athena")
+    outgoing = root.content_host.current
+    entered = asyncio.Event()
+    release = asyncio.Event()
+    owns = True
+    messages = []
+
+    async def shutdown():
+        entered.set()
+        await release.wait()
+
+    monkeypatch.setattr(outgoing, "shutdown", shutdown, raising=False)
+
+    class Candidate:
+        drained = False
+        disposed = False
+
+        def construct(self):
+            pass
+
+        async def shutdown(self):
+            self.drained = True
+
+        def dispose(self):
+            self.disposed = True
+
+    candidate = Candidate()
+    monkeypatch.setattr(service, "build_vm", lambda _connection: candidate)
+    subscription = root.message_hub.messages.subscribe(
+        lambda message: (
+            messages.append(message) if isinstance(message, ConnectionChangedMessage) else None
+        )
+    )
+    swap = asyncio.create_task(
+        root.switch_connection_and_service(
+            _aws_conn("prod"),
+            TokenState.CONNECTED,
+            "athena",
+            ownership_is_current=lambda: owns,
+        )
+    )
+    try:
+        await asyncio.wait_for(entered.wait(), timeout=2)
+        owns = False
+        release.set()
+        assert await asyncio.wait_for(swap, timeout=2) is False
+        assert root.content_host.current is None
+        assert root.active_connection == prior
+        assert not messages
+        assert candidate.drained
+        assert candidate.disposed
+    finally:
+        release.set()
+        await asyncio.gather(swap, return_exceptions=True)
+        subscription.dispose()
+        root.dispose()
