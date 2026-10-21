@@ -29,6 +29,11 @@ A refresh preserves the selected run's details while that run remains loaded,
 even if a filter hides its row. Restoring the filter reveals it again.
 Filters do not clear a loading or provider error state.
 
+Compact run lists reserve space for the name or run ID and omit the
+timestamp column. Select a run to inspect its full name, ID, state and
+timestamp in detail. If the detail request fails, information already
+loaded from the runs list remains available with the error.
+
 From the runs pane, press Tab to focus the detail scroll area. Use Up/Down
 or `k`/`j` to scroll without changing the selected run. PageUp/PageDown move
 by pages; Home/End reach the first and last content. Tab and Shift+Tab
