@@ -17,127 +17,170 @@
 
 ## 1. Connect to and switch between data sources
 
-Walks through three setups people hit on day one:
-
-- **§1.1–§1.5** — connect to local Adobe S3Mock from scratch (the
-  canonical "first s3-compatible endpoint" walkthrough).
-- **§1.6** — jump between AWS profiles with one keystroke
-  (multi-account flows).
-- **§1.7** — run several `s3-compatible` endpoints side-by-side.
-- **§1.8** — open an exact source, service, or directory from the CLI.
-
-You have S3Mock running on `http://localhost:9000` with arbitrary test
-credentials `test / test`. The shipped harness creates the canonical
-`dev-s3` connection; the manual examples below use `s3mock-local`
-to show that connection names are user-defined.
+Use §1.1–§1.5 to connect to a local Adobe S3Mock endpoint. Later recipes cover
+AWS profiles (§1.6), multiple endpoints (§1.7), and exact CLI selection (§1.8).
+The local example uses synthetic credentials `test / test` and one connection
+named `s3mock-local`.
 
 ### 1.1. Start S3Mock (skip if already running)
 
-**Quickest path — dev seeded S3Mock** (recommended for first-time
-exploration; ships ~5 buckets and ~90 objects so you have content to
-navigate):
+The harness requires a **source checkout**, Git, Bash, Python 3.11–3.13,
+`uv` 0.13.4 or newer, and a running Docker daemon with Docker Compose v2.
+On Windows, run the shell scripts in a Bash environment that can access Docker.
+See [Installation](install.md) for the supported application setup.
+
+A standalone installation does not include `scripts/test-services/`.
+Use an existing checkout, or obtain one:
+
+```bash
+git clone https://github.com/thekaveh/aws-tui.git
+cd aws-tui
+uv sync --locked
+```
+
+Run this recipe's shell commands from that **checkout root**.
+Choose one startup method below. If a suitable endpoint already runs at
+`http://localhost:9000`, reuse it and skip startup and teardown.
+
+**Seeded harness:** first ensure port 9000 and the `aws-tui-dev-s3mock` /
+`aws-tui-dev-s3mock-init` container names are available for this recipe.
+The harness uses the named volume `aws-tui-dev-s3mock-data`; do not reuse
+another workload's resources.
 
 ```bash
 scripts/test-services/s3/up.sh
 ```
 
-This wraps `docker compose` + `seed.py` and prints the path to
-`scripts/test-services/s3/config-snippet.toml`; add that snippet to
-`<config-dir>/config.toml` to create `dev-s3`. Teardown is
-`scripts/test-services/s3/down.sh` (add `--purge` to wipe the data
-volume). See `scripts/test-services/README.md` for the seeded
-dataset and how to extend it.
+The script starts Docker Compose and seeds five buckets with sample objects.
+It prints a `dev-s3` config snippet but does **not** create an application
+connection. Ignore that paste-snippet instruction when following the Settings
+route below. Do not also add `dev-s3`.
+See [connection verification](#15-use-it) for the expected bucket listing.
 
-**Plain S3Mock** (no seed):
+**Alternative: unseeded container.** Use this instead of the seeded harness,
+with port 9000 and the container name below available:
 
 ```bash
-docker run --rm -d --name s3mock \
+docker run --rm -d --name aws-tui-cookbook-s3mock \
     -p 127.0.0.1:9000:9090 \
     adobe/s3mock:5.2.3@sha256:ab01a6946750f451ca215a47e91030695b260e4003b8a5a6201d25029b8fca92
 ```
 
-### 1.2. Store the credentials in the macOS Keychain (recommended)
+This endpoint starts empty. An empty bucket list is expected until you create
+test data outside aws-tui.
 
-The resolver expects two required keychain entries under ONE service name
-(matching the `credentials = "keychain:<service>"` value in
-`config.toml`): one account named `access_key_id` and one named
-`secret_access_key`. Temporary credentials may also provide an
-optional `session_token` account. So for a `keychain:s3mock-local`
-config entry:
+### 1.2. Choose one connection setup route
 
-```bash
-# service="s3mock-local", account="access_key_id"
-security add-generic-password \
-    -s s3mock-local -a access_key_id -w test
+Use **Settings (§1.3)** when a working OS keyring backend is available.
+It stores the test credentials and creates one connection.
+If the backend is unavailable, use the **static TOML alternative (§1.4)**.
 
-# service="s3mock-local", account="secret_access_key"
-security add-generic-password \
-    -s s3mock-local -a secret_access_key -w test
-
-# optional, only for temporary credentials
-security add-generic-password \
-    -s s3mock-local -a session_token -w '<session-token>'
-```
-
-(The Python `keyring` library aws-tui uses delegates to the macOS
-Keychain by default.)
+These are alternatives, not consecutive steps. Do not manually create macOS
+Keychain entries before using Settings. Do not append the static table after
+Settings saves the same connection. See
+[credential sources](connections.md#2-credential-sources-for-s3-compatible-connections)
+for platform-independent storage behavior.
 
 ### 1.3. Add via the in-TUI Settings form
-Open Settings with `,`, add an S3-compatible connection, and fill the
-form:
 
-| Field | Value |
-|---|---|
-| Name | `s3mock-local` |
-| Endpoint URL | `http://localhost:9000` |
-| Region | `us-east-1` |
-| Access key ID | `test` |
-| Secret access key | `test` |
-| Session token | Optional; only for temporary credentials |
+1. Launch the checkout application:
+
+    ```bash
+    uv run aws-tui
+    ```
+
+2. Press `,` to open Settings.
+3. Choose **+ Add s3-compatible connection** and fill the form:
+
+    | Field | Value |
+    |---|---|
+    | Name | `s3mock-local` |
+    | Endpoint URL | `http://localhost:9000` |
+    | Region | `us-east-1` |
+    | Access key ID | `test` |
+    | Secret access key | `test` |
+    | Session token | Leave blank for these test credentials. |
+
+4. Choose **Save**. Wait for the form to close after successful persistence.
+5. Continue to §1.5. Saving in Settings does not select the connection.
 
 The form stores the secret fields in the OS keychain through `keyring` and
-persists only a `keychain:` reference in `config.toml`. New saves use the
-URL-escaped `aws-tui:connections/<url-escaped-name>` namespace; later edits
-alternate between the `aws-tui:connection-revisions/<url-escaped-name>/0` and
-`/1` services. The resulting entry is equivalent to the following shape:
+persists only a `keychain:` reference in `config.toml`.
+The following is an illustration of the saved entry, **not another block to
+append**:
 
 ```toml
 [connections.s3mock-local]
 kind = "s3-compatible"
 endpoint_url = "http://localhost:9000"
+region = "us-east-1"
 credentials = "keychain:aws-tui:connections/s3mock-local"
 force_path_style = true
-verify_tls = false              # http:// S3Mock -> no cert to verify
+verify_tls = true
 ```
 
+TLS verification remains enabled by default. This HTTP endpoint has no TLS
+certificate to validate. Use HTTPS for real remote credentials.
+Later Settings edits use bounded credential revision services; see
+[Connections](connections.md#2-credential-sources-for-s3-compatible-connections).
+
 ### 1.4. Add by editing the file directly
-If you already have other connections, just append:
+
+Use this route **instead of §1.3**. It needs no keychain entries.
+The inline credentials below are public test values for a loopback service;
+do not use this pattern to store production secrets.
+
+1. Quit aws-tui before editing its configuration.
+2. Locate `<config-dir>/config.toml` using [platform paths](platforms.md#1-quick-reference).
+3. Create the configuration directory and file if absent. Add the table below once, preserving other settings.
+4. If `connections.s3mock-local` already exists, edit that table instead of appending a duplicate.
 
 ```toml
 [connections.s3mock-local]
 kind = "s3-compatible"
 endpoint_url = "http://localhost:9000"
-credentials = "static"          # tells the resolver to use inline keys below
+region = "us-east-1"
+credentials = "static"
 access_key_id = "test"
 secret_access_key = "test"
 force_path_style = true
-verify_tls = false              # http:// S3Mock -> no cert to verify
+verify_tls = true
 ```
 
-For **multiple** S3-compatible services, just add more
-`[connections.<name>]` blocks — the `<name>` (e.g. `s3mock-local`,
-`r2-prod`, `b2-archive`) becomes the source identifier shown in
-the pane's bottom border (`s3-compatible · s3mock-local · localhost:9000`).
-**Region is optional in app configuration and is not displayed** for
-`s3-compatible` connections. Set the signing region required by your provider.
-The pane title shows `name · endpoint` instead.
+The application warns about inline credentials at startup.
+Continue to §1.5; do not also complete the Settings route.
+
+For multiple endpoints, use a different `[connections.<name>]` table for each
+connection; see §1.7. Region is optional in hand-edited S3-compatible entries.
+Set the signing region required by the provider.
+The pane title shows the connection name and endpoint.
 
 ### 1.5. Use it
+
+After either setup route, close any running instance and launch the exact
+connection from the checkout root:
+
 ```bash
-aws-tui
+uv run aws-tui --connection s3mock-local
 ```
 
-Then in-app, press `Shift+S` on the focused pane to **cycle
+A standalone-installed reader can instead run
+`aws-tui --connection s3mock-local` against the same application config.
+The seeded endpoint shows five `aws-tui-dev-*` buckets; the unseeded endpoint
+shows an empty list. A connection error is not an empty successful listing.
+
+When finished, quit aws-tui. Stop only the service you started for this recipe:
+
+- Seeded harness: run `scripts/test-services/s3/down.sh` from the checkout root.
+  It preserves the named data volume. Do not add `--purge` unless you intend
+  to delete that harness's data.
+- Unseeded container: run `docker stop aws-tui-cookbook-s3mock`.
+  Its `--rm` setting removes that container.
+- Reused endpoint: leave it running. Do not stop or purge shared resources.
+
+To switch sources while the application is running, use the controls below.
+
+In the app, press `Shift+S` on the focused pane to **cycle
 through every available source** — `local` → every TOML /
 auto-discovered connection → wrap. AWS profiles auto-discovered
 from `~/.aws/credentials` show up as
