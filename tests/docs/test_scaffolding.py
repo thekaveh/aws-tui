@@ -668,8 +668,11 @@ def test_public_docs_cover_integrated_iceberg_workflow() -> None:
         "tests/unit/ui/glue/test_iceberg_view.py",
     ):
         assert automated_test in releasing
-    assert "`partitions` intentionally uses `SELECT *` with `LIMIT 500`" in ledger
-    assert "without `ORDER BY` because its metadata schema is dynamic" in ledger
+    inspection = next(
+        line for line in ledger.splitlines() if line.startswith("| Iceberg metadata inspection |")
+    )
+    assert "dynamic partitions use `SELECT *` without ordering" in inspection
+    assert "one lookahead row" in inspection
 
 
 def test_glue_operation_ledger_matches_domain_adapter_exactly() -> None:

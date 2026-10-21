@@ -296,3 +296,42 @@ def test_glue_iceberg_coverage_footer_content_guards() -> None:
     narrow = _snapshot("test_glue_iceberg_narrow_snapshot")
     assert "unknown&#160;snapshots" in narrow
     assert "metadata&#160;row&#160;limit&#160;100" in narrow
+
+
+@pytest.mark.parametrize("terminal_size", [(80, 24), (120, 40)])
+def test_iceberg_current_files_with_historical_snapshot_pinned(terminal_size, snap_compare):
+    from textual.widgets import TextArea
+
+    from aws_tui.vm.file_manager.pane_vm import PaneState
+    from tests.helpers import wait_until
+    from tests.unit.vm.glue.test_iceberg_vm import NOW
+
+    app = GluePageApp(theme="carbon", fixture="iceberg")
+
+    async def inspect_current(pilot):
+        await pilot.pause()
+        table = app.query_one("#glue-iceberg-table")
+        table.focus()
+        await pilot.press("down", "down")
+        await wait_until(
+            lambda: app._vm.catalog.iceberg.selected_snapshot_id == 41,
+            what="older snapshot selected",
+        )
+        await pilot.click("#glue-iceberg-info")
+        await pilot.press("down", "enter", "escape")
+        assert app._vm.catalog.iceberg.comparison_snapshot_id == 41
+        await pilot.click("#glue-iceberg-tab-files")
+        await wait_until(
+            lambda: app._vm.catalog.iceberg.state is PaneState.IDLE, what="current files loaded"
+        )
+        # Fixed synthetic fetch time makes this rendering fixture deterministic;
+        # live observation-time ownership is covered in VM cancellation tests.
+        app._vm.catalog.iceberg._panes["files"].observed_at = NOW
+        await pilot.pause()
+        await pilot.click("#glue-iceberg-info")
+        text = app.screen.query_one(TextArea).text
+        assert "CURRENT observations: files" in text
+        assert "Historical snapshot A: 41" in text
+        assert "not files/partitions reconstructed for snapshot A" in text
+
+    assert snap_compare(app, terminal_size=terminal_size, run_before=inspect_current)

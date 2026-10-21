@@ -30,6 +30,58 @@ _PARTITION_METRIC_COLUMNS = (
 )
 T = TypeVar("T")
 
+_METADATA_QUERIES = {
+    "snapshots": (
+        "committed_at, snapshot_id, parent_id, operation, manifest_list, summary",
+        "committed_at DESC",
+        100,
+    ),
+    "history": (
+        "made_current_at, snapshot_id, parent_id, is_current_ancestor",
+        "made_current_at DESC",
+        100,
+    ),
+    "manifests": (
+        "path, length, partition_spec_id, added_snapshot_id, added_data_files_count, "
+        "existing_data_files_count, deleted_data_files_count, partition_summaries",
+        "added_snapshot_id DESC, path",
+        500,
+    ),
+    "files": (
+        "content, file_path, file_format, spec_id, partition, record_count, "
+        "file_size_in_bytes, equality_ids, sort_order_id",
+        "file_path",
+        1000,
+    ),
+    "partitions": ("*", "", 500),
+    "refs": (
+        "name, type, snapshot_id, max_reference_age_in_ms, min_snapshots_to_keep, max_snapshot_age_in_ms",
+        "name",
+        100,
+    ),
+}
+
+
+@dataclass(frozen=True, slots=True)
+class IcebergQueryPlan:
+    table_ref: TableRef = field(repr=False)
+    collection: str
+    row_limit: int
+    request_limit: int
+    sql: str = field(repr=False)
+
+
+def metadata_query_plan(table_ref: TableRef, collection: str) -> IcebergQueryPlan:
+    """Build the exact bounded statement before any provider work begins."""
+    if collection not in _METADATA_QUERIES:
+        raise ValueError("Unknown Iceberg metadata collection")
+    projection, order, limit = _METADATA_QUERIES[collection]
+    sql = f"SELECT {projection} FROM {_metadata_table(table_ref, collection)}"
+    if order:
+        sql += f" ORDER BY {order}"
+    sql += f" LIMIT {limit + 1}"
+    return IcebergQueryPlan(table_ref, collection, limit, limit + 1, sql)
+
 
 @dataclass(frozen=True, slots=True)
 class IcebergCoverage:
@@ -145,9 +197,6 @@ class IcebergInspector:
         return await self._inspect(
             table_ref,
             suffix="snapshots",
-            projection=("committed_at, snapshot_id, parent_id, operation, manifest_list, summary"),
-            order_by="committed_at DESC",
-            limit=100,
             mapper=_map_snapshots,
         )
 
@@ -158,9 +207,6 @@ class IcebergInspector:
         return await self._inspect(
             table_ref,
             suffix="history",
-            projection=("made_current_at, snapshot_id, parent_id, is_current_ancestor"),
-            order_by="made_current_at DESC",
-            limit=100,
             mapper=_map_history,
         )
 
@@ -171,13 +217,6 @@ class IcebergInspector:
         return await self._inspect(
             table_ref,
             suffix="manifests",
-            projection=(
-                "path, length, partition_spec_id, added_snapshot_id, "
-                "added_data_files_count, existing_data_files_count, "
-                "deleted_data_files_count, partition_summaries"
-            ),
-            order_by="added_snapshot_id DESC, path",
-            limit=500,
             mapper=_map_manifests,
         )
 
@@ -188,12 +227,6 @@ class IcebergInspector:
         return await self._inspect(
             table_ref,
             suffix="files",
-            projection=(
-                "content, file_path, file_format, spec_id, partition, record_count, "
-                "file_size_in_bytes, equality_ids, sort_order_id"
-            ),
-            order_by="file_path",
-            limit=1000,
             mapper=_map_files,
         )
 
@@ -211,12 +244,6 @@ class IcebergInspector:
         return await self._inspect(
             table_ref,
             suffix="refs",
-            projection=(
-                "name, type, snapshot_id, max_reference_age_in_ms, "
-                "min_snapshots_to_keep, max_snapshot_age_in_ms"
-            ),
-            order_by="name",
-            limit=100,
             mapper=_map_refs,
         )
 
@@ -233,12 +260,12 @@ class IcebergInspector:
         table_ref: TableRef,
     ) -> BoundedQueryResult:
         self._validate_table(table_ref)
-        sql = f"SELECT * FROM {_metadata_table(table_ref, 'partitions')} LIMIT 501"
+        plan = metadata_query_plan(table_ref, "partitions")
         return await self._runner.run(
-            sql,
+            plan.sql,
             self._context,
             request_token=_request_token(),
-            max_rows=501,
+            max_rows=plan.request_limit,
         )
 
     async def _inspect(
@@ -246,23 +273,17 @@ class IcebergInspector:
         table_ref: TableRef,
         *,
         suffix: str,
-        projection: str,
-        order_by: str,
-        limit: int,
         mapper: Callable[[BoundedQueryResult], tuple[T, ...]],
     ) -> IcebergInspection[T]:
         self._validate_table(table_ref)
-        sql = (
-            f"SELECT {projection} FROM {_metadata_table(table_ref, suffix)} "
-            f"ORDER BY {order_by} LIMIT {limit + 1}"
-        )
+        plan = metadata_query_plan(table_ref, suffix)
         result = await self._runner.run(
-            sql,
+            plan.sql,
             self._context,
             request_token=_request_token(),
-            max_rows=limit + 1,
+            max_rows=plan.request_limit,
         )
-        return _inspection(result, table_ref, suffix, limit, mapper)
+        return _inspection(result, table_ref, suffix, plan.row_limit, mapper)
 
     def _validate_table(self, table_ref: TableRef) -> None:
         if (

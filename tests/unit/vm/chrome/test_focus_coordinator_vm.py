@@ -447,6 +447,7 @@ def test_focus_slot_enum_has_all_required_members() -> None:
         "GLUE_ICEBERG_PARTITIONS",
         "GLUE_ICEBERG_REFS",
         "GLUE_ICEBERG_TABLE",
+        "GLUE_ICEBERG_INFO",
         "GLUE_ICEBERG_MORE",
         "GLUE_ICEBERG_RETRY",
         "GLUE_ICEBERG_TIME_TRAVEL",
