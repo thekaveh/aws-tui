@@ -44,7 +44,7 @@ from aws_tui.vm.athena._pager_compat import (
 from aws_tui.vm.athena.draft_recovery import validate_draft_context
 from aws_tui.vm.athena.drafts_vm import AthenaDraftsVM
 from aws_tui.vm.athena.history_vm import AthenaHistorySnapshot, AthenaHistoryVM
-from aws_tui.vm.athena.query_vm import AthenaQuerySnapshot, AthenaQueryVM
+from aws_tui.vm.athena.query_vm import AthenaEditorSnapshot, AthenaQuerySnapshot, AthenaQueryVM
 from aws_tui.vm.athena.results_vm import AthenaResultsVM
 from aws_tui.vm.athena.saved_vm import AthenaSavedSnapshot, AthenaSavedVM, SavedQueryKind
 from aws_tui.vm.athena.tables_vm import AthenaTablesVM
@@ -78,6 +78,12 @@ _RECOVERY_FAILURE_STATES = frozenset(
 
 
 @dataclass(frozen=True, slots=True)
+class AthenaPageEditorSnapshot:
+    editor: AthenaEditorSnapshot = field(repr=False)
+    recovery_error: str | None = field(repr=False)
+
+
+@dataclass(frozen=True, slots=True)
 class AthenaPageSnapshot:
     context: QueryContext = field(repr=False)
     context_state: _SnapshotContextStage = field(repr=False)
@@ -89,6 +95,7 @@ class AthenaPageSnapshot:
     loaded_views: tuple[AthenaView, ...] = field(repr=False)
     history: AthenaHistorySnapshot = field(repr=False)
     saved: AthenaSavedSnapshot = field(repr=False)
+    draft_recovery_error: str | None = field(default=None, repr=False)
 
 
 @dataclass(frozen=True, slots=True)
@@ -606,10 +613,35 @@ class AthenaPageVM:
             loaded_views=tuple(sorted(self._loaded_views)),
             history=self.history.export_snapshot(),
             saved=self.saved.export_snapshot(),
+            draft_recovery_error=self._draft_recovery_error,
         )
         if not self.snapshot_is_valid(snapshot):
             raise ValueError("Athena snapshot is invalid")
         return snapshot
+
+    def export_editor_snapshot(self) -> AthenaPageEditorSnapshot:
+        if not self._is_alive():
+            raise ValueError("Athena page is unavailable")
+        return AthenaPageEditorSnapshot(
+            self.query.export_editor_snapshot(), self._draft_recovery_error
+        )
+
+    def install_editor_snapshot(self, snapshot: AthenaPageEditorSnapshot) -> None:
+        if (
+            not self._is_alive()
+            or type(snapshot) is not AthenaPageEditorSnapshot
+            or not optional_exact_string(snapshot.recovery_error)
+        ):
+            raise ValueError("Athena editor provenance is unavailable")
+        recovery_error = (
+            self._draft_recovery_error
+            if self.query.draft_recovery_guard and self._draft_recovery_error is not None
+            else snapshot.recovery_error
+        )
+        self.query.install_editor_snapshot(snapshot.editor, notify=False)
+        self._draft_recovery_error = recovery_error
+        self.query._notify_snapshot_restored()
+        self._notify("draft_recovery_error")
 
     async def restore_snapshot(self, snapshot: AthenaPageSnapshot) -> None:
         prepared, issue = _prepare_page_snapshot(
@@ -624,6 +656,8 @@ class AthenaPageVM:
             raise ValueError("Athena snapshot does not match the active source")
         if prepared is None:
             raise ValueError("Athena snapshot is invalid")
+        if not self.query.can_restore_draft_provenance(prepared.query.draft):
+            raise ValueError("Athena editor provenance is unavailable")
         try:
             query_before = self.query.export_snapshot()
             history_before = self.history.export_snapshot()
@@ -680,6 +714,7 @@ class AthenaPageVM:
                 snapshot.context,
             )
             or not optional_exact_string(snapshot.history_execution_id)
+            or not optional_exact_string(snapshot.draft_recovery_error)
             or (snapshot.saved_kind is not None and type(snapshot.saved_kind) is not SavedQueryKind)
             or not optional_exact_string(snapshot.saved_query_id)
             or ((snapshot.saved_kind is None) != (snapshot.saved_query_id is None))
@@ -906,6 +941,13 @@ class AthenaPageVM:
         self,
         snapshot: AthenaPageSnapshot,
     ) -> None:
+        if not self.query.can_restore_draft_provenance(snapshot.query.draft):
+            raise ValueError("Athena editor provenance is unavailable")
+        recovery_error = (
+            self._draft_recovery_error
+            if self.query.draft_recovery_guard and self._draft_recovery_error is not None
+            else snapshot.draft_recovery_error
+        )
         context = snapshot.context_state
         self._context_generation += 1
         self._workgroup_generation += 1
@@ -944,7 +986,9 @@ class AthenaPageVM:
             context.databases_token,
             limit_reached=context.databases_limit_reached,
         )
+        recovery_error_changed = self._draft_recovery_error != recovery_error
         self.query._install_snapshot(snapshot.query)
+        self._draft_recovery_error = recovery_error
         refs = self._policy.table_refs(snapshot.query.sql, self._context)
         self._selected_table_ref = refs[0] if len(refs) == 1 else None
         self.history._install_snapshot(snapshot.history)
@@ -974,6 +1018,8 @@ class AthenaPageVM:
         self._notify("active_view")
         self._notify_context_lists()
         self._notify_workgroup_detail()
+        if recovery_error_changed:
+            self._notify("draft_recovery_error")
 
     def _snapshot_restore_token(self) -> tuple[object, ...]:
         return (
@@ -2408,4 +2454,4 @@ def _snapshot_context_stage_is_valid(
     return sum(row.ref.database_name == expected_context.database for row in value.databases) == 1
 
 
-__all__ = ["AthenaPageSnapshot", "AthenaPageVM", "AthenaView"]
+__all__ = ["AthenaPageEditorSnapshot", "AthenaPageSnapshot", "AthenaPageVM", "AthenaView"]
