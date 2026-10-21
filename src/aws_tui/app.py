@@ -19,7 +19,7 @@ from collections import deque
 from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Callable
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
-from functools import partial
+from functools import cached_property, partial
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, ClassVar, Literal, cast
 
@@ -61,6 +61,7 @@ from aws_tui.infra.doctor_probe import probe_source
 from aws_tui.infra.keymap_store import textual_key_name
 from aws_tui.infra.redaction import redact_text
 from aws_tui.infra.theme_store import ThemeNotFound, ThemeStore
+from aws_tui.service_navigation import ServiceMountPorts, ServiceNavigation, ViewPublisher
 from aws_tui.services.glue.service import GlueService
 from aws_tui.ui import notifications
 from aws_tui.ui.actions import ActionRegistry
@@ -866,16 +867,6 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
         self._table_clipboard_sub: DisposableBase | None = None
         self.launch_ready = False
         self.launch_error: str | None = None
-        self._service_navigation_closed = False
-        self._table_navigation_generation = 0
-        self._service_navigation_owner: tuple[str, int] | None = None
-        self._table_navigation_lock = asyncio.Lock()
-        self._service_navigation_lock = asyncio.Lock()
-        self._table_navigation_tasks: set[asyncio.Task[None]] = set()
-        self._table_handoff_rollbacks: set[asyncio.Task[bool]] = set()
-        self._service_navigation_suppressed_selection: (
-            tuple[asyncio.Task[object] | None, str] | None
-        ) = None
         # True while ``on_mount`` is driving the initial service mount —
         # gates ``_on_nav_selection_changed`` so the seed selected_id
         # change doesn't spawn a duplicate mount worker that races the
@@ -891,23 +882,68 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
         # for the next attempt.
         self._attempt_conn_key: tuple[str, str] | None = None
         self._attempt_future: asyncio.Future[str] | None = None
-        # Sticky for the session once the boot chain ran out of
-        # candidates and we mounted local-on-both-panes. Subsequent
-        # Settings → S3 toggles route through
-        # ``_mount_local_only_dual_pane`` instead of rebuilding the
-        # S3 DualPane (which would re-attempt the same failed
-        # connections and force the user back into the same
-        # 60s-then-error pane the chain already negotiated past).
-        # The user can still press ``r`` on a pane or ``Shift+S``
-        # to re-bind to a specific connection — those are the
-        # explicit recovery paths.
-        self._chain_resolved_to_local: bool = False
-        self._chain_initial_conn: Connection | None = None
         # Tracks the last frozenset of skipped connection names shown in a
         # skip-toast so repeated Shift+S presses don't stack duplicate toasts.
         self._last_skip_toast_set: frozenset[str] | None = None
         self._source_revision = 0
         self._auth_recovery_task: asyncio.Task[None] | None = None
+
+    @cached_property
+    def service_navigation(self) -> ServiceNavigation:
+        """Pure lazy construction also supports isolated legacy App test stubs."""
+        return ServiceNavigation()
+
+    @property
+    def _table_navigation_generation(self) -> int:
+        return self.service_navigation.generation
+
+    @_table_navigation_generation.setter
+    def _table_navigation_generation(self, generation: int) -> None:
+        self.service_navigation.set_generation(generation)
+
+    @property
+    def _service_navigation_owner(self) -> tuple[str, int] | None:
+        return self.service_navigation.owner
+
+    @property
+    def _service_navigation_closed(self) -> bool:
+        return self.service_navigation.closed
+
+    @property
+    def _service_navigation_lock(self) -> asyncio.Lock:
+        return self.service_navigation.service_lock
+
+    @property
+    def _table_navigation_lock(self) -> asyncio.Lock:
+        return self.service_navigation.table_lock
+
+    @property
+    def _table_navigation_tasks(self) -> frozenset[asyncio.Task[None]]:
+        return self.service_navigation.navigation_tasks
+
+    @property
+    def _table_handoff_rollbacks(self) -> frozenset[asyncio.Task[bool]]:
+        return self.service_navigation.rollback_tasks
+
+    @property
+    def _chain_resolved_to_local(self) -> bool:
+        return self.service_navigation.local_fallback
+
+    @_chain_resolved_to_local.setter
+    def _chain_resolved_to_local(self, local_only: bool) -> None:
+        self.service_navigation.restore_fallback_state(
+            local_only, self.service_navigation.fallback_connection
+        )
+
+    @property
+    def _chain_initial_conn(self) -> Connection | None:
+        return self.service_navigation.fallback_connection
+
+    @_chain_initial_conn.setter
+    def _chain_initial_conn(self, connection: Connection | None) -> None:
+        self.service_navigation.restore_fallback_state(
+            self.service_navigation.local_fallback, connection
+        )
 
     @property
     def app_ctx(self) -> AppContext:
@@ -1054,7 +1090,7 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
                     error_type=type(exc).__name__,
                 )
                 auth_state = TokenState.MISSING
-            await ctx.root_vm.switch_connection_with(initial_conn, auth_state)
+            await self.service_navigation.switch_connection(ctx.root_vm, initial_conn, auth_state)
             # Run the initial DualPane build in a background worker
             # so on_mount returns immediately and Textual paints the
             # chrome (banner, nav rail, hint legend, etc.) without
@@ -1172,7 +1208,7 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
                         if launch.location is not None
                         else None,
                     )
-                    await ctx.root_vm.content_host.set_content(dual, service_id="s3")
+                    await self.service_navigation.adopt_content(ctx.root_vm, dual, service_id="s3")
                     setup = ctx.root_vm.content_host._setup_task
                     if setup is not None:
                         await setup
@@ -1196,8 +1232,8 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
                     )
                     if connection_route(connection) != connection_route(launch.connection):
                         raise RuntimeError("selected source changed before startup")
-                    await ctx.root_vm.switch_connection_and_service(
-                        connection, TokenState.CONNECTED, launch.service_id
+                    await self.service_navigation.switch_connection_and_service(
+                        ctx.root_vm, connection, TokenState.CONNECTED, launch.service_id
                     )
                     setup = ctx.root_vm.content_host._setup_task
                     if setup is not None:
@@ -1226,12 +1262,12 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
                     raise RuntimeError("selected service has no readiness state")
                 if any(state not in {PaneState.IDLE, PaneState.EMPTY} for state in states):
                     raise RuntimeError("selected service did not become ready")
-            if not self._service_navigation_closed and not self._exit:
+            if not self.service_navigation.closed and not self._exit:
                 self.call_after_refresh(partial(self._finish_explicit_launch, current))
         except asyncio.CancelledError:
             raise
         except Exception as exc:
-            if not self._service_navigation_closed and not self._exit:
+            if not self.service_navigation.closed and not self._exit:
                 ctx.log_sink.error("app.explicit_launch.failed", error_type=type(exc).__name__)
                 self.launch_error = "explicit launch failed for the selected source or location"
                 self.exit(return_code=1)
@@ -1240,7 +1276,7 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
 
     def _finish_explicit_launch(self, expected_vm: object) -> None:
         if (
-            self._service_navigation_closed
+            self.service_navigation.closed
             or self._exit
             or self._app_ctx.root_vm.content_host.current is not expected_vm
         ):
@@ -1370,8 +1406,7 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
             # walking the chain again (which would just replay the
             # same failures the user already saw).
             self._raise_local_fallback_toast()
-            self._chain_resolved_to_local = True
-            self._chain_initial_conn = initial_conn
+            self.service_navigation.remember_local_fallback(initial_conn)
             mounted = await self._mount_local_only_dual_pane(
                 initial_conn=initial_conn,
                 reason="chain-exhausted",
@@ -1455,8 +1490,10 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
         self._attempt_conn_key = (conn.kind, conn.name)
         try:
             try:
-                await ctx.root_vm.switch_connection_with(conn, TokenState.CONNECTED)
-                await ctx.root_vm.switch_service("s3")
+                await self.service_navigation.switch_connection(
+                    ctx.root_vm, conn, TokenState.CONNECTED
+                )
+                await self.service_navigation.switch_service(ctx.root_vm, "s3")
             except Exception as exc:
                 ctx.log_sink.error(
                     "app.boot_chain.switch_failed",
@@ -1658,7 +1695,7 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
         try:
             # ContentHostVM constructs the candidate before retiring the
             # outgoing VM, so a malformed fallback cannot empty the host.
-            await ctx.root_vm.content_host.set_content(dual, service_id="s3")
+            await self.service_navigation.adopt_content(ctx.root_vm, dual, service_id="s3")
         except Exception as exc:
             ctx.log_sink.error(
                 "app.local_only_mount.set_content_failed",
@@ -1917,7 +1954,7 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
         )
 
     def _first_run_owned(self, generation: int) -> bool:
-        return not self._service_navigation_closed and self._service_navigation_is_owned_by(
+        return not self.service_navigation.closed and self._service_navigation_is_owned_by(
             "first-run", generation
         )
 
@@ -1937,7 +1974,7 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
             section.disabled = busy
 
     def _request_first_run_discovery(self, *, mount: bool = False) -> None:
-        if self._service_navigation_closed:
+        if self.service_navigation.closed:
             return
         generation = self._advance_service_navigation("first-run", cancel_table_tasks=True)
         self._set_first_run_busy(True)
@@ -1978,7 +2015,7 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
         return snapshot
 
     async def _first_run_discovery_worker(self, generation: int, *, mount: bool) -> None:
-        async with self._service_navigation_lock:
+        async with self.service_navigation.service_lock:
             if not self._first_run_owned(generation):
                 return
             if mount:
@@ -2008,7 +2045,7 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
         self, event: FirstRunConnectionList.ConnectionSelected
     ) -> None:
         event.stop()
-        if self._service_navigation_closed:
+        if self.service_navigation.closed:
             return
         generation = self._advance_service_navigation("first-run", cancel_table_tasks=True)
         self._set_first_run_busy(True)
@@ -2028,7 +2065,7 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
         ):
             return
         event.stop()
-        if self._service_navigation_closed or event.mode != "add":
+        if self.service_navigation.closed or event.mode != "add":
             return
         generation = self._advance_service_navigation("first-run", cancel_table_tasks=True)
         self._set_first_run_busy(True)
@@ -2046,7 +2083,7 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
             await ctx.s3_connections_vm.add_async(entry)
         except Exception as exc:
             if not self._first_run_owned(generation):
-                if not self._service_navigation_closed:
+                if not self.service_navigation.closed:
                     notifications.error(
                         ctx.root_vm.chrome.toast_stack,
                         subject="Connection",
@@ -2066,7 +2103,7 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
                 self.call_after_refresh(partial(self._focus_first_run, view, generation))
             return
         if not self._first_run_owned(generation):
-            if not self._service_navigation_closed:
+            if not self.service_navigation.closed:
                 notifications.success(
                     ctx.root_vm.chrome.toast_stack,
                     subject="Connection",
@@ -2080,7 +2117,7 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
 
     async def _first_run_select(self, name: str, generation: int) -> None:
         ctx = self._app_ctx
-        async with self._service_navigation_lock:
+        async with self.service_navigation.service_lock:
             if not self._first_run_owned(generation):
                 return
             try:
@@ -2109,19 +2146,16 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
                 if fresh.invalid_sources or current != connection:
                     await self._refresh_first_run_discovery(generation)
                     return
-                suppression = (asyncio.current_task(), "s3")
-                self._service_navigation_suppressed_selection = suppression
-                try:
-                    await ctx.root_vm.switch_connection_and_service(connection, state, "s3")
+                with self.service_navigation.suppress_selection("s3"):
+                    await self.service_navigation.switch_connection_and_service(
+                        ctx.root_vm, connection, state, "s3"
+                    )
                     if not self._first_run_owned(generation):
                         return
                     if not await self._mount_service_view("s3", required_connection=connection):
                         raise RuntimeError("service mount failed")
                     if not self._first_run_owned(generation):
                         return
-                finally:
-                    if self._service_navigation_suppressed_selection is suppression:
-                        self._service_navigation_suppressed_selection = None
                 await self.query_one(NavMenu).show_first_run_connections(None)
                 if not self._first_run_owned(generation):
                     return
@@ -2365,7 +2399,7 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
             len(self.screen_stack) != 1
             or self._app_ctx.focus_coordinator.is_modal
             or self._shutdown_task is not None
-            or self._service_navigation_closed
+            or self.service_navigation.closed
         ):
             return None
         origin = self._capture_discovery_origin()
@@ -2396,7 +2430,7 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
         def current() -> bool:
             if (
                 self._shutdown_task is not None
-                or self._service_navigation_closed
+                or self.service_navigation.closed
                 or not self._discovery_origin_owned(origin)
                 or self._dual_pane() is not dual
                 or dual.focused_pane is not source
@@ -2773,7 +2807,7 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
         ctx = self._app_ctx
         connection = ctx.root_vm.active_connection
         return (
-            not self._service_navigation_closed
+            not self.service_navigation.closed
             and self._shutdown_task is None
             and connection is not None
             and service_id in ctx.registry
@@ -3045,11 +3079,11 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
         # also makes it cancellable by newer navigation and shutdown.
         task = asyncio.current_task()
         if task is not None:
-            self._table_navigation_tasks.add(task)
+            self.service_navigation.track_navigation(task)
         try:
-            async with self._service_navigation_lock:
+            async with self.service_navigation.service_lock:
                 if (
-                    self._service_navigation_closed
+                    self.service_navigation.closed
                     or self._shutdown_task is not None
                     or not self._service_navigation_is_owned_by("external", generation)
                     or not self._discovery_origin_owned(origin)
@@ -3087,7 +3121,7 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
                 host = self._app_ctx.root_vm.content_host
                 if (
                     not accepted
-                    and not self._service_navigation_closed
+                    and not self.service_navigation.closed
                     and self._service_navigation_is_owned_by("external", generation)
                     and host.current_id == target.service_id
                 ):
@@ -3104,7 +3138,7 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
                             header.restore_source()
         finally:
             if task is not None:
-                self._table_navigation_tasks.discard(task)
+                self.service_navigation.untrack_navigation(task)
 
     def _project_discovery_actions(
         self, origin: _DiscoveryOrigin
@@ -3764,14 +3798,14 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
             dual.schedule_listing(pane)
 
     def _handle_authenticate(self) -> None:
-        if self._shutdown_task is None and not self._service_navigation_closed:
+        if self._shutdown_task is None and not self.service_navigation.closed:
             self._run_lifecycle_worker(
                 self.action_authenticate, group="credential-recovery", exclusive=False
             )
 
     async def action_authenticate(self) -> None:
         """Retry the active source after credentials are repaired externally."""
-        if self._shutdown_task is not None or self._service_navigation_closed:
+        if self._shutdown_task is not None or self.service_navigation.closed:
             return
         self.record_action("auth.authenticate")
         task = self._auth_recovery_task
@@ -3837,7 +3871,7 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
         service_id = root.content_host.current_id
         hosted = root.content_host.current
         revision = self._source_revision
-        navigation_owner = self._service_navigation_owner
+        navigation_owner = self.service_navigation.owner
         if connection is None or service_id not in _SOURCE_SERVICE_IDS or hosted is None:
             notifications.advise(
                 root.chrome.toast_stack,
@@ -3942,8 +3976,8 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
 
                 def is_current() -> bool:
                     return (
-                        not self._service_navigation_closed
-                        and self._service_navigation_owner == navigation_owner
+                        not self.service_navigation.closed
+                        and self.service_navigation.owner == navigation_owner
                         and recovery.live_state_is_current()
                         and self._credential_recovery_is_current(
                             connection=connection,
@@ -3953,7 +3987,7 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
                         )
                     )
 
-                async with self._service_navigation_lock:
+                async with self.service_navigation.service_lock:
                     if not is_current():
                         await self._discard_staged_service_recovery(recovery.vm)
                         return
@@ -3977,8 +4011,7 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
         else:
             root.refresh_connection_state(resolved, TokenState.CONNECTED)
         self._clear_connection_unreachable(resolved.kind, resolved.name)
-        self._chain_resolved_to_local = False
-        self._chain_initial_conn = None
+        self.service_navigation.clear_local_fallback()
         notifications.success(
             root.chrome.toast_stack,
             subject="Auth",
@@ -4200,7 +4233,7 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
         outgoing_id = root.content_host.current_id
         original_connection = root.active_connection
         original_revision = self._source_revision
-        navigation_owner = self._service_navigation_owner
+        navigation_owner = self.service_navigation.owner
         input_claimed = False
 
         def owns_adoption() -> bool:
@@ -4211,9 +4244,9 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
             # state from a retired page.
             current = root.content_host.current
             return (
-                not self._service_navigation_closed
+                not self.service_navigation.closed
                 and self._shutdown_task is None
-                and self._service_navigation_owner == navigation_owner
+                and self.service_navigation.owner == navigation_owner
                 and self._source_revision == original_revision
                 and root.active_connection == original_connection
                 and (
@@ -4285,7 +4318,8 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
 
         prior_children = tuple(child for child in host.children if child is not staging_host)
         try:
-            adopted = await ctx.root_vm.adopt_prepared_service_vm(
+            adopted = await self.service_navigation.adopt_prepared_service(
+                ctx.root_vm,
                 connection,
                 TokenState.CONNECTED,
                 service_id,
@@ -4334,7 +4368,7 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
         from aws_tui.services.s3.service import _format_pane_title
 
         targets: list[tuple[PaneVM, PathRef]] = []
-        if self._chain_resolved_to_local:
+        if self.service_navigation.local_fallback:
             targets.append((hosted.left, PathRef(())))
         else:
             key = (connection.kind, connection.name)
@@ -4907,7 +4941,7 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
             move.execute(delta)
 
     def _handle_swap_source(self) -> None:
-        if self._shutdown_task is not None or self._service_navigation_closed:
+        if self._shutdown_task is not None or self.service_navigation.closed:
             return
         origin = self._capture_discovery_origin()
         if not self._discovery_origin_owned(origin):
@@ -4931,10 +4965,10 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
             return
         self.record_action("app.swap_source")
         generation = self._supersede_table_navigation()
-        async with self._service_navigation_lock:
+        async with self.service_navigation.service_lock:
             if (
                 self._shutdown_task is not None
-                or self._service_navigation_closed
+                or self.service_navigation.closed
                 or not self._service_navigation_is_owned_by("external", generation)
             ):
                 return
@@ -4951,7 +4985,7 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
     ) -> None:
         """Switch to the exact source committed by a Glue/Athena picker."""
         event.stop()
-        if self._shutdown_task is not None or self._service_navigation_closed:
+        if self._shutdown_task is not None or self.service_navigation.closed:
             return
         origin = self._capture_discovery_origin()
         if (
@@ -4977,10 +5011,10 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
         service_id: str,
         generation: int,
     ) -> None:
-        async with self._service_navigation_lock:
+        async with self.service_navigation.service_lock:
             if (
                 self._shutdown_task is not None
-                or self._service_navigation_closed
+                or self.service_navigation.closed
                 or not self._service_navigation_is_owned_by("external", generation)
                 or not self._discovery_origin_owned(origin)
                 or not event.header.is_attached
@@ -5133,7 +5167,7 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
         require_focus: bool = False,
     ) -> None:
         page = self._athena_page() or self._glue_page()
-        if page is None or self._shutdown_task is not None or self._service_navigation_closed:
+        if page is None or self._shutdown_task is not None or self.service_navigation.closed:
             return
         origin = self._capture_discovery_origin()
 
@@ -5500,9 +5534,9 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
 
     def _source_rollback_owned(self, state: _SourceRollback) -> bool:
         return (
-            not self._service_navigation_closed
+            not self.service_navigation.closed
             and self._shutdown_task is None
-            and self._service_navigation_owner == state.owner
+            and self.service_navigation.owner == state.owner
         )
 
     def _source_input_untouched(self, observation: _SourceInputObservation) -> bool:
@@ -5552,7 +5586,7 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
             service_id,
             ctx.root_vm.active_connection,
             ctx.root_vm.active_auth_state,
-            self._service_navigation_owner,
+            self.service_navigation.owner,
             ctx.root_vm.content_host.current,
         )
 
@@ -5601,7 +5635,8 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
                 )
                 auth_state = TokenState.MISSING
             try:
-                adopted = await ctx.root_vm.switch_connection_and_service(
+                adopted = await self.service_navigation.switch_connection_and_service(
+                    ctx.root_vm,
                     target,
                     auth_state,
                     service_id,
@@ -5707,11 +5742,10 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
                     await candidate.restore_source_editor(state.editor)
                 if not self._source_rollback_may_replace(state):
                     return False
-                suppression = (asyncio.current_task(), state.service_id)
-                self._service_navigation_suppressed_selection = suppression
-                try:
+                with self.service_navigation.suppress_selection(state.service_id):
                     try:
-                        adopted = await root.adopt_prepared_service_vm(
+                        adopted = await self.service_navigation.adopt_prepared_service(
+                            root,
                             connection,
                             auth_state,
                             state.service_id,
@@ -5726,26 +5760,19 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
                         if not adopted:
                             raise
                         publication_error = exc
-                finally:
-                    if self._service_navigation_suppressed_selection is suppression:
-                        self._service_navigation_suppressed_selection = None
                 if not adopted:
                     return False
                 if self._source_rollback_owned(state):
                     recovery.commit_selection()
             else:
-                suppression = (asyncio.current_task(), state.service_id)
-                self._service_navigation_suppressed_selection = suppression
-                try:
-                    adopted = await root.switch_connection_and_service(
+                with self.service_navigation.suppress_selection(state.service_id):
+                    adopted = await self.service_navigation.switch_connection_and_service(
+                        root,
                         connection,
                         auth_state,
                         state.service_id,
                         ownership_is_current=lambda: self._source_rollback_may_replace(state),
                     )
-                finally:
-                    if self._service_navigation_suppressed_selection is suppression:
-                        self._service_navigation_suppressed_selection = None
             if not adopted or not self._source_rollback_owned(state):
                 if publication_error is not None:
                     raise publication_error
@@ -6071,7 +6098,7 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
             # connection again — drop the chain-fallback memo so
             # Settings → S3 toggles return to the real DualPane
             # instead of staying pinned to local-on-both.
-            self._chain_resolved_to_local = False
+            self.service_navigation.mark_local_recovered()
 
         # Boot-chain attempt narrator: resolve the awaited future on
         # first terminal state for the matching connection key. The
@@ -6163,7 +6190,7 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
                     await self._rebind_pane_to_connection(pane, conn)
 
     def _on_service_navigation_message(self, msg: object) -> None:
-        if self._service_navigation_closed:
+        if self.service_navigation.closed:
             return
         if isinstance(msg, OpenS3LocationRequest):
             generation = self._advance_service_navigation(
@@ -6183,8 +6210,8 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
                 self._open_table_request(msg, generation),
                 name=f"table-navigation-{generation}",
             )
-            self._table_navigation_tasks.add(navigation)
-            navigation.add_done_callback(self._table_navigation_tasks.discard)
+            self.service_navigation.track_navigation(navigation)
+            navigation.add_done_callback(self.service_navigation.untrack_navigation)
             self.run_worker(
                 navigation,
                 exclusive=True,
@@ -6203,51 +6230,25 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
         # raise a success toast whether or not the write reached anything.
         self.copy_value(copied.sql_identifier, "table reference")
 
-    def _advance_service_navigation(
-        self,
-        owner: str,
-        *,
-        cancel_table_tasks: bool = False,
-    ) -> int:
-        self._table_navigation_generation += 1
-        generation = self._table_navigation_generation
-        self._service_navigation_owner = (owner, generation)
-        if cancel_table_tasks:
-            current = asyncio.current_task()
-            for task in tuple(self._table_navigation_tasks):
-                if task is not current and not task.done():
-                    task.cancel()
-        return generation
+    def _advance_service_navigation(self, owner: str, *, cancel_table_tasks: bool = False) -> int:
+        return self.service_navigation.advance(owner, cancel_table_tasks=cancel_table_tasks)
 
     def _supersede_table_navigation(self) -> int:
-        return self._advance_service_navigation(
-            "external",
-            cancel_table_tasks=True,
-        )
+        return self.service_navigation.supersede()
 
-    def _service_navigation_is_owned_by(
-        self,
-        owner: str,
-        generation: int,
-    ) -> bool:
-        return self._service_navigation_owner == (owner, generation)
+    def _service_navigation_is_owned_by(self, owner: str, generation: int) -> bool:
+        return self.service_navigation.owns(owner, generation)
 
     def _table_handoff_should_restore(self, generation: int) -> bool:
-        owner = self._service_navigation_owner
-        return generation <= self._table_navigation_generation and (
-            owner is None or owner[0] == "table"
-        )
+        return self.service_navigation.may_restore_handoff(generation)
 
     async def _open_table_request(
-        self,
-        request: OpenAthenaTableRequest | OpenGlueTableRequest,
-        generation: int,
+        self, request: OpenAthenaTableRequest | OpenGlueTableRequest, generation: int
     ) -> None:
         """Switch, mount, and select one exact Glue/Athena table."""
-        async with self._table_navigation_lock:
-            if generation != self._table_navigation_generation:
+        async with self.service_navigation.table_lock:
+            if not self.service_navigation.claim_table(generation):
                 return
-            self._service_navigation_owner = ("table", generation)
             await self._open_table_request_transaction(request, generation)
 
     async def _open_table_request_transaction(
@@ -6322,34 +6323,30 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
                     error_type=type(exc).__name__,
                 )
                 auth_state = TokenState.MISSING
-            if generation != self._table_navigation_generation:
+            if generation != self.service_navigation.generation:
                 return
 
-            suppression = (asyncio.current_task(), destination)
-            self._service_navigation_suppressed_selection = suppression
-            prepare_candidate: Callable[[object], None] | None = None
-            if isinstance(request, OpenAthenaTableRequest):
+            with self.service_navigation.suppress_selection(destination):
+                prepare_candidate: Callable[[object], None] | None = None
+                if isinstance(request, OpenAthenaTableRequest):
 
-                def prime_athena_candidate(candidate: object) -> None:
-                    nonlocal primed_athena, primed_athena_token
-                    if not isinstance(candidate, AthenaPageVM):
-                        raise RuntimeError("Athena destination is unavailable")
-                    primed_athena_token = candidate.prime_table_query(ref, request.snapshot_id)
-                    primed_athena = candidate
+                    def prime_athena_candidate(candidate: object) -> None:
+                        nonlocal primed_athena, primed_athena_token
+                        if not isinstance(candidate, AthenaPageVM):
+                            raise RuntimeError("Athena destination is unavailable")
+                        primed_athena_token = candidate.prime_table_query(ref, request.snapshot_id)
+                        primed_athena = candidate
 
-                prepare_candidate = prime_athena_candidate
+                    prepare_candidate = prime_athena_candidate
 
-            try:
                 mutation_started = True
-                await ctx.root_vm.switch_connection_and_service(
+                await self.service_navigation.switch_connection_and_service(
+                    ctx.root_vm,
                     connection,
                     auth_state,
                     destination,
                     prepare_vm=prepare_candidate,
                 )
-            finally:
-                if self._service_navigation_suppressed_selection is suppression:
-                    self._service_navigation_suppressed_selection = None
             if await self._restore_superseded_table_handoff(generation, snapshot):
                 if primed_athena is not None:
                     primed_athena.abandon_table_query_prime(prime_token=primed_athena_token)
@@ -6429,7 +6426,7 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
                 )
             if rollback_cancelled:
                 raise asyncio.CancelledError from None
-            if generation != self._table_navigation_generation:
+            if generation != self.service_navigation.generation:
                 return
             ctx.log_sink.error(
                 "service_navigation.table_handoff_failed",
@@ -6539,7 +6536,7 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
         generation: int,
         snapshot: _TableHandoffSnapshot,
     ) -> bool:
-        if generation == self._table_navigation_generation:
+        if generation == self.service_navigation.generation:
             return False
         if self._table_handoff_should_restore(generation):
             _, cancelled = await self._restore_table_handoff_durably(
@@ -6561,7 +6558,7 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
             self._restore_table_handoff(snapshot, generation, input_is_owned=input_is_owned),
             name="table-handoff-rollback",
         )
-        self._table_handoff_rollbacks.add(rollback)
+        self.service_navigation.track_rollback(rollback)
         current = asyncio.current_task()
         cancellation_count = current.cancelling() if current is not None else 0
         cancelled = False
@@ -6586,7 +6583,7 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
                 )
                 return False, cancelled
         finally:
-            self._table_handoff_rollbacks.discard(rollback)
+            self.service_navigation.untrack_rollback(rollback)
 
     async def _wait_for_current_service_setup(self) -> None:
         task = self._app_ctx.root_vm.content_host._setup_task
@@ -6601,7 +6598,7 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
         *,
         input_is_owned: Callable[[], bool] | None = None,
     ) -> bool:
-        async with self._service_navigation_lock:
+        async with self.service_navigation.service_lock:
             if input_is_owned is not None and not input_is_owned():
                 return False
             return await self._restore_table_handoff_transaction(
@@ -6626,27 +6623,24 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
                 stage="missing_snapshot",
             )
             return False
-        suppression = (asyncio.current_task(), snapshot.service_id)
-        self._service_navigation_suppressed_selection = suppression
-        try:
-            await self._app_ctx.root_vm.switch_connection_and_service(
-                snapshot.connection,
-                snapshot.auth_state,
-                snapshot.service_id,
-            )
-        except Exception as exc:
-            self._app_ctx.log_sink.error(
-                "service_navigation.table_rollback_failed",
-                connection=snapshot.connection.name,
-                service_id=snapshot.service_id,
-                stage="switch",
-                error=str(exc),
-                error_type=type(exc).__name__,
-            )
-            return False
-        finally:
-            if self._service_navigation_suppressed_selection is suppression:
-                self._service_navigation_suppressed_selection = None
+        with self.service_navigation.suppress_selection(snapshot.service_id):
+            try:
+                await self.service_navigation.switch_connection_and_service(
+                    self._app_ctx.root_vm,
+                    snapshot.connection,
+                    snapshot.auth_state,
+                    snapshot.service_id,
+                )
+            except Exception as exc:
+                self._app_ctx.log_sink.error(
+                    "service_navigation.table_rollback_failed",
+                    connection=snapshot.connection.name,
+                    service_id=snapshot.service_id,
+                    stage="switch",
+                    error=str(exc),
+                    error_type=type(exc).__name__,
+                )
+                return False
         if not self._table_handoff_should_restore(generation):
             return False
         if not await self._mount_service_view(
@@ -6674,11 +6668,11 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
         generation: int | None = None,
     ) -> None:
         """Resolve and mount an S3 request without changing source identity."""
-        if self._service_navigation_closed:
+        if self.service_navigation.closed:
             return
         if generation is None:
             generation = self._supersede_table_navigation()
-        async with self._service_navigation_lock:
+        async with self.service_navigation.service_lock:
             if not self._service_navigation_is_owned_by("external", generation):
                 return
             await self._open_s3_location_request_transaction(request)
@@ -6771,17 +6765,13 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
 
         stage = "mount"
         try:
-            suppression = (asyncio.current_task(), "s3")
-            self._service_navigation_suppressed_selection = suppression
-            try:
-                await ctx.root_vm.switch_connection_and_service(
+            with self.service_navigation.suppress_selection("s3"):
+                await self.service_navigation.switch_connection_and_service(
+                    ctx.root_vm,
                     connection,
                     auth_state,
                     "s3",
                 )
-            finally:
-                if self._service_navigation_suppressed_selection is suppression:
-                    self._service_navigation_suppressed_selection = None
 
             if not await self._mount_service_view(
                 "s3",
@@ -6924,31 +6914,28 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
             )
             return False
 
-        suppression = (asyncio.current_task(), service_id)
-        self._service_navigation_suppressed_selection = suppression
-        try:
-            with contextlib.suppress(Exception):
-                host = self.query_one("#content-host", Container)
-                await host.remove_children()
-                release_detached_query_results(host.ancestors_with_self)
-            await self._app_ctx.root_vm.switch_connection_and_service(
-                connection,
-                auth_state,
-                service_id,
-            )
-        except Exception as exc:
-            self._app_ctx.log_sink.error(
-                "service_navigation.s3_rollback_failed",
-                connection=connection.name,
-                service_id=service_id,
-                stage="switch",
-                error=str(exc),
-                error_type=type(exc).__name__,
-            )
-            return False
-        finally:
-            if self._service_navigation_suppressed_selection is suppression:
-                self._service_navigation_suppressed_selection = None
+        with self.service_navigation.suppress_selection(service_id):
+            try:
+                with contextlib.suppress(Exception):
+                    host = self.query_one("#content-host", Container)
+                    await host.remove_children()
+                    release_detached_query_results(host.ancestors_with_self)
+                await self.service_navigation.switch_connection_and_service(
+                    self._app_ctx.root_vm,
+                    connection,
+                    auth_state,
+                    service_id,
+                )
+            except Exception as exc:
+                self._app_ctx.log_sink.error(
+                    "service_navigation.s3_rollback_failed",
+                    connection=connection.name,
+                    service_id=service_id,
+                    stage="switch",
+                    error=str(exc),
+                    error_type=type(exc).__name__,
+                )
+                return False
 
         restored = await self._mount_service_view(
             service_id,
@@ -7197,13 +7184,7 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
         # The legend's trailing globals (themes/help/quit) are
         # independent of this.
         ctx.root_vm.chrome.hint_legend.set_current_service(selected)
-        suppression = self._service_navigation_suppressed_selection
-        if (
-            suppression is not None
-            and suppression[0] is asyncio.current_task()
-            and suppression[1] == selected
-        ):
-            self._service_navigation_suppressed_selection = None
+        if self.service_navigation.consume_selection(selected):
             return
         generation = self._supersede_table_navigation()
         # Skip the seed selected_id change that on_mount fires while
@@ -7263,20 +7244,15 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
         selected: str,
         generation: int,
     ) -> None:
-        async with self._service_navigation_lock:
-            if self._service_navigation_closed or not self._service_navigation_is_owned_by(
+        async with self.service_navigation.service_lock:
+            if self.service_navigation.closed or not self._service_navigation_is_owned_by(
                 "external", generation
             ):
                 return
             menu = self._app_ctx.root_vm.services_menu
             if menu.selected_id != selected:
-                suppression = (asyncio.current_task(), selected)
-                self._service_navigation_suppressed_selection = suppression
-                try:
+                with self.service_navigation.suppress_selection(selected):
                     menu.switch_service_command.execute(selected)
-                finally:
-                    if self._service_navigation_suppressed_selection is suppression:
-                        self._service_navigation_suppressed_selection = None
             for section in self.query(FirstRunConnectionList):
                 section.disabled = False
             if selected == SETTINGS_NAV_ID:
@@ -7331,7 +7307,9 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
         )
         try:
             host = self.query_one("#content-host", Container)
-            await ctx.root_vm.content_host.set_content(settings_vm, service_id=SETTINGS_NAV_ID)
+            await self.service_navigation.adopt_content(
+                ctx.root_vm, settings_vm, service_id=SETTINGS_NAV_ID
+            )
             replacement = SettingsView(
                 vm=settings_vm,
                 hub=ctx.hub,
@@ -7374,173 +7352,80 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
             self._restore_navigation_after_failed_adoption("Settings")
 
     async def _mount_service_view(
-        self,
-        service_id: str,
-        *,
-        required_connection: Connection | None = None,
+        self, service_id: str, *, required_connection: Connection | None = None
     ) -> bool:
-        """Swap the content host to show the DualPane for ``service_id``.
-
-        Always runs the full ``switch_service`` + ``remove_children``
-        + ``mount`` sequence. An earlier ``current_id == service_id``
-        early-return shortcut was meant to skip a no-op rebuild on a
-        same-service reselect, but it raced the Settings ↔ S3 toggle:
-        if the user clicked S3 → Settings → S3 quickly enough, the
-        Settings worker could be cancelled mid-``set_content`` before
-        ``current_id`` flipped to ``"settings"``, leaving
-        ``current_id == "s3"`` while the DOM held a partially-mounted
-        ``SettingsView``. The next ``_mount_service_view("s3")`` would
-        then hit the shortcut, see ``current_id == "s3"``, check
-        ``host.query(DualPane)`` (which returned nothing because
-        SettingsView was in the DOM), and re-mount using whatever
-        ``content_host.current`` was — possibly the disposed DualPaneVM
-        from the original mount, possibly the SettingsVM, possibly
-        nothing — and the user saw "S3 selected but Settings still on
-        screen". ``switch_service`` is idempotent on a matching
-        ``service_id``, so always running it is cheap; always tearing
-        the host children down and re-mounting forces the DOM into
-        agreement with the VM regardless of which intermediate state
-        a cancelled worker may have left behind.
-        """
+        """Adapt the UI operations for one shared navigation-owner attempt."""
         ctx = self._app_ctx
-        navigation_owner = self._service_navigation_owner
 
-        def owns_mount() -> bool:
-            return (
-                not self._service_navigation_closed
-                and self._service_navigation_owner == navigation_owner
-            )
-
-        await self._cancel_transfer_workers_before_content_swap()
-        if not owns_mount():
-            return False
-        if required_connection is not None and ctx.root_vm.active_connection != required_connection:
-            active = ctx.root_vm.active_connection
-            ctx.log_sink.error(
-                "app.mount_service_view.connection_mismatch",
-                service_id=service_id,
-                required_connection=required_connection.name,
-                active_connection=active.name if active is not None else None,
-            )
-            return False
-        # Explicit S3 selection after boot-chain local fallback is a
-        # retry. Earlier builds made the fallback sticky for the whole
-        # session, which left users unable to recover from Settings
-        # after fixing credentials. Retry the remembered initial
-        # connection once; if it still fails, remount local-on-both so
-        # the content host never stays stranded on the previous screen.
-        if (
-            service_id == "s3"
-            and required_connection is None
-            and self._chain_resolved_to_local
-            and self._chain_initial_conn is not None
-        ):
-            retry_conn = self._chain_initial_conn
-            self._chain_resolved_to_local = False
-            ctx.unreachable_connections.discard((retry_conn.kind, retry_conn.name))
-            self._last_skip_toast_set = None
-            outcome = await self._try_connection(retry_conn)
-            if outcome == "ok":
-                self._chain_initial_conn = None
-                return True
-            self._mark_connection_unreachable(retry_conn.kind, retry_conn.name)
-            self._raise_failure_toast(retry_conn, outcome)
-            self._raise_local_fallback_toast()
-            self._chain_resolved_to_local = True
-            self._chain_initial_conn = retry_conn
-            return await self._mount_local_only_dual_pane(
-                initial_conn=retry_conn,
-                reason="chain-exhausted",
-            )
-        try:
+        def prepare_mount() -> ViewPublisher:
             host = self.query_one("#content-host", Container)
-            await ctx.root_vm.switch_service(service_id)
-            if not owns_mount():
-                return False
-        except Exception as exc:
-            ctx.log_sink.error(
-                "app.mount_service_view.switch_service_failed",
-                service_id=service_id,
-                error=str(exc),
-                error_type=type(exc).__name__,
-            )
-            self._restore_navigation_after_failed_adoption(service_id)
-            return False
-        try:
-            current_vm = ctx.root_vm.content_host.current
-            if current_vm is None:
-                ctx.log_sink.error(
-                    "app.mount_service_view.missing_view_model",
-                    service_id=service_id,
+
+            async def publish(service: str, vm: object) -> None:
+                replacement = build_service_view(
+                    service,
+                    vm,
+                    hub=ctx.hub,
+                    keymap=ctx.keymap_store,
+                    source_candidates=_service_source_contexts(ctx, service),
+                    focus_coordinator=ctx.focus_coordinator,
                 )
-                return False
-            replacement = build_service_view(
-                service_id,
-                current_vm,
-                hub=ctx.hub,
-                keymap=ctx.keymap_store,
-                source_candidates=_service_source_contexts(ctx, service_id),
-                focus_coordinator=ctx.focus_coordinator,
-            )
-            await self._replace_content_widget(host, replacement)
-            if not owns_mount():
-                return False
-            if service_id in {"glue", "athena", "emr-serverless"}:
-                self._recompute_hint_disables()
-        except Exception as exc:
-            ctx.log_sink.error(
-                "app.mount_service_view.mount_failed",
-                service_id=service_id,
-                error=str(exc),
-                error_type=type(exc).__name__,
-                notes=getattr(exc, "__notes__", ()),
-            )
-            return False
-        return True
+                await self._replace_content_widget(host, replacement)
+
+            return publish
+
+        def begin_retry(connection: Connection) -> None:
+            ctx.unreachable_connections.discard((connection.kind, connection.name))
+            self._last_skip_toast_set = None
+
+        def report_retry_failure(connection: Connection, outcome: str) -> None:
+            self._mark_connection_unreachable(connection.kind, connection.name)
+            self._raise_failure_toast(connection, outcome)
+
+        return await self.service_navigation.mount_service(
+            service_id,
+            required_connection=required_connection,
+            ports=ServiceMountPorts(
+                root=ctx.root_vm,
+                log=ctx.log_sink,
+                cancel_transfers=self._cancel_transfer_workers_before_content_swap,
+                prepare_mount=prepare_mount,
+                retry_connection=self._try_connection,
+                mount_local_fallback=lambda connection: self._mount_local_only_dual_pane(
+                    initial_conn=connection, reason="chain-exhausted"
+                ),
+                begin_retry=begin_retry,
+                report_retry_failure=report_retry_failure,
+                report_local_fallback=self._raise_local_fallback_toast,
+                restore_navigation=self._restore_navigation_after_failed_adoption,
+                refresh_hints=self._recompute_hint_disables,
+            ),
+        )
 
     def _restore_navigation_after_failed_adoption(self, requested_id: str) -> None:
-        """Realign tentative navigation chrome with the still-hosted content."""
         ctx = self._app_ctx
-        current_id = ctx.root_vm.content_host.current_id
-        menu = ctx.root_vm.services_menu
-        if menu.selected_id != current_id:
-            current_task = asyncio.current_task()
-            suppression = (
-                (current_task, current_id)
-                if current_task is not None and current_id is not None
-                else None
-            )
-            self._service_navigation_suppressed_selection = suppression
-            try:
-                if current_id is None:
-                    menu.clear_selection()
-                else:
-                    menu.switch_service_command.execute(current_id)
-            finally:
-                if self._service_navigation_suppressed_selection is suppression:
-                    self._service_navigation_suppressed_selection = None
-        ctx.root_vm.chrome.hint_legend.set_current_service(current_id)
-        with contextlib.suppress(Exception):
+
+        def notify_failure(requested: str, current: str | None) -> None:
             notifications.error(
                 ctx.root_vm.chrome.toast_stack,
                 subject="Mount",
-                message=f"Could not open {requested_id}; restored {current_id or 'current view'}",
+                message=f"Could not open {requested}; restored {current or 'current view'}",
                 toast_id="navigation-adoption-failed",
             )
 
+        self.service_navigation.restore_navigation(
+            ctx.root_vm, requested_id, notify_failure=notify_failure
+        )
+
     async def _replace_content_widget(self, host: Container, replacement: Widget) -> None:
         """Mount a content replacement or leave a coherent error surface."""
-        navigation_owner = self._service_navigation_owner
+        navigation_owner = self.service_navigation.owner
         if any(candidate[0] is host for candidate in self._content_mount_hosts.values()):
             host = await self._reset_content_host(host)
-            if (
-                self._service_navigation_closed
-                or self._service_navigation_owner != navigation_owner
-            ):
+            if self.service_navigation.closed or self.service_navigation.owner != navigation_owner:
                 return
         await host.remove_children()
         release_detached_query_results(host.ancestors_with_self)
-        if self._service_navigation_closed or self._service_navigation_owner != navigation_owner:
+        if self.service_navigation.closed or self.service_navigation.owner != navigation_owner:
             return
         self._content_mount_hosts[replacement] = (host, navigation_owner)
         try:
@@ -7551,8 +7436,8 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
             try:
                 host = await self._reset_content_host(host)
                 if (
-                    self._service_navigation_closed
-                    or self._service_navigation_owner != navigation_owner
+                    self.service_navigation.closed
+                    or self.service_navigation.owner != navigation_owner
                 ):
                     return
                 await host.mount(
@@ -7582,7 +7467,7 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
         await host.remove()
         release_detached_query_results(cache_owners)
         replacement = Container(id="content-host")
-        if self._service_navigation_closed:
+        if self.service_navigation.closed:
             return replacement
         await parent.mount(replacement, before=next_sibling)
         return replacement
@@ -7643,14 +7528,14 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
     ) -> None:
         def is_owned() -> bool:
             return (
-                not self._service_navigation_closed
-                and self._service_navigation_owner == navigation_owner
+                not self.service_navigation.closed
+                and self.service_navigation.owner == navigation_owner
             )
 
         try:
             # Intent can advance while resetting, but the winning service mount
             # must wait until the empty host boundary is repaired.
-            async with self._service_navigation_lock:
+            async with self.service_navigation.service_lock:
                 if not is_owned():
                     return
                 current_host = self.query_one("#content-host", Container)
@@ -7857,32 +7742,16 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
         return self._crash_report
 
     def _close_service_navigation_intake(self) -> None:
-        if getattr(self, "_service_navigation_closed", False):
+        if self.service_navigation.closed:
             return
-        self._service_navigation_closed = True
+        self.service_navigation.close_intake()
         subscription = getattr(self, "_service_navigation_sub", None)
         if subscription is not None:
             subscription.dispose()
         self._service_navigation_sub = None
 
     async def _drain_table_navigation(self) -> None:
-        if not hasattr(self, "_table_navigation_tasks"):
-            self._table_navigation_tasks = set()
-        if not hasattr(self, "_table_handoff_rollbacks"):
-            self._table_handoff_rollbacks = set()
-        while self._table_navigation_tasks or self._table_handoff_rollbacks:
-            navigations = tuple(self._table_navigation_tasks)
-            for task in navigations:
-                if not task.done():
-                    task.cancel()
-            if navigations:
-                await self._await_tasks_through_cancellation(navigations)
-                self._table_navigation_tasks.difference_update(navigations)
-
-            rollbacks = tuple(self._table_handoff_rollbacks)
-            if rollbacks:
-                await self._await_tasks_through_cancellation(rollbacks)
-                self._table_handoff_rollbacks.difference_update(rollbacks)
+        await self.service_navigation.drain()
 
     async def _await_tasks_through_cancellation(
         self,
