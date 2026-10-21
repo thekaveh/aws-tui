@@ -193,6 +193,19 @@ class TransferRuntime:
         finally:
             self._begin_tasks.discard(owner)
 
+    async def claim_running(self, tid: str) -> None:
+        """Let a receipt-aware owner finalize an externally executed transfer.
+
+        Cancellation still sets the shared event. Once claimed, queued cleanup
+        must not decide the final outcome before publication receipts drain.
+        """
+        if tid not in self.owned_ids or tid not in self.cancel_events:
+            raise RuntimeError("Transfer execution has no owned journal entry")
+        self._running_ids.add(tid)
+        cleanup = self._queued_cleanup.get(tid)
+        if cleanup is not None:
+            await asyncio.shield(cleanup)
+
     def release(self, tid: str) -> None:
         self.owned_ids.discard(tid)
         self._descriptors.discard(tid)

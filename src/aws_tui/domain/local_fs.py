@@ -49,6 +49,7 @@ from aws_tui.domain.filesystem import (
     UnsupportedSourceError,
 )
 from aws_tui.domain.preview_limits import PreviewBudget, PreviewRequestKind
+from aws_tui.domain.recursive_upload import UploadSourceChangedError
 
 # Default streaming chunk size. 8 MiB matches S3 multipart minimum-friendly
 # blocks and keeps memory bounded on slow disks.
@@ -59,6 +60,7 @@ _STAGE_IDENTITY_PREFIX = "local-stage:v1:"
 # PaneVM consumes one complete listing. Bound the provider-side materialization
 # until the shared filesystem protocol exposes continuation tokens.
 _MAX_LISTING_ENTRIES: int = 10_000
+_List = list  # LocalFS.list otherwise shadows the builtin in later method annotations.
 
 
 class LocalFS:
@@ -205,6 +207,48 @@ class LocalFS:
                 continue
         entries.sort(key=lambda e: (e.kind != EntryKind.DIRECTORY, e.name))
         return entries
+
+    async def list_upload_directory(self, path: PathRef) -> _List[FileEntry]:
+        """Enumerate via no-follow component traversal, including unrooted paths."""
+        try:
+            if _WINDOWS:
+                windows_rows = await anyio.to_thread.run_sync(_windows_list, self._root, path)
+                return [
+                    _entry_from_stat(name, value, etag=etag) for name, value, etag in windows_rows
+                ]
+            rows = await anyio.to_thread.run_sync(_rooted_list, self._root or Path("/"), path)
+            entries = [_entry_from_stat(name, value) for name, value in rows]
+            entries.sort(key=lambda entry: (entry.kind != EntryKind.DIRECTORY, entry.name))
+            return entries
+        except OSError as exc:
+            raise _map_os_error(exc, path.as_posix()) from exc
+
+    async def inspect_upload_entry(self, path: PathRef) -> FileEntry:
+        """Inspect without following links; reject devices, sockets and FIFOs.
+
+        Ordinary pane listings retain their historical FileEntry projection.
+        Upload planning needs to distinguish those special entries before any
+        payload opens or destination mutations.
+        """
+        self._resolve_leaf(path)
+
+        def inspect() -> FileEntry:
+            etag = None
+            if _WINDOWS:
+                value, etag = _windows_lstat(self._root, path)
+            else:
+                value = _rooted_lstat(self._root or Path("/"), path)
+            mode = value.st_mode
+            if not (stat.S_ISREG(mode) or stat.S_ISDIR(mode) or stat.S_ISLNK(mode)) and not (
+                getattr(value, "st_file_attributes", 0) & _WINDOWS_FILE_ATTRIBUTE_REPARSE_POINT
+            ):
+                raise UnsupportedSourceError(f"not a regular file or directory: {path.as_posix()}")
+            return _entry_from_stat(path.name, value, etag=etag)
+
+        try:
+            return await anyio.to_thread.run_sync(inspect)
+        except OSError as exc:
+            raise _map_os_error(exc, path.as_posix()) from exc
 
     async def stat(self, path: PathRef) -> FileEntry:
         if self._root is None and _WINDOWS and path.is_root:
@@ -734,8 +778,35 @@ class LocalFS:
         finally:
             claim.abandon()
 
+    async def read_upload_stream(
+        self, path: PathRef, *, expected: FileEntry, chunk_size: int = _DEFAULT_CHUNK_SIZE
+    ) -> AsyncIterator[bytes]:
+        """Read only the reviewed regular-file revision, validating through EOF.
+
+        This is a provider revision check, not a cryptographic filesystem
+        snapshot. The uploader must consume final EOF before publication.
+        """
+        if (
+            expected.kind != EntryKind.FILE
+            or type(expected.size) is not int
+            or expected.size < 0
+            or not isinstance(expected.etag, str)
+            or not expected.etag
+        ):
+            raise UploadSourceChangedError("Upload source has no reviewed regular-file revision")
+        if type(chunk_size) is not int or not 0 < chunk_size <= _DEFAULT_CHUNK_SIZE:
+            raise UploadSourceChangedError("Upload source chunk size must be between 1 and 8 MiB")
+        try:
+            return await self.read_stream(path, chunk_size=chunk_size, _expected_upload=expected)
+        except ProviderError as exc:
+            raise UploadSourceChangedError(f"Upload source changed: {path.as_posix()}") from exc
+
     async def read_stream(
-        self, path: PathRef, *, chunk_size: int = _DEFAULT_CHUNK_SIZE
+        self,
+        path: PathRef,
+        *,
+        chunk_size: int = _DEFAULT_CHUNK_SIZE,
+        _expected_upload: FileEntry | None = None,
     ) -> AsyncIterator[bytes]:
         host = self._resolve_leaf(path)
 
@@ -748,8 +819,10 @@ class LocalFS:
             try:
                 if _WINDOWS:
                     opener = partial(_windows_open, self._root, path, os.O_RDONLY)
-                elif self._root is not None:
-                    opener = partial(_rooted_open, self._root, path, os.O_RDONLY | os.O_NONBLOCK)
+                elif self._root is not None or _expected_upload is not None:
+                    opener = partial(
+                        _rooted_open, self._root or Path("/"), path, os.O_RDONLY | os.O_NONBLOCK
+                    )
                 else:
                     opener = partial(_open_nofollow, host.as_posix(), os.O_RDONLY | os.O_NONBLOCK)
                 fd = await anyio.to_thread.run_sync(claim.open_with, opener)
@@ -757,16 +830,74 @@ class LocalFS:
                 if not stat.S_ISREG(opened.st_mode):
                     raise UnsupportedSourceError(f"not a regular file: {host.as_posix()}")
                 async with _owned_async_file(claim, fd, "rb") as fh:
+                    transferred = 0
+
+                    async def validate_upload() -> None:
+                        if _expected_upload is None:
+                            return
+
+                        async def validate() -> None:
+                            revision = await anyio.to_thread.run_sync(
+                                _open_file_revision, fd, host.as_posix()
+                            )
+                            if (
+                                revision != _expected_upload.etag
+                                or await self.inspect_upload_entry(path) != _expected_upload
+                            ):
+                                raise UploadSourceChangedError(
+                                    f"Upload source changed: {path.as_posix()}"
+                                )
+
+                        validation = asyncio.create_task(validate())
+                        try:
+                            await asyncio.shield(validation)
+                        except asyncio.CancelledError:
+                            # Raw Textual/asyncio cancellation can abandon an
+                            # anyio worker. Drain before closing its descriptor.
+                            while not validation.done():
+                                with suppress(Exception, asyncio.CancelledError):
+                                    await asyncio.shield(validation)
+                            if not validation.cancelled():
+                                validation.exception()
+                            raise
+
+                    await validate_upload()
                     while True:
                         chunk = await fh.read(chunk_size)
+                        await validate_upload()
+                        transferred += len(chunk)
+                        if _expected_upload is not None:
+                            expected_size = _expected_upload.size
+                            if (
+                                expected_size is None
+                                or transferred > expected_size
+                                or (not chunk and transferred != expected_size)
+                            ):
+                                raise UploadSourceChangedError(
+                                    f"Upload source size changed: {path.as_posix()}"
+                                )
                         if not chunk:
                             return
                         yield chunk
+            except ProviderError as exc:
+                if _expected_upload is not None and not isinstance(exc, UploadSourceChangedError):
+                    raise UploadSourceChangedError(
+                        f"Upload source changed: {path.as_posix()}"
+                    ) from exc
+                raise
             except FileNotFoundError as exc:
+                if _expected_upload is not None:
+                    raise UploadSourceChangedError(
+                        f"Upload source changed: {path.as_posix()}"
+                    ) from exc
                 raise NotFoundError(host.as_posix()) from exc
             except PermissionError as exc:
                 raise PermissionDeniedError(host.as_posix()) from exc
             except OSError as exc:
+                if _expected_upload is not None:
+                    raise UploadSourceChangedError(
+                        f"Upload source changed: {path.as_posix()}"
+                    ) from exc
                 if exc.errno == errno.ELOOP:
                     raise UnsupportedSourceError(f"refusing symlink: {host.as_posix()}") from exc
                 raise _map_os_error(exc, host.as_posix()) from exc
