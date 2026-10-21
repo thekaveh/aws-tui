@@ -233,6 +233,9 @@ section. The current tree must not be tagged as v0.8.0.
 
 ### Fixed
 
+- Glue Peek reloads when the selected Iceberg snapshot changes. Retained rows
+  keep their successful snapshot identity through failed or cancelled reloads,
+  with Retry available for the selected snapshot.
 - Athena Query Refresh reloads workgroup configuration, catalogs and databases
   while retaining valid context, SQL, draft provenance and execution results.
   Failed reads remain local to their metadata, and superseded replies cannot
