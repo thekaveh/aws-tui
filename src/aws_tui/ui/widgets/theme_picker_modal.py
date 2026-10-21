@@ -184,6 +184,13 @@ class ThemePickerModal(ModalScreen[None]):
     def _sync_cursor_class(self) -> None:
         for i, row in enumerate(self._rows):
             row.set_cursor(i == self._cursor)
+        # Mount and theme previews can change layout. Reveal the current row
+        # after refresh, rather than using stale geometry or a queued old row.
+        self.call_after_refresh(self._reveal_cursor)
+
+    def _reveal_cursor(self) -> None:
+        if self.is_mounted and self.app.screen is self and self._rows:
+            self._rows[self._cursor].scroll_visible(animate=False, immediate=True)
 
 
 __all__ = ["ThemePickerModal"]

@@ -233,6 +233,10 @@ section. The current tree must not be tagged as v0.8.0.
 
 ### Fixed
 
+- **Visible theme selection.** The theme picker scrolls the highlighted row
+  into view during keyboard navigation and when opening on a late custom theme.
+  Mouse scrolling, live preview and Escape rollback keep their existing behavior.
+
 - **Terminal-safe remap examples.** Object details, log follow and history
   examples use distinct ANSI control bytes. The keybinding guide explains
   protocol-dependent Ctrl+I/Tab and Ctrl+H/Backspace aliases and the limits
