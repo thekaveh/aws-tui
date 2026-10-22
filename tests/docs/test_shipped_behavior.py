@@ -81,8 +81,10 @@ def test_unreleased_changelog_does_not_contradict_shipped_handlers_or_demo() -> 
 
     assert "(Quick Look, command palette) still need their own handlers" not in unreleased
     assert "seeded in-memory S3 + EMR fakes" not in unreleased
-    assert "Quick Look and the command palette now register their handlers" in unreleased
-    assert "seeded in-memory S3, EMR, and Glue fakes" in unreleased
+    # Protect the current capability statements, not an old wiring progress log.
+    assert "**Structured Quick Look.**" in unreleased
+    assert "service actions and dynamic connection/service entries" in unreleased
+    assert "Seeded in-memory S3, EMR, Glue and Athena providers" in unreleased
 
 
 def test_current_docs_do_not_claim_deleted_first_run_or_resume_modals() -> None:
