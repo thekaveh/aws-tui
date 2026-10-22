@@ -38,6 +38,7 @@ from aws_tui.domain.iceberg import (
     IcebergReference,
     IcebergSnapshot,
 )
+from aws_tui.domain.navigation_workspace import NavigationTarget
 from aws_tui.domain.query import QueryContext
 from aws_tui.domain.sql_policy import ReadOnlySqlPolicy
 from aws_tui.infra.aws_session import AwsSession
@@ -48,7 +49,7 @@ from aws_tui.vm.glue.comparison_ports import ComparisonCatalogClient
 from aws_tui.vm.glue.comparison_vm import GlueComparisonVM
 from aws_tui.vm.glue.iceberg_vm import IcebergInspectionUnavailableError
 from aws_tui.vm.glue.page_vm import GluePageVM
-from aws_tui.vm.service_source_vm import SelectionScope, ServiceSelectionStore
+from aws_tui.vm.service_source_vm import SelectionScope, ServiceSelectionStore, navigation_seed
 from aws_tui.vm.services_protocol import RecoveryServiceVM, ServiceDescriptor
 
 
@@ -291,7 +292,22 @@ class GlueService:
         scope = SelectionScope(self.descriptor.id, connection.name, connection.region)
         return RecoveryServiceVM(
             vm=self._build_vm(connection, selections),
-            commit_selection=lambda: self._selections.replace_scope_from(selections, scope),
+            commit_selection=lambda: selections.adopt_recovery_scope_into(self._selections, scope),
+        )
+
+    def navigation_targets(self) -> tuple[NavigationTarget, ...]:
+        return self._selections.navigation_targets(self.descriptor.id)
+
+    def install_navigation_targets(self, targets: tuple[NavigationTarget, ...]) -> None:
+        self._selections.install_navigation_targets(targets, service_id=self.descriptor.id)
+
+    def build_navigation_vm(
+        self, connection: Connection, target: NavigationTarget
+    ) -> RecoveryServiceVM:
+        selections = navigation_seed(self.descriptor.id, connection, target)
+        return RecoveryServiceVM(
+            vm=self._build_vm(connection, selections),
+            commit_selection=lambda: selections.adopt_navigation_into(self._selections, target),
         )
 
     def _build_vm(

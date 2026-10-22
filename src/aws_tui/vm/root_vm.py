@@ -74,6 +74,7 @@ class RootVM:
             hub=self._hub,
             dispatcher=self._dispatcher,
             on_setup_error=self._report_content_setup_error,
+            on_retire=self._remember_retired_navigation,
         )
         self._chrome: ChromeVM = ChromeVM(hub=self._hub, dispatcher=self._dispatcher, keymap=keymap)
 
@@ -88,6 +89,20 @@ class RootVM:
             error_type=type(error).__name__,
             error=str(error),
         )
+
+    def _remember_retired_navigation(self, service_id: str | None, vm: object) -> None:
+        """Capture pure navigation only from content that was actually hosted."""
+        if service_id is None or service_id not in self._registry:
+            return
+        remember = getattr(self._registry.get(service_id), "remember_navigation", None)
+        if callable(remember):
+            try:
+                remember(vm)
+            except Exception as exc:
+                # A capture failure must never interrupt content retirement.
+                self._log.warning(
+                    "workspace.capture.failed", service=service_id, error_type=type(exc).__name__
+                )
 
     def _report_service_operation_failure(self, message: Message) -> None:
         if not isinstance(message, ServiceOperationFailedMessage):
@@ -318,7 +333,7 @@ class RootVM:
 
     async def adopt_prepared_service_vm(
         self,
-        connection: Connection,
+        connection: Connection | None,
         auth_state: TokenState,
         service_id: str,
         vm: object,
@@ -328,23 +343,36 @@ class RootVM:
     ) -> bool:
         """Publish prepared content, or return False with its caller retaining it."""
         service = self._registry.get(service_id)
-        if not service.supports(connection):
+        if connection is None:
+            if service_id != "s3":
+                raise RuntimeError("Only file navigation can be adopted without a global source")
+            auth_state = TokenState.MISSING
+        elif not service.supports(connection):
             raise RuntimeError(
                 f"service {service_id!r} does not support connection {connection.name!r}"
             )
-        adopted = await self._adopt_service_vm(
-            service_id,
-            vm,
-            before_publish=lambda: self._set_connection_state(connection, auth_state),
-            already_prepared=True,
-            ownership_is_current=ownership_is_current,
-            claim_input=claim_input,
-        )
-        if not adopted:
-            return False
-        self._hub.send(ConnectionChangedMessage(connection=connection, auth_state=auth_state))
-        self._services_menu.switch_service_command.execute(service_id)
-        return True
+        try:
+            adopted = await self._adopt_service_vm(
+                service_id,
+                vm,
+                before_publish=lambda: self._set_connection_state(connection, auth_state),
+                already_prepared=True,
+                ownership_is_current=ownership_is_current,
+                claim_input=claim_input,
+            )
+        finally:
+            # A current notification can raise cancellation after publication.
+            # Actual host identity, rather than the await's acknowledgement,
+            # decides which source/menu is now authoritative.
+            if self._content_host.current is vm:
+                try:
+                    self._hub.send(
+                        ConnectionChangedMessage(connection=connection, auth_state=auth_state)
+                    )
+                finally:
+                    self._services_menu.update_connection(connection)
+                    self._services_menu.switch_service_command.execute(service_id)
+        return adopted
 
     async def _adopt_service_vm(
         self,
@@ -382,11 +410,13 @@ class RootVM:
                 claim_input=claim_input,
             )
         except (Exception, asyncio.CancelledError):
-            # Revert — host failed to adopt, ribbon must not advance.
-            if prior_selection is not None:
-                self._services_menu.switch_service_command.execute(prior_selection)
-            else:
-                self._services_menu.clear_selection()
+            # Only an unadopted candidate can roll back the ribbon. Observer
+            # failure after publication must not claim old content is current.
+            if self._content_host.current is not vm:
+                if prior_selection is not None:
+                    self._services_menu.switch_service_command.execute(prior_selection)
+                else:
+                    self._services_menu.clear_selection()
             raise
         if not adopted and self._services_menu.selected_id == service_id:
             if prior_selection is not None:
@@ -395,7 +425,7 @@ class RootVM:
                 self._services_menu.clear_selection()
         return adopted
 
-    def _set_connection_state(self, connection: Connection, auth_state: TokenState) -> None:
+    def _set_connection_state(self, connection: Connection | None, auth_state: TokenState) -> None:
         self._connection = connection
         self._auth_state = auth_state
 

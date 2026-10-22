@@ -381,6 +381,9 @@ class EmrServerlessPageVM:
         selection when available, otherwise select the first one in
         user-facing sorted order so the LEFT pane has something to
         populate."""
+        if self._disposed or self._shutdown_started:
+            return
+        self._selection_store.remember_navigation_scope(self._selection_scope)
         if not await self._run(self.applications.refresh):
             return
         await self._select_after_applications_load()

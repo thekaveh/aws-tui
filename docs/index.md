@@ -17,6 +17,7 @@ Start with the demo to explore sample resources without AWS credentials.
 - Browse Glue databases, tables, jobs and crawlers, including Iceberg metadata.
 - Review and execute allowed read-only SQL in Athena, then inspect results
   and query history.
+- Save named navigation workspaces and bookmarks for later application runs.
 
 Glue table and Iceberg snapshot handoffs prefill Athena queries without
 executing them. Athena queries can incur AWS charges and write query results.

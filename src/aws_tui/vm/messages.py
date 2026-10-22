@@ -40,9 +40,12 @@ class ConnectionChangedMessage:
 
     Subscribers: :class:`NavMenuVM`, service content VMs, and the active
     :class:`ContentHostVM` swap orchestrator.
+
+    ``connection=None`` explicitly selects file navigation without a global
+    AWS source; individual file panes can still own their own sources.
     """
 
-    connection: Connection
+    connection: Connection | None
     auth_state: TokenState
     sender_name: str = "root"
 

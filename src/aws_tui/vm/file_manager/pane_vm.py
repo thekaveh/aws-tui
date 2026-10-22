@@ -20,7 +20,8 @@ which is what the app-level cross-pane subscribers still read.
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Iterable
+from collections.abc import Iterable, Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from enum import StrEnum
@@ -42,6 +43,7 @@ from vmx.services.dispatcher import Dispatcher
 
 from aws_tui.domain.filesystem import (
     AuthRequiredError,
+    DirectoryNavigationVerifier,
     EntryKind,
     FileEntry,
     FileSystemProvider,
@@ -150,9 +152,10 @@ class _ProviderRecoveryStage:
     entries: tuple[FileEntry, ...]
     identity_label: str | None
     path_protocol: str
-    connection_key: tuple[str, str]
+    connection_key: tuple[str, str] | None
     transfer_connection: TransferConnectionIdentity | None
     used_root_fallback: bool
+    connection_region: str | None = None
 
 
 # State → (user-facing text, severity) — VM-owned per MVVM. Severity maps
@@ -270,6 +273,7 @@ class PaneVM:
         path_protocol: str = "",
         connection_key: tuple[str, str] | None = None,
         transfer_connection: TransferConnectionIdentity | None = None,
+        connection_region: str | None = None,
     ) -> None:
         self._hub: MessageHub[Message] = hub
         self._dispatcher: Dispatcher = dispatcher
@@ -289,6 +293,7 @@ class PaneVM:
         # swap_provider BEFORE _reload() runs so hub subscribers always
         # see the correct key when a state change fires.
         self._connection_key: tuple[str, str] | None = connection_key
+        self._connection_region = connection_region if connection_key is not None else None
         self._transfer_connection = transfer_connection
 
         self._entries: list[EntryVM] = []
@@ -526,6 +531,11 @@ class PaneVM:
         attribution race that existed when the App tracked keys
         separately in ``_left_pane_conn_key`` / ``_right_pane_conn_key``."""
         return self._connection_key
+
+    @property
+    def current_connection_region(self) -> str | None:
+        """Region of this pane's bound provider, independently of the root."""
+        return self._connection_region
 
     @property
     def entries(self) -> tuple[EntryVM, ...]:
@@ -832,9 +842,9 @@ class PaneVM:
 
     # ── Async operations ────────────────────────────────────────────────────
 
-    async def setup(self) -> None:
+    async def setup(self, *, strict_missing: bool = False) -> None:
         """Load the initial directory listing under the current path."""
-        await self._reload()
+        await self._reload(strict_missing=strict_missing)
 
     async def navigate_to(self, path: PathRef) -> None:
         """Replace ``path`` and re-list."""
@@ -851,6 +861,23 @@ class PaneVM:
     async def refresh(self) -> None:
         await self._reload()
 
+    @contextmanager
+    def navigation_loading(self) -> Iterator[None]:
+        """Show an owned deferred source read without replacing newer pane state."""
+        provider, path, generation = self._provider, self._path, self._reload_generation
+        previous_state, previous_error = self._state, self._error_text
+        self._error_text = None
+        self._set_state(PaneState.LOADING)
+        try:
+            yield
+        finally:
+            if (
+                self._reload_is_current(generation, provider, path)
+                and self._state is PaneState.LOADING
+            ):
+                self._error_text = previous_error
+                self._set_state(previous_state)
+
     @property
     def transfer_connection(self) -> TransferConnectionIdentity | None:
         return self._transfer_connection
@@ -862,8 +889,10 @@ class PaneVM:
         path: PathRef,
         identity_label: str | None,
         path_protocol: str,
-        connection_key: tuple[str, str],
+        connection_key: tuple[str, str] | None,
         transfer_connection: TransferConnectionIdentity | None = None,
+        connection_region: str | None = None,
+        strict_missing: bool = False,
     ) -> _ProviderRecoveryStage:
         """Read a replacement provider while leaving the live pane untouched."""
         original_provider = self._provider
@@ -872,8 +901,12 @@ class PaneVM:
         staged_path = path
         used_root_fallback = False
         try:
+            if strict_missing and isinstance(provider, DirectoryNavigationVerifier):
+                await provider.verify_directory(staged_path)
             entries = await provider.list(staged_path)
         except NotFoundError:
+            if strict_missing:
+                raise
             if staged_path.is_root:
                 entries = []
             else:
@@ -895,6 +928,7 @@ class PaneVM:
             connection_key=connection_key,
             used_root_fallback=used_root_fallback,
             transfer_connection=transfer_connection,
+            connection_region=connection_region,
         )
 
     def can_commit_provider_recovery(self, staged: _ProviderRecoveryStage) -> bool:
@@ -915,6 +949,7 @@ class PaneVM:
         self._identity_label = staged.identity_label
         self._path_protocol = staged.path_protocol
         self._connection_key = staged.connection_key
+        self._connection_region = staged.connection_region
         self._transfer_connection = staged.transfer_connection
         self._path = staged.path
         filter_reset = bool(self._filter_text)
@@ -937,6 +972,7 @@ class PaneVM:
         path_protocol: str | None = None,
         connection_key: tuple[str, str] | None = None,
         transfer_connection: TransferConnectionIdentity | None = None,
+        connection_region: str | None = None,
     ) -> None:
         """Replace this pane's filesystem provider at runtime.
 
@@ -959,6 +995,7 @@ class PaneVM:
         # Update the key ATOMICALLY before _reload so hub subscribers
         # see the correct connection when the state-change fires.
         self._connection_key = connection_key
+        self._connection_region = connection_region if connection_key is not None else None
         self._transfer_connection = transfer_connection
         self._path = _ROOT_PATH
         self._cursor_index = 0
@@ -1166,7 +1203,7 @@ class PaneVM:
 
     # ── Internal: listing & state ───────────────────────────────────────────
 
-    async def _reload(self) -> None:
+    async def _reload(self, *, strict_missing: bool = False) -> None:
         self._reload_generation += 1
         generation = self._reload_generation
         provider = self._provider
@@ -1183,6 +1220,8 @@ class PaneVM:
         self._clear_marks()
         self._set_state(PaneState.LOADING)
         try:
+            if strict_missing and isinstance(provider, DirectoryNavigationVerifier):
+                await provider.verify_directory(path)
             raw = await provider.list(path)
         except NotFoundError as exc:
             if not self._reload_is_current(generation, provider, path):
@@ -1194,7 +1233,7 @@ class PaneVM:
             # from ``str(exc)``) so the placeholder reads as the plain
             # "empty" copy rather than carrying the underlying error
             # string. See :class:`PaneState` docstring for the contract.
-            if self._path.is_root:
+            if self._path.is_root and not strict_missing:
                 self._replace_entries([])
                 self._set_state(PaneState.EMPTY)
             else:

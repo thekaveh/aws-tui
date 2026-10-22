@@ -24,7 +24,7 @@ import pytest
 from vmx import Message, MessageHub, PropertyChangedMessage
 
 from aws_tui.app import AwsTuiApp, _build_swap_candidates
-from aws_tui.composition import build_app_context
+from aws_tui.composition import AppContext, build_app_context
 from aws_tui.domain.filesystem import (
     FileEntry,
     FileSystemProvider,
@@ -32,8 +32,10 @@ from aws_tui.domain.filesystem import (
     ProgressCallback,
     ProviderUnreachableError,
 )
+from aws_tui.infra.aws_session import TokenProbeResult, TokenState
+from aws_tui.vm.file_manager.dual_pane_vm import DualPaneVM
 from aws_tui.vm.file_manager.pane_vm import PaneState, PaneVM
-from tests.helpers import wait_until
+from tests.helpers import drain_workers, wait_until
 
 
 class _UnreachableFS(FileSystemProvider):
@@ -124,62 +126,76 @@ class _ReachableFS(FileSystemProvider):
 
 @pytest.mark.asyncio
 async def test_hub_subscription_marks_unreachable_via_pane_state(
-    tmp_path: Path,
+    app_context_factory: Callable[..., AppContext],
 ) -> None:
-    """Pane state-change message through the real hub subscriber marks/clears."""
-    config_dir = tmp_path / "config"
-    config_dir.mkdir()
-    ctx = build_app_context(config_dir=config_dir, cache_dir=tmp_path / "cache")
-    app = AwsTuiApp(ctx)
+    """Only the hosted pane's real provider transitions mark/clear reachability."""
+    offline = False
 
-    # Build a real PaneVM with connection_key set and the unreachable provider.
-    hub: MessageHub[Message] = ctx.hub
-    pane = PaneVM(
+    class RecoverableFS(_ReachableFS):
+        async def list(self, path: PathRef) -> list[FileEntry]:
+            if offline:
+                raise ProviderUnreachableError("test endpoint down")
+            return await super().list(path)
+
+    ctx = app_context_factory(fs=RecoverableFS())
+    ctx.config_store.path.write_text(
+        '[connections.target]\nkind="s3-compatible"\n'
+        'endpoint_url="http://127.0.0.1:9999"\ncredentials="static"\n'
+        'access_key_id="synthetic"\nsecret_access_key="synthetic"\n'
+        '[defaults]\nconnection="target"\n'
+    )
+    ctx.aws_session.probe_token = lambda connection: TokenProbeResult(TokenState.CONNECTED)  # type: ignore[method-assign]
+    app = AwsTuiApp(ctx)
+    speculative = PaneVM(
         provider=_UnreachableFS(),
-        hub=hub,
+        hub=ctx.hub,
         dispatcher=ctx.dispatcher,
-        id_prefix="pane.test",
+        id_prefix="pane.speculative",
         connection_key=("s3-compatible", "target"),
     )
-    pane.construct()
+    speculative.construct()
+    try:
+        async with app.run_test(size=(100, 30)) as pilot:
+            await drain_workers(app)
+            await app._wait_for_current_service_setup()
+            await pilot.pause()
+            hosted = ctx.root_vm.content_host.current
+            assert isinstance(hosted, DualPaneVM)
+            pane = hosted.left
+            assert pane.current_connection_key == ("s3-compatible", "target")
+            assert ("s3-compatible", "target") not in ctx.unreachable_connections
 
-    # Manually drive the pane's internal state to UNREACHABLE (as _reload would).
-    pane._state = PaneState.UNREACHABLE
+            # A real speculative read emits through the same hub, but cannot
+            # change the currently hosted connection's reachability.
+            await speculative.setup()
+            assert speculative.state is PaneState.UNREACHABLE
+            await pilot.pause()
+            assert ("s3-compatible", "target") not in ctx.unreachable_connections
 
-    # Build the PropertyChangedMessage as the hub would carry it.
-    real_msg = PropertyChangedMessage.create(pane, pane.name, "state")
+            offline = True
+            await pane.refresh()
+            await wait_until(
+                lambda: ("s3-compatible", "target") in ctx.unreachable_connections,
+                what="hosted target connection to be marked unreachable",
+            )
+            assert pane.state is PaneState.UNREACHABLE
 
-    async with app.run_test(size=(100, 30)) as pilot:
-        # Drain mount notifications before checking the initial unreachable set.
-        await pilot.pause()
-
-        # Verify the real MessageHub subscription routes it to mark the connection.
-        assert ("s3-compatible", "target") not in ctx.unreachable_connections
-        hub.send(real_msg)
-        await wait_until(
-            lambda: ("s3-compatible", "target") in ctx.unreachable_connections,
-            what="target connection to be marked unreachable",
-        )
-        assert ("s3-compatible", "target") in ctx.unreachable_connections
-
-        # Now simulate recovery: pane transitions to IDLE.
-        pane._state = PaneState.IDLE
-        recovery_msg = PropertyChangedMessage.create(pane, pane.name, "state")
-        hub.send(recovery_msg)
-        await wait_until(
-            lambda: ("s3-compatible", "target") not in ctx.unreachable_connections,
-            what="target connection to recover",
-        )
-        assert ("s3-compatible", "target") not in ctx.unreachable_connections
-
-    # Cleanup.
-    pane.dispose()
-    ctx.transfers_vm.dispose()
-    ctx.confirm_vm.dispose()
-    ctx.quick_look_vm.dispose()
-    ctx.command_palette_vm.dispose()
-    ctx.root_vm.dispose()
-    ctx.log_sink.close()
+            offline = False
+            await pane.refresh()
+            await wait_until(
+                lambda: ("s3-compatible", "target") not in ctx.unreachable_connections,
+                what="hosted target connection to recover",
+            )
+            assert pane.viewmodel.state is PaneState.EMPTY
+            assert not app.crash_report
+    finally:
+        speculative.dispose()
+        ctx.transfers_vm.dispose()
+        ctx.confirm_vm.dispose()
+        ctx.quick_look_vm.dispose()
+        ctx.command_palette_vm.dispose()
+        ctx.root_vm.dispose()
+        ctx.log_sink.close()
 
 
 @pytest.mark.asyncio

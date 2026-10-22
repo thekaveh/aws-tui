@@ -94,6 +94,36 @@ class LocalFS:
             candidate = Path(path.as_posix())
         return candidate.resolve(strict=False)
 
+    def navigation_path(self, path: PathRef) -> str:
+        """Capture native navigation intent without filesystem resolution."""
+        if self._root is not None:
+            return str(self._root.joinpath(*path.segments))
+        if _WINDOWS and not path.is_root:
+            return str(_windows_path_ref(path))
+        return path.as_posix()
+
+    def path_from_navigation(self, value: str) -> PathRef:
+        """Map native intent under this configured anchor; listing validates it."""
+        if not isinstance(value, str) or "\x00" in value:
+            raise ProviderError("saved local location is unavailable")
+        if _WINDOWS and self._root is None and value == "/":
+            return PathRef()  # The existing local drive-picker root.
+        native = PureWindowsPath(value) if _WINDOWS else Path(value)
+        if not native.is_absolute() or any(part in {".", ".."} for part in native.parts):
+            raise ProviderError("saved local location is unavailable")
+        if self._root is not None:
+            try:
+                relative = native.relative_to(self._root)
+            except ValueError:
+                raise ProviderError("saved local location is outside the configured root") from None
+            return PathRef(relative.parts)
+        if _WINDOWS:
+            windows = PureWindowsPath(value)
+            if windows.drive.startswith("\\\\"):
+                raise ProviderError("saved share location requires its configured local root")
+            return PathRef((windows.drive, *windows.relative_to(windows.anchor).parts))
+        return PathRef(native.parts[1:])
+
     # ------------------------------------------------------------------
     # Path resolution
     # ------------------------------------------------------------------

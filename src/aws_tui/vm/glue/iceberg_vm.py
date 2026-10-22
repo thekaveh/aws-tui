@@ -272,6 +272,13 @@ class GlueIcebergVM:
         return self._preview
 
     @property
+    def owns_active_work(self) -> bool:
+        """Track accepted reads independently of current table/presentation state."""
+        return self._preview.owns_active_work or any(
+            not task.done() for task in self._metadata_tasks
+        )
+
+    @property
     def active_view(self) -> IcebergView:
         return self._active_view
 
