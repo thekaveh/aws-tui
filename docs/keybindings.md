@@ -254,12 +254,12 @@ detail. The active-view controls are:
 
 Unavailable buttons are omitted, and `Shift+Tab` is the exact reverse order.
 The six result actions appear with configured keys in Help and the Athena
-command palette. See [loaded result semantics](services/athena.md#7-inspect-and-control-loaded-results)
+command palette. See [loaded result semantics](services/athena.md#5-inspect-and-control-loaded-results)
 for JSON encoding, paging scope, reset behavior, and clipboard limitations.
 
 SQL authoring actions also appear in Help and the command palette with configured keys.
 Use the SQL menu if your terminal cannot distinguish a shortcut.
-See [SQL authoring](services/athena.md#8-author-sql-and-use-local-files) for file, completion, snippet, and undo behavior.
+See [SQL authoring](services/athena.md#2-author-sql-and-use-local-files) for file, completion, snippet, and undo behavior.
 
 Bare printable bindings, including `i`, `W`, `C`, and `D`, are deliberately
 non-priority: a focused Athena editor receives them as text. Use the command

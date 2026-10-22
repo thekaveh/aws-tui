@@ -49,6 +49,9 @@ VMs to build service pages, but it cannot import Textual widgets.
         transfer state. `DualPaneVM` owns cross-provider copy/move orchestration;
         each `PaneVM` owns one provider-backed projection and cursor.
 
+        `S3Service` supplies the two pane providers. `CrossFsCopy` owns staging,
+        commit, rollback, conflict handling, progress and cancellation.
+
         At startup, `TransferHistoryVM` loads persisted summaries and interrupted transfer records.
         `Ctrl+T` opens History and Recovery for explicit, endpoint-bound new-copy retries.
         Automatic replay and multipart resume remain unsupported.
@@ -101,6 +104,10 @@ VMs to build service pages, but it cannot import Textual widgets.
         `AthenaCompletionVM` owns bounded schema reads and context-scoped completion caches.
         The Query view owns cursor placement, selected suggestions, and native undo history.
         Query execution remains in `AthenaQueryVM`; authoring does not submit SQL.
+
+        SQLGlot parses queries, while the domain client maps Athena API responses.
+        Generation and execution-identity guards prevent retired asynchronous work
+        from publishing into a replacement context.
 
     - `vm/settings/` — `SettingsVM` (built per-mount when the user
         selects the Settings nav peer) and `S3ConnectionsVM` (singleton
