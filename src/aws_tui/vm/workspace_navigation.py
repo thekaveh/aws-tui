@@ -42,7 +42,7 @@ def _available(state: PaneState) -> None:
         raise WorkspaceNavigationError("destination_unavailable")
 
 
-async def _find(
+async def find_navigation_value(
     value: str,
     *,
     names: Callable[[], tuple[str, ...]],
@@ -118,7 +118,7 @@ async def resolve_service_target(page: object, target: NavigationTarget) -> None
             value = selected.get(field)
             if value is None:
                 continue
-            await _find(
+            await find_navigation_value(
                 value, names=names, state=state, more=more, limited=limited, load_more=load_more
             )
             if field == "workgroup" and not any(
@@ -160,7 +160,7 @@ async def resolve_service_target(page: object, target: NavigationTarget) -> None
             value = selected.get(field)
             if value is None:
                 continue
-            await _find(
+            await find_navigation_value(
                 value, names=names, state=state, more=more, limited=limited, load_more=load_more
             )
             if getattr(catalog, f"selected_{field}_name") != value:

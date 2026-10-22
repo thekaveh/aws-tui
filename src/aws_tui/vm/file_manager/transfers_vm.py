@@ -85,6 +85,11 @@ class TransfersVM:
         return tuple(t for t in self._transfers if t.is_finished)
 
     @property
+    def finished_limit(self) -> int:
+        """Retention bound for the session projection, independent of durable history."""
+        return _MAX_FINISHED_TRANSFERS
+
+    @property
     def active_count(self) -> int:
         return sum(1 for t in self._transfers if t.is_active or t.state == TransferState.PENDING)
 

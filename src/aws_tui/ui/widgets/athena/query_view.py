@@ -11,7 +11,8 @@ from textual import events
 from textual.app import ComposeResult
 from textual.binding import Binding, BindingType
 from textual.containers import Horizontal, VerticalScroll
-from textual.document._document import Document, Selection
+from textual.document._document import Document, EditResult, Selection
+from textual.document._edit import Edit
 from textual.message import Message
 from textual.screen import Screen
 from textual.widget import Widget
@@ -59,19 +60,45 @@ class _EditorCapture:
 
 
 class _SqlEditor(TextArea):
+    # Native edits can return to the same text before Changed messages drain.
+    # Keep an input epoch independent of the VM's asynchronously synced SQL.
+    _input_revision = 0
+
+    @property
+    def input_revision(self) -> int:
+        return self._input_revision
+
+    def edit(self, edit: Edit) -> EditResult:
+        self._input_revision += 1
+        return super().edit(edit)
+
+    def load_text(self, text: str) -> None:
+        self._input_revision += 1
+        super().load_text(text)
+
     def undo(self) -> None:
         # Textual8.2.8 refreshes scrollbars before restoring the edit's old
         # selection. A multiline-to-single-line undo otherwise uses a now
         # out-of-range cursor during that refresh. Native history still owns
         # the edit and restores its exact original selection afterward.
         if self.history.undo_stack:
+            self._input_revision += 1
             self.move_cursor((0, 0))
         super().undo()
+
+    def redo(self) -> None:
+        if self.history.redo_stack:
+            self._input_revision += 1
+        super().redo()
 
 
 class AthenaQueryView(DeferredWorkerMixin, Widget):
     class OpenDrafts(Message):
         """Request the metadata-only local draft manager."""
+
+    @property
+    def native_input_revision(self) -> int:
+        return self.query_one("#athena-editor", _SqlEditor).input_revision
 
     BINDINGS: ClassVar[list[BindingType]] = [
         Binding("tab", "focus_next", show=False),

@@ -13,6 +13,7 @@
 8. [Diagnose local setup and source access](#8-diagnose-local-setup-and-source-access)
 9. [Preview files with Quick Look](#9-preview-files-with-quick-look)
 10. [Save and open workspaces and bookmarks](#10-save-and-open-workspaces-and-bookmarks)
+11. [Watch selected jobs, queries and transfers](#11-watch-selected-jobs-queries-and-transfers)
 
 ---
 
@@ -1372,3 +1373,59 @@ A missing connection or resource leaves the current page usable. Correct the
 connection or select an available destination before saving a replacement.
 Malformed and unsupported libraries show an error without overwriting the file.
 See [Configuration](configuration.md#6-workspaces-and-bookmarks) for storage and limits.
+
+## 11. Watch selected jobs, queries and transfers
+
+Use **Scoped overview** to check selected work without visiting each service page.
+The overview shows the configured connection, profile and region. It does not discover an AWS account or inventory resources.
+
+1. Select an Athena workgroup, Glue job or crawler, or EMR Serverless application on its service page.
+2. Open the command palette with `Ctrl+K` or `:`. Choose **Scoped overview**.
+3. Select **Add current scope**. This adds a watch without fetching data.
+4. Select **Refresh all** to read the watched scopes.
+5. Use arrow keys to select a source or entry. Use `Tab` to reach its controls.
+6. Select **Retry source** to refresh only the selected section, or **Remove scope** to stop watching it.
+7. Select an entry and press `Enter`, or choose **Open detail**, to inspect its existing detail view.
+8. Press `Esc` to close the overview and cancel its refreshes.
+
+Choose **Scoped overview** from S3 to add this session's transfers.
+These include all connections, with at most 100 finished transfers retained.
+The display shows at most 100 active transfers separately and labels any truncation.
+Use [Transfer history and recovery](#4-inspect-transfer-history-and-recovery-after-a-restart) for durable history.
+
+Watches remain available when you reopen the overview under the same source, including after service navigation.
+Changing the resolved source or its configuration clears those watches. Watches do not survive application exit.
+If no resource is selected, **Add current scope** is unavailable. The demo supports session transfers only.
+
+### 11.1. Read status and refresh limits
+
+Refresh is manual; the overview has no background timer.
+Each section shows its refresh state and last successful refresh.
+A failed refresh keeps previous data marked **STALE**. Other sections remain usable.
+Source changes disable old controls and ask you to reopen the overview.
+
+The overview accepts eight watches and refreshes at most two scopes concurrently.
+Each AWS watch reads one page of up to 25 entries, or one named crawler.
+A continuation token or oversized response produces a visible first-page limit. The overview never fetches another page automatically.
+
+Each watch admits at most two service API calls; **Refresh all** admits at most 16.
+The existing six-attempt SDK policy permits at most 96 service attempts for that refresh.
+These limits exclude credential-provider traffic used by normal AWS authentication.
+
+Entries retain native statuses and labelled timestamps, grouped as active, failed or other.
+A crawler's current state is separate from its last crawl status.
+Athena free-form error reasons are omitted because they can contain SQL; available native error codes remain visible.
+No SQL, query results, job arguments or raw service responses are stored in the overview.
+
+### 11.2. Open exact detail safely
+
+Detail navigation retains the original connection, region, resource and execution or run identifier.
+It uses the service's normal selectors, with at most 64 **Load more** calls after each initial page.
+The service's own limits still apply. Missing, denied or capped destinations leave your current page intact.
+
+Opening detail submits or cancels no work and fetches no query results or logs automatically.
+Finish active operations before opening AWS detail. Confirm replacement of modified Athena SQL when prompted.
+If your input changes during preparation, the overview retains the current page.
+
+Transfer entries reveal the exact retained session card, including cards whose normal display period has expired.
+Press `Esc` from the card to restore normal expiration. Evicted transfers cannot be opened from the overview.

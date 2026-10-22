@@ -40,6 +40,7 @@ from aws_tui.domain.iceberg import (
 )
 from aws_tui.domain.navigation_workspace import NavigationTarget
 from aws_tui.domain.query import QueryContext
+from aws_tui.domain.scoped_overview import WatchScope
 from aws_tui.domain.sql_policy import ReadOnlySqlPolicy
 from aws_tui.infra.aws_session import AwsSession
 from aws_tui.infra.connection_resolver import Connection
@@ -308,6 +309,25 @@ class GlueService:
         return RecoveryServiceVM(
             vm=self._build_vm(connection, selections),
             commit_selection=lambda: selections.adopt_navigation_into(self._selections, target),
+        )
+
+    def build_overview_vm(self, connection: Connection, target: WatchScope) -> RecoveryServiceVM:
+        """Seed a job/crawler view before setup, without speculative catalog reads."""
+        if (
+            target.kind not in {"glue-job", "glue-crawler"}
+            or not self.supports(connection)
+            or (target.connection_name, target.region) != (connection.name, connection.region)
+        ):
+            raise ValueError("Overview source is unavailable")
+        selections = self._selections.clone()
+        scope = SelectionScope("glue", connection.name, connection.region)
+        jobs = target.kind == "glue-job"
+        selections.set(scope, "active_view", "jobs" if jobs else "crawlers")
+        selections.set(scope, "job_name" if jobs else "crawler_name", target.resource)
+        selections.discard(scope, "job_run_states" if jobs else "crawler_state")
+        return RecoveryServiceVM(
+            vm=self._build_vm(connection, selections),
+            commit_selection=lambda: selections.adopt_recovery_scope_into(self._selections, scope),
         )
 
     def _build_vm(
