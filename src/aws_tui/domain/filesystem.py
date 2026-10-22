@@ -186,6 +186,15 @@ class FileSystemProvider(Protocol):
 
 
 @runtime_checkable
+class DirectoryNavigationVerifier(Protocol):
+    """Providers whose successful empty listing does not prove a directory exists."""
+
+    async def verify_directory(self, path: PathRef) -> None:
+        """Raise ProviderError if the exact directory destination cannot be verified."""
+        ...
+
+
+@runtime_checkable
 class AtomicNoReplacePublisher(Protocol):
     """Provider capability for atomic publication of a staged entry."""
 

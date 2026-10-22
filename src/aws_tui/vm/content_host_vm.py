@@ -41,6 +41,7 @@ class ContentHostVM:
         hub: MessageHub[Message],
         dispatcher: Dispatcher,
         on_setup_error: Callable[[BaseException], None] | None = None,
+        on_retire: Callable[[str | None, object], None] | None = None,
     ) -> None:
         self._hub: MessageHub[Message] = hub
 
@@ -51,6 +52,7 @@ class ContentHostVM:
         # doesn't outlive its VM.
         self._setup_task: asyncio.Task[None] | None = None
         self._on_setup_error = on_setup_error
+        self._on_retire = on_retire
         self._swap_lock = asyncio.Lock()
 
         self._inner: ComponentVM = (
@@ -99,11 +101,16 @@ class ContentHostVM:
 
     def dispose(self) -> None:
         self._cancel_pending_setup()
+        self._dispose_current()
+        self._inner.dispose()
+
+    def _dispose_current(self) -> None:
         if self._current is not None:
+            if self._on_retire is not None:
+                self._on_retire(self._current_id, self._current)
             self._current.dispose()
             self._current = None
             self._current_id = None
-        self._inner.dispose()
 
     # ── Public API ─────────────────────────────────────────────────────────
 
@@ -198,11 +205,9 @@ class ContentHostVM:
         # tear down before the new one wires up.
         if self._current is not None:
             try:
-                self._current.dispose()
+                self._dispose_current()
             except BaseException:
                 raise
-            self._current = None
-            self._current_id = None
 
         if shutdown_cancelled:
             send_value_free(self._hub, PropertyChangedMessage.create(self, self.name, "current"))

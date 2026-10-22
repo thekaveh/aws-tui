@@ -126,6 +126,7 @@ class NavMenuVM:
         self._dispatcher: Dispatcher = dispatcher
 
         self._connection: Connection | None = None
+        self._local_navigation = False
         self._items: list[NavItemVM] = []
         # Selection lives in `self._inner.current` (the CompositeVM's
         # canonical slot). `selected_id` is a derived property — see the
@@ -215,9 +216,10 @@ class NavMenuVM:
 
     # ── Public API ─────────────────────────────────────────────────────────
 
-    def update_connection(self, connection: Connection) -> None:
-        """Re-filter the menu against ``connection.supports`` for each service."""
+    def update_connection(self, connection: Connection | None) -> None:
+        """Filter supported services, or explicitly expose local file navigation."""
         self._connection = connection
+        self._local_navigation = connection is None
         self._rebuild_items()
 
     def clear_selection(self) -> None:
@@ -330,7 +332,7 @@ class NavMenuVM:
         """Service ids the current connection supports, in registry order."""
         conn = self._connection
         if conn is None:
-            return []
+            return ["s3"] if self._local_navigation and "s3" in self._registry else []
         return [s.descriptor.id for s in self._registry.all() if s.supports(conn)]
 
     def _clear_items(self) -> None:

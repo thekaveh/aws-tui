@@ -158,6 +158,7 @@ class GluePageVM:
     async def setup(self) -> None:
         if not self._is_alive():
             return
+        self._selection_store.remember_navigation_scope(self._selection_scope)
         generation = self._lifecycle_generation
         stored_view = self._selection_store.get(self._selection_scope, "active_view")
         if stored_view in _VIEWS:

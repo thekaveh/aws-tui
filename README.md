@@ -21,6 +21,8 @@ connection and region separate from other sources.
   browse results and history, and open available result artifacts in S3.
 - **Keyboard controls:** navigate with keys, find service actions in the
   command palette, and customize keybindings and themes.
+- **Saved navigation:** reopen named workspaces and individual bookmarks across
+  application runs.
 
 Glue inspection is read-only. Glue-to-Athena handoffs prefill a
 `SELECT * … LIMIT 5` query without executing it. Athena execution can incur
@@ -132,7 +134,7 @@ transfers with unknown outcomes. Recovery verifies endpoints before starting
 an explicit new copy. Automatic replay and multipart resume are unsupported.
 See [transfer recovery](docs/cookbook.md#4-inspect-transfer-history-and-recovery-after-a-restart) before retrying an interrupted operation.
 
-Move, rename and new-folder actions are unavailable. EMR provides cloning of
+File move, rename and new-folder actions are unavailable. EMR provides cloning of
 existing Spark runs rather than a blank job submission form.
 
 ## 6. Documentation

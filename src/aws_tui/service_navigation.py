@@ -300,7 +300,7 @@ class ServiceNavigation:
     async def adopt_prepared_service(
         self,
         root: RootVM,
-        connection: Connection,
+        connection: Connection | None,
         auth_state: TokenState,
         service_id: str,
         vm: object,

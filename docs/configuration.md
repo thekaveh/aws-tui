@@ -1,7 +1,7 @@
 # Configuration Reference
 
 This reference covers file locations, environment variables, localization,
-transfer history, keybindings and local SQL drafts.
+transfer history, keybindings, saved navigation and local SQL drafts.
 
 ## 1. File locations
 
@@ -13,6 +13,7 @@ preserved when present.
 | Path | Contents |
 |---|---|
 | `<config-dir>/config.toml` | Connections + defaults + keybindings |
+| `<config-dir>/workspaces.json` | Named navigation workspaces and bookmarks |
 | `<config-dir>/athena-drafts/<id>.json` | Opt-in local Athena SQL drafts |
 | `<config-dir>/theme.tcss` | Optional `.tcss` overlay over the active theme |
 | `<config-dir>/themes/<name>.tcss` | Optional full custom themes |
@@ -102,3 +103,36 @@ Draft contents are not collected by
 `doctor` or support diagnostics. See [Athena](services/athena.md#6-local-sql-draft-recovery)
 for recovery and [Cookbook](cookbook.md#66-save-and-recover-local-sql-drafts)
 for the keyboard procedure and shutdown limits.
+
+## 6. Workspaces and bookmarks
+
+Choose **Workspaces and bookmarks** from the command palette to save or open
+navigation. The `app.workspaces` action has no default shortcut.
+See the [keyboard procedure](cookbook.md#10-save-and-open-workspaces-and-bookmarks).
+
+A workspace records its active service, connection name and region, plus both
+known file-pane locations with independent sources. It also records known
+Athena workgroup/catalog/database, Glue database/table and EMR application
+selections for each visited source. A bookmark names one destination within
+a workspace.
+
+The separate JSON library uses schema version `1`. It contains navigation
+fields only. It excludes credentials, SQL, result rows, query/job identifiers
+and operation state. It does not restore a session automatically.
+Local SQL drafts remain a separate, opt-in feature.
+
+Limits are 100 workspaces, 100 bookmarks per workspace, 32 service scopes per
+workspace and 1 MiB for the library. Names contain at most 80 characters.
+Duplicate names are compared without case distinctions within their workspace
+or library. Rename and delete preserve unrelated records.
+
+Writes use a private temporary file and atomic replacement under the configuration
+lock. POSIX directory/file modes are `0700`/`0600` where supported; the file
+is plaintext. Invalid or unsupported-version libraries are reported and preserved.
+Demo mode permits reading existing records but disables library writes.
+
+Open checks current connections, regions, service support and saved resources
+before adoption. It performs metadata reads, but submits no query or job and
+replays no transfer or mutation. Missing destinations remain errors; Open does
+not substitute another resource. Finish active operations before opening saved
+navigation. Failed preparation preserves the current screen.

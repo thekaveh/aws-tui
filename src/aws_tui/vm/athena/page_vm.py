@@ -655,6 +655,7 @@ class AthenaPageVM:
         async with self._setup_lock:
             if self._disposed or self._shutdown_started:
                 return
+            self._selection_store.remember_navigation_scope(self._selection_scope)
             # Establish the source baseline even while persistence is off, so
             # later Enable cannot adopt a remapped credentials selector.
             if self._drafts is not None:
