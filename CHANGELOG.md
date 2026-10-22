@@ -27,6 +27,10 @@ section. The current tree must not be tagged as v0.8.0.
 
 ### Added
 
+- Read-only scoped overview from the command palette, with explicit session watches,
+  bounded manual refreshes, per-source failure states and exact existing-detail navigation.
+  Session transfers retain the existing 100-finished-entry limit.
+
 - Named navigation workspaces and bookmarks with keyboard management,
   versioned local storage and current-source/resource validation before Open.
   Saved navigation excludes SQL, credentials, results and running operations.
