@@ -358,3 +358,21 @@ def test_operations_flow_assigns_transfer_journal_to_dual_pane() -> None:
     assert 'data-owner="DualPaneVM" data-target="TransferJournal"' in master
     assert 'd="M180 215V270H1230V215"' in master
     assert 'd="M620 165H1080"' not in master
+
+
+@pytest.mark.parametrize("diagram", ["architecture", "operations-flow"])
+def test_provider_routes_are_visible_and_explain_optional_peek(diagram: str) -> None:
+    """A hidden SVG description alone cannot repair the incomplete figures."""
+    master = Path(f"docs/diagrams/{diagram}.html").read_text(encoding="utf-8")
+    root = ET.fromstring(extract_svg(master))
+    namespace = "{http://www.w3.org/2000/svg}"
+    visible = " ".join(" ".join(node.itertext()) for node in root.iter(f"{namespace}text"))
+    assert "CloudWatch" in visible
+    assert "DuckDB" in visible or "NativeDuckDb" in visible
+    assert "optional" in visible.lower()
+    assert "S3" in visible
+    description = root.find(f"{namespace}desc")
+    assert description is not None
+    explanation = " ".join(description.itertext())
+    for contract in ("CloudWatch", "follow", "direct S3", "extensions", "Athena"):
+        assert contract in explanation

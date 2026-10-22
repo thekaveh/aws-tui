@@ -1,6 +1,6 @@
 # Architecture
 
-![aws-tui five-layer architecture: Textual S3, EMR Serverless, Glue and Iceberg, and Athena views; Glue and Athena VM trees plus S3 and EMR view models; service plugins; domain operations with shared TableRef and QueryContext models; connection, configuration, keychain, platform-path, and logging infrastructure; the AWS Glue, Athena, S3, and Lake Formation boundary; and a separate demo-mode composition boundary.](diagrams/img/architecture.png)
+![aws-tui five-layer architecture: Textual S3, EMR Serverless, Glue and Iceberg, and Athena views; Glue and Athena VM trees plus S3 and EMR view models; service plugins; domain operations with shared TableRef and QueryContext models; connection, configuration, keychain, platform-path, and logging infrastructure; the AWS Glue, Athena, S3, and Lake Formation boundary; CloudWatch log reads and explicit follow; optional direct-S3 DuckDB Peek; and a separate demo-mode composition boundary.](diagrams/img/architecture.png)
 
 aws-tui follows a five-layer architecture with enforced forbidden edges:
 
@@ -262,7 +262,23 @@ Superseding external navigation cancels older handoffs without joining them unde
 
 ## 4. Messaging
 
-![aws-tui operational flows for local and S3 transfer, Glue-to-Athena query handoff, S3 result artifacts, and bounded EMR Serverless log loading.](diagrams/img/operations-flow.png)
+![aws-tui operational flows for local and S3 transfer, Glue-to-Athena query handoff, S3 result artifacts, bounded S3 or CloudWatch EMR log loading/follow, and optional direct-S3 DuckDB Peek.](diagrams/img/operations-flow.png)
+
+The figures distinguish SDK clients from the optional local DuckDB engine.
+The connection-owned `EmrServerlessLogsClient` facade serves S3 and CloudWatch reads.
+`JobRunLogsVM` owns explicit CloudWatch follow polling; this is not AWS Live Tail.
+Readers need `logs:DescribeLogStreams` and `logs:FilterLogEvents`; EMR job writer permissions are separate.
+See [EMR log sources, bounds and credentials](services/emr-serverless.md#21-cloudwatch-source-and-loaded-data).
+
+For Peek, `GlueIcebergVM` delegates to `IcebergPreviewVM` and the injected `DuckDbPort`.
+Its optional `NativeDuckDb` implementation reads source S3 directly using the selected profile and region credential chain.
+It requires source permissions and any applicable KMS decryption access.
+Athena or Lake Formation query grants alone do not authorize these reads.
+
+DuckDB extensions need `extensions.duckdb.org` unless compatible copies are cached.
+The Peek scan does not execute Athena; loading metadata tabs can still execute Athena queries.
+Row limits do not bound S3 bytes, requests or charges.
+See [Peek prerequisites and costs](services/glue.md#32-preview-table-rows).
 
 ![aws-tui table handoff sequence from a Glue catalog selection through identity validation, Athena page adoption, prefill without execution, an explicit user run, and the result handoff to the S3 pane, with a rollback path back to the composition root.](diagrams/img/table-handoff.png)
 
