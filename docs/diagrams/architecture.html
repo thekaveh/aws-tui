@@ -23,7 +23,7 @@
   <section class="frame">
     <svg viewBox="0 0 1600 900" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="title desc">
       <title id="title">aws-tui S3, EMR Serverless, Glue, and Athena five-layer architecture</title>
-      <desc id="desc">S3, EMR Serverless, AWS Glue, and Amazon Athena flow through Textual view, VMx view model, service, domain, infrastructure, and external service boundaries. Domain adapters perform runtime AWS + filesystem I/O. Infrastructure owns sessions + SDK client construction and credentials, config, OS-backed stores. Content replacement must await hosted VM shutdown, then dispose outgoing VM. Demo providers sit outside production layers and are selected only by composition.</desc>
+      <desc id="desc">S3, EMR Serverless, AWS Glue, and Amazon Athena flow through Textual view, VMx view model, service, domain, infrastructure, and external service boundaries. Domain adapters perform runtime AWS + filesystem I/O. Infrastructure owns sessions + SDK client construction and credentials, config, OS-backed stores. Content replacement must await hosted VM shutdown, then dispose outgoing VM. EMR log reads and explicit follow use a connection-owned S3/CloudWatch facade. Optional Peek uses NativeDuckDb for direct S3 reads without Athena execution; its extensions can require network access. Demo providers sit outside production layers and are selected only by composition.</desc>
       <defs>
         <pattern id="grid" width="40" height="40" patternUnits="userSpaceOnUse"><path d="M40 0H0V40" fill="none" stroke="#1e293b" stroke-width="0.5"/></pattern>
         <marker id="arrow" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto"><polygon points="0 0,10 3.5,0 7" fill="#94a3b8"/></marker>
@@ -62,8 +62,8 @@
 
       <g id="textual-views"><desc>DualPane mounted by service_view_factory.py; ContextPicker and ServiceTabStrip serve GluePage and AthenaPage.</desc></g>
       <g id="viewmodels"><desc>ServiceSelectionStore and TableClipboardVM support GluePageVM with GlueCatalogVM, GlueJobsVM, and GlueCrawlersVM; AthenaPageVM owns AthenaQueryVM, AthenaHistoryVM, AthenaResultsVM, and AthenaSavedVM.</desc></g>
-      <g id="domain-models"><desc>S3FS + LocalFS feed CrossFsCopy / Move and TransferJournal. EMR Serverless Client uses an S3 log adapter. Glue uses IcebergInspector and AthenaQueryRunner with TableRef and QueryContext.</desc></g>
-      <g id="infrastructure"><desc>ConnectionResolver resolves exact connection + region identity. AwsSessionFactory constructs SDK client contexts.</desc></g>
+      <g id="domain-models"><desc>S3FS + LocalFS feed CrossFsCopy / Move and TransferJournal. EMR Serverless Client handles EMR API operations. Separately, EmrServerlessLogsClient provides the S3 log adapter and CloudWatch reads; JobRunLogsVM owns explicit follow polling. Glue uses IcebergInspector and AthenaQueryRunner with TableRef and QueryContext.</desc></g>
+      <g id="infrastructure"><desc>ConnectionResolver resolves exact connection + region identity. AwsSessionFactory constructs SDK client contexts. Separately, GlueIcebergVM preview uses DuckDbPort and optional NativeDuckDb for direct S3 reads through the selected profile and region credential chain. NativeDuckDb installs/loads extensions; this path does not execute Athena.</desc></g>
       <g id="cross-service-handoffs"><desc>Glue-to-Athena uses OpenAthenaTableRequest; Athena uses OpenGlueTableRequest and OpenS3LocationRequest. Snapshot time travel follows the same app transaction. TableClipboardVM handles CopyTableReferenceRequest for copy quoted table ref and same-source insert.</desc></g>
 
       <g font-family="Fira Code Embedded" text-anchor="middle">
@@ -108,10 +108,10 @@
           <rect x="590" y="525" width="250" height="85" rx="5"/><rect x="850" y="525" width="250" height="85" rx="5"/>
         </g>
         <g fill="#f8fafc" font-size="11" font-weight="700">
-          <text x="195" y="552">LocalFS · S3FS</text><text x="455" y="552">EmrServerlessClient</text><text x="715" y="552">GlueClient</text><text x="975" y="552">AthenaClient</text>
+          <text x="195" y="552">LocalFS · S3FS</text><text x="455" y="552">EMR API + log-read facade</text><text x="715" y="552">GlueClient</text><text x="975" y="552">AthenaClient</text>
         </g>
         <g fill="#94a3b8" font-size="9.5">
-          <text x="195" y="576">CrossFsCopy/Move · journal</text><text x="455" y="576">EMR log discovery via S3</text>
+          <text x="195" y="576">CrossFsCopy/Move · journal</text><text x="455" y="576">S3 / CloudWatch reads</text>
           <text x="715" y="576">IcebergInspector · TableRef</text><text x="975" y="576">ReadOnlySqlPolicy · QueryContext</text>
         </g>
 
@@ -125,11 +125,11 @@
         </g>
         <g fill="#f8fafc" font-size="10.5" font-weight="700">
           <text x="195" y="706">service-owned aioboto3</text><text x="455" y="706">service-owned aioboto3</text>
-          <text x="715" y="706">AwsSession client context</text><text x="975" y="706">AwsSession client context</text>
+          <text x="715" y="697">AwsSession client context</text><text x="975" y="706">AwsSession client context</text>
         </g>
         <g fill="#94a3b8" font-size="9">
-          <text x="195" y="725">S3 / local provider setup</text><text x="455" y="725">EMR + log S3 clients</text>
-          <text x="715" y="725">Glue + contextual Athena</text><text x="975" y="725">Athena execution client</text>
+          <text x="195" y="725">S3 / local provider setup</text><text x="455" y="725">EMR + S3 / logs SDK clients</text>
+          <text x="715" y="714">NativeDuckDb (optional Peek)</text><text x="715" y="731">separate SDK / DuckDB paths</text><text x="975" y="725">Athena execution client</text>
         </g>
 
         <g fill="#0f172a" stroke="#fb7185" stroke-width="2">
@@ -137,8 +137,8 @@
           <rect x="590" y="810" width="250" height="48" rx="5"/><rect x="850" y="810" width="250" height="48" rx="5"/>
         </g>
         <g fill="#f8fafc" font-size="9.5" font-weight="700">
-          <text x="195" y="839">local · AWS S3 · S3-compatible</text><text x="455" y="839">AWS EMR Serverless · S3 logs</text>
-          <text x="715" y="839">AWS Glue · Athena · Lake Formation</text><text x="975" y="839">Amazon Athena · result S3</text>
+          <text x="195" y="839">local · AWS S3 · S3-compatible</text><text x="455" y="839">EMR · S3 · CloudWatch Logs</text>
+          <text x="715" y="829">Glue · Athena · Lake Formation</text><text x="715" y="848">Peek: S3 + extension host</text><text x="975" y="839">Amazon Athena · result S3</text>
         </g>
 
         <g fill="#0f172a" stroke="#34d399" stroke-width="2">
