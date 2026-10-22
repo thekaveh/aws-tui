@@ -71,6 +71,7 @@ explicit meaning.
 | Filter pane | `/` | Edit the loaded name filter live |
 | Command palette | `:` / `Ctrl+K` | Opens the fuzzy app-command palette |
 | Workspaces and bookmarks | Unbound | Choose from the command palette; Tab selects Save/Open/Rename/Delete, Enter applies, Esc closes |
+| Scoped overview | Unbound | Watch selected jobs, queries, crawlers and session transfers; refresh manually and open an existing detail view |
 | Theme picker (modal) | `t` | |
 | Cycle to next theme (no modal) | `Shift+T` (`T`) | |
 | Help overlay | `?` | |
@@ -391,6 +392,7 @@ unbound until a handler ships.
 | `app.focus_transfers` | none (`Unbound`) | yes | Focus active transfer controls from the palette; configurable in `[keybindings]` |
 | `app.command_palette` | `:` / `ctrl+k` | yes | Open the command palette |
 | `app.workspaces` | none (palette only) | yes | Manage saved navigation workspaces and bookmarks; no configurable binding |
+| `app.overview` | none (palette only) | yes | Open the read-only scoped overview; no configurable binding |
 | `app.help` | `?` | yes | Help overlay |
 | `app.themes` | `t` | yes | Open theme picker modal |
 | `app.cycle_theme` | `T` (`shift+t`) | yes | Cycle to next theme without opening the modal |

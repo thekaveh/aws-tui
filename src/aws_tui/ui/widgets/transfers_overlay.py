@@ -24,6 +24,7 @@ from textual.app import ComposeResult
 from textual.binding import Binding, BindingType
 from textual.containers import Horizontal, VerticalScroll
 from textual.css.query import NoMatches
+from textual.events import Key
 from textual.widget import Widget
 from textual.widgets import Button, Static
 from vmx import Message, MessageHub, PropertyChangedMessage
@@ -166,6 +167,12 @@ class TransferRowWidget(HubSubscriberMixin, Widget):
     @property
     def transfer_vm(self) -> TransferVM:
         return self._vm
+
+    def on_key(self, event: Key) -> None:
+        if self.has_focus and event.key in {"enter", "space"}:
+            # Exact session inspection focuses the card, never its cancel chip.
+            event.stop()
+            event.prevent_default()
 
     def compose(self) -> ComposeResult:
         with Horizontal(classes="transfer-title-row"):
@@ -371,6 +378,7 @@ class TransfersOverlay(Widget, can_focus=True):
         self._hub: MessageHub[Message] = hub
         self._sub: DisposableBase | None = None
         self._expired_ids: set[str] = set()
+        self._inspected_transfer_id: str | None = None
         # Tracks transfer ids whose linger timer is currently armed
         # but hasn't fired yet. Without this, every ``_rebuild`` call
         # would re-arm a fresh ``set_timer`` for the same id (the
@@ -442,6 +450,8 @@ class TransfersOverlay(Widget, can_focus=True):
     async def _rebuild(self) -> None:
         represented_ids = {transfer.id for transfer in self._vm.transfers}
         self._expired_ids.intersection_update(represented_ids)
+        if self._inspected_transfer_id not in represented_ids:
+            self._inspected_transfer_id = None
         try:
             container = self.query_one("#transfers-overlay-inner", VerticalScroll)
         except NoMatches:
@@ -449,7 +459,7 @@ class TransfersOverlay(Widget, can_focus=True):
 
         visible: list[TransferVM] = []
         for t in self._vm.transfers:
-            if t.id in self._expired_ids:
+            if t.id in self._expired_ids and t.id != self._inspected_transfer_id:
                 continue
             if t.is_active or t.state is TransferState.PENDING:
                 visible.append(t)
@@ -466,6 +476,8 @@ class TransfersOverlay(Widget, can_focus=True):
         for t in visible:
             if t.id not in currently_mounted:
                 await container.mount(TransferRowWidget(t, hub=self._hub))
+        for row in container.query(TransferRowWidget):
+            row.can_focus = row.transfer_vm.id == self._inspected_transfer_id
 
         if visible or (self._history_vm is not None and self._history_vm.records):
             self.remove_class("-hidden")
@@ -513,10 +525,42 @@ class TransfersOverlay(Widget, can_focus=True):
             focused.press()
 
     def action_leave_controls(self) -> None:
+        self._inspected_transfer_id = None
+        self.call_after_refresh(self._rebuild)
         if self._restore_focus is not None:
             self._restore_focus()
         else:
             self.app.set_focus(None)
+
+    async def reveal_session_transfer(self, transfer_id: str) -> bool:
+        """Reveal an exact retained session card without a history read or mutation.
+
+        Inspection temporarily overrides visual linger expiry, not retention.
+        Escape releases inspection and the existing expiry state applies again.
+        """
+        retained = next(
+            (transfer for transfer in self._vm.transfers if transfer.id == transfer_id), None
+        )
+        if retained is None:
+            return False
+        self._inspected_transfer_id = transfer_id
+        await self._rebuild()
+        row = next(
+            (row for row in self.query(TransferRowWidget) if row.transfer_vm is retained),
+            None,
+        )
+        if (
+            row is None
+            or self._inspected_transfer_id != transfer_id
+            or not any(transfer is retained for transfer in self._vm.transfers)
+        ):
+            if self._inspected_transfer_id == transfer_id:
+                self._inspected_transfer_id = None
+                self.call_after_refresh(self._rebuild)
+            return False
+        row.focus()
+        self.call_after_refresh(self._reveal_focused_transfer)
+        return True
 
     def open_history(self, mode: Literal["history", "recovery"] = "history") -> None:
         """Keyboard/palette bridge remains usable even when the overlay is empty."""

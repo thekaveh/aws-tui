@@ -115,6 +115,13 @@ ACTION_SPECS: tuple[ActionSpec, ...] = (
         key_source="unbound",
     ),
     ActionSpec("app.focus_transfers", "Focus active transfers", "App"),
+    ActionSpec(
+        "app.overview",
+        "Scoped overview",
+        "App",
+        keywords=("watch", "jobs", "queries", "crawlers", "transfers"),
+        key_source="unbound",
+    ),
     ActionSpec("app.cycle_theme", "Cycle theme", "App"),
     ActionSpec(
         "app.swap_source",

@@ -23,6 +23,8 @@ connection and region separate from other sources.
   command palette, and customize keybindings and themes.
 - **Saved navigation:** reopen named workspaces and individual bookmarks across
   application runs.
+- **Scoped overview:** watch selected jobs, queries, crawlers and session transfers,
+  then open their existing detail views.
 
 Glue inspection is read-only. Glue-to-Athena handoffs prefill a
 `SELECT * … LIMIT 5` query without executing it. Athena execution can incur

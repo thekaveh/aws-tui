@@ -40,7 +40,7 @@ from textual.driver import Driver
 from textual.widget import Widget
 from textual.widgets import Button, DataTable, Input, OptionList, Static, TextArea
 
-from aws_tui.composition import AppContext, build_app_context
+from aws_tui.composition import AppContext, build_app_context, make_source_check_factory
 from aws_tui.domain.data_catalog import TableRef
 from aws_tui.domain.filesystem import (
     AuthRequiredError,
@@ -54,12 +54,19 @@ from aws_tui.domain.navigation_workspace import (
     Workspace,
     WorkspaceError,
 )
+from aws_tui.domain.overview_client import OverviewClient
 from aws_tui.domain.preview import load_preview
 from aws_tui.domain.preview_limits import RAW_PREVIEW_BYTES
 from aws_tui.domain.query import QueryState
 from aws_tui.domain.s3_object_details import S3ObjectDetailsProvider
 from aws_tui.domain.s3_uri import parse_s3_uri
 from aws_tui.domain.s3_versions import S3VersionProvider
+from aws_tui.domain.scoped_overview import (
+    MAX_CONCURRENT_REFRESHES,
+    OverviewEntry,
+    OverviewPage,
+    WatchScope,
+)
 from aws_tui.domain.workspace_store import WorkspaceStore
 from aws_tui.infra.aws_session import TokenState
 from aws_tui.infra.connection_resolver import Connection, ConnectionDiscovery, ConnectionNotFound
@@ -69,6 +76,7 @@ from aws_tui.infra.doctor_probe import probe_source
 from aws_tui.infra.keymap_store import textual_key_name
 from aws_tui.infra.redaction import redact_text
 from aws_tui.infra.theme_store import ThemeNotFound, ThemeStore
+from aws_tui.overview_navigation import prepare_overview_entry
 from aws_tui.service_navigation import (
     ConnectionAdoptionOptions,
     ServiceMountPorts,
@@ -114,6 +122,7 @@ from aws_tui.ui.widgets.quick_look import QuickLook
 from aws_tui.ui.widgets.recursive_upload import RecursiveUploadModal
 from aws_tui.ui.widgets.s3_object_details import S3ObjectDetailsModal
 from aws_tui.ui.widgets.s3_versions import S3VersionsModal
+from aws_tui.ui.widgets.scoped_overview_modal import ScopedOverviewModal
 from aws_tui.ui.widgets.service_source_header import ServiceSourceHeader
 from aws_tui.ui.widgets.service_tab_strip import ServiceTabStrip
 from aws_tui.ui.widgets.service_view_factory import build_service_view
@@ -172,6 +181,8 @@ from aws_tui.vm.messages import (
     ThemeChangedMessage,
 )
 from aws_tui.vm.nav_menu_vm import SETTINGS_NAV_ID
+from aws_tui.vm.overview_transfers import project_session_transfers
+from aws_tui.vm.scoped_overview_vm import ScopedOverviewVM
 from aws_tui.vm.service_diagnostics import (
     CapturedServiceDiagnostic,
     capture_service_diagnostics,
@@ -773,6 +784,7 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
         self._actions.register("app.themes", self.action_themes)
         self._actions.register("app.transfer_history", self.action_transfer_history)
         self._actions.register("app.workspaces", self.action_workspaces)
+        self._actions.register("app.overview", self.action_overview)
         self._actions.register("app.focus_transfers", self.action_focus_transfers)
         self._actions.register("app.cycle_theme", self.action_cycle_theme)
         self._actions.register("app.open_settings", self.action_open_settings)
@@ -940,6 +952,10 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
         self._workspace_libraries: set[WorkspaceLibraryVM] = set()
         self._workspace_library_subscriptions: dict[WorkspaceLibraryVM, DisposableBase] = {}
         self._workspace_input_claimed = False
+        self._overview_vm: ScopedOverviewVM | None = None
+        self._overview_instances: set[ScopedOverviewVM] = set()
+        self._overview_slots = asyncio.Semaphore(MAX_CONCURRENT_REFRESHES)
+        self._overview_sub: DisposableBase | None = None
         self._pane_state_sub: DisposableBase | None = None
         self._connection_state_sub: DisposableBase | None = None
         self._connection_list_sub: DisposableBase | None = None
@@ -1140,6 +1156,7 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
         self._connection_list_sub = ctx.hub.messages.subscribe(
             on_next=self._on_connection_list_changed
         )
+        self._overview_sub = ctx.hub.messages.subscribe(self._on_overview_source_message)
         self._nav_selection_sub = ctx.hub.messages.subscribe(on_next=self._on_nav_selection_changed)
         # Subscribe to pane cursor / entries changes so the HintLegend can
         # mark ``pane.copy`` / ``pane.delete`` disabled when the cursor sits
@@ -2466,6 +2483,322 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
             ),
             selected,
         )
+
+    def _overview_connection(self) -> Connection:
+        root = self._app_ctx.root_vm
+        current = root.content_host.current
+        if isinstance(current, (AthenaPageVM, GluePageVM, EmrServerlessPageVM)):
+            return current.connection
+        return root.active_connection or Connection("session", "local", "local", "session")
+
+    def _overview_current_scope(self, connection: Connection) -> WatchScope | None:
+        current = self._app_ctx.root_vm.content_host.current
+        kind, resource = "", None
+        if isinstance(current, DualPaneVM):
+            kind, resource = "transfers", ""
+        elif not self._app_ctx.demo and connection.kind == "aws":
+            if isinstance(current, AthenaPageVM):
+                kind, resource = "athena", current.context.workgroup
+            elif isinstance(current, GluePageVM):
+                if current.active_view == "jobs":
+                    kind, resource = "glue-job", current.jobs.selected_job_name
+                elif current.active_view == "crawlers":
+                    kind, resource = "glue-crawler", current.crawlers.selected_crawler_name
+            elif isinstance(current, EmrServerlessPageVM):
+                kind, resource = "emr-serverless", current.applications.selected_id
+        return (
+            WatchScope(kind, connection.name, connection.region, resource)
+            if resource is not None
+            else None
+        )
+
+    def _retire_overview(self) -> None:
+        vm, self._overview_vm = self._overview_vm, None
+        if vm is not None:
+            vm.close()
+            if self._shutdown_task is None:
+                self._run_lifecycle_worker(
+                    partial(self._drain_overview, vm), group="overview-drain"
+                )
+
+    async def _drain_overview(self, vm: ScopedOverviewVM) -> None:
+        await vm.shutdown()
+        self._overview_instances.discard(vm)
+
+    def _on_overview_source_message(self, message: object) -> None:
+        vm = self._overview_vm
+        if vm is None:
+            return
+        if isinstance(message, ConnectionListChangedMessage):
+            changed = vm.connection.name in message.names
+        elif isinstance(message, ConnectionChangedMessage):
+            changed = message.connection != vm.connection
+        elif isinstance(message, PropertyChangedMessage):
+            changed = (
+                message.sender_object is self._app_ctx.root_vm.content_host
+                and message.property_name == "current"
+                and self._overview_connection() != vm.connection
+            )
+        else:
+            changed = False
+        if changed:
+            self._retire_overview()
+
+    def action_overview(self) -> None:
+        if len(self.screen_stack) != 1 or self._shutdown_task is not None:
+            return
+        self.record_action("app.overview")
+        ctx = self._app_ctx
+        connection = self._overview_connection()
+        if self._overview_vm is not None and self._overview_vm.connection != connection:
+            self._retire_overview()
+        vm = self._overview_vm
+        if vm is None:
+            check_source = make_source_check_factory(ctx.config_store, ctx.connection_resolver)(
+                connection
+            )
+
+            async def owned_source_check() -> bool:
+                # The resolver uses to_thread. Shield its actual lifetime so
+                # cancellation neither leaks a read nor poisons initialization.
+                async def resolve() -> bool:
+                    return await check_source()
+
+                task = asyncio.create_task(resolve())
+                try:
+                    return await asyncio.shield(task)
+                except asyncio.CancelledError:
+                    await self._await_tasks_through_cancellation((task,))
+                    raise
+
+            async def source_is_current() -> bool:
+                if (
+                    self._shutdown_task is not None
+                    or self._overview_vm is not vm
+                    or self._overview_connection() != connection
+                ):
+                    return False
+                if connection.source != "session" and not await owned_source_check():
+                    # A failed first identity check is deliberately latched by
+                    # the resolver. Reopening must create a fresh source session.
+                    if self._overview_vm is vm:
+                        self._retire_overview()
+                    return False
+                return self._overview_vm is vm and self._overview_connection() == connection
+
+            async def read(scope: WatchScope) -> OverviewPage:
+                if scope.kind == "transfers":
+                    return project_session_transfers(scope, ctx.transfers_vm)
+                if ctx.demo:
+                    raise ValueError("AWS overview reads are unavailable in demo mode")
+                return await OverviewClient(ctx.aws_session).read(scope, connection)
+
+            vm = ScopedOverviewVM(
+                connection=connection,
+                read=read,
+                source_is_current=source_is_current,
+                slots=self._overview_slots,
+            )
+            self._overview_vm = vm
+            self._overview_instances.add(vm)
+
+        def selected(entry: OverviewEntry | None) -> None:
+            if entry is not None and self._shutdown_task is None:
+                self._run_lifecycle_worker(
+                    partial(self._open_overview_entry, vm, entry), group="overview-open"
+                )
+
+        self.push_screen(
+            ScopedOverviewModal(vm, add_current=self._overview_current_scope(connection)), selected
+        )
+
+    async def _open_overview_entry(self, vm: ScopedOverviewVM, entry: OverviewEntry) -> None:
+        ready: asyncio.Future[None] = asyncio.get_running_loop().create_future()
+
+        def dismissed() -> None:
+            if not ready.done():
+                ready.set_result(None)
+
+        self.call_after_refresh(dismissed)
+        await ready
+        entry_owner = vm.entry_owner(entry)
+        if (
+            self._shutdown_task is not None
+            or len(self.screen_stack) != 1
+            or self._overview_vm is not vm
+            or self._overview_connection() != vm.connection
+            or entry_owner is None
+        ):
+            return
+        if entry.scope.kind == "transfers":
+            if not await self.query_one(TransfersOverlay).reveal_session_transfer(entry.identifier):
+                notifications.advise(
+                    self._app_ctx.root_vm.chrome.toast_stack,
+                    subject="Transfer",
+                    message="This transfer is no longer retained in the session",
+                )
+            return
+        ctx, root = self._app_ctx, self._app_ctx.root_vm
+
+        def advise(message: str) -> None:
+            notifications.advise(root.chrome.toast_stack, subject="Source", message=message)
+
+        if self._workspace_has_active_work():
+            advise("Finish the active operation before opening overview detail")
+            return
+        outgoing = root.content_host.current
+        baseline = self._overview_input_snapshot(outgoing)
+        source_revision = self._source_revision
+        generation = self.service_navigation.advance("overview", cancel_table_tasks=True)
+        owner = asyncio.current_task()
+        assert owner is not None
+        self.service_navigation.track_navigation(owner)
+        changed = False
+        subscriptions: list[DisposableBase] = []
+
+        def observed(_event: object) -> None:
+            nonlocal changed
+            # Compare actual input rather than status notifications. A changed
+            # choice stays latched even if the user subsequently chooses A again.
+            if (
+                root.content_host.current is not outgoing
+                or self._overview_input_snapshot(outgoing) != baseline
+            ):
+                changed = True
+
+        subscriptions.append(ctx.hub.messages.subscribe(observed))
+        children: tuple[object, ...] = ()
+        if isinstance(outgoing, GluePageVM):
+            children = (
+                outgoing.catalog,
+                outgoing.jobs,
+                outgoing.crawlers,
+                outgoing.catalog.iceberg,
+            )
+        elif isinstance(outgoing, EmrServerlessPageVM):
+            children = (outgoing.applications, outgoing.job_runs, outgoing.job_run_logs)
+        elif isinstance(outgoing, DualPaneVM):
+            children = (outgoing, outgoing.left, outgoing.right)
+        elif isinstance(outgoing, AthenaPageVM):
+            children = (outgoing, outgoing.query)
+        for child in children:
+            changes = getattr(child, "on_property_changed", None)
+            if changes is not None:
+                subscriptions.append(changes.subscribe(observed))
+
+        def owns() -> bool:
+            observed(None)
+            if (
+                changed
+                or self._shutdown_task is not None
+                or len(self.screen_stack) != 1
+                or self.service_navigation.closed
+                or not self.service_navigation.owns("overview", generation)
+                or self._overview_vm is not vm
+                or vm.entry_owner(entry) is not entry_owner
+                or self._overview_connection() != vm.connection
+                or self._source_revision != source_revision
+                or self._workspace_has_active_work()
+            ):
+                return False
+            if isinstance(outgoing, AthenaPageVM):
+                page = next((view for view in self.query(AthenaPage) if view.vm is outgoing), None)
+                if (
+                    page is None
+                    or page.query_one("#athena-editor", TextArea).text != outgoing.query.sql
+                ):
+                    return False
+            return True
+
+        prepared = None
+        try:
+            if not owns() or not await vm.source_is_current() or not owns():
+                return
+            if isinstance(outgoing, AthenaPageVM):
+
+                async def confirm(message: str) -> bool:
+                    return await ctx.confirm_vm.ask(
+                        ConfirmRequest(
+                            title="Open overview detail?",
+                            body_lines=(message,),
+                            confirm_label="Open",
+                            danger=True,
+                        ),
+                        dialog_service=TextualDialogService(self, ctx.confirm_vm, hub=ctx.hub),
+                    )
+
+                if not await outgoing.authoring.confirm_replacement(
+                    confirm=confirm, still_selected=owns
+                ):
+                    return
+            prepared = await prepare_overview_entry(entry, vm.connection, ctx.registry)
+            if not await vm.source_is_current() or not owns():
+                advise("Overview detail was not opened because the current context changed")
+                return
+            recovery = _StagedServiceRecovery(
+                PaneState.IDLE, prepared.recovery.vm, prepared.recovery.commit_selection, (), owns
+            )
+            async with self.service_navigation.service_lock:
+                with self.service_navigation.suppress_selection(prepared.service_id):
+                    adopted = await self._commit_staged_service_recovery(
+                        recovery,
+                        connection=prepared.connection,
+                        service_id=prepared.service_id,
+                        is_current=owns,
+                        protect_claimed_adoption=True,
+                        progress_message="Opening overview detail…",
+                    )
+                if adopted:
+                    notifications.success(
+                        root.chrome.toast_stack, subject="Source", message="Overview detail opened"
+                    )
+        except asyncio.CancelledError:
+            raise
+        except Exception as error:
+            ctx.log_sink.warning("overview.open_failed", error_type=type(error).__name__)
+            advise("Overview detail is unavailable; the current screen is retained")
+        finally:
+            for subscription in subscriptions:
+                subscription.dispose()
+            try:
+                if prepared is not None and root.content_host.current is not prepared.recovery.vm:
+                    await retire_workspace_candidate(prepared.recovery.vm)
+            finally:
+                self.service_navigation.untrack_navigation(owner)
+
+    def _overview_input_snapshot(self, page: object) -> object:
+        if isinstance(page, GluePageVM):
+            return self._capture_glue_page_snapshot(page)
+        if isinstance(page, AthenaPageVM):
+            view = next((view for view in self.query(AthenaPage) if view.vm is page), None)
+            return (
+                page.active_view,
+                page.query.editor_revision,
+                page.authoring.ownership_revision,
+                page.context_choice_revision,
+                page.history.selected_execution_id,
+                view.query_one(AthenaQueryView).native_input_revision if view is not None else None,
+            )
+        if isinstance(page, EmrServerlessPageVM):
+            return page.export_credential_recovery_snapshot()
+        if isinstance(page, DualPaneVM):
+            return (
+                page.focused_pane,
+                tuple(
+                    (
+                        pane.current_connection_key,
+                        pane.current_connection_region,
+                        pane.path,
+                        pane.filter_text,
+                        pane.cursor_index,
+                        pane.viewmodel.sort_status_text,
+                        pane.is_multiselect_mode,
+                        pane.marked_entries,
+                    )
+                    for pane in (page.left, page.right)
+                ),
+            )
+        return None
 
     def _workspace_has_active_work(self) -> bool:
         """Admission precedes navigation cancellation and outgoing shutdown."""
@@ -5198,6 +5531,7 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
         service_id: str,
         is_current: Callable[[], bool] | None = None,
         protect_claimed_adoption: bool = False,
+        progress_message: str = "Opening saved navigation…",
     ) -> bool:
         """Adopt a verified candidate and mount its matching view."""
         ctx = self._app_ctx
@@ -5253,8 +5587,12 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
                     root.chrome.toast_stack,
                     key="workspace-open",
                     subject="Source",
-                    message="Opening saved navigation…",
+                    message=progress_message,
                 )
+            # Progress observers can synchronously retire the source, accept
+            # work or edit input. Recheck after the last outward notification.
+            if not owns_adoption():
+                return False
             if not isinstance(outgoing, AthenaPageVM):
                 input_claimed = True
                 return True
@@ -9163,6 +9501,8 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
             await await_cleanup(
                 "workspace_library.shutdown", partial(self._drain_workspace_library, library)
             )
+        for overview in tuple(getattr(self, "_overview_instances", ())):
+            await await_cleanup("scoped_overview.shutdown", partial(self._drain_overview, overview))
 
         run_cleanup("service_navigation.close_intake", self._close_service_navigation_intake)
         recovery_task = getattr(self, "_auth_recovery_task", None)
@@ -9233,6 +9573,7 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
             "_service_navigation_sub",
             "_palette_failure_sub",
             "_history_sub",
+            "_overview_sub",
         ):
             run_cleanup(
                 f"subscription.{attribute.removeprefix('_')}.dispose",

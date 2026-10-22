@@ -18,6 +18,7 @@ Start with the demo to explore sample resources without AWS credentials.
 - Review and execute allowed read-only SQL in Athena, then inspect results
   and query history.
 - Save named navigation workspaces and bookmarks for later application runs.
+- Watch selected jobs, queries, crawlers and session transfers in a read-only [scoped overview](cookbook.md#11-watch-selected-jobs-queries-and-transfers).
 
 Glue table and Iceberg snapshot handoffs prefill Athena queries without
 executing them. Athena queries can incur AWS charges and write query results.
