@@ -40,6 +40,7 @@ instead of binding to ``on_property_changed``.
 
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass
 from functools import partial
 
@@ -139,6 +140,7 @@ class IcebergPreviewVM:
         self._dispatcher: Dispatcher = dispatcher
         self._disposed: bool = False
         self._constructed: bool = False
+        self._active_loaders = 0
 
         self._location: str | None = None
         self._profile: str | None = None
@@ -214,6 +216,11 @@ class IcebergPreviewVM:
         # The same validator the SQL generator uses, so `available` cannot be
         # True for a location that would be rejected at query time.
         return parse_s3_uri(location) is not None
+
+    @property
+    def owns_active_work(self) -> bool:
+        """A retired resource may still be draining an accepted engine query."""
+        return self._active_loaders > 0
 
     @property
     def state(self) -> PaneState:
@@ -404,9 +411,34 @@ class IcebergPreviewVM:
             return IcebergPreviewPage()
         snapshot_id = self._requested_snapshot_id
         sql = iceberg_preview_sql(location, limit=self._limit, snapshot_id=snapshot_id)
-        result = await anyio.to_thread.run_sync(
-            partial(self._port.query, sql, profile=profile, region=self._region)
-        )
+        self._active_loaders += 1
+        try:
+            engine = asyncio.create_task(
+                anyio.to_thread.run_sync(
+                    partial(self._port.query, sql, profile=profile, region=self._region)
+                )
+            )
+            canceled = False
+            while not engine.done():
+                try:
+                    await asyncio.shield(engine)
+                except asyncio.CancelledError:
+                    # VMx cancels loaders with asyncio.Task.cancel(). Protect
+                    # the AnyIO worker owner until the synchronous query has
+                    # actually terminated, even across resource replacement.
+                    canceled = True
+                except Exception:
+                    break
+            try:
+                result = engine.result()
+            except BaseException:
+                if canceled:
+                    raise asyncio.CancelledError from None
+                raise
+            if canceled:
+                raise asyncio.CancelledError
+        finally:
+            self._active_loaders -= 1
         if result.outcome is not DuckDbOutcome.OK:
             raise IcebergPreviewFailure(result.outcome)
         return IcebergPreviewPage(columns=result.columns, rows=result.rows, snapshot_id=snapshot_id)

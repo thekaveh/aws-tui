@@ -452,6 +452,25 @@ class S3FS:
         entries.sort(key=lambda e: (e.kind != EntryKind.DIRECTORY, e.name))
         return entries
 
+    async def verify_directory(self, path: PathRef) -> None:
+        """Verify a literal prefix without conflating a same-named object with it."""
+        if self._bucket is None and path.is_root:
+            return  # The subsequent listing verifies the virtual service root.
+        bucket, key = self._resolve(path)
+        if not key and (path.is_root or (self._bucket is None and len(path.segments) == 1)):
+            return  # The subsequent bucket-root listing verifies bucket access.
+        try:
+            async with self._client() as s3:
+                result = await s3.list_objects_v2(Bucket=bucket, Prefix=f"{key}/", MaxKeys=1)
+                if not result.get("KeyCount", 0):
+                    raise NotFoundError(path.as_posix())
+        except _AUTH_FAILURE_EXCEPTIONS as exc:
+            raise _auth_error(exc) from exc
+        except _TRANSPORT_FAILURE_EXCEPTIONS as exc:
+            raise ProviderUnreachableError(str(exc)) from exc
+        except ClientError as exc:
+            raise _map_client_error(exc, key) from exc
+
     async def stat(self, path: PathRef) -> FileEntry:
         if path.is_root:
             return FileEntry(name="", kind=EntryKind.DIRECTORY, size=None, modified=None)

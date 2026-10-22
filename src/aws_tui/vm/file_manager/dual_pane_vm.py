@@ -17,6 +17,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
+from collections.abc import Awaitable, Callable
 from enum import StrEnum
 from typing import TYPE_CHECKING
 
@@ -310,12 +311,6 @@ class DualPaneVM:
         content swaps dispose this VM, so stale refreshes must be cancelled
         before they emit pane-state updates from old providers.
         """
-        if self._shutdown_started:
-            return None
-        try:
-            loop = asyncio.get_running_loop()
-        except RuntimeError:
-            return None  # No running loop (sync-driven tests); caller can refresh manually.
         provider = pane.provider
 
         async def refresh() -> None:
@@ -326,7 +321,23 @@ class DualPaneVM:
             else:
                 await pane.navigate_to(path)
 
-        task = loop.create_task(refresh())
+        return self._schedule_owned_operation(refresh)
+
+    def _schedule_owned_operation(
+        self, work: Callable[[], Awaitable[None]]
+    ) -> asyncio.Task[None] | None:
+        """Own a deferred read through cancellation and normal VM retirement."""
+        if self._shutdown_started:
+            return None
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            return None
+
+        async def run() -> None:
+            await work()
+
+        task = loop.create_task(run())
         self._refresh_tasks.add(task)
 
         def _done(done: asyncio.Task[None]) -> None:

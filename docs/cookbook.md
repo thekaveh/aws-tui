@@ -12,6 +12,7 @@
 7. [Inspect and query Glue tables through Athena](#7-inspect-and-query-glue-tables-through-athena)
 8. [Diagnose local setup and source access](#8-diagnose-local-setup-and-source-access)
 9. [Preview files with Quick Look](#9-preview-files-with-quick-look)
+10. [Save and open workspaces and bookmarks](#10-save-and-open-workspaces-and-bookmarks)
 
 ---
 
@@ -1313,3 +1314,61 @@ Closing or replacing a preview cancels its work and drains owned resources.
 Local and S3 previews validate source identity before displaying results; a
 changed source shows `Preview cancelled: source changed`. Preview reads are
 read-only and never download the whole object for decoding.
+
+## 10. Save and open workspaces and bookmarks
+
+Use a workspace to return to a group of service selections and file locations.
+Use a bookmark to return to one destination. Configure its connections before
+opening a saved record on another installation.
+
+### 10.1. Save a workspace
+
+1. Select the required sources and destinations in the service pages.
+2. Press `Ctrl+K`, type `workspaces`, and press `Enter`.
+3. Type a name in the name field.
+4. Press `Tab` to reach **Save**, then press `Enter`.
+5. Press `Esc` to return to the current service.
+
+**Save** creates a new workspace with the current service and known navigation across visited
+sources, including both file panes. It does not capture SQL or running work.
+A duplicate name shows an error and preserves the existing record.
+
+### 10.2. Add and open a bookmark
+
+1. Navigate to the destination in its service page or focused file pane.
+2. Open **Workspaces and bookmarks** from the command palette.
+3. Press `Tab` until the list has focus, then select the parent workspace with `Up` or `Down`.
+4. Press `Tab` until the name field has focus, then enter the bookmark name.
+5. Press `Tab` to reach **Bookmark**, then press `Enter`.
+6. Press `Tab` until the list has focus.
+7. Select its indented bookmark row and press `Enter` to open it.
+
+A file bookmark replaces the focused file pane when the file manager is open.
+The other pane keeps its source and location. From another service, the file
+manager opens the bookmark on the left and retains the last known right-pane
+destination. An unavailable right-pane destination does not block the bookmark.
+
+AWS bookmarks apply their destination through the service's validated selectors.
+They do not open the parent workspace's other destinations.
+
+### 10.3. Open and manage saved navigation
+
+1. Open **Workspaces and bookmarks** from the command palette.
+2. Press `Tab` until the list has focus.
+3. Select a workspace row with `Up` or `Down`.
+4. Press `Tab` to reach **Open**, then press `Enter`.
+
+Opening a workspace validates its saved sources and resources before switching
+pages. Queries, jobs, transfers and mutations are never replayed. Finish active
+operations first. Athena can ask for confirmation before replacing edited SQL.
+
+To rename a record, select it, enter a new name, and activate **Rename**.
+Rename changes only the name; it does not capture new navigation.
+To remove it, activate **Delete** and confirm. Deleting a workspace also removes
+its bookmarks; deleting a bookmark preserves its parent. **Refresh** reloads
+changes made by another process. `Esc` closes the manager.
+
+A missing connection or resource leaves the current page usable. Correct the
+connection or select an available destination before saving a replacement.
+Malformed and unsupported libraries show an error without overwriting the file.
+See [Configuration](configuration.md#6-workspaces-and-bookmarks) for storage and limits.

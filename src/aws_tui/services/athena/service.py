@@ -10,13 +10,14 @@ from vmx.services.dispatcher import Dispatcher
 
 from aws_tui.domain.athena import AthenaClient
 from aws_tui.domain.athena_runner import AthenaQueryRunner
+from aws_tui.domain.navigation_workspace import NavigationTarget
 from aws_tui.domain.sql_authoring import CompletionTable
 from aws_tui.domain.sql_policy import ReadOnlySqlPolicy
 from aws_tui.infra.aws_session import AwsSession
 from aws_tui.infra.connection_resolver import Connection
 from aws_tui.vm.athena.drafts_vm import AthenaDraftsVM
 from aws_tui.vm.athena.page_vm import AthenaPageVM
-from aws_tui.vm.service_source_vm import SelectionScope, ServiceSelectionStore
+from aws_tui.vm.service_source_vm import SelectionScope, ServiceSelectionStore, navigation_seed
 from aws_tui.vm.services_protocol import RecoveryServiceVM, ServiceDescriptor
 
 
@@ -154,9 +155,37 @@ class AthenaService:
         selections = self._selections.clone()
         scope = SelectionScope(self.descriptor.id, connection.name, connection.region)
         page = self._build_vm(connection, selections, drafts_active=False)
+        committed = False
 
         def commit_selection() -> None:
-            self._selections.replace_scope_from(selections, scope)
+            nonlocal committed
+            if committed:
+                return
+            selections.adopt_recovery_scope_into(self._selections, scope)
+            committed = True
+            page.activate_drafts()
+
+        return RecoveryServiceVM(vm=page, commit_selection=commit_selection)
+
+    def navigation_targets(self) -> tuple[NavigationTarget, ...]:
+        return self._selections.navigation_targets(self.descriptor.id)
+
+    def install_navigation_targets(self, targets: tuple[NavigationTarget, ...]) -> None:
+        self._selections.install_navigation_targets(targets, service_id=self.descriptor.id)
+
+    def build_navigation_vm(
+        self, connection: Connection, target: NavigationTarget
+    ) -> RecoveryServiceVM:
+        selections = navigation_seed(self.descriptor.id, connection, target)
+        page = self._build_vm(connection, selections, drafts_active=False)
+        committed = False
+
+        def commit_selection() -> None:
+            nonlocal committed
+            if committed:
+                return
+            selections.adopt_navigation_into(self._selections, target)
+            committed = True
             page.activate_drafts()
 
         return RecoveryServiceVM(vm=page, commit_selection=commit_selection)

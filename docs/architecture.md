@@ -146,6 +146,11 @@ VMs to build service pages, but it cannot import Textual widgets.
     `ReadOnlySqlPolicy`
     validates both user and generated SQL. Raw AWS responses remain below VMs.
 
+    `NavigationTarget` and `Workspace` carry immutable navigation intent.
+    `WorkspaceStore` persists a versioned allowlist in the domain layer and
+    uses Infrastructure's configuration transaction lock. Execution state,
+    credentials, SQL and results are outside its schema.
+
 - **Infrastructure** — Infrastructure owns sessions, credentials,
     configuration, SDK client construction, and OS-backed stores.
     `AwsSession` and `ConnectionResolver` provide configured AWS identities and
@@ -211,6 +216,12 @@ Service-specific table/editor snapshots remain with their existing transaction l
 their model-adoption calls use the same owner. `ContentHostVM` retains candidate
 construction, setup, shutdown and disposal. Action routing and application shutdown
 remain in the composition root.
+
+`workspace_restore.py` prepares saved navigation through isolated service candidates
+and normal resource selectors. The app checks source and saved-record ownership
+before publication. Single file bookmarks stage one pane; companion reads belong
+to the adopted file manager. `WorkspaceLibraryVM` owns disk operations beyond
+the lifetime of its modal and drains them during application shutdown.
 
 At startup, automatic connection attempts consume one shared 90-second budget;
 untried sources remain available for explicit selection after the local fallback

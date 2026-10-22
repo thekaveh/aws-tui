@@ -15,7 +15,7 @@ disposing the previous DualPaneVM via the :class:`ContentHostVM` swap.
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import ClassVar
 
@@ -23,17 +23,26 @@ import aioboto3
 from vmx import Message, MessageHub
 from vmx.services.dispatcher import Dispatcher
 
-from aws_tui.domain.filesystem import AuthRequiredError, FileSystemProvider, PathRef
+from aws_tui.domain.filesystem import AuthRequiredError, FileSystemProvider, PathRef, ProviderError
 from aws_tui.domain.local_fs import LocalFS
+from aws_tui.domain.navigation_workspace import FileLocation, NavigationTarget, WorkspaceError
 from aws_tui.domain.s3_fs import S3FS
 from aws_tui.domain.transfer_journal import TransferJournal
+from aws_tui.domain.unavailable_navigation_fs import UnavailableNavigationFS
 from aws_tui.infra.connection_resolver import Connection
 from aws_tui.infra.redaction import safe_endpoint_display
 from aws_tui.vm.credential_recovery import connection_history_identity
 from aws_tui.vm.file_manager.dual_pane_vm import DualPaneVM
 from aws_tui.vm.file_manager.pane_vm import PaneVM
 from aws_tui.vm.file_manager.transfer_runtime import TransferRuntime
-from aws_tui.vm.services_protocol import ServiceDescriptor
+from aws_tui.vm.services_protocol import RecoveryServiceVM, ServiceDescriptor
+from aws_tui.vm.workspace_navigation import WorkspaceNavigationError
+from aws_tui.vm.workspace_panes import (
+    BookmarkPaneVM,
+    WorkspacePaneVM,
+    capture_pane_target,
+    validate_pane_targets,
+)
 
 #: Test hook — when provided, replaces the real ``S3FS`` construction.
 S3FsFactory = Callable[[Connection], FileSystemProvider]
@@ -136,6 +145,8 @@ class S3Service:
         self._dispatcher: Dispatcher = dispatcher
         self._local_root: Path | None = local_root
         self._s3_fs_factory: S3FsFactory | None = s3_fs_factory
+        self._last_navigation: tuple[NavigationTarget, NavigationTarget] | None = None
+        self._navigation_capture_failed = False
         self._transfer_runtime = TransferRuntime(transfer_journal, hub) if hub is not None else None
 
     def bind_hub(self, hub: MessageHub[Message]) -> None:
@@ -190,6 +201,7 @@ class S3Service:
             path_protocol="s3:",
             initial_path=self._initial_left_path or PathRef(),
             connection_key=(connection.kind, connection.name),
+            connection_region=connection.region,
             transfer_connection=connection_history_identity(connection, s3_provider),
         )
         right = PaneVM(
@@ -212,6 +224,198 @@ class S3Service:
             transfer_journal=self._journal,
             transfer_runtime=self.transfer_runtime,
         )
+
+    def remember_navigation(self, vm: object) -> None:
+        """Remember two immutable pane intents, never providers or a retired VM."""
+        self._last_navigation = None
+        self._navigation_capture_failed = True
+        if not isinstance(vm, DualPaneVM):
+            return
+        self._last_navigation = (capture_pane_target(vm.left), capture_pane_target(vm.right))
+        self._navigation_capture_failed = False
+
+    def install_navigation_panes(self, targets: tuple[NavigationTarget, NavigationTarget]) -> None:
+        """Install structurally valid intent after the navigation owner has preflighted it."""
+        validate_pane_targets(targets)
+        self._last_navigation = targets
+        self._navigation_capture_failed = False
+
+    def build_workspace_vm(
+        self,
+        targets: tuple[NavigationTarget, NavigationTarget],
+        connections: tuple[Connection, ...],
+    ) -> RecoveryServiceVM:
+        """Compose exactly two saved panes, without consuming launch inputs or live state."""
+        validate_pane_targets(targets)
+        if self._hub is None:
+            raise RuntimeError("S3Service workspace requested before bind_hub")
+        resolved: list[Connection | None] = []
+        # Validate every source before constructing any provider (including a
+        # potentially credential-bearing SDK session for the other pane).
+        for target in targets:
+            if target.connection is None:
+                resolved.append(None)
+                continue
+            matches = [
+                connection
+                for connection in connections
+                if (connection.name, connection.region) == (target.connection, target.region)
+            ]
+            if len(matches) != 1 or not self.supports(matches[0]):
+                raise WorkspaceError("invalid")
+            resolved.append(matches[0])
+
+        panes: list[PaneVM] = []
+        try:
+            for index, (target, connection) in enumerate(zip(targets, resolved, strict=True)):
+                panes.append(
+                    self._build_navigation_pane(target, connection, f"pane.workspace.{index}")
+                )
+            dual = WorkspacePaneVM(
+                left=panes[0],
+                right=panes[1],
+                hub=self._hub,
+                dispatcher=self._dispatcher,
+                transfer_journal=self._journal,
+                transfer_runtime=self.transfer_runtime,
+            )
+        except BaseException:
+            for pane in panes:
+                pane.dispose()
+            raise
+
+        committed = False
+
+        def commit() -> None:
+            nonlocal committed
+            if committed:
+                return
+            dual.activate_navigation()
+            self.install_navigation_panes(
+                (capture_pane_target(dual.left), capture_pane_target(dual.right))
+            )
+            committed = True
+
+        return RecoveryServiceVM(dual, commit)
+
+    def build_navigation_pane(
+        self, target: NavigationTarget, connections: tuple[Connection, ...]
+    ) -> PaneVM:
+        """Compose one exact file destination without consulting the other pane."""
+        if not isinstance(target, NavigationTarget) or target.service != "s3":
+            raise WorkspaceError("invalid")
+        connection = None
+        if target.connection is not None:
+            matches = [
+                source
+                for source in connections
+                if (source.name, source.region) == (target.connection, target.region)
+            ]
+            if len(matches) != 1 or not self.supports(matches[0]):
+                raise WorkspaceError("invalid")
+            connection = matches[0]
+        return self._build_navigation_pane(target, connection, "pane.bookmark")
+
+    def build_bookmark_vm(
+        self,
+        target: NavigationTarget,
+        companion: NavigationTarget | None,
+        connections: tuple[Connection, ...],
+        *,
+        companion_loader: Callable[[PaneVM], Awaitable[None]] | None = None,
+    ) -> RecoveryServiceVM:
+        """Enter file browsing at one target without requiring the companion to be available."""
+        assert self._hub is not None
+        left = self.build_navigation_pane(target, connections)
+        right = None
+        try:
+            if companion is None:
+                provider = self.build_local_provider()
+                if not isinstance(provider, LocalFS):
+                    raise WorkspaceError("invalid")
+                companion = NavigationTarget(
+                    "s3", location=FileLocation(local=provider.navigation_path(PathRef()))
+                )
+            try:
+                right = self.build_navigation_pane(companion, connections)
+            except Exception:
+                location = companion.location
+                assert location is not None
+                right = PaneVM(
+                    provider=UnavailableNavigationFS(companion),
+                    hub=self._hub,
+                    dispatcher=self._dispatcher,
+                    id_prefix="pane.bookmark.companion",
+                    identity_label="Unavailable saved source",
+                    path_protocol="s3:" if location.s3 is not None else "",
+                    initial_path=PathRef(location.s3)
+                    if location.s3 is not None
+                    else PathRef.from_posix(location.local or "/"),
+                )
+            assert self._hub is not None
+            dual = BookmarkPaneVM(
+                left=left,
+                right=right,
+                hub=self._hub,
+                dispatcher=self._dispatcher,
+                transfer_journal=self._journal,
+                transfer_runtime=self.transfer_runtime,
+                companion_loader=companion_loader,
+            )
+        except BaseException:
+            left.dispose()
+            if right is not None:
+                right.dispose()
+            raise
+        committed = False
+
+        def commit() -> None:
+            nonlocal committed
+            if committed:
+                return
+            dual.activate_navigation()
+            self.install_navigation_panes((capture_pane_target(left), capture_pane_target(right)))
+            committed = True
+
+        return RecoveryServiceVM(dual, commit)
+
+    def _build_navigation_pane(
+        self, target: NavigationTarget, connection: Connection | None, identity: str
+    ) -> PaneVM:
+        if self._hub is None:
+            raise RuntimeError("S3Service navigation requested before bind_hub")
+        location = target.location
+        assert location is not None
+        if connection is None:
+            provider = self.build_local_provider()
+            if not isinstance(provider, LocalFS) or location.local is None:
+                raise WorkspaceError("invalid")
+            try:
+                path = provider.path_from_navigation(location.local)
+            except ProviderError:
+                raise WorkspaceNavigationError("destination_unavailable") from None
+        else:
+            provider = self.build_remote_provider(connection)
+            assert location.s3 is not None
+            path = PathRef(location.s3)
+        return PaneVM(
+            provider=provider,
+            hub=self._hub,
+            dispatcher=self._dispatcher,
+            id_prefix=identity,
+            identity_label=_format_pane_title(connection) if connection else "local",
+            path_protocol="s3:" if connection else "",
+            initial_path=path,
+            connection_key=(connection.kind, connection.name) if connection else None,
+            connection_region=connection.region if connection else None,
+            transfer_connection=connection_history_identity(connection, provider),
+        )
+
+    def navigation_panes(self) -> tuple[NavigationTarget, NavigationTarget] | None:
+        """None means never visited; a failed capture cannot masquerade as that."""
+        if self._navigation_capture_failed:
+            raise WorkspaceError("invalid")
+        return self._last_navigation
 
     @property
     def transfer_runtime(self) -> TransferRuntime:

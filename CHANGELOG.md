@@ -27,6 +27,10 @@ section. The current tree must not be tagged as v0.8.0.
 
 ### Added
 
+- Named navigation workspaces and bookmarks with keyboard management,
+  versioned local storage and current-source/resource validation before Open.
+  Saved navigation excludes SQL, credentials, results and running operations.
+
 - Reviewed one-way local-to-S3 sync with full-byte SHA-256 comparison,
   include/exclude filters, individual operation selection, conditional publication,
   cancellation, and fresh comparisons before retrying failed or unattempted work.

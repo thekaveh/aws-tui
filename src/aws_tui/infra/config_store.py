@@ -16,6 +16,7 @@ import errno
 import importlib
 import math
 import os
+import stat
 import tempfile
 import threading
 import time
@@ -50,20 +51,35 @@ class _ConfigLockTimeout(Exception):
 class _ConfigPathLock:
     """Reentrant process-local guard backed by an OS file lock."""
 
-    def __init__(self, path: Path) -> None:
-        self._path = path
+    def __init__(self) -> None:
         self._thread_lock = threading.RLock()
         self._depth = 0
         self._file: BinaryIO | None = None
 
-    def acquire(self, timeout: float) -> None:
+    def acquire(
+        self,
+        path: Path,
+        timeout: float,
+        *,
+        directory_fd: int | None = None,
+        strict_leaf: bool = False,
+    ) -> None:
         started = time.monotonic()
         if not self._thread_lock.acquire(timeout=timeout):
             raise _ConfigLockTimeout
         try:
             if self._depth == 0:
                 remaining = max(0.0, timeout - (time.monotonic() - started))
-                self._file = _acquire_os_file_lock(self._path, remaining)
+                if strict_leaf:
+                    self._file = _acquire_os_file_lock(
+                        path, remaining, directory_fd=directory_fd, strict_leaf=True
+                    )
+                else:
+                    self._file = (
+                        _acquire_os_file_lock(path, remaining)
+                        if directory_fd is None
+                        else _acquire_os_file_lock(path, remaining, directory_fd=directory_fd)
+                    )
             self._depth += 1
         except BaseException:
             self._thread_lock.release()
@@ -78,6 +94,25 @@ class _ConfigPathLock:
         finally:
             self._thread_lock.release()
 
+    def acquired_parent(self, path: Path, *, directory_fd: int | None) -> os.stat_result:
+        """Prove the registered parent currently contains our actual lock."""
+        assert self._file is not None
+        before = os.fstat(directory_fd) if directory_fd is not None else path.parent.stat()
+        entry = os.stat(
+            path.name if directory_fd is not None else path,
+            dir_fd=directory_fd,
+            follow_symlinks=False,
+        )
+        after = os.fstat(directory_fd) if directory_fd is not None else path.parent.stat()
+        held = os.fstat(self._file.fileno())
+        if (
+            (before.st_dev, before.st_ino) != (after.st_dev, after.st_ino)
+            or not stat.S_ISREG(entry.st_mode)
+            or (entry.st_dev, entry.st_ino) != (held.st_dev, held.st_ino)
+        ):
+            raise OSError(errno.EIO, "config transaction lock location changed")
+        return before
+
     def abandon_after_fork(self) -> None:
         """Drop this process's inherited descriptor without unlocking it."""
         if self._file is not None:
@@ -87,11 +122,13 @@ class _ConfigPathLock:
 
 
 _PATH_LOCKS_GUARD = threading.Lock()
-_PATH_LOCKS: dict[Path, _ConfigPathLock] = {}
+_PATH_LOCKS: dict[Path | tuple[int, int, str], _ConfigPathLock] = {}
 _PATH_LOCKS_PID = os.getpid()
 
 
-def _config_path_lock(path: Path) -> _ConfigPathLock:
+def _config_path_lock(
+    path: Path, *, directory_fd: int | None = None, strict_leaf: bool = False
+) -> _ConfigPathLock:
     global _PATH_LOCKS_GUARD, _PATH_LOCKS, _PATH_LOCKS_PID
 
     current_pid = os.getpid()
@@ -101,20 +138,119 @@ def _config_path_lock(path: Path) -> _ConfigPathLock:
         _PATH_LOCKS_GUARD = threading.Lock()
         _PATH_LOCKS = {}
         _PATH_LOCKS_PID = current_pid
-    canonical = path.resolve(strict=False)
+    canonical: Path | tuple[int, int, str]
+    if directory_fd is None:
+        resolved = path.absolute() if strict_leaf else path.resolve(strict=False)
+        try:
+            parent = resolved.parent.stat()
+        except FileNotFoundError:
+            canonical = resolved
+        else:
+            canonical = (parent.st_dev, parent.st_ino, resolved.name)
+    else:
+        parent = os.fstat(directory_fd)
+        canonical = (parent.st_dev, parent.st_ino, path.name)
     with _PATH_LOCKS_GUARD:
-        return _PATH_LOCKS.setdefault(canonical, _ConfigPathLock(canonical))
+        return _PATH_LOCKS.setdefault(canonical, _ConfigPathLock())
 
 
-def _acquire_os_file_lock(path: Path, timeout: float) -> BinaryIO:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with contextlib.suppress(OSError, NotImplementedError):
-        path.parent.chmod(0o700)
-    flags = os.O_RDWR | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0)
-    fd = os.open(path, flags, 0o600)
+def _strict_lock_entry(path: Path, directory_fd: int | None) -> os.stat_result | None:
     try:
+        entry = os.stat(
+            path.name if directory_fd is not None else path,
+            dir_fd=directory_fd,
+            follow_symlinks=False,
+        )
+    except FileNotFoundError:
+        return None
+    if (
+        not stat.S_ISREG(entry.st_mode)
+        or getattr(entry, "st_file_attributes", 0) & stat.FILE_ATTRIBUTE_REPARSE_POINT
+        or entry.st_nlink != 1
+    ):
+        raise OSError(errno.EINVAL, "config transaction lock is aliased or not regular")
+    return entry
+
+
+def _acquire_os_file_lock(
+    path: Path,
+    timeout: float,
+    *,
+    directory_fd: int | None = None,
+    strict_leaf: bool = False,
+) -> BinaryIO:
+    parent_before = None
+    expected_entry = None
+    if strict_leaf:
+        parent_before = os.fstat(directory_fd) if directory_fd is not None else path.parent.lstat()
+        if (
+            not stat.S_ISDIR(parent_before.st_mode)
+            or getattr(parent_before, "st_file_attributes", 0) & stat.FILE_ATTRIBUTE_REPARSE_POINT
+        ):
+            raise OSError(errno.EINVAL, "config transaction lock parent is aliased")
+        expected_entry = _strict_lock_entry(path, directory_fd)
+    if directory_fd is None and not strict_leaf:
+        path.parent.mkdir(parents=True, exist_ok=True)
         with contextlib.suppress(OSError, NotImplementedError):
-            path.chmod(0o600)
+            path.parent.chmod(0o700)
+    flags = os.O_RDWR | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0)
+    if directory_fd is not None or strict_leaf:
+        flags |= getattr(os, "O_NONBLOCK", 0)
+    if strict_leaf:
+        leaf = path.name if directory_fd is not None else path
+        try:
+            fd = os.open(leaf, flags | os.O_EXCL, 0o600, dir_fd=directory_fd)
+        except FileExistsError:
+            if expected_entry is None:
+                # A concurrent first creator may legitimately win EXCL. Bind
+                # the existing-file open to that validated winner, not any
+                # replacement arriving between this read and the open.
+                expected_entry = _strict_lock_entry(path, directory_fd)
+                if expected_entry is None:
+                    raise OSError(errno.EIO, "config transaction lock location changed") from None
+            fd = os.open(leaf, flags & ~os.O_CREAT, dir_fd=directory_fd)
+    elif directory_fd is None:
+        fd = os.open(path, flags, 0o600)
+    else:
+        try:
+            # Atomic first creation has one winner. Some openat implementations
+            # return ENOENT when nonexclusive O_CREAT races another creator;
+            # explicitly opening the winner avoids that race without relaxing
+            # NOFOLLOW or retrying arbitrary acquisition failures.
+            fd = os.open(path.name, flags | os.O_EXCL, 0o600, dir_fd=directory_fd)
+        except FileExistsError:
+            fd = os.open(path.name, flags & ~os.O_CREAT, dir_fd=directory_fd)
+    try:
+        if strict_leaf:
+            entry = _strict_lock_entry(path, directory_fd)
+            held = os.fstat(fd)
+            parent_after = (
+                os.fstat(directory_fd) if directory_fd is not None else path.parent.lstat()
+            )
+            assert parent_before is not None
+            if (
+                entry is None
+                or (entry.st_dev, entry.st_ino) != (held.st_dev, held.st_ino)
+                or (
+                    expected_entry is not None
+                    and (expected_entry.st_dev, expected_entry.st_ino) != (held.st_dev, held.st_ino)
+                )
+                or not stat.S_ISREG(held.st_mode)
+                or held.st_nlink != 1
+                or (parent_before.st_dev, parent_before.st_ino)
+                != (parent_after.st_dev, parent_after.st_ino)
+                or not stat.S_ISDIR(parent_after.st_mode)
+                or getattr(parent_after, "st_file_attributes", 0)
+                & stat.FILE_ATTRIBUTE_REPARSE_POINT
+            ):
+                raise OSError(errno.EIO, "config transaction lock location changed")
+        if directory_fd is not None and not stat.S_ISREG(os.fstat(fd).st_mode):
+            raise OSError(errno.EINVAL, "config transaction lock is not a regular file")
+        with contextlib.suppress(OSError, NotImplementedError):
+            if directory_fd is None and not strict_leaf:
+                path.chmod(0o600)
+            elif hasattr(os, "fchmod"):
+                os.fchmod(fd, 0o600)
         file = os.fdopen(fd, "r+b", buffering=0)
     except BaseException:
         with contextlib.suppress(OSError):
@@ -396,16 +532,52 @@ class ConfigStore:
     # ------------------------------------------------------------------
 
     @contextmanager
-    def transaction(self) -> Iterator[None]:
-        """Serialize a complete config-related transaction across processes."""
+    def transaction(
+        self, *, directory_fd: int | None = None, strict_leaf: bool = False
+    ) -> Iterator[None]:
+        """Serialize a complete config-related transaction across processes.
+
+        A caller holding a POSIX parent directory may bind lock acquisition to
+        that descriptor; no pathname-based mkdir or chmod occurs in that mode.
+        The caller retains descriptor ownership until this context exits.
+        Strict leaf mode additionally refuses aliases and verifies the opened
+        lock identity before permission changes or lock initialization.
+        """
         if self._read_only:
             yield
             return
 
         lock_path = self._path.with_name(f".{self._path.name}.lock")
-        lock = _config_path_lock(lock_path)
         try:
-            lock.acquire(self._lock_timeout)
+            if strict_leaf:
+                _strict_lock_entry(lock_path, directory_fd)
+            if directory_fd is not None:
+                try:
+                    existing = os.stat(lock_path.name, dir_fd=directory_fd, follow_symlinks=False)
+                except FileNotFoundError:
+                    pass
+                else:
+                    if not stat.S_ISREG(existing.st_mode):
+                        raise OSError(errno.EINVAL, "config transaction lock is not a regular file")
+            acquisition_path = (
+                lock_path.resolve(strict=False)
+                if directory_fd is None and not strict_leaf
+                else lock_path
+            )
+            lock = _config_path_lock(
+                acquisition_path, directory_fd=directory_fd, strict_leaf=strict_leaf
+            )
+            if strict_leaf:
+                lock.acquire(
+                    acquisition_path,
+                    self._lock_timeout,
+                    directory_fd=directory_fd,
+                    strict_leaf=True,
+                )
+            elif directory_fd is None:
+                lock.acquire(acquisition_path, self._lock_timeout)
+            else:
+                lock.acquire(acquisition_path, self._lock_timeout, directory_fd=directory_fd)
         except _ConfigLockTimeout as exc:
             raise ConfigError(
                 f"timed out after {self._lock_timeout:g}s waiting for the config "
@@ -417,6 +589,15 @@ class ConfigStore:
                 f"unable to acquire config transaction lock at {lock_path}: {exc}"
             ) from exc
         try:
+            # A pathname-mode acquisition can create a previously missing
+            # parent. Register its now-known physical identity before nested
+            # transactions so FD and pathname modes share the same RLock.
+            try:
+                parent = lock.acquired_parent(acquisition_path, directory_fd=directory_fd)
+            except OSError as exc:
+                raise ConfigError("config transaction lock location changed; retry") from exc
+            with _PATH_LOCKS_GUARD:
+                _PATH_LOCKS[(parent.st_dev, parent.st_ino, acquisition_path.name)] = lock
             yield
         finally:
             lock.release()

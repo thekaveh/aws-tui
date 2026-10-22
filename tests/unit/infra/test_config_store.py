@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import contextlib
+import errno
 import os
 import subprocess
 import sys
@@ -780,6 +781,140 @@ def test_transaction_lock_reports_os_acquisition_failure(
         ConfigStore(path=tmp_path / "config.toml").transaction(),
     ):
         pytest.fail("transaction unexpectedly acquired an unavailable lock")
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX directory-descriptor ownership")
+def test_directory_bound_lock_handles_peer_creating_first_lock(tmp_path, monkeypatch):
+    """The peer wins creation; opening its regular lock still serializes us."""
+    directory_fd = os.open(tmp_path, os.O_RDONLY | os.O_DIRECTORY)
+    real_open = os.open
+    calls = []
+    name = ".workspaces.json.lock"
+
+    def peer_creates_first(path, flags, mode=0o777, **kwargs):
+        if path == name and kwargs.get("dir_fd") == directory_fd:
+            calls.append(flags)
+            if len(calls) == 1:
+                peer = real_open(
+                    name, os.O_RDWR | os.O_CREAT | os.O_EXCL, 0o600, dir_fd=directory_fd
+                )
+                os.close(peer)
+                # Observed concurrent O_CREAT/openat failure on this host;
+                # exclusive creation instead reports its actual losing race.
+                if flags & os.O_EXCL:
+                    raise FileExistsError(errno.EEXIST, "peer created the lock")
+                raise FileNotFoundError(errno.ENOENT, "concurrent nonexclusive creation")
+        return real_open(path, flags, mode, **kwargs)
+
+    monkeypatch.setattr(os, "open", peer_creates_first)
+    try:
+        with ConfigStore(path=tmp_path / "workspaces.json").transaction(directory_fd=directory_fd):
+            assert (tmp_path / name).is_file()
+        assert len(calls) == 2
+        assert calls[0] & os.O_EXCL
+        assert not calls[1] & os.O_CREAT
+    finally:
+        os.close(directory_fd)
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX directory-descriptor ownership")
+@pytest.mark.parametrize("descriptor_first", [False, True])
+def test_same_lock_is_reentrant_across_path_and_directory_descriptor(tmp_path, descriptor_first):
+    directory_fd = os.open(tmp_path, os.O_RDONLY | os.O_DIRECTORY)
+    store = ConfigStore(path=tmp_path / "workspaces.json", lock_timeout=0.04)
+    try:
+        outer = {"directory_fd": directory_fd} if descriptor_first else {}
+        inner = {} if descriptor_first else {"directory_fd": directory_fd}
+        with store.transaction(**outer), store.transaction(**inner):
+            assert (tmp_path / ".workspaces.json.lock").is_file()
+    finally:
+        os.close(directory_fd)
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX directory-descriptor ownership")
+def test_path_first_creates_parent_then_reenters_with_directory_descriptor(tmp_path):
+    parent = tmp_path / "new-config"
+    store = ConfigStore(path=parent / "workspaces.json", lock_timeout=0.04)
+    with store.transaction():
+        directory_fd = os.open(parent, os.O_RDONLY | os.O_DIRECTORY)
+        try:
+            with store.transaction(directory_fd=directory_fd):
+                assert (parent / ".workspaces.json.lock").is_file()
+        finally:
+            os.close(directory_fd)
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX directory-descriptor ownership")
+def test_renamed_parent_uses_current_lock_path_and_excludes_another_process(tmp_path):
+    original = tmp_path / "original"
+    original.mkdir()
+    directory_fd = os.open(original, os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        with ConfigStore(path=original / "workspaces.json").transaction(directory_fd=directory_fd):
+            pass
+    finally:
+        os.close(directory_fd)
+    current = tmp_path / "current"
+    original.rename(current)
+    script = """
+from pathlib import Path
+import sys
+from aws_tui.infra.config_store import ConfigStore,ConfigError
+try:
+    with ConfigStore(path=Path(sys.argv[1]),lock_timeout=.04).transaction():
+        print('acquired')
+except ConfigError: print('blocked')
+"""
+    with ConfigStore(path=current / "workspaces.json").transaction():
+        peer = subprocess.run(
+            [sys.executable, "-B", "-c", script, str(current / "workspaces.json")],
+            capture_output=True,
+            text=True,
+            timeout=3,
+            check=True,
+        )
+        assert peer.stdout.strip() == "blocked"
+        assert not original.exists()
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX directory-descriptor ownership")
+def test_parent_replaced_after_acquisition_is_refused_before_yield(tmp_path, monkeypatch):
+    parent = tmp_path / "config"
+    parent.mkdir()
+    moved = tmp_path / "moved"
+    real_acquire = config_store_module._acquire_os_file_lock
+
+    def replace_parent_after_lock(path, timeout, **kwargs):
+        handle = real_acquire(path, timeout, **kwargs)
+        parent.rename(moved)
+        parent.mkdir()
+        return handle
+
+    monkeypatch.setattr(config_store_module, "_acquire_os_file_lock", replace_parent_after_lock)
+    with pytest.raises(ConfigError), ConfigStore(path=parent / "workspaces.json").transaction():
+        pytest.fail("replacement directory was registered as owning the old lock")
+    assert not list(parent.iterdir())
+
+
+@pytest.mark.skipif(os.name == "nt", reason="controlled POSIX replacement of an open lock file")
+def test_replaced_regular_lock_reports_portable_config_error(tmp_path, monkeypatch):
+    real_acquire = config_store_module._acquire_os_file_lock
+    lock_path = tmp_path / ".workspaces.json.lock"
+    monkeypatch.delattr(errno, "ESTALE", raising=False)
+
+    def replace_entry_after_acquire(path, timeout, **kwargs):
+        handle = real_acquire(path, timeout, **kwargs)
+        path.unlink()
+        path.write_bytes(b"replacement")
+        return handle
+
+    monkeypatch.setattr(config_store_module, "_acquire_os_file_lock", replace_entry_after_acquire)
+    with (
+        pytest.raises(ConfigError),
+        ConfigStore(path=tmp_path / "workspaces.json").transaction(),
+    ):
+        pytest.fail("a different lock entry was treated as owned")
+    assert lock_path.read_bytes() == b"replacement"
 
 
 def test_concurrent_store_instances_preserve_both_mutations(tmp_path: Path) -> None:

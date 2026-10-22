@@ -48,12 +48,19 @@ from aws_tui.domain.filesystem import (
     PermissionDeniedError,
     ProviderUnreachableError,
 )
+from aws_tui.domain.navigation_workspace import (
+    Bookmark,
+    NavigationTarget,
+    Workspace,
+    WorkspaceError,
+)
 from aws_tui.domain.preview import load_preview
 from aws_tui.domain.preview_limits import RAW_PREVIEW_BYTES
 from aws_tui.domain.query import QueryState
 from aws_tui.domain.s3_object_details import S3ObjectDetailsProvider
 from aws_tui.domain.s3_uri import parse_s3_uri
 from aws_tui.domain.s3_versions import S3VersionProvider
+from aws_tui.domain.workspace_store import WorkspaceStore
 from aws_tui.infra.aws_session import TokenState
 from aws_tui.infra.connection_resolver import Connection, ConnectionDiscovery, ConnectionNotFound
 from aws_tui.infra.crash_dump import CrashDump
@@ -69,6 +76,7 @@ from aws_tui.service_navigation import (
     ViewPublisher,
 )
 from aws_tui.services.glue.service import GlueService
+from aws_tui.services.s3 import S3Service
 from aws_tui.ui import notifications
 from aws_tui.ui.actions import ActionRegistry
 from aws_tui.ui.bindings import BindingResolver
@@ -119,6 +127,7 @@ from aws_tui.ui.widgets.theme_picker_modal import ThemePickerModal
 from aws_tui.ui.widgets.toast import ToastStack
 from aws_tui.ui.widgets.transfer_history_modal import TransferHistoryModal
 from aws_tui.ui.widgets.transfers_overlay import TransfersOverlay
+from aws_tui.ui.widgets.workspace_library_modal import WorkspaceLibraryModal, WorkspaceOpenRequest
 from aws_tui.version import __version__
 from aws_tui.vm.athena.history_vm import _execution_identity_belongs_to
 from aws_tui.vm.athena.page_vm import AthenaPageEditorSnapshot, AthenaPageSnapshot, AthenaPageVM
@@ -168,6 +177,18 @@ from aws_tui.vm.service_diagnostics import (
     capture_service_diagnostics,
 )
 from aws_tui.vm.service_source_vm import ServiceSourceContext
+from aws_tui.vm.workspace_library_vm import WorkspaceLibraryVM, WorkspaceWriteNotice
+from aws_tui.vm.workspace_panes import capture_pane_target
+from aws_tui.workspace_restore import (
+    capture_workspace,
+    prepare_file_bookmark,
+    prepare_pane_bookmark,
+    prepare_workspace,
+    resolve_bookmark_sources,
+    resolve_workspace_sources,
+    retire_workspace_candidate,
+    validate_saved_navigation,
+)
 
 _ACTION_RING_SIZE = 100
 _QUICK_LOOK_PREVIEW_BYTES = RAW_PREVIEW_BYTES
@@ -751,6 +772,7 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
         self._actions.register("app.help", self.action_help)
         self._actions.register("app.themes", self.action_themes)
         self._actions.register("app.transfer_history", self.action_transfer_history)
+        self._actions.register("app.workspaces", self.action_workspaces)
         self._actions.register("app.focus_transfers", self.action_focus_transfers)
         self._actions.register("app.cycle_theme", self.action_cycle_theme)
         self._actions.register("app.open_settings", self.action_open_settings)
@@ -915,6 +937,9 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
         self._versions_focus_restoration: Callable[[], None] | None = None
         self._version_browsers: set[S3VersionsModal] = set()
         self._upload_reviews: set[RecursiveUploadModal] = set()
+        self._workspace_libraries: set[WorkspaceLibraryVM] = set()
+        self._workspace_library_subscriptions: dict[WorkspaceLibraryVM, DisposableBase] = {}
+        self._workspace_input_claimed = False
         self._pane_state_sub: DisposableBase | None = None
         self._connection_state_sub: DisposableBase | None = None
         self._connection_list_sub: DisposableBase | None = None
@@ -1682,7 +1707,6 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
     def _compose_local_dual_pane(self, *, initial_right_path: PathRef | None = None) -> DualPaneVM:
         """Compose local panes without marking or inventing a failed remote source."""
         from aws_tui.domain.filesystem import PathRef
-        from aws_tui.services.s3.service import S3Service
         from aws_tui.vm.file_manager.dual_pane_vm import DualPaneVM
         from aws_tui.vm.file_manager.pane_vm import PaneVM
 
@@ -1748,8 +1772,6 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
         # Mark the connection unreachable so the swap-source ring
         # skips it (consistent with the reactive auto-fallback path).
         self._mark_connection_unreachable(initial_conn.kind, initial_conn.name)
-
-        from aws_tui.services.s3.service import S3Service
 
         s3_service = cast("S3Service", ctx.registry.get("s3"))
         if s3_service.transfer_journal is None:
@@ -2305,6 +2327,8 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
         holds the real handler. Returning the handler's awaitable (if any)
         lets Textual await async actions.
         """
+        if self._workspace_input_claimed and action_id != "app.quit":
+            return None
         if (
             len(self.screen_stack) > 1 or self._app_ctx.focus_coordinator.is_modal
         ) and action_id not in _MODAL_ROUTED_ACTIONS:
@@ -2357,6 +2381,409 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
         self.record_action("app.transfer_history")
         if len(self.screen_stack) == 1:
             self.query_one(TransfersOverlay).open_history("history")
+
+    def _capture_navigation_workspace(self, name: str) -> Workspace:
+        ctx = self._app_ctx
+        root = ctx.root_vm
+        return capture_workspace(
+            name,
+            ctx.registry,
+            root.content_host.current_id,
+            root.active_connection,
+            root.content_host.current,
+        )
+
+    def _capture_navigation_bookmark(self, name: str) -> Bookmark:
+        record = self._capture_navigation_workspace(name)
+        current = self._app_ctx.root_vm.content_host.current
+        target: NavigationTarget | None
+        if isinstance(current, DualPaneVM):
+            target = capture_pane_target(current.focused_pane)
+        else:
+            target = next(
+                (
+                    scope
+                    for scope in record.scopes
+                    if (scope.service, scope.connection, scope.region)
+                    == (record.active_service, record.connection, record.region)
+                ),
+                None,
+            )
+            if target is None:
+                raise WorkspaceError("invalid")
+        return Bookmark(name, target)
+
+    def _on_workspace_write(self, notice: WorkspaceWriteNotice) -> None:
+        report = notifications.advise if notice.warning else notifications.success
+        report(self._app_ctx.root_vm.chrome.toast_stack, subject="Source", message=notice.message)
+
+    async def _drain_workspace_library(self, vm: WorkspaceLibraryVM) -> None:
+        try:
+            await vm.shutdown()
+        finally:
+            subscription = self._workspace_library_subscriptions.pop(vm, None)
+            if subscription is not None:
+                subscription.dispose()
+            self._workspace_libraries.discard(vm)
+
+    def action_workspaces(self) -> None:
+        if len(self.screen_stack) != 1 or self._shutdown_task is not None:
+            return
+        self.record_action("app.workspaces")
+        ctx = self._app_ctx
+        vm = WorkspaceLibraryVM(
+            store=WorkspaceStore(path=ctx.config_store.path.parent / "workspaces.json"),
+            read_only=ctx.config_store.read_only,
+        )
+        self._workspace_libraries.add(vm)
+        self._workspace_library_subscriptions[vm] = vm.on_write_completed.subscribe(
+            self._on_workspace_write
+        )
+
+        def closed() -> None:
+            vm.close()
+            if self._shutdown_task is None:
+                self._run_lifecycle_worker(
+                    partial(self._drain_workspace_library, vm),
+                    group="workspace-library-drain",
+                )
+
+        def selected(request: WorkspaceOpenRequest | None) -> None:
+            if request is not None and self._shutdown_task is None:
+                self._run_lifecycle_worker(
+                    partial(self._open_navigation_workspace, request),
+                    group="workspace-open",
+                )
+
+        self.push_screen(
+            WorkspaceLibraryModal(
+                vm,
+                capture=self._capture_navigation_workspace,
+                capture_bookmark=self._capture_navigation_bookmark,
+                confirmation=ctx.confirm_vm,
+                hub=ctx.hub,
+                closed=closed,
+            ),
+            selected,
+        )
+
+    def _workspace_has_active_work(self) -> bool:
+        """Admission precedes navigation cancellation and outgoing shutdown."""
+        current = self._app_ctx.root_vm.content_host.current
+        service = self._app_ctx.registry.get("s3")
+        if isinstance(service, S3Service):
+            runtime = service.transfer_runtime
+            if runtime.begins_pending or runtime.owned_ids:
+                return True
+        groups = {
+            *_TRANSFER_WORKER_GROUPS,
+            "emr-clone",
+            "emr-clone-submit",
+            "emr-cancel",
+            "glue-iceberg-select-view",
+            "glue-iceberg-retry",
+            "glue-iceberg-preview",
+        }
+        if any(not worker.is_finished and worker.group in groups for worker in self.workers):
+            return True
+        if isinstance(current, AthenaPageVM):
+            query = current.query
+            return bool(
+                query.is_executing
+                or query.is_submitting
+                or query.owns_active_query
+                or query.is_context_resolving
+                or query.execute_command.is_executing
+            )
+        if isinstance(current, EmrServerlessPageVM):
+            return current.cancel_busy
+        if isinstance(current, GluePageVM):
+            iceberg = current.catalog.iceberg
+            return (
+                iceberg.owns_active_work
+                or iceberg.preview.state is PaneState.LOADING
+                or any(
+                    iceberg.state_for(view) is PaneState.LOADING
+                    for view in ("snapshots", "history", "manifests", "files", "partitions", "refs")
+                )
+            )
+        return False
+
+    async def _open_navigation_workspace(self, request: WorkspaceOpenRequest) -> None:
+        # Screen dismissal is asynchronous. Never adopt behind a manager or
+        # another modal, and never block Textual's message pump with disk/RPCs.
+        ready: asyncio.Future[None] = asyncio.get_running_loop().create_future()
+
+        def dismissed() -> None:
+            if not ready.done():
+                ready.set_result(None)
+
+        self.call_after_refresh(dismissed)
+        await ready
+        if self._shutdown_task is not None or len(self.screen_stack) != 1:
+            return
+        ctx = self._app_ctx
+        root = ctx.root_vm
+
+        def advise(message: str) -> None:
+            notifications.advise(root.chrome.toast_stack, subject="Source", message=message)
+
+        if self._workspace_has_active_work():
+            advise("Finish the active operation before opening saved navigation")
+            return
+        workspace = request.workspace
+        file_target: NavigationTarget | None = None
+        if request.bookmark is not None:
+            # Individual pane publication is implemented separately from the
+            # whole-record transaction; never silently open the whole record.
+            target = request.bookmark.destination
+            if target.service == "s3":
+                file_target = target
+            else:
+                workspace = Workspace(
+                    request.bookmark.name,
+                    target.service,
+                    target.connection,
+                    target.region,
+                    scopes=(target,),
+                )
+        outgoing = root.content_host.current
+        bookmark_pane = (
+            outgoing.focused_pane
+            if file_target is not None and isinstance(outgoing, DualPaneVM)
+            else None
+        )
+        connection = root.active_connection
+        source_revision = self._source_revision
+        baseline = (
+            self._capture_navigation_workspace("Current")
+            if request.bookmark is None
+            and isinstance(outgoing, (DualPaneVM, AthenaPageVM, GluePageVM, EmrServerlessPageVM))
+            else None
+        )
+        generation = self.service_navigation.advance("workspace", cancel_table_tasks=True)
+        owner = asyncio.current_task()
+        assert owner is not None
+        self.service_navigation.track_navigation(owner)
+        subscriptions: list[DisposableBase] = []
+        changed = False
+        required_names = (
+            {file_target.connection}
+            if file_target is not None
+            else {
+                workspace.connection,
+                *(target.connection for target in workspace.scopes),
+                *(target.connection for target in workspace.file_panes or ()),
+            }
+        ) - {None}
+
+        def observed(_property: str) -> None:
+            nonlocal changed
+            if _property in {
+                "path",
+                "selected_database_name",
+                "selected_table_name",
+                "selected_id",
+            }:
+                changed = True
+
+        def pane_observed(_property: str) -> None:
+            nonlocal changed
+            if _property in {
+                "path",
+                "filter_text",
+                "filtered_entries",
+                "cursor_index",
+                "is_multiselect_mode",
+                "viewmodel",
+            }:
+                changed = True
+
+        def sources_changed(message: object) -> None:
+            nonlocal changed
+            if isinstance(message, ConnectionListChangedMessage) and required_names.intersection(
+                message.names
+            ):
+                changed = True
+
+        subscriptions.append(ctx.hub.messages.subscribe(sources_changed))
+
+        if isinstance(outgoing, DualPaneVM):
+            subscriptions.extend(
+                pane.on_property_changed.subscribe(pane_observed)
+                for pane in (
+                    (bookmark_pane,)
+                    if bookmark_pane is not None
+                    else (outgoing.left, outgoing.right)
+                )
+            )
+        elif isinstance(outgoing, GluePageVM):
+            subscriptions.append(outgoing.catalog.on_property_changed.subscribe(observed))
+        elif isinstance(outgoing, EmrServerlessPageVM):
+            subscriptions.append(outgoing.applications.on_property_changed.subscribe(observed))
+        editor_identity = (
+            (
+                outgoing.query.editor_revision,
+                outgoing.authoring.ownership_revision,
+                outgoing.context_choice_revision,
+            )
+            if isinstance(outgoing, AthenaPageVM)
+            else None
+        )
+
+        def owns() -> bool:
+            if (
+                self._shutdown_task is not None
+                or len(self.screen_stack) != 1
+                or self.service_navigation.closed
+                or not self.service_navigation.owns("workspace", generation)
+                or root.content_host.current is not outgoing
+                or root.active_connection != connection
+                or self._source_revision != source_revision
+                or changed
+                or self._workspace_has_active_work()
+                or (
+                    bookmark_pane is not None
+                    and isinstance(outgoing, DualPaneVM)
+                    and outgoing.focused_pane is not bookmark_pane
+                )
+            ):
+                return False
+            if isinstance(outgoing, AthenaPageVM):
+                identity = (
+                    outgoing.query.editor_revision,
+                    outgoing.authoring.ownership_revision,
+                    outgoing.context_choice_revision,
+                )
+                page = next((view for view in self.query(AthenaPage) if view.vm is outgoing), None)
+                if (
+                    identity != editor_identity
+                    or page is None
+                    or page.query_one("#athena-editor", TextArea).text != outgoing.query.sql
+                ):
+                    return False
+            try:
+                return baseline is None or self._capture_navigation_workspace("Current") == baseline
+            except WorkspaceError:
+                return False
+
+        prepared = None
+        try:
+            library = WorkspaceStore(path=ctx.config_store.path.parent / "workspaces.json")
+            await validate_saved_navigation(request.workspace, request.bookmark, library)
+            if not owns():
+                return
+            if isinstance(outgoing, AthenaPageVM):
+
+                async def confirm(message: str) -> bool:
+                    return await ctx.confirm_vm.ask(
+                        ConfirmRequest(
+                            title="Open saved navigation?",
+                            body_lines=(message,),
+                            confirm_label="Open",
+                            danger=True,
+                        ),
+                        dialog_service=TextualDialogService(self, ctx.confirm_vm, hub=ctx.hub),
+                    )
+
+                if not await outgoing.authoring.confirm_replacement(
+                    confirm=confirm, still_selected=owns
+                ):
+                    return
+            sources = (
+                await resolve_bookmark_sources(file_target, ctx.connection_resolver)
+                if file_target is not None
+                else await resolve_workspace_sources(workspace, ctx.connection_resolver)
+            )
+            if not owns():
+                return
+            if file_target is not None:
+                service = ctx.registry.get("s3")
+                if not isinstance(service, S3Service):
+                    raise WorkspaceError("invalid")
+                if bookmark_pane is not None:
+                    pane_stage = await prepare_pane_bookmark(
+                        bookmark_pane, file_target, service, sources
+                    )
+                    await validate_saved_navigation(request.workspace, request.bookmark, library)
+                    if (
+                        await resolve_bookmark_sources(file_target, ctx.connection_resolver)
+                        != sources
+                    ):
+                        raise WorkspaceError("changed")
+                    async with self.service_navigation.service_lock:
+                        if not owns() or not pane_stage.is_current():
+                            return
+                        pane_stage.commit()
+                        service.remember_navigation(outgoing)
+                        notifications.success(
+                            root.chrome.toast_stack, subject="Source", message="Bookmark opened"
+                        )
+                    return
+                previous = service.navigation_panes()
+                companion = previous[1] if previous is not None else None
+                if not owns():
+                    return
+                prepared = await prepare_file_bookmark(
+                    file_target,
+                    companion,
+                    service,
+                    sources,
+                    resolver=ctx.connection_resolver,
+                    hub=ctx.hub,
+                )
+            else:
+                prepared = await prepare_workspace(workspace, ctx.registry, sources)
+            await validate_saved_navigation(request.workspace, request.bookmark, library)
+            current_sources = (
+                await resolve_bookmark_sources(file_target, ctx.connection_resolver)
+                if file_target is not None
+                else await resolve_workspace_sources(workspace, ctx.connection_resolver)
+            )
+            if current_sources != sources:
+                raise WorkspaceError("changed")
+            if not owns():
+                advise("Saved navigation was not opened because the current context changed")
+                return
+            recovery = _StagedServiceRecovery(
+                PaneState.IDLE,
+                prepared.recovery.vm,
+                prepared.recovery.commit_selection,
+                (),
+                owns,
+            )
+            async with self.service_navigation.service_lock:
+                with self.service_navigation.suppress_selection(prepared.service_id):
+                    adopted = await self._commit_staged_service_recovery(
+                        recovery,
+                        connection=prepared.connection,
+                        service_id=prepared.service_id,
+                        is_current=owns,
+                        protect_claimed_adoption=True,
+                    )
+                if adopted:
+                    notifications.success(
+                        root.chrome.toast_stack,
+                        subject="Source",
+                        message="Bookmark opened"
+                        if request.bookmark is not None
+                        else "Workspace opened",
+                    )
+        except WorkspaceError as error:
+            advise(str(error))
+        except asyncio.CancelledError:
+            raise
+        except Exception as error:
+            ctx.log_sink.warning("workspace.open_failed", error_type=type(error).__name__)
+            advise("Saved navigation could not be opened; the current screen is retained")
+        finally:
+            for subscription in subscriptions:
+                subscription.dispose()
+            try:
+                if prepared is not None and root.content_host.current is not prepared.recovery.vm:
+                    await retire_workspace_candidate(prepared.recovery.vm)
+            finally:
+                self.service_navigation.untrack_navigation(owner)
 
     def action_focus_transfers(self) -> None:
         if len(self.screen_stack) == 1 and self._shutdown_task is None:
@@ -3732,6 +4159,7 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
         await ready
         if (
             self._shutdown_task is not None
+            or self._workspace_input_claimed
             or len(self.screen_stack) != 1
             or self._app_ctx.focus_coordinator.is_modal
             or not self._discovery_origin_owned(origin)
@@ -4766,9 +5194,10 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
         self,
         recovery: _StagedServiceRecovery,
         *,
-        connection: Connection,
+        connection: Connection | None,
         service_id: str,
         is_current: Callable[[], bool] | None = None,
+        protect_claimed_adoption: bool = False,
     ) -> bool:
         """Adopt a verified candidate and mount its matching view."""
         ctx = self._app_ctx
@@ -4782,6 +5211,8 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
         original_revision = self._source_revision
         navigation_owner = self.service_navigation.owner
         input_claimed = False
+        input_area: Widget | None = None
+        input_area_disabled = False
 
         def owns_adoption() -> bool:
             if not input_claimed:
@@ -4790,6 +5221,11 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
             # claimed, compare transaction ownership rather than exporting
             # state from a retired page.
             current = root.content_host.current
+            if protect_claimed_adoption:
+                # Input admission is closed and this transaction owns the
+                # irreversible shutdown. Finish its publication before queued
+                # navigation or application shutdown can proceed.
+                return current is None or current is outgoing_vm
             return (
                 not self.service_navigation.closed
                 and self._shutdown_task is None
@@ -4804,10 +5240,21 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
 
         def claim_outgoing_input() -> bool:
             """Close live Athena intake only at the host's shutdown boundary."""
-            nonlocal input_claimed
+            nonlocal input_claimed, input_area, input_area_disabled
             if not owns_adoption():
                 return False
             outgoing = ctx.root_vm.content_host.current
+            if protect_claimed_adoption:
+                input_area = self.query_one("#main-area")
+                input_area_disabled = input_area.disabled
+                input_area.disabled = True
+                self._workspace_input_claimed = True
+                notifications.progress(
+                    root.chrome.toast_stack,
+                    key="workspace-open",
+                    subject="Source",
+                    message="Opening saved navigation…",
+                )
             if not isinstance(outgoing, AthenaPageVM):
                 input_claimed = True
                 return True
@@ -4864,44 +5311,92 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
                 self._recovery_mount_errors.pop(staging_host, None)
 
         prior_children = tuple(child for child in host.children if child is not staging_host)
-        try:
-            adopted = await self.service_navigation.adopt_prepared_service(
-                ctx.root_vm,
-                connection,
-                TokenState.CONNECTED,
-                service_id,
-                recovery.vm,
-                ownership_is_current=owns_adoption,
-                claim_input=claim_outgoing_input,
-            )
-            if not adopted:
-                try:
-                    await staging_host.remove()
-                finally:
-                    await self._discard_staged_service_recovery(recovery.vm)
-                return False
-        except BaseException:
-            with contextlib.suppress(Exception):
-                await staging_host.remove()
-            raise
 
-        recovery.commit_selection()
-        for child in prior_children:
-            child.display = False
-        staging_host.display = True
-        for child in prior_children:
-            try:
-                await child.remove()
-            except Exception as exc:
-                ctx.log_sink.warning(
-                    "credential_recovery.stale_widget_cleanup_failed",
-                    service=service_id,
-                    error_type=type(exc).__name__,
+        async def finish_publication() -> None:
+            # The root's actual content identity is the receipt. An observer
+            # can cancel its acknowledgement after publication; neither that
+            # callback nor ambient cancellation may strand the adopted model
+            # behind the old view or omit its navigation activation.
+            async def finish() -> None:
+                recovery.commit_selection()
+                for child in prior_children:
+                    child.display = False
+                staging_host.display = True
+                for child in prior_children:
+                    try:
+                        await child.remove()
+                    except Exception as exc:
+                        ctx.log_sink.warning(
+                            "credential_recovery.stale_widget_cleanup_failed",
+                            service=service_id,
+                            error_type=type(exc).__name__,
+                        )
+                release_detached_query_results(host.ancestors_with_self)
+                if service_id in {"glue", "athena", "emr-serverless"}:
+                    self._recompute_hint_disables()
+
+            receipt = asyncio.create_task(finish())
+            canceled = False
+            while not receipt.done():
+                try:
+                    await asyncio.shield(receipt)
+                except asyncio.CancelledError:
+                    canceled = True
+            receipt.result()
+            if canceled:
+                raise asyncio.CancelledError
+
+        async def adopt() -> bool:
+            with self.service_navigation.suppress_selection(service_id):
+                return await self.service_navigation.adopt_prepared_service(
+                    ctx.root_vm,
+                    connection,
+                    TokenState.CONNECTED,
+                    service_id,
+                    recovery.vm,
+                    ownership_is_current=owns_adoption,
+                    claim_input=claim_outgoing_input,
                 )
-        release_detached_query_results(host.ancestors_with_self)
-        if service_id in {"glue", "athena", "emr-serverless"}:
-            self._recompute_hint_disables()
-        return True
+
+        async def protected_adopt() -> bool:
+            adoption = asyncio.create_task(adopt())
+            canceled = False
+            while not adoption.done():
+                try:
+                    await asyncio.shield(adoption)
+                except asyncio.CancelledError:
+                    canceled = True
+                    if not input_claimed and not adoption.cancelling():
+                        adoption.cancel()
+            result = adoption.result()
+            if canceled:
+                raise asyncio.CancelledError
+            return result
+
+        try:
+            try:
+                adopted = await (protected_adopt() if protect_claimed_adoption else adopt())
+                if not adopted and root.content_host.current is not recovery.vm:
+                    try:
+                        await staging_host.remove()
+                    finally:
+                        await self._discard_staged_service_recovery(recovery.vm)
+                    return False
+            except BaseException:
+                if root.content_host.current is recovery.vm:
+                    await finish_publication()
+                else:
+                    with contextlib.suppress(Exception):
+                        await staging_host.remove()
+                raise
+
+            await finish_publication()
+            return True
+        finally:
+            if protect_claimed_adoption and input_area is not None:
+                input_area.disabled = input_area_disabled
+                self._workspace_input_claimed = False
+                root.chrome.toast_stack.dismiss("progress-workspace-open")
 
     async def _recover_s3_credentials(
         self,
@@ -4934,6 +5429,7 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
                 identity_label=_format_pane_title(resolved),
                 path_protocol="s3:",
                 connection_key=(resolved.kind, resolved.name),
+                connection_region=resolved.region,
                 transfer_connection=connection_history_identity(resolved, provider),
             )
             staged.append((pane, stage))
@@ -5488,19 +5984,29 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
             move.execute(delta)
 
     def _handle_swap_source(self) -> None:
-        if self._shutdown_task is not None or self.service_navigation.closed:
+        if (
+            self._shutdown_task is not None
+            or self.service_navigation.closed
+            or self._workspace_input_claimed
+        ):
             return
         origin = self._capture_discovery_origin()
         if not self._discovery_origin_owned(origin):
             return
         dual = self._dual_pane()
         pane = dual.focused_pane if dual is not None else None
+        generation = self._supersede_table_navigation()
         self._run_lifecycle_worker(
-            partial(self.action_swap_source, origin=origin, pane=pane), group="content-mount"
+            partial(self.action_swap_source, origin=origin, pane=pane, generation=generation),
+            group="content-mount",
         )
 
     async def action_swap_source(
-        self, *, origin: _DiscoveryOrigin | None = None, pane: PaneVM | None = None
+        self,
+        *,
+        origin: _DiscoveryOrigin | None = None,
+        pane: PaneVM | None = None,
+        generation: int | None = None,
     ) -> None:
         """Cycle the current service's source.
 
@@ -5511,7 +6017,8 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
         if not self._discovery_origin_owned(origin):
             return
         self.record_action("app.swap_source")
-        generation = self._supersede_table_navigation()
+        if generation is None:
+            generation = self._supersede_table_navigation()
         async with self.service_navigation.service_lock:
             if (
                 self._shutdown_task is not None
@@ -5532,7 +6039,11 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
     ) -> None:
         """Switch to the exact source committed by a Glue/Athena picker."""
         event.stop()
-        if self._shutdown_task is not None or self.service_navigation.closed:
+        if (
+            self._shutdown_task is not None
+            or self.service_navigation.closed
+            or self._workspace_input_claimed
+        ):
             return
         origin = self._capture_discovery_origin()
         if (
@@ -5663,6 +6174,7 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
             identity_label=next_label,
             path_protocol=new_protocol,
             connection_key=new_conn_key,
+            connection_region=None if isinstance(payload, str) else payload.region,
             transfer_connection=connection_history_identity(
                 None if isinstance(payload, str) else payload, new_provider
             ),
@@ -6383,7 +6895,7 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
         ``AwsTuiApp`` via ``object.__new__`` working.
         """
         from aws_tui.domain.s3_fs import S3FS
-        from aws_tui.services.s3.service import S3Service, _aioboto3_session_for
+        from aws_tui.services.s3.service import _aioboto3_session_for
 
         ctx = getattr(self, "_app_ctx", None)
         if ctx is not None:
@@ -6401,7 +6913,6 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
     def _make_local_provider(self) -> FileSystemProvider:
         """Build a LocalFS using the registered S3 service's local root."""
         from aws_tui.domain.local_fs import LocalFS
-        from aws_tui.services.s3.service import S3Service
 
         ctx = getattr(self, "_app_ctx", None)
         if ctx is not None:
@@ -6451,6 +6962,7 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
             identity_label=_format_pane_title(conn),  # type: ignore[arg-type]
             path_protocol="s3:",
             connection_key=(conn.kind, conn.name),  # type: ignore[attr-defined]
+            connection_region=conn.region,  # type: ignore[attr-defined]
             transfer_connection=connection_history_identity(conn, provider),  # type: ignore[arg-type]
         )
 
@@ -7831,6 +8343,9 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
         if not isinstance(msg.sender_object, PaneVM):
             return
         sender_vm = msg.sender_object
+        current = self._app_ctx.root_vm.content_host.current
+        if not isinstance(current, DualPaneVM) or sender_vm not in (current.left, current.right):
+            return  # Speculative and retired panes cannot change live reachability.
         key = sender_vm.current_connection_key
         if key is None:
             return  # local pane — never tracked
@@ -8644,6 +9159,10 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
             await await_cleanup("s3_versions.shutdown", browser.shutdown)
         for review in tuple(getattr(self, "_upload_reviews", ())):
             await await_cleanup("recursive_upload.shutdown", review.shutdown)
+        for library in tuple(getattr(self, "_workspace_libraries", ())):
+            await await_cleanup(
+                "workspace_library.shutdown", partial(self._drain_workspace_library, library)
+            )
 
         run_cleanup("service_navigation.close_intake", self._close_service_navigation_intake)
         recovery_task = getattr(self, "_auth_recovery_task", None)
