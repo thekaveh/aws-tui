@@ -19,25 +19,27 @@
 <body>
 <main>
   <h1>aws-tui Operational Flows</h1>
-  <p>Transfer control, catalog-to-query transactions, and bounded EMR log inspection</p>
+  <p>Transfer control, query handoffs, bounded logs, and optional direct-S3 row preview</p>
   <section class="frame">
-    <svg viewBox="0 0 1600 900" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="title desc">
+    <svg viewBox="0 0 1600 1100" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="title desc">
       <title id="title">aws-tui operational flows</title>
-      <desc id="desc">Three orthogonal flows are shown. DualPaneVM controls cross-filesystem transfer. Glue publishes a typed message through the application transaction to Athena and Amazon Athena. EMR logs load from S3 into the log pane.</desc>
+      <desc id="desc">Four flows are shown. DualPaneVM controls cross-filesystem transfer. Glue publishes a typed request through the application transaction to Athena; the user executes the query. The EMR log facade selects S3 reads or CloudWatch discovery/read; explicit follow polls CloudWatch. Optional DuckDB Peek performs direct S3 reads without Athena execution; extensions can require network access. Arrows show requests and loaded data, not permission grants or automatic source fallback.</desc>
       <defs>
         <pattern id="grid" width="40" height="40" patternUnits="userSpaceOnUse"><path d="M40 0H0V40" fill="none" stroke="#1e293b" stroke-width="0.5"/></pattern>
         <marker id="arrow" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto"><polygon points="0 0,10 3.5,0 7" fill="#94a3b8"/></marker>
       </defs>
-      <rect width="1600" height="900" fill="#020617"/><rect width="1600" height="900" fill="url(#grid)"/>
+      <rect width="1600" height="1100" fill="#020617"/><rect width="1600" height="1100" fill="url(#grid)"/>
       <g fill="#07101f" stroke="#1e293b" stroke-width="1.5">
         <rect x="30" y="35" width="1540" height="255" rx="8"/>
         <rect x="30" y="310" width="1540" height="300" rx="8"/>
-        <rect x="30" y="630" width="1540" height="235" rx="8"/>
+        <rect x="30" y="630" width="1540" height="220" rx="8"/>
+        <rect x="30" y="870" width="1540" height="195" rx="8"/>
       </g>
       <g font-family="Fira Code Embedded" font-size="12" font-weight="700" text-anchor="start">
         <text x="52" y="62" fill="#22d3ee">FILE TRANSFER · CONTROL AND DATA OWNERSHIP</text>
         <text x="52" y="337" fill="#34d399">GLUE TO ATHENA TO RESULT ARTIFACT</text>
-        <text x="52" y="657" fill="#a78bfa">EMR SERVERLESS LOG INSPECTION</text>
+        <text x="52" y="657" fill="#a78bfa">EMR LOGS · EXPLICIT READ / CLOUDWATCH FOLLOW</text>
+        <text x="52" y="897" fill="#fb923c">GLUE ICEBERG PEEK · OPTIONAL LOCAL DUCKDB</text>
       </g>
 
       <g fill="none" stroke-width="2" marker-end="url(#arrow)">
@@ -48,8 +50,15 @@
         <path d="M250 440H300" stroke="#34d399"/><path d="M500 440H550" stroke="#34d399"/>
         <path d="M770 440H830" stroke="#34d399"/><path d="M1030 440H1080" stroke="#fbbf24"/>
         <path d="M1280 440H1330" stroke="#fbbf24"/><path d="M1430 490V525" stroke="#fbbf24"/>
-        <path d="M330 750H390" stroke="#a78bfa"/><path d="M650 750H720" stroke="#fbbf24"/>
-        <path d="M980 750H1050" stroke="#22d3ee"/>
+        <path d="M310 760H365" stroke="#a78bfa"/><path d="M625 760H680" stroke="#a78bfa"/>
+        <path d="M900 740H930V710H965" stroke="#fbbf24"/>
+        <path d="M900 780H930V795H965" stroke="#fbbf24"/>
+        <path d="M1230 710H1260V735H1290" stroke="#22d3ee"/>
+        <path d="M1230 795H1260V785H1290" stroke="#22d3ee"/>
+        <path d="M330 972H390" stroke="#fb923c"/>
+        <path d="M660 960H740" stroke="#fbbf24"/>
+        <path d="M660 985H700V1030H740" stroke="#fb923c" stroke-dasharray="7 5"/>
+        <path d="M1050 960H1120" stroke="#22d3ee"/>
       </g>
 
       <g font-family="Fira Code Embedded" text-anchor="middle">
@@ -94,18 +103,42 @@
         </g>
 
         <g fill="#0f172a" stroke-width="2">
-          <rect x="60" y="700" width="270" height="100" rx="5" stroke="#fbbf24"/>
-          <rect x="390" y="700" width="260" height="100" rx="5" stroke="#a78bfa"/>
-          <rect x="720" y="700" width="260" height="100" rx="5" stroke="#fbbf24"/>
-          <rect x="1050" y="700" width="270" height="100" rx="5" stroke="#22d3ee"/>
+          <rect x="60" y="710" width="250" height="100" rx="5" stroke="#fbbf24"/>
+          <rect x="365" y="710" width="260" height="100" rx="5" stroke="#a78bfa"/>
+          <rect x="680" y="710" width="220" height="100" rx="5" stroke="#a78bfa"/>
+          <rect x="965" y="680" width="265" height="60" rx="5" stroke="#fbbf24"/>
+          <rect x="965" y="765" width="265" height="65" rx="5" stroke="#fbbf24"/>
+          <rect x="1290" y="710" width="250" height="100" rx="5" stroke="#22d3ee"/>
         </g>
         <g fill="#f8fafc" font-size="11" font-weight="700">
-          <text x="195" y="736">EMR run detail</text><text x="520" y="736">JobRunLogsVM</text>
-          <text x="850" y="736">S3 log objects</text><text x="1185" y="736">Textual log pane</text>
+          <text x="185" y="746">EMR run detail</text><text x="495" y="746">JobRunLogsVM</text>
+          <text x="790" y="746">Log read facade</text><text x="1097" y="705">S3 log objects</text>
+          <text x="1097" y="790">CloudWatch Logs</text><text x="1415" y="746">Textual log pane</text>
         </g>
         <g fill="#94a3b8" font-size="9.5">
-          <text x="195" y="762">exact application + run</text><text x="520" y="762">owned on-demand load</text>
-          <text x="850" y="762">attempts · driver · workers</text><text x="1185" y="762">object chips · gzip bounds · filter</text>
+          <text x="185" y="772">exact application + run</text><text x="495" y="772">owns load / follow / stop</text>
+          <text x="790" y="772">connection session + region</text>
+          <text x="1097" y="725">list / get · bounded gzip</text>
+          <text x="1097" y="812">discover / filter events</text>
+          <text x="1415" y="772">bounded retained data</text><text x="1415" y="793">local display filters</text>
+        </g>
+
+        <g fill="#0f172a" stroke-width="2">
+          <rect x="60" y="930" width="270" height="80" rx="5" stroke="#34d399"/>
+          <rect x="390" y="930" width="270" height="80" rx="5" stroke="#fb923c"/>
+          <rect x="740" y="925" width="310" height="65" rx="5" stroke="#fbbf24"/>
+          <rect x="740" y="1005" width="310" height="45" rx="5" stroke="#94a3b8" stroke-dasharray="7 5"/>
+          <rect x="1120" y="930" width="380" height="80" rx="5" stroke="#22d3ee"/>
+        </g>
+        <g fill="#f8fafc" font-size="11" font-weight="700">
+          <text x="195" y="960">Iceberg preview VM</text><text x="525" y="960">NativeDuckDb (optional)</text>
+          <text x="895" y="950">Source S3 · KMS if needed</text><text x="1310" y="960">Peek rows</text>
+        </g>
+        <g fill="#94a3b8" font-size="9.5">
+          <text x="195" y="985">DuckDbPort · worker thread</text><text x="525" y="985">profile + region credential chain</text>
+          <text x="895" y="975">direct reads; source grants required</text>
+          <text x="895" y="1032">extensions.duckdb.org unless cached</text>
+          <text x="1310" y="985">no Athena execution; rows ≠ scan bytes</text>
         </g>
       </g>
     </svg>
