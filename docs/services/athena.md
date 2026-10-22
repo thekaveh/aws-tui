@@ -6,8 +6,7 @@ results, saved queries, and exact-source handoffs to Glue and S3.
 
 ## 1. Query context
 
-Source, Workgroup, Catalog, and Database are four individually framed,
-dependent overlay selectors in one unframed row. `Shift+S` rebuilds the page
+Choose Source, Workgroup, Catalog and Database in that order. `Shift+S` rebuilds the page
 under the next supported AWS source. `Shift+W`, `Shift+C`, and `Shift+D` open
 the corresponding selector. Changing any parent context retires loaders,
 results, and app-owned execution state from the prior identity.
@@ -32,7 +31,83 @@ Enabled load-more controls appear immediately after their selector.
 The segmented frame contains Query (`1`), History (`2`), Results (`3`), and
 Saved (`4`). Unavailable controls are omitted from the active focus ring.
 
-## 2. Read-only execution policy
+Context discovery stops at 1,000 items. A visible safety-limit state replaces **Load more** when this ceiling is reached.
+That state remains visible after refresh or navigation rollback.
+
+<a id="8-author-sql-and-use-local-files" name="8-author-sql-and-use-local-files"></a>
+
+## 2. Author SQL and use local files
+
+The **SQL** menu on Query provides completion, formatting, local files, and local snippets.
+Press `Alt+E` to open it, or use the command palette.
+These actions edit SQL without submitting a query. Run still applies the read-only policy before execution.
+
+<a id="81-complete-and-format-sql" name="81-complete-and-format-sql"></a>
+
+### 2.1. Complete and format SQL
+
+1. Select the source, workgroup, catalog, and database.
+2. Place the cursor where you need a keyword, table, or column.
+3. Press `Ctrl+Space`, then choose one suggestion.
+
+Completion uses the current context and cursor position, including quoted identifiers and nested columns.
+It inserts only the selected suggestion. Context changes invalidate suggestions and their metadata cache.
+Metadata reads are bounded; the status reports partial or unavailable results.
+A slow read can keep completion busy until its underlying request finishes.
+
+Press `Ctrl+Alt+F` to format the current SQL layout.
+Formatting preserves comments, literal values, quoted identifiers, and statement meaning.
+Incomplete or unsupported SQL stays unchanged, with a reason in the status.
+Completion, formatting, and snippet insertion support editor undo.
+
+<a id="82-open-and-save-sql-files" name="82-open-and-save-sql-files"></a>
+
+### 2.2. Open and save SQL files
+
+Use `Ctrl+Alt+O` to open a local UTF-8 `.sql` file.
+Use `Ctrl+Alt+S` to save it, or `Ctrl+Alt+Shift+S` to choose another path.
+The SQL menu provides the same commands when your terminal does not transmit these shortcuts.
+Files must be regular files, at most 1 MiB; symbolic links are refused.
+
+The editor shows the filename or **Untitled**, plus a modified marker.
+The tooltip and Execution detail show a file's full path.
+
+The marker compares SQL with the current document baseline.
+Opening or saving a file, or loading an AWS query or table query, sets that baseline.
+Draft autosaves do not clear the marker. Recovered drafts start as modified untitled documents.
+
+Save asks before overwriting an existing destination.
+Changed files, permissions, invalid encoding, and size limits produce recoverable errors without clearing the editor.
+
+Open, saved-query loads, draft recovery, and table replacement ask before replacing modified SQL.
+An accepted whole-document load starts a new undo history.
+Changing the editor while a decision or load is pending invalidates that replacement.
+Saving a file preserves the current undo history.
+
+<a id="83-keep-local-snippets" name="83-keep-local-snippets"></a>
+
+### 2.3. Keep local snippets
+
+Choose **Save local snippet…** in the SQL menu to store the current SQL with a name.
+Choose **Insert local snippet…** to insert a selection at the cursor or replace the selected text.
+Snippet choices show their local provenance, including the connection name and region.
+Provenance is descriptive; it does not switch the active AWS context.
+
+Local snippets are separate from the AWS named queries and prepared statements in Saved.
+They use plaintext `sql-snippets.json` in the app's configuration directory.
+The library holds at most 100 snippets, with 64 KiB per SQL entry and 8 MiB total.
+Do not store secrets in SQL files or snippets. Snippet actions do not create or update AWS saved queries.
+
+### 2.4. Load AWS saved SQL
+
+Saved pages named queries and prepared statements separately.
+Opening either copies SQL into the editor without executing it.
+Each saved-query collection stops at 1,000 items and shows a safety-limit state instead of **Load more**.
+The limit remains visible after refresh or navigation rollback.
+
+<a id="2-read-only-execution-policy" name="2-read-only-execution-policy"></a>
+
+## 3. Read-only execution policy
 
 `Ctrl+Enter` dispatches exactly one statement only after the local SQLGlot
 Athena-dialect policy accepts it. The allowlist covers bounded read forms such
@@ -45,7 +120,9 @@ The complete grammar and examples are maintained in the
 Formation, workgroup, S3, bucket, and KMS policy remain the authorization
 boundary after local validation.
 
-## 3. Query lifecycle and results
+<a id="3-query-lifecycle-and-results" name="3-query-lifecycle-and-results"></a>
+
+## 4. Query lifecycle and results
 
 The app records the identity of each query it starts and polls until a terminal
 state. **Stop** or `Esc` interrupts submission or requests that Athena stop the
@@ -59,10 +136,8 @@ Results load at most
 1,000 rows per Athena page and retain the continuation token for `l` to load
 more. History hydrates selected execution detail, including bytes scanned and
 result reuse, with one `BatchGetQueryExecution` request per bounded 50-row
-history page.
-
-Saved independently pages named queries and prepared statements;
-opening either copies SQL into the editor without executing it.
+history page. History stops at 1,000 executions and shows a safety-limit state instead of **Load more**.
+The limit remains visible after refresh or navigation rollback.
 
 Workgroup configuration determines customer-S3 output or Athena managed
 results. Only a successful customer-S3 execution has an artifact that can be
@@ -76,32 +151,53 @@ scrollable Execution detail pane leave at least three rows for the SQL editor.
 Tab to Execution detail and use the Up and Down arrows to read additional rows. Resizing keeps typed SQL, context selections, and keyboard focus; taller terminals
 restore the spacious banner and query layout.
 
-Glue table and Iceberg snapshot handoffs prefill a quoted `SELECT *` starter ending in `LIMIT 5`. The transaction explicitly projects the starter into the mounted editor and never executes it.
+<a id="7-inspect-and-control-loaded-results" name="7-inspect-and-control-loaded-results"></a>
 
-## 4. Cross-service handoffs
+## 5. Inspect and control loaded results
 
-Glue table and Iceberg snapshot requests prefill the editor under the same
-connection and region. `i` inserts a copied table reference only when its
-source identity matches the active Athena context. The command palette can
-open one unambiguous query table in Glue or a validated successful result
-artifact in S3. None of these handoffs substitutes another profile.
+On Results, arrow keys select individual cells. Press Enter or click the current cell to select it. This includes the first cell or a result containing only one cell.
 
-## 5. Architecture and verification
+`Alt+Enter` opens the complete
+original value in a read-only, scrollable inspector. Escape or Close returns
+to the same original row and column when that execution and cell remain
+available. Null and empty strings have explicit status. Enter in the inspector
+does not execute SQL.
 
-`AthenaService` composes `AthenaPageVM` from query, history, results, and saved
-VMs. VMx owns commands, observable state, and lifecycle. Athena's app-owned snapshot pager retains VMx commands while adding immutable hydration. Cumulative ceilings are 1,000 context, history, and saved-query items, and 10,000 result rows. Reaching a ceiling replaces load-more with a visible safety-limit
-state that survives refresh and snapshot rollback.
+`Alt+C` copies the selected cell as JSON; `Alt+Shift+C` copies its row as a
+JSON array in column order. Null becomes `null`, an empty string becomes `""`,
+and the literal string `NULL` becomes `"NULL"`. JSON escapes newlines and quotes;
+Unicode remains readable. Duplicate column labels remain separate array
+positions. Copy uses original values, including complete multiline strings.
 
-SQLGlot owns parsing; the
-domain client owns public Athena API calls and response mapping. Generation
-and execution identity guards prevent retired async work from publishing into
-a replacement context.
+Clipboard delivery depends on the terminal and platform clipboard helper; a
+failed or unacknowledged terminal write is not a confirmed native copy. Check
+the app's clipboard outcome message.
 
-Demo mode provides profile-isolated workgroups, query states, result pages,
-saved SQL, managed-output cases, customer-S3 artifacts, and scoped denial.
-Contract tests validate AWS request names and fields against the locked
-botocore model. Policy tests exercise accepted and rejected SQL across the
-minimum and locked SQLGlot versions.
+`Alt+F` opens a literal, case-insensitive substring filter across every cell
+of the loaded rows. Null is searchable as `null`. Apply changes the filter,
+Cancel leaves it unchanged, and Clear restores all loaded rows. A zero-match
+filter still reports visible and loaded counts and whether more rows are
+available. The footer's `local` scope means loaded rows only.
+
+`Alt+S` cycles the selected column through ascending, descending, and original
+loaded order. Sorting compares Unicode strings lexically, without converting
+numeric-looking text; null stays last in both directions and ties retain
+loaded order. `Alt+R` clears both the local filter and sort. Filtering a selected
+row out clears its selection; sorting preserves a surviving original cell.
+
+Only explicit **Load more** or `l` fetches the next page. New rows enter the
+current filter and order. The 10,000-row safety ceiling can leave unfetched
+results: `more available` and `safety limit` are scope warnings, including when
+no loaded rows match. Local controls never rewrite or rerun SQL or fetch all
+pages.
+
+Source/context changes, execution replacement or reload, and page
+shutdown reset selection, filter, and sort and invalidate an open inspector. These settings are transient. Full-execution export is separate scope in
+[#254](https://github.com/thekaveh/aws-tui/issues/254).
+
+These six actions can be remapped in `[keybindings]`; Help and the Athena
+command palette display their actual configured keys. They apply to the
+current Results view and yield while typing in an editor or modal.
 
 ## 6. Local SQL draft recovery
 
@@ -150,104 +246,27 @@ exit; pending or failed edits are not guaranteed to be recoverable. Follow the
 [keyboard recovery recipe](../cookbook.md#66-save-and-recover-local-sql-drafts)
 for restart and shutdown details.
 
-## 7. Inspect and control loaded results
+<a id="4-cross-service-handoffs" name="4-cross-service-handoffs"></a>
 
-On Results, arrow keys select individual cells. Press Enter or click the current cell to select it. This includes the first cell or a result containing only one cell.
+## 7. Cross-service handoffs
 
-`Alt+Enter` opens the complete
-original value in a read-only, scrollable inspector. Escape or Close returns
-to the same original row and column when that execution and cell remain
-available. Null and empty strings have explicit status. Enter in the inspector
-does not execute SQL.
+Glue table and Iceberg snapshot requests prefill the editor under the same
+connection and region. `i` inserts a copied table reference only when its
+source identity matches the active Athena context. The command palette can
+open one unambiguous query table in Glue or a validated successful result
+artifact in S3. None of these handoffs substitutes another profile.
 
-`Alt+C` copies the selected cell as JSON; `Alt+Shift+C` copies its row as a
-JSON array in column order. Null becomes `null`, an empty string becomes `""`,
-and the literal string `NULL` becomes `"NULL"`. JSON escapes newlines and quotes;
-Unicode remains readable. Duplicate column labels remain separate array
-positions. Copy uses original values, including complete multiline strings.
+Glue table and Iceberg snapshot handoffs fill the editor with a quoted `SELECT *` starter ending in `LIMIT 5`.
+They never execute it.
 
-Clipboard delivery depends on the terminal and platform clipboard helper; a
-failed or unacknowledged terminal write is not a confirmed native copy. Check
-the app's clipboard outcome message.
+<a id="5-architecture-and-verification" name="5-architecture-and-verification"></a>
 
-`Alt+F` opens a literal, case-insensitive substring filter across every cell
-of the loaded rows. Null is searchable as `null`. Apply changes the filter,
-Cancel leaves it unchanged, and Clear restores all loaded rows. A zero-match
-filter still reports visible and loaded counts and whether more rows are
-available. The footer's `local` scope means loaded rows only.
+## 8. Further reading and demo
 
-`Alt+S` cycles the selected column through ascending, descending, and original
-loaded order. Sorting compares Unicode strings lexically, without converting
-numeric-looking text; null stays last in both directions and ties retain
-loaded order. `Alt+R` clears both the local filter and sort. Filtering a selected
-row out clears its selection; sorting preserves a surviving original cell.
+The [Architecture guide](../architecture.md#1-layers) explains the query, history, results and saved-query components.
+It also describes parsing, paging and execution ownership.
+The [Contract ledger](../contract-ledger.md) records locked SDK request shapes and SQL policy compatibility.
+Contributors can use the [testing guide](../architecture.md#5-testing-pyramid) for verification workflows.
 
-Only explicit **Load more** or `l` fetches the next page. New rows enter the
-current filter and order. The 10,000-row safety ceiling can leave unfetched
-results: `more available` and `safety limit` are scope warnings, including when
-no loaded rows match. Local controls never rewrite or rerun SQL or fetch all
-pages.
-
-Source/context changes, execution replacement or reload, and page
-shutdown reset selection, filter, and sort and invalidate an open inspector. These settings are transient. Full-execution export is separate scope in
-[#254](https://github.com/thekaveh/aws-tui/issues/254).
-
-These six actions can be remapped in `[keybindings]`; Help and the Athena
-command palette display their actual configured keys. They apply to the
-current Results view and yield while typing in an editor or modal.
-
-## 8. Author SQL and use local files
-
-The **SQL** menu on Query provides completion, formatting, local files, and local snippets.
-Press `Alt+E` to open it, or use the command palette.
-These actions edit SQL without submitting a query. Run still applies the read-only policy before execution.
-
-### 8.1. Complete and format SQL
-
-1. Select the source, workgroup, catalog, and database.
-2. Place the cursor where you need a keyword, table, or column.
-3. Press `Ctrl+Space`, then choose one suggestion.
-
-Completion uses the current context and cursor position, including quoted identifiers and nested columns.
-It inserts only the selected suggestion. Context changes invalidate suggestions and their metadata cache.
-Metadata reads are bounded; the status reports partial or unavailable results.
-A slow read can keep completion busy until its underlying request finishes.
-
-Press `Ctrl+Alt+F` to format the current SQL layout.
-Formatting preserves comments, literal values, quoted identifiers, and statement meaning.
-Incomplete or unsupported SQL stays unchanged, with a reason in the status.
-Completion, formatting, and snippet insertion support editor undo.
-
-### 8.2. Open and save SQL files
-
-Use `Ctrl+Alt+O` to open a local UTF-8 `.sql` file.
-Use `Ctrl+Alt+S` to save it, or `Ctrl+Alt+Shift+S` to choose another path.
-The SQL menu provides the same commands when your terminal does not transmit these shortcuts.
-Files must be regular files, at most 1 MiB; symbolic links are refused.
-
-The editor shows the filename or **Untitled**, plus a modified marker.
-The tooltip and Execution detail show a file's full path.
-
-The marker compares SQL with the current document baseline.
-Opening or saving a file, or loading an AWS query or table query, sets that baseline.
-Draft autosaves do not clear the marker. Recovered drafts start as modified untitled documents.
-
-Save asks before overwriting an existing destination.
-Changed files, permissions, invalid encoding, and size limits produce recoverable errors without clearing the editor.
-
-Open, saved-query loads, draft recovery, and table replacement ask before replacing modified SQL.
-An accepted whole-document load starts a new undo history.
-Changing the editor while a decision or load is pending invalidates that replacement.
-Saving a file preserves the current undo history.
-
-### 8.3. Keep local snippets
-
-Choose **Save local snippet…** in the SQL menu to store the current SQL with a name.
-Choose **Insert local snippet…** to insert a selection at the cursor or replace the selected text.
-Snippet choices show their local provenance, including the connection name and region.
-Provenance is descriptive; it does not switch the active AWS context.
-
-Local snippets are separate from the AWS named queries and prepared statements in Saved.
-They use plaintext `sql-snippets.json` in the app's configuration directory.
-The library holds at most 100 snippets, with 64 KiB per SQL entry and 8 MiB total.
-Do not store secrets in SQL files or snippets. Snippet actions do not create or update AWS saved queries.
+Demo mode supplies synthetic workgroups, query states, results, saved SQL, managed output, customer-S3 artifacts and scoped denial.
+It sends no AWS requests. Local SQL file and snippet actions still use your filesystem.
