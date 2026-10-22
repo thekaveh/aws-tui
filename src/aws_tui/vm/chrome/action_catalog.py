@@ -35,6 +35,14 @@ class ActionPresentation:
 
 ACTION_SPECS: tuple[ActionSpec, ...] = (
     ActionSpec(
+        "pane.sync_folder",
+        "Sync folder to S3",
+        "File operations",
+        keywords=("one-way", "checksum", "dry run", "include", "exclude"),
+        service_ids=frozenset(("s3",)),
+        key_source="unbound",
+    ),
+    ActionSpec(
         "pane.upload_folder",
         "Upload folder to S3",
         "File operations",

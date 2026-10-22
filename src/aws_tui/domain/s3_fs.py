@@ -23,9 +23,11 @@ EndpointConnection → Unreachable).
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import inspect
 import json
 from collections.abc import AsyncIterator, Callable
-from contextlib import AsyncExitStack, suppress
+from contextlib import AsyncExitStack, asynccontextmanager, suppress
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
@@ -74,6 +76,7 @@ from aws_tui.domain.s3_versions import (
     version_page,
     versioning_state,
 )
+from aws_tui.domain.sync_checksum import SyncChecksum, check_sync_cancellation
 
 # Family of transport-layer failures that the user should see as
 # "endpoint unreachable" rather than a generic provider error. We
@@ -502,6 +505,19 @@ class S3FS:
         """Pure literal mapping for a reviewed upload prefix or object key."""
         return self._resolve(path)
 
+    @asynccontextmanager
+    async def _owned_upload_read_client(self) -> AsyncIterator[Any]:
+        """Drain review-read client cleanup independently of its caller's cancellation."""
+        resources = AsyncExitStack()
+        try:
+            client = await resources.enter_async_context(self._client())
+            check_sync_cancellation()
+            yield client
+        finally:
+            _, canceled = await _drain_task(asyncio.create_task(resources.aclose()))
+            if canceled:
+                raise asyncio.CancelledError
+
     async def inspect_upload_destination(self, path: PathRef) -> FileEntry | None:
         """Observe one exact key without treating a prefix as a missing file.
 
@@ -511,14 +527,20 @@ class S3FS:
         """
         bucket, key = self._resolve_file(path)
         try:
-            async with self._client() as s3:
+            async with self._owned_upload_read_client() as s3:
                 try:
                     head = await s3.head_object(Bucket=bucket, Key=key)
+                    if not isinstance(head, dict):
+                        raise UploadPlanError(f"Invalid S3 upload destination observation: {key!r}")
                 except ClientError as exc:
                     if _error_code(exc) not in {"404", "NoSuchKey", "NotFound"}:
                         raise _map_client_error(exc, key) from exc
                     head = None
+                check_sync_cancellation()
                 probe = await s3.list_objects_v2(Bucket=bucket, Prefix=f"{key}/", MaxKeys=1)
+                check_sync_cancellation()
+                if not isinstance(probe, dict):
+                    raise UploadPlanError(f"Invalid S3 upload prefix observation: {key!r}")
                 count, contents = probe.get("KeyCount"), probe.get("Contents", [])
                 if (
                     type(count) is not int
@@ -1370,6 +1392,138 @@ class S3FS:
             raise _auth_error(exc) from exc
         except _TRANSPORT_FAILURE_EXCEPTIONS as exc:
             raise ProviderUnreachableError(str(exc)) from exc
+
+    async def read_sync_checksum(self, path: PathRef, *, expected: FileEntry) -> SyncChecksum:
+        """Hash a conditional full-object read and recheck the current key.
+
+        Own the request through cleanup even if the caller repeatedly cancels.
+        This purpose-specific dry-run read does not alter ordinary read_stream.
+        """
+        if (
+            expected.kind != EntryKind.FILE
+            or type(expected.size) is not int
+            or expected.size < 0
+            or not isinstance(expected.etag, str)
+            or not expected.etag
+        ):
+            raise UploadPlanError("Sync checksum requires a reviewed regular-file revision")
+        check_sync_cancellation()
+        owned = asyncio.create_task(self._read_sync_checksum(path, expected))
+        try:
+            return await asyncio.shield(owned)
+        except asyncio.CancelledError:
+            if not owned.done() and not owned.cancelling():
+                owned.cancel()
+            while not owned.done():
+                try:
+                    await asyncio.shield(owned)
+                except asyncio.CancelledError:
+                    continue
+                except Exception:
+                    break
+            with suppress(Exception, asyncio.CancelledError):
+                owned.result()
+            raise
+
+    async def _read_sync_checksum(self, path: PathRef, expected: FileEntry) -> SyncChecksum:
+        bucket, key = self._resolve_file(path)
+        assert expected.etag is not None
+        assert expected.size is not None
+        revision = _parse_s3_revision(expected.etag)
+        if revision.etag is None:
+            raise UploadPlanError("Sync checksum requires a reviewed conditional ETag")
+        request: dict[str, Any] = {
+            "Bucket": bucket,
+            "Key": key,
+            "IfMatch": _quoted_etag(revision.etag),
+        }
+        if revision.version_id is not None:
+            request["VersionId"] = revision.version_id
+        digest, count = hashlib.sha256(), 0
+        try:
+            async with self._owned_upload_read_client() as s3:
+                response = await s3.get_object(**request)
+                if not isinstance(response, dict):
+                    raise UploadPlanError("Malformed S3 sync checksum response")
+                body = response.get("Body")
+                close = getattr(body, "close", None)
+                try:
+                    check_sync_cancellation()
+                    if (
+                        body is None
+                        or not callable(getattr(body, "read", None))
+                        or not callable(close)
+                    ):
+                        raise UploadPlanError("S3 sync checksum requires an owned readable body")
+                    if (
+                        type(response.get("ContentLength")) is not int
+                        or response["ContentLength"] < 0
+                        or not isinstance(response.get("ETag"), str)
+                        or not _clean_etag(response["ETag"])
+                        or (
+                            response.get("LastModified") is not None
+                            and not isinstance(response["LastModified"], datetime)
+                        )
+                        or (
+                            response.get("VersionId") is not None
+                            and not isinstance(response["VersionId"], str)
+                        )
+                    ):
+                        raise UploadPlanError("Malformed S3 sync checksum identity")
+                    if (
+                        response["ContentLength"] != expected.size
+                        or _s3_revision_token(response) != expected.etag
+                    ):
+                        raise ConflictError("S3 object changed before sync checksum read")
+                    while True:
+                        chunk = await body.read(1024 * 1024)
+                        check_sync_cancellation()
+                        if not isinstance(chunk, bytes):
+                            raise UploadPlanError("S3 sync checksum returned an invalid byte chunk")
+                        if not chunk:
+                            break
+                        count += len(chunk)
+                        if count > expected.size:
+                            raise UploadPlanError("S3 sync checksum exceeded its reviewed size")
+                        digest.update(chunk)
+                    if count != expected.size:
+                        raise UploadPlanError("S3 sync checksum ended before its reviewed size")
+                finally:
+                    if callable(close):
+
+                        async def close_body() -> None:
+                            closing = close()
+                            if inspect.isawaitable(closing):
+                                await closing
+
+                        _, canceled = await _drain_task(asyncio.create_task(close_body()))
+                        if canceled:
+                            raise asyncio.CancelledError
+            check_sync_cancellation()
+            current = await self.inspect_upload_destination(path)
+            check_sync_cancellation()
+            if self._resolve_file(path) != (bucket, key) or current != expected:
+                raise ConflictError("Current S3 object changed during sync checksum comparison")
+        except _AUTH_FAILURE_EXCEPTIONS as exc:
+            raise _auth_error(exc) from exc
+        except _TRANSPORT_FAILURE_EXCEPTIONS as exc:
+            raise ProviderUnreachableError(str(exc)) from exc
+        except ClientError as exc:
+            if _error_code(exc) in {
+                "NoSuchKey",
+                "NoSuchVersion",
+                "404",
+                "NotFound",
+                "PreconditionFailed",
+                "ConditionalRequestConflict",
+                "409",
+                "412",
+            }:
+                raise ConflictError(
+                    "S3 object changed or disappeared during sync comparison"
+                ) from exc
+            raise _map_client_error(exc, key) from exc
+        return SyncChecksum(digest.hexdigest(), count, expected.etag)
 
     async def write_upload_stream(
         self,

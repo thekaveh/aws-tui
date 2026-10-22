@@ -744,3 +744,26 @@ The diagnostic journal does not supply durable per-object History or Recovery re
 
 Checks cover installed SDK request models, isolated Moto HTTP publication/cancellation, controlled races, and mounted application keyboard flows.
 These checks do not establish live AWS parity or native Windows/Linux behavior.
+
+**Reviewed one-way local-to-S3 sync**
+
+`botocore==1.40.61`, S3 API `2006-03-01`; Textual `8.2.8`
+
+`pane.sync_folder` applies literal relative-path filters before destination inspection.
+Default equality requires checked full-object SHA-256 for equal-sized files.
+S3 GET binds the reviewed ETag and available version; current-key reinspection follows complete reads and owned closure.
+The optional size/time comparison is explicitly heuristic, never verified content equality.
+Dry runs make no mutation requests and can incur GET, download, and KMS access costs.
+
+Immutable selected plans reuse the upload writer's conditional create/update requests and publication receipts.
+Synchronous native-control revisions and both confirmation boundaries guard admission.
+Fresh retries inspect only eligible previously selected paths, without discovering new files or pruning destination objects.
+An unchanged comparison can resolve remaining work while preserving a historical failed receipt.
+Published, uncertain, omitted, and started-canceled operations are excluded from automatic retry.
+
+Checks include controlled provider failures, installed SDK requests, isolated HTTP fixtures, and mounted application keyboard flows.
+Moto 5.2.3 ignores `IfMatch` on multipart completion.
+Unpatched HTTP controls cover creation, empty-object updates, and unchanged second runs.
+Separate test-server controls validate the serialized completion condition and its matching/mismatching outcomes.
+Those controls do not establish native Moto support or live AWS parity.
+Native Windows/Linux and live AWS remain unverified.

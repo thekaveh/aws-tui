@@ -27,6 +27,10 @@ section. The current tree must not be tagged as v0.8.0.
 
 ### Added
 
+- Reviewed one-way local-to-S3 sync with full-byte SHA-256 comparison,
+  include/exclude filters, individual operation selection, conditional publication,
+  cancellation, and fresh comparisons before retrying failed or unattempted work.
+
 - Reviewed recursive local-folder uploads to S3 from the command palette,
   with explicit conflict policies, per-object results, bounded concurrency,
   cancellation that preserves published objects, and fresh failed/unattempted-only retries.
