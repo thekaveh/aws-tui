@@ -204,15 +204,7 @@ class RecursiveUploadVM:
         async def read() -> UploadPlan | None:
             if not self._current(generation):
                 return None
-            if self._batch is not None:
-                return await replan_failed(self._batch, policy=self.policy)
-            return await plan_upload(
-                cast(UploadSource, self._source),
-                cast(UploadDestination, self._destination),
-                self.source_root,
-                self.destination_prefix,
-                policy=self.policy,
-            )
+            return await self._build_plan()
 
         try:
             plan = await self._owner.run(read)
@@ -234,6 +226,21 @@ class RecursiveUploadVM:
             return
         if not self._current(generation) or plan is None:
             return
+        self._install_plan(plan)
+        self._notify()
+
+    async def _build_plan(self) -> UploadPlan:
+        if self._batch is not None:
+            return await replan_failed(self._batch, policy=self.policy)
+        return await plan_upload(
+            cast(UploadSource, self._source),
+            cast(UploadDestination, self._destination),
+            self.source_root,
+            self.destination_prefix,
+            policy=self.policy,
+        )
+
+    def _install_plan(self, plan: UploadPlan) -> None:
         self.plan, self._state, self._busy = plan, "ready", False
         if not self._ever_accepted:
             self._known_bytes = plan.known_bytes
@@ -249,7 +256,6 @@ class RecursiveUploadVM:
                 reviewed_sizes.get(path, row.item.source_entry.size or 0)
                 for path, row in self._outcomes.items()
             )
-        self._notify()
 
     def prepare(self) -> PreparedUpload:
         if (

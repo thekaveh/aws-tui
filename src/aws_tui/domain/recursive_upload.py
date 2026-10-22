@@ -58,6 +58,16 @@ class UploadObject:
 
 
 @dataclass(frozen=True, slots=True)
+class UploadTree:
+    """The bounded source snapshot, before destination mapping or inspection."""
+
+    root_entry: FileEntry
+    files: tuple[tuple[PathRef, FileEntry], ...]
+    excluded: tuple[UploadExclusion, ...]
+    empty_directories: tuple[PathRef, ...]
+
+
+@dataclass(frozen=True, slots=True)
 class UploadPlan:
     source_root: PathRef
     destination_prefix: PathRef
@@ -105,7 +115,7 @@ def checked_upload_location(destination: UploadDestination, path: PathRef) -> tu
     return _location(destination, path, file=True)
 
 
-def _validate_file_snapshot(path: PathRef, entry: FileEntry) -> None:
+def validate_upload_file_snapshot(path: PathRef, entry: FileEntry) -> None:
     if (
         entry.kind != EntryKind.FILE
         or type(entry.size) is not int
@@ -134,6 +144,30 @@ async def plan_upload(
     """
     if not isinstance(policy, ConflictResolution):
         raise UploadPlanError("Unknown upload conflict policy")
+    _validate_upload_tree_request(source, max_entries, max_depth)
+    if not callable(getattr(destination, "upload_location", None)) or not callable(
+        getattr(destination, "inspect_upload_destination", None)
+    ):
+        raise UploadPlanError("Destination does not support reviewed S3 uploads")
+    _location(destination, destination_prefix, file=False)
+    tree = await _walk_upload_tree(source, source_root, max_entries, max_depth)
+    objects = await _map_uploads(
+        source_root, destination_prefix, list(tree.files), destination, policy
+    )
+    return UploadPlan(
+        source_root,
+        destination_prefix,
+        policy,
+        objects,
+        tree.excluded,
+        tree.empty_directories,
+        tree.root_entry,
+        source,
+        destination,
+    )
+
+
+def _validate_upload_tree_request(source: UploadSource, max_entries: int, max_depth: int) -> None:
     if type(max_entries) is not int or not 1 <= max_entries <= 10_000:
         raise UploadPlanError("Upload entry safety limit must be between 1 and 10000")
     if type(max_depth) is not int or not 0 <= max_depth <= 128:
@@ -142,11 +176,23 @@ async def plan_upload(
         getattr(source, "list_upload_directory", None)
     ):
         raise UploadPlanError("Source does not support local upload inspection")
-    if not callable(getattr(destination, "upload_location", None)) or not callable(
-        getattr(destination, "inspect_upload_destination", None)
-    ):
-        raise UploadPlanError("Destination does not support reviewed S3 uploads")
-    _location(destination, destination_prefix, file=False)
+
+
+async def inspect_upload_tree(
+    source: UploadSource,
+    source_root: PathRef,
+    *,
+    max_entries: int = 10_000,
+    max_depth: int = 128,
+) -> UploadTree:
+    """Inspect the same bounded tree for upload or filtered sync planning."""
+    _validate_upload_tree_request(source, max_entries, max_depth)
+    return await _walk_upload_tree(source, source_root, max_entries, max_depth)
+
+
+async def _walk_upload_tree(
+    source: UploadSource, source_root: PathRef, max_entries: int, max_depth: int
+) -> UploadTree:
     try:
         root = await source.inspect_upload_entry(source_root)
     except ProviderError as exc:
@@ -200,7 +246,7 @@ async def plan_upload(
             if (await source.inspect_upload_entry(path)) != entry:
                 raise UploadPlanError(f"Directory changed during planning: {path.as_posix()}")
             return
-        _validate_file_snapshot(path, entry)
+        validate_upload_file_snapshot(path, entry)
         files.append((path, entry))
 
     try:
@@ -210,18 +256,7 @@ async def plan_upload(
     except ProviderError as exc:
         raise UploadPlanError(f"Upload source changed or is unavailable: {exc}") from exc
 
-    objects = await _map_uploads(source_root, destination_prefix, files, destination, policy)
-    return UploadPlan(
-        source_root,
-        destination_prefix,
-        policy,
-        objects,
-        tuple(excluded),
-        tuple(empty),
-        root,
-        source,
-        destination,
-    )
+    return UploadTree(root, tuple(files), tuple(excluded), tuple(empty))
 
 
 async def _map_uploads(
@@ -295,7 +330,7 @@ async def replan_upload_objects(
     files = []
     for path in sources:
         entry = await plan.source.inspect_upload_entry(path)
-        _validate_file_snapshot(path, entry)
+        validate_upload_file_snapshot(path, entry)
         files.append((path, entry))
     reserved_paths = tuple(
         dict.fromkeys(
