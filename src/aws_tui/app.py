@@ -114,6 +114,7 @@ from aws_tui.ui.widgets.settings.connection_form import (
     ConnectionFormSubmitted,
 )
 from aws_tui.ui.widgets.settings_view import SettingsView
+from aws_tui.ui.widgets.sync import SyncModal
 from aws_tui.ui.widgets.theme_picker_modal import ThemePickerModal
 from aws_tui.ui.widgets.toast import ToastStack
 from aws_tui.ui.widgets.transfer_history_modal import TransferHistoryModal
@@ -147,6 +148,7 @@ from aws_tui.vm.file_manager.recursive_upload_vm import PreparedUpload, Recursiv
 from aws_tui.vm.file_manager.s3_object_details_vm import S3ObjectDetailsVM
 from aws_tui.vm.file_manager.s3_version_transfer import execute_version_transfer
 from aws_tui.vm.file_manager.s3_versions_vm import S3VersionsVM, VersionTransferRequest
+from aws_tui.vm.file_manager.sync_vm import SyncVM
 from aws_tui.vm.glue.catalog_vm import GlueSelectionSuperseded
 from aws_tui.vm.glue.iceberg_vm import IcebergView
 from aws_tui.vm.glue.page_vm import GluePageVM, GlueView
@@ -861,6 +863,7 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
         self._actions.register("pane.object_details", self.action_object_details)
         self._actions.register("pane.object_versions", self.action_object_versions)
         self._actions.register("pane.upload_folder", self.action_upload_folder)
+        self._actions.register("pane.sync_folder", self.action_sync_folder)
         self._actions.register("pane.enter_multiselect", self.action_enter_multiselect)
         self._actions.register("pane.toggle_select", self.action_toggle_select)
         self._actions.register("pane.select_all", self.action_select_all)
@@ -2658,7 +2661,12 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
     def action_upload_folder(self) -> None:
         self._open_folder_upload(self._folder_upload_origin())
 
-    def _open_folder_upload(self, origin: _FolderUploadOrigin | None) -> None:
+    def action_sync_folder(self) -> None:
+        self._open_folder_upload(self._folder_upload_origin(), sync=True)
+
+    def _open_folder_upload(
+        self, origin: _FolderUploadOrigin | None, *, sync: bool = False
+    ) -> None:
         if (
             len(self.screen_stack) != 1
             or self._app_ctx.focus_coordinator.is_modal
@@ -2674,8 +2682,9 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
         ):
             return
         ctx = self._app_ctx
-        self.record_action("pane.upload_folder")
-        vm = RecursiveUploadVM(source=origin.source, destination=origin.destination, hub=ctx.hub)
+        self.record_action("pane.sync_folder" if sync else "pane.upload_folder")
+        vm_type = SyncVM if sync else RecursiveUploadVM
+        vm = vm_type(source=origin.source, destination=origin.destination, hub=ctx.hub)
         vm.construct()
         screen: RecursiveUploadModal
 
@@ -2689,7 +2698,8 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
                 exit_on_error=False,
             )
 
-        screen = RecursiveUploadModal(
+        modal_type = SyncModal if sync else RecursiveUploadModal
+        screen = modal_type(
             vm, submit=submit, on_drained=lambda: self._upload_reviews.discard(screen)
         )
         self._upload_reviews.add(screen)
@@ -2710,6 +2720,8 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
         ctx = self._app_ctx
         vm = screen.vm
         try:
+            if isinstance(screen, SyncModal):
+                screen.validate_controls()
             prepared = vm.prepare()
             if (
                 self._shutdown_task is not None
@@ -2720,7 +2732,9 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
                 self._file_confirmation_invalidated()
                 return
             request = ConfirmRequest(
-                title="Upload reviewed folder objects?",
+                title="Sync reviewed folder objects?"
+                if isinstance(vm, SyncVM)
+                else "Upload reviewed folder objects?",
                 paths=(
                     ConfirmPath("Local source", vm.source_label),
                     ConfirmPath("S3 prefix", vm.destination_label),
@@ -2729,12 +2743,18 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
                     f"{len(prepared.plan.objects)} objects · {prepared.plan.known_bytes} bytes · {prepared.plan.conflicts} conflicts · {prepared.plan.policy.value}",
                     "Empty folders omitted. Published objects remain on cancel.",
                 ),
-                confirm_label="Upload",
-                danger=prepared.plan.policy.value == "overwrite",
+                confirm_label="Sync" if isinstance(vm, SyncVM) else "Upload",
+                danger=(
+                    prepared.plan.conflicts > 0
+                    if isinstance(vm, SyncVM)
+                    else prepared.plan.policy.value == "overwrite"
+                ),
             )
             dialogs = TextualDialogService(self, ctx.confirm_vm, hub=ctx.hub)
             if not await ctx.confirm_vm.ask(request, dialog_service=dialogs):
                 return
+            if isinstance(screen, SyncModal):
+                screen.validate_controls()
             if (
                 self._shutdown_task is not None
                 or self._dual_pane() is not dual
@@ -3383,6 +3403,7 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
                 reasons["pane.object_versions"] = "selection_required"
             if not self._folder_upload_origin_current(origin.folder_upload):
                 reasons["pane.upload_folder"] = "selection_required"
+                reasons["pane.sync_folder"] = "selection_required"
             if len(_build_swap_candidates(self._app_ctx)[0]) <= 1:
                 reasons["app.swap_source"] = "source_missing"
         athena = self._athena_page()
@@ -3722,13 +3743,13 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
         )
         if row is None or not row.available:
             return
-        if action_id == "pane.upload_folder":
+        if action_id in {"pane.upload_folder", "pane.sync_folder"}:
             if self._folder_upload_origin_current(origin.folder_upload) and (
                 origin.focus is None or origin.focus.is_attached
             ):
                 self._app_ctx.focus_coordinator.set_focused_slot(origin.slot)
                 self.set_focus(origin.focus)
-                self._open_folder_upload(origin.folder_upload)
+                self._open_folder_upload(origin.folder_upload, sync=action_id == "pane.sync_folder")
             return
         if action_id == "pane.object_versions":
             if self._versions_origin_current(origin.object_versions) and (
