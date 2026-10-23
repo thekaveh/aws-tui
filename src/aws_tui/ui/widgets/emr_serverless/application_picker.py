@@ -132,13 +132,10 @@ class ApplicationPicker(Widget, can_focus=True):
             self,
             picker: ApplicationPicker,
             is_open: bool,
-            *,
-            intent_epoch: int | None = None,
         ) -> None:
             super().__init__()
             self.picker = picker
             self.is_open = is_open
-            self.intent_epoch = intent_epoch
 
         @property
         def control(self) -> ApplicationPicker:
@@ -201,15 +198,20 @@ class ApplicationPicker(Widget, can_focus=True):
         self._pending_highlight = None
         self._pending_scroll = 0.0
         if was_open and self.parent is not None:
-            intent_epoch = (
-                self._open_intent.observe(self, False) if self._open_intent is not None else None
-            )
-            self.parent.post_message(self.OpenChanged(self, False, intent_epoch=intent_epoch))
+            if self._open_intent is not None:
+                self._open_intent.observe(self, False)
+            self.parent.post_message(self.OpenChanged(self, False))
         if self._sub is not None:
             self._sub.dispose()
             self._sub = None
 
     # ── Public API ──────────────────────────────────────────────────────────
+
+    @property
+    def open_intent(self) -> PickerOpenIntent | None:
+        """The optional coordinator that already observes visibility synchronously."""
+
+        return self._open_intent
 
     @property
     def is_open(self) -> bool:
@@ -231,11 +233,10 @@ class ApplicationPicker(Widget, can_focus=True):
         if not was_open and self._option_list is not None:
             self._option_list.highlighted = None
         self.add_class("-open")
-        intent_epoch = (
-            self._open_intent.observe(self, True) if self._open_intent is not None else None
-        )
-        if not was_open or intent_epoch is not None:
-            self.post_message(self.OpenChanged(self, True, intent_epoch=intent_epoch))
+        if self._open_intent is not None:
+            self._open_intent.observe(self, True)
+        if not was_open or self._open_intent is not None:
+            self.post_message(self.OpenChanged(self, True))
         self.call_after_refresh(partial(self._prepare_open_dropdown, epoch))
 
     def action_close(self) -> None:
@@ -250,10 +251,9 @@ class ApplicationPicker(Widget, can_focus=True):
         self._pending_highlight = None
         self._pending_scroll = 0.0
         if was_open:
-            intent_epoch = (
-                self._open_intent.observe(self, False) if self._open_intent is not None else None
-            )
-            self.post_message(self.OpenChanged(self, False, intent_epoch=intent_epoch))
+            if self._open_intent is not None:
+                self._open_intent.observe(self, False)
+            self.post_message(self.OpenChanged(self, False))
         if was_open and refocus and self.is_attached:
             self.call_after_refresh(partial(self._refocus, epoch))
 

@@ -110,13 +110,10 @@ class ContextPicker(Widget, can_focus=True):
             self,
             picker: ContextPicker,
             is_open: bool,
-            *,
-            intent_epoch: int | None = None,
         ) -> None:
             super().__init__()
             self.picker = picker
             self.is_open = is_open
-            self.intent_epoch = intent_epoch
 
         @property
         def control(self) -> ContextPicker:
@@ -156,6 +153,12 @@ class ContextPicker(Widget, can_focus=True):
         return self._value
 
     @property
+    def open_intent(self) -> PickerOpenIntent | None:
+        """The optional coordinator that already observes visibility synchronously."""
+
+        return self._open_intent
+
+    @property
     def is_open(self) -> bool:
         """Whether the inline option list is currently visible."""
 
@@ -182,10 +185,9 @@ class ContextPicker(Widget, can_focus=True):
         self._focus_intent.advance()
         self.remove_class("-open")
         if was_open and self.parent is not None:
-            intent_epoch = (
-                self._open_intent.observe(self, False) if self._open_intent is not None else None
-            )
-            self.parent.post_message(self.OpenChanged(self, False, intent_epoch=intent_epoch))
+            if self._open_intent is not None:
+                self._open_intent.observe(self, False)
+            self.parent.post_message(self.OpenChanged(self, False))
 
     def set_options(
         self,
@@ -240,7 +242,7 @@ class ContextPicker(Widget, can_focus=True):
         )
         self._open_intent_epoch = intent_epoch
         if not was_open or intent_epoch is not None:
-            self.post_message(self.OpenChanged(self, True, intent_epoch=intent_epoch))
+            self.post_message(self.OpenChanged(self, True))
         self.call_after_refresh(partial(self._focus_options, epoch))
 
     def close(self, *, restore: bool = True, refocus: bool = True) -> None:
@@ -253,10 +255,9 @@ class ContextPicker(Widget, can_focus=True):
         if restore:
             self._restore_highlight()
         if was_open:
-            intent_epoch = (
-                self._open_intent.observe(self, False) if self._open_intent is not None else None
-            )
-            self.post_message(self.OpenChanged(self, False, intent_epoch=intent_epoch))
+            if self._open_intent is not None:
+                self._open_intent.observe(self, False)
+            self.post_message(self.OpenChanged(self, False))
         if was_open and refocus and not self.disabled and self.is_attached:
             self.call_after_refresh(partial(self._refocus, epoch))
 
