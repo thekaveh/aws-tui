@@ -28,7 +28,7 @@ class PickerFocusIntent:
 
 @dataclass(slots=True)
 class PickerOpenIntent:
-    """Page-owned exclusive-open intent with deferred reconciliation epochs."""
+    """Exclusive-open ownership with epochs guarding stale deferred focus."""
 
     epoch: int = 0
     desired: Widget | None = None

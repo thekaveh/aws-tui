@@ -535,11 +535,9 @@ async def test_emr_left_pane_click_selects_and_repoints_detail(tmp_path: Path) -
 async def _held_open(pilot: object, picker: object) -> None:
     """Open ``picker`` and confirm it stays open, without trusting one pause.
 
-    ``EmrServerlessPage._reconcile_open_pickers`` closes every picker that is
-    not the currently desired one, and it runs from a ``call_after_refresh``.
-    A single pause after ``toggle_open`` therefore asserts a state a queued
-    reconcile may still be about to change. Observed on windows-latest, where
-    this precondition failed while macOS passed the same commit.
+    Mount-time loading and focus projection can dismiss an initial open.
+    Confirm the precondition after another settle before exercising the
+    behavior under test; one scheduler pause alone is insufficient.
 
     Re-open until the state survives an extra settle, so the test asserts the
     behaviour it is named for rather than the runner's timing.

@@ -376,25 +376,8 @@ class AthenaPage(DeferredWorkerMixin, HubSubscriberMixin, Widget):
         event.stop()
         if not self._picker_coordination_available():
             return
-        epoch = event.intent_epoch
-        if epoch is None:
-            epoch = self._picker_open_intent.observe(event.picker, event.is_open)
-        self.call_after_refresh(partial(self._reconcile_open_pickers, epoch))
-
-    def _reconcile_open_pickers(self, epoch: int) -> None:
-        if not self._picker_coordination_available() or not self._picker_open_intent.is_current(
-            epoch
-        ):
-            return
-        pickers = tuple(self.query(ContextPicker))
-        desired = self._picker_open_intent.desired
-        if not isinstance(desired, ContextPicker) or (
-            not desired.is_attached or not desired.is_open
-        ):
-            desired = None
-        for picker in pickers:
-            if picker is not desired and picker.is_open:
-                picker.close(refocus=False)
+        if event.picker.open_intent is None:
+            self._picker_open_intent.observe(event.picker, event.is_open)
 
     def _picker_coordination_available(self) -> bool:
         return self.is_running and self.is_attached and self.display

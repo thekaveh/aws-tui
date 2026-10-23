@@ -711,8 +711,8 @@ async def test_switching_named_filters_never_shows_two_open_at_once() -> None:
     ``PickerOpenIntent.observe`` closes the previously desired picker inside
     ``ContextPicker.open`` with no await in between, so no task can ever
     observe two open. Sampling after every scheduler tick of three round trips
-    pins that, so a future change cannot quietly demote it to something the
-    deferred ``_reconcile_open_pickers`` sweep merely cleans up later.
+    pins that, so a future change cannot quietly demote it to eventual
+    exclusivity after a deferred callback.
     """
     vm, _fake = _build_vm()
     await vm.setup()
@@ -954,47 +954,6 @@ async def test_a_loading_overlay_still_counts_as_holding_the_focus() -> None:
 
         assert picker.is_open
         assert app.screen.focused is overlay
-
-
-@pytest.mark.asyncio
-async def test_the_reconcile_sweep_closes_a_picker_that_is_open_but_not_desired() -> None:
-    """The deferred sweep's own contract, which nothing else pinned.
-
-    Mutation testing found `_reconcile_open_pickers` to be the one guard in
-    this area that no test needed: disabling it left all 78 tests green, and
-    instrumenting the full unit+integration+e2e run showed it executes 152
-    times and closes nothing. `PickerOpenIntent.observe` closes the previously
-    desired picker SYNCHRONOUSLY inside `open()`, and every picker on this page
-    is constructed with that intent, so the sweep always arrives with no work.
-
-    Be precise about what this test therefore is: it pins the sweep's
-    CONTRACT, not a product-reachable path. It reaches the open-but-not-desired
-    state through the intent directly, because no user action produces it. The
-    sweep looks vestigial -- it predates the synchronous exclusive close that
-    superseded it -- and removing it belongs in its own change, not in a race
-    fix. Until then this keeps it from being a silent mutation survivor, which
-    is what let its redundancy go unnoticed.
-    """
-    vm, _fake = _build_vm()
-    await vm.setup()
-    app = _GlueApp(vm)
-
-    async with app.run_test() as pilot:
-        await pilot.pause()
-        page = app.query_one(GluePage)
-
-        await page.action_choose_crawler_state()
-        picker = await _settle_named_filter(app, "glue-crawler-state-filter")
-        assert picker.is_open
-
-        epoch = page._picker_open_intent.observe(picker, False)
-        assert page._picker_open_intent.desired is None
-        assert picker.is_open, "the intent drop must not have closed the widget itself"
-
-        page._reconcile_open_pickers(epoch)
-
-        assert not picker.is_open
-        assert _open_picker_ids(page) == ()
 
 
 @pytest.mark.asyncio

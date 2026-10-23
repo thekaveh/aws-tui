@@ -303,37 +303,17 @@ class EmrServerlessPage(DeferredWorkerMixin, Widget):
 
     def on_context_picker_open_changed(self, event: ContextPicker.OpenChanged) -> None:
         event.stop()
-        self._queue_picker_reconcile(event.picker, event.is_open, event.intent_epoch)
+        self._observe_uncoordinated_picker(event.picker, event.is_open)
 
-    def _queue_picker_reconcile(
+    def _observe_uncoordinated_picker(
         self,
-        picker: Widget,
+        picker: ContextPicker | ApplicationPicker,
         is_open: bool,
-        intent_epoch: int | None,
     ) -> None:
         if not self._picker_coordination_available():
             return
-        epoch = intent_epoch
-        if epoch is None:
-            epoch = self._picker_open_intent.observe(picker, is_open)
-        self.call_after_refresh(partial(self._reconcile_open_pickers, epoch))
-
-    def _reconcile_open_pickers(self, epoch: int) -> None:
-        if not self._picker_coordination_available() or not self._picker_open_intent.is_current(
-            epoch
-        ):
-            return
-        pickers: tuple[ContextPicker | ApplicationPicker, ...] = tuple(self.query(ContextPicker))
-        if self._picker is not None:
-            pickers = (*pickers, self._picker)
-        desired = self._picker_open_intent.desired
-        if not isinstance(desired, ContextPicker | ApplicationPicker) or (
-            not desired.is_attached or not desired.is_open
-        ):
-            desired = None
-        for picker in pickers:
-            if picker is not desired and picker.is_open:
-                picker.close(refocus=False)
+        if picker.open_intent is None:
+            self._picker_open_intent.observe(picker, is_open)
 
     def _picker_coordination_available(self) -> bool:
         return self.is_running and self.is_attached and self.display
@@ -359,7 +339,7 @@ class EmrServerlessPage(DeferredWorkerMixin, Widget):
 
     def on_application_picker_open_changed(self, event: ApplicationPicker.OpenChanged) -> None:
         event.stop()
-        self._queue_picker_reconcile(event.picker, event.is_open, event.intent_epoch)
+        self._observe_uncoordinated_picker(event.picker, event.is_open)
 
     def action_cycle_panes_forward(self) -> None:
         self._cycle("right")

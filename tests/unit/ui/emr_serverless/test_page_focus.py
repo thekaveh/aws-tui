@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Callable
 
 import pytest
 from textual.containers import Horizontal
@@ -38,23 +37,6 @@ def _track_picker_focus(
 
     monkeypatch.setattr(picker, callback_name, track_focus)
     return focused
-
-
-def _track_picker_reconcile(
-    page: EmrServerlessPage,
-    settled: Callable[[], bool],
-    monkeypatch: pytest.MonkeyPatch,
-) -> asyncio.Event:
-    reconciled = asyncio.Event()
-    reconcile = page._reconcile_open_pickers
-
-    def track_reconcile(epoch: int) -> None:
-        reconcile(epoch)
-        if page._picker_open_intent.is_current(epoch) and settled():
-            reconciled.set()
-
-    monkeypatch.setattr(page, "_reconcile_open_pickers", track_reconcile)
-    return reconciled
 
 
 async def _wait_for_completions(*completions: asyncio.Event) -> None:
@@ -330,7 +312,7 @@ async def _opened_source_picker(pilot: object, app: EmrPageOpenSourcePickerApp) 
     ``EmrPageOpenSourcePickerApp`` auto-opens the list from a mount-time
     ``call_after_refresh`` that races page setup: while the page is still
     settling ``ContextPicker.open`` is a silent no-op (the picker reports
-    loading) and a queued open-intent reconcile can close it again. Sibling
+    loading), and mount-time focus projection can dismiss it. Sibling
     tests in this file already call ``picker.open()`` themselves for exactly
     that reason.
 
@@ -377,13 +359,8 @@ async def test_keyboard_opening_application_picker_closes_source_picker(
         assert not source_picker.is_open
 
         focus_complete = _track_picker_focus(application_picker, monkeypatch)
-        reconcile_complete = _track_picker_reconcile(
-            page,
-            lambda: application_picker.is_open and not source_picker.is_open,
-            monkeypatch,
-        )
         await pilot.press("enter")
-        await _wait_for_completions(focus_complete, reconcile_complete)
+        await _wait_for_completions(focus_complete)
 
         assert not source_picker.is_open
         assert application_picker.is_open
@@ -403,20 +380,16 @@ async def test_same_turn_programmatic_opens_keep_newest_picker_focused(
 
     async with app.run_test() as pilot:
         await pilot.pause()
-        page = app.query_one(EmrServerlessPage)
         source = app.query_one("#emr-source-header-picker", ContextPicker)
         application = app.query_one(ApplicationPicker)
         pickers = {"source": source, "application": application}
 
         focus_complete = _track_picker_focus(pickers[newest], monkeypatch)
-        reconcile_complete = _track_picker_reconcile(
-            page,
-            lambda: pickers[newest].is_open and not pickers[first].is_open,
-            monkeypatch,
-        )
         pickers[first].open()
         pickers[newest].open()
-        await _wait_for_completions(focus_complete, reconcile_complete)
+        assert pickers[newest].is_open
+        assert not pickers[first].is_open
+        await _wait_for_completions(focus_complete)
 
         assert pickers[newest].is_open
         assert not pickers[first].is_open
