@@ -28,6 +28,7 @@ from vmx.services.dispatcher import Dispatcher
 from aws_tui.infra.connection_resolver import Connection
 from aws_tui.vm._observable import send_value_free
 from aws_tui.vm.messages import ConnectionChangedMessage, ConnectionListChangedMessage
+from aws_tui.vm.selection_projection import selection_changed
 from aws_tui.vm.services_protocol import ServiceDescriptor, ServiceRegistry
 
 #: Canonical id for the synthetic Settings nav peer. Lives on the VM
@@ -229,7 +230,7 @@ class NavMenuVM:
         self._inner.current = None
         for item in self._items:
             item.set_selected(False)
-        send_value_free(self._hub, PropertyChangedMessage.create(self, self.name, "selected_id"))
+        send_value_free(self._hub, selection_changed(self, self.name, self.selected_id))
 
     # ── Internal ────────────────────────────────────────────────────────────
 
@@ -270,7 +271,7 @@ class NavMenuVM:
         self._inner.current = match.inner
         for item in self._items:
             item.set_selected(item is match)
-        send_value_free(self._hub, PropertyChangedMessage.create(self, self.name, "selected_id"))
+        send_value_free(self._hub, selection_changed(self, self.name, self.selected_id))
 
     def _rebuild_items(self, *, notify: bool = True) -> None:
         prior_selected_id = self.selected_id
@@ -324,9 +325,7 @@ class NavMenuVM:
         # Only emit the user-visible `selected_id` notification if the
         # rebuild actually changed which service is current.
         if notify and self._inner.current is None and prior_selected_id is not None:
-            send_value_free(
-                self._hub, PropertyChangedMessage.create(self, self.name, "selected_id")
-            )
+            send_value_free(self._hub, selection_changed(self, self.name, self.selected_id))
 
     def _desired_service_ids(self) -> list[str]:
         """Service ids the current connection supports, in registry order."""

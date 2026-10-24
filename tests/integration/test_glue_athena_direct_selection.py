@@ -390,3 +390,94 @@ async def test_athena_pending_nondefault_database_survives_slow_metadata_refresh
             await ctx.root_vm.content_host.shutdown()
         ctx.root_vm.dispose()
         ctx.log_sink.close()
+
+
+@pytest.mark.parametrize("scheduling", ["normal", "deferred"])
+async def test_normal_run_async_bottom_handoff_keeps_exact_context_and_visible_sql(
+    tmp_path: Path, scheduling: str
+) -> None:
+    """Normal startup never installs run_test's private App message-pump task."""
+    ctx = build_app_context(config_dir=tmp_path / "config", cache_dir=tmp_path / "cache", demo=True)
+    target = _seed_nondefault_glue_table(ctx)
+    client = _athena_client(ctx, "demo-dev")
+    app = AwsTuiApp(ctx)
+    loop = asyncio.get_running_loop()
+    original_factory = loop.get_task_factory()
+    completed = False
+
+    async def journey(pilot: Pilot[None]) -> None:
+        nonlocal completed
+        if scheduling == "deferred":
+            loop.set_task_factory(None)
+        assert app._task is None
+        try:
+            glue = await _open_service(ctx, app, pilot, "glue")
+            assert isinstance(glue, GluePageVM)
+            await _wait_for_startup_warning(app, pilot)
+            databases = app.query_one("#glue-databases-pane-options", OptionList)
+            await _choose_visible_option(pilot, databases, target.database_name, "mouse")
+            await wait_until(
+                lambda: (
+                    glue.catalog.selected_database_name == target.database_name
+                    and app.query_one("#glue-tables-pane-options", OptionList).option_count == 2
+                ),
+                what="normal-launch Glue database tables",
+            )
+            await drain_workers(app)
+            await pilot.pause()
+            tables = app.query_one("#glue-tables-pane-options", OptionList)
+            await _choose_visible_option(pilot, tables, target.table_name, "mouse")
+            await wait_until(
+                lambda: (
+                    glue.catalog.table_detail is not None
+                    and glue.catalog.table_detail.summary.ref == target
+                ),
+                what="normal-launch selected Iceberg metadata",
+            )
+            await drain_workers(app)
+            await pilot.pause()
+            label = next(
+                chip.query_one(".hint-label", Static)
+                for chip in app.query_one(HintLegend).query(".hint-chip")
+                if chip.action.action_id == "glue.query_in_athena" and chip.action.enabled
+            )
+            assert await pilot.click(label)
+            await wait_until(
+                lambda: (
+                    isinstance(ctx.root_vm.content_host.current, AthenaPageVM)
+                    and not app._table_navigation_tasks
+                ),
+                what="normal-launch bottom-command handoff",
+            )
+            await drain_workers(app)
+            await pilot.pause()
+            athena = ctx.root_vm.content_host.current
+            assert isinstance(athena, AthenaPageVM)
+            sql = 'SELECT * FROM "review_glue_database"."review_selected_iceberg" LIMIT 5'
+            assert athena.context.connection_name == target.connection_name
+            assert athena.context.region == target.region
+            assert athena.context.catalog == target.catalog_name
+            assert athena.context.database == target.database_name
+            assert athena.context.workgroup == "dev-analytics"
+            assert athena.workgroup_detail is not None
+            assert athena.workgroup_detail.output_location == "s3://athena-results/dev/"
+            assert athena.selected_table_ref == target
+            assert app.query_one("#athena-database", ContextPicker).value == target.database_name
+            assert athena.query.sql == sql
+            assert app.query_one("#athena-editor", TextArea).text == sql
+            assert not any(call.method == "start_query" for call in client.calls)
+            assert app._task is None
+            completed = True
+        finally:
+            app.exit()
+
+    try:
+        await app.run_async(headless=True, size=(120, 40), auto_pilot=journey)
+        assert app._exception is None
+        assert completed, "normal application exited before completing the actual handoff"
+    finally:
+        loop.set_task_factory(original_factory)
+        with contextlib.suppress(Exception):
+            await ctx.root_vm.content_host.shutdown()
+        ctx.root_vm.dispose()
+        ctx.log_sink.close()
