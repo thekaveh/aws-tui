@@ -1212,7 +1212,7 @@ async def test_catalog_change_invalidates_results_before_new_context_load_finish
     await page.query.execute()
     assert page.results.rows == (("1",),)
 
-    change = asyncio.create_task(page.select_catalog("federated"))
+    change = asyncio.create_task(page.select_catalog("federated", confirm=_accept_sql_replacement))
     await asyncio.sleep(0)
 
     assert page.results.rows == ()
@@ -1266,8 +1266,9 @@ async def test_source_editor_fallback_validates_before_clearing_context(invalid)
             await candidate.select_workgroup("not-an-available-workgroup")
             assert candidate.context_choice_revision == revision
             assert not candidate.query.execute_command.can_execute()
-            # A new explicit context choice can recover the editor normally.
-            await candidate.select_workgroup("primary")
+            # Explicit confirmation permits context recovery while an empty
+            # table list retains the authored editor and its provenance.
+            await candidate.select_workgroup("primary", confirm=_accept_sql_replacement)
             assert candidate.query.sql == "SELECT 'original editor'"
             assert candidate.query.execute_command.can_execute()
     finally:

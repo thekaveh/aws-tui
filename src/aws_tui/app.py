@@ -7878,7 +7878,7 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
                 if page is None or page.vm is not target:
                     raise RuntimeError("Athena destination view is unavailable")
                 page.refresh_from_vm()
-                await self.wait_for_refresh()
+                await self.screen.wait_for_refresh()
                 if await self._restore_superseded_table_handoff(
                     generation, snapshot, input_is_owned=destination_input_is_owned
                 ):
@@ -7904,7 +7904,7 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
                 if not isinstance(target, GluePageVM):
                     raise RuntimeError("Glue destination is unavailable")
                 await target.open_table(ref)
-            await self.wait_for_refresh()
+            await self.screen.wait_for_refresh()
             await self._restore_superseded_table_handoff(
                 generation, snapshot, input_is_owned=destination_input_is_owned
             )
@@ -8228,7 +8228,7 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
         task = self._app_ctx.root_vm.content_host._setup_task
         if task is not None and not task.done():
             await task
-        await self.wait_for_refresh()
+        await self.screen.wait_for_refresh()
 
     async def _restore_table_handoff(
         self,
@@ -8332,7 +8332,7 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
             return False
         if not self._table_handoff_should_restore(generation):
             return False
-        await self.wait_for_refresh()
+        await self.screen.wait_for_refresh()
         return True
 
     async def _open_s3_location_request(
@@ -8860,7 +8860,7 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
         # The legend's trailing globals (themes/help/quit) are
         # independent of this.
         ctx.root_vm.chrome.hint_legend.set_current_service(selected)
-        if self.service_navigation.consume_selection(selected):
+        if self.service_navigation.consume_selection(selected, msg):
             return
         generation = self._supersede_table_navigation()
         # Skip the seed selected_id change that on_mount fires while

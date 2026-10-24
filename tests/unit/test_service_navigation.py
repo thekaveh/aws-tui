@@ -200,18 +200,26 @@ async def test_rapid_service_and_source_ownership_keeps_broader_table_rollback_r
     assert not nav.claim_table(second)
 
 
-async def test_selection_suppression_is_task_and_service_scoped():
+async def test_selection_projection_is_publication_and_service_scoped():
+    from aws_tui.vm.selection_projection import selection_changed
+
     nav = ServiceNavigation()
     with nav.suppress_selection("athena"):
-        assert not nav.consume_selection("glue")
+        projected = selection_changed(object(), "menu", "athena")
+        unrelated = selection_changed(object(), "menu", "glue")
 
-        async def other_task():
-            return nav.consume_selection("athena")
+    # A queued projection retains its origin outside its creation scope/task.
+    async def delivered_later():
+        return nav.consume_selection("athena", projected)
 
-        assert not await asyncio.create_task(other_task())
-        assert nav.consume_selection("athena")
-        assert not nav.consume_selection("athena")
-    assert not nav.consume_selection("athena")
+    assert await asyncio.create_task(delivered_later())
+    assert not nav.consume_selection("glue", unrelated)
+    assert not ServiceNavigation().consume_selection("athena", projected)
+    user = selection_changed(object(), "menu", "athena")
+    assert not nav.consume_selection("athena", user)
+    assert not nav.consume_selection(
+        "athena", PropertyChangedMessage.create(object(), "menu", "selected_id")
+    )
 
 
 async def test_advance_cancels_without_joining_a_handoff_needing_the_service_lock():
@@ -300,7 +308,7 @@ async def test_restoration_uses_real_menu_and_suppresses_its_own_selection(curre
                 return
             if menu.selected_id is None:
                 return
-            consumed = nav.consume_selection(menu.selected_id)
+            consumed = nav.consume_selection(menu.selected_id, message)
             suppressed.append(consumed)
             if not consumed:
                 nav.supersede()
@@ -372,3 +380,87 @@ async def test_closed_intake_keeps_transfer_drain_before_rejecting_mount():
     nav.close_intake()
     assert not await nav.mount_service("athena", ports=harness.ports())
     assert harness.events == ["cancel-transfers"]
+
+
+@pytest.mark.skipif(not hasattr(asyncio, "eager_task_factory"), reason="Python 3.12 eager tasks")
+async def test_reentrant_eager_handoff_projection_preserves_owner_and_later_user_supersedes():
+    from aws_tui.app import AwsTuiApp
+    from aws_tui.domain.data_catalog import TableRef
+    from aws_tui.vm.messages import OpenAthenaTableRequest
+
+    nav = ServiceNavigation()
+    registry = ServiceRegistry()
+    for service in ["glue", "athena"]:
+        registry.register(
+            SimpleNamespace(
+                descriptor=ServiceDescriptor(id=service, label=service, icon="s"),
+                supports=lambda conn: True,
+                build_vm=lambda conn: object(),
+            )
+        )
+    hub = MessageHub()
+    menu = NavMenuVM(registry=registry, hub=hub, dispatcher=NULL_DISPATCHER)
+    menu.construct()
+    hub.send(ConnectionChangedMessage(connection=connection(), auth_state=TokenState.CONNECTED))
+    menu.switch_service_command.execute("glue")
+    app = SimpleNamespace(
+        service_navigation=nav,
+        _app_ctx=SimpleNamespace(
+            root_vm=SimpleNamespace(
+                services_menu=menu,
+                chrome=SimpleNamespace(
+                    hint_legend=SimpleNamespace(set_current_service=lambda _: None)
+                ),
+            )
+        ),
+        _boot_in_flight=False,
+        _supersede_table_navigation=nav.supersede,
+        _run_lifecycle_worker=lambda *args, **kwargs: None,
+        _mount_external_navigation=lambda *args: None,
+    )
+    entered = asyncio.Event()
+    release = asyncio.Event()
+    tasks = []
+    generation = nav.advance("table")
+
+    async def handoff():
+        with nav.suppress_selection("athena"):
+            menu.switch_service_command.execute("athena")
+            entered.set()
+            await release.wait()
+
+    def route(message):
+        if isinstance(message, OpenAthenaTableRequest):
+            tasks.append(asyncio.create_task(handoff()))
+        else:
+            AwsTuiApp._on_nav_selection_changed(app, message)
+
+    subscription = hub.messages.subscribe(on_next=route)
+    loop = asyncio.get_running_loop()
+    original_factory = loop.get_task_factory()
+    try:
+        loop.set_task_factory(asyncio.eager_task_factory)
+        hub.send(
+            OpenAthenaTableRequest(
+                table_ref=TableRef(
+                    connection_name="dev",
+                    region="us-east-1",
+                    catalog_name="AwsDataCatalog",
+                    database_name="db",
+                    table_name="table",
+                )
+            )
+        )
+        assert entered.is_set(), "handoff must publish while the outer MessageHub drain is active"
+        assert nav.owns("table", generation)
+        # The user's later away-and-back choice must not inherit suppression.
+        menu.switch_service_command.execute("glue")
+        assert nav.owns("external", generation + 1)
+        menu.switch_service_command.execute("athena")
+        assert nav.owns("external", generation + 2)
+    finally:
+        loop.set_task_factory(original_factory)
+        release.set()
+        await asyncio.gather(*tasks, return_exceptions=True)
+        subscription.dispose()
+        menu.dispose()

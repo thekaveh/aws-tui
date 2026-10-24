@@ -17,6 +17,7 @@ from aws_tui.demo.in_memory_glue import InMemoryGlue
 from aws_tui.domain.athena import AthenaWorkgroupSummary
 from aws_tui.domain.data_catalog import TableFormat, TableRef
 from aws_tui.services.glue.service import GlueService
+from aws_tui.ui.widgets.confirm_modal import ConfirmModal
 from aws_tui.ui.widgets.context_picker import ContextPicker
 from aws_tui.ui.widgets.hint_legend import HintLegend
 from aws_tui.ui.widgets.toast import Toast
@@ -305,13 +306,15 @@ async def test_glue_immediate_bottom_athena_uses_visible_table_during_metadata_d
 
 
 @pytest.mark.parametrize("size", [(80, 24), (120, 40)])
+@pytest.mark.parametrize("answer", [False, True])
 async def test_athena_pending_nondefault_database_survives_slow_metadata_refresh(
-    tmp_path: Path, size: tuple[int, int], monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, size: tuple[int, int], monkeypatch: pytest.MonkeyPatch, answer: bool
 ) -> None:
     ctx = build_app_context(config_dir=tmp_path / "config", cache_dir=tmp_path / "cache", demo=True)
     client = _athena_client(ctx, "demo-dev")
     target = "review_pending_database"
     client.add_database("dev-analytics", "DevDataCatalog", target)
+    client.add_table("dev-analytics", "DevDataCatalog", target, "chosen_table")
     app = AwsTuiApp(ctx)
     entered = asyncio.Event()
     release = asyncio.Event()
@@ -326,6 +329,7 @@ async def test_athena_pending_nondefault_database_survives_slow_metadata_refresh
             assert athena.context.workgroup == "dev-analytics"
             assert athena.context.catalog == "DevDataCatalog"
             assert athena.context.database != target
+            original_context = athena.context
             assert target in {row.ref.database_name for row in athena.databases}
             editor = app.query_one("#athena-editor", TextArea)
             assert await pilot.click(editor)
@@ -370,13 +374,28 @@ async def test_athena_pending_nondefault_database_survives_slow_metadata_refresh
                 # database choice until the user's explicit Enter commit.
                 assert options.highlighted == index
                 await pilot.press("enter")
+                await wait_until(
+                    lambda: isinstance(app.screen, ConfirmModal),
+                    what="modified SQL confirmation before database replacement",
+                )
+                assert athena.context == original_context
+                assert athena.query.sql == "SELECT 7"
+                await pilot.press(*(("right", "enter") if answer else ("escape",)))
                 await drain_workers(app)
                 await pilot.pause()
-                assert athena.context.database == target
-                assert picker.value == target
+                if answer:
+                    assert athena.context.database == target
+                    assert picker.value == target
+                    assert athena.selected_table_ref.table_name == "chosen_table"
+                    expected = f'SELECT * FROM "{target}"."chosen_table" LIMIT 5'
+                else:
+                    assert athena.context == original_context
+                    assert picker.value == original_context.database
+                    assert athena.selected_table_ref is None
+                    expected = "SELECT 7"
                 assert not picker.is_open
-                assert athena.query.sql == "SELECT 7"
-                assert editor.text == "SELECT 7"
+                assert athena.query.sql == expected
+                assert editor.text == expected
                 assert athena.query.execution_ref is None
                 assert not any(call.method == "start_query" for call in client.calls)
             finally:
@@ -386,6 +405,171 @@ async def test_athena_pending_nondefault_database_survives_slow_metadata_refresh
         if metadata_task is not None:
             with contextlib.suppress(Exception):
                 await metadata_task
+        with contextlib.suppress(Exception):
+            await ctx.root_vm.content_host.shutdown()
+        ctx.root_vm.dispose()
+        ctx.log_sink.close()
+
+
+@pytest.mark.parametrize("scheduling", ["normal", "deferred"])
+async def test_normal_run_async_bottom_handoff_keeps_exact_context_and_visible_sql(
+    tmp_path: Path, scheduling: str
+) -> None:
+    """Normal startup never installs run_test's private App message-pump task."""
+    ctx = build_app_context(config_dir=tmp_path / "config", cache_dir=tmp_path / "cache", demo=True)
+    target = _seed_nondefault_glue_table(ctx)
+    client = _athena_client(ctx, "demo-dev")
+    changed_database = 'normal"database'
+    changed_table = 'first"table'
+    changed_catalog = "NormalLaunchCatalog"
+    client.add_database("dev-analytics", "AwsDataCatalog", changed_database)
+    client.add_table("dev-analytics", "AwsDataCatalog", changed_database, changed_table)
+    client.add_catalog("dev-analytics", changed_catalog)
+    client.add_database("dev-analytics", changed_catalog, "catalog_database")
+    client.add_table("dev-analytics", changed_catalog, "catalog_database", "catalog_table")
+    app = AwsTuiApp(ctx)
+    loop = asyncio.get_running_loop()
+    original_factory = loop.get_task_factory()
+    completed = False
+
+    async def journey(pilot: Pilot[None]) -> None:
+        nonlocal completed
+        if scheduling == "deferred":
+            loop.set_task_factory(None)
+        assert app._task is None
+        try:
+            glue = await _open_service(ctx, app, pilot, "glue")
+            assert isinstance(glue, GluePageVM)
+            await _wait_for_startup_warning(app, pilot)
+            databases = app.query_one("#glue-databases-pane-options", OptionList)
+            await _choose_visible_option(pilot, databases, target.database_name, "mouse")
+            await wait_until(
+                lambda: (
+                    glue.catalog.selected_database_name == target.database_name
+                    and app.query_one("#glue-tables-pane-options", OptionList).option_count == 2
+                ),
+                what="normal-launch Glue database tables",
+            )
+            await drain_workers(app)
+            await pilot.pause()
+            tables = app.query_one("#glue-tables-pane-options", OptionList)
+            await _choose_visible_option(pilot, tables, target.table_name, "mouse")
+            await wait_until(
+                lambda: (
+                    glue.catalog.table_detail is not None
+                    and glue.catalog.table_detail.summary.ref == target
+                ),
+                what="normal-launch selected Iceberg metadata",
+            )
+            await drain_workers(app)
+            await pilot.pause()
+            label = next(
+                chip.query_one(".hint-label", Static)
+                for chip in app.query_one(HintLegend).query(".hint-chip")
+                if chip.action.action_id == "glue.query_in_athena" and chip.action.enabled
+            )
+            assert await pilot.click(label)
+            await wait_until(
+                lambda: (
+                    isinstance(ctx.root_vm.content_host.current, AthenaPageVM)
+                    and not app._table_navigation_tasks
+                ),
+                what="normal-launch bottom-command handoff",
+            )
+            await drain_workers(app)
+            await pilot.pause()
+            athena = ctx.root_vm.content_host.current
+            assert isinstance(athena, AthenaPageVM)
+            sql = 'SELECT * FROM "review_glue_database"."review_selected_iceberg" LIMIT 5'
+            assert athena.context.connection_name == target.connection_name
+            assert athena.context.region == target.region
+            assert athena.context.catalog == target.catalog_name
+            assert athena.context.database == target.database_name
+            assert athena.context.workgroup == "dev-analytics"
+            assert athena.workgroup_detail is not None
+            assert athena.workgroup_detail.output_location == "s3://athena-results/dev/"
+            assert athena.selected_table_ref == target
+            assert app.query_one("#athena-database", ContextPicker).value == target.database_name
+            assert athena.query.sql == sql
+            assert app.query_one("#athena-editor", TextArea).text == sql
+            assert not any(call.method == "start_query" for call in client.calls)
+            assert app._task is None
+            for selector, value, expected_ref, expected_sql in (
+                (
+                    "#athena-database",
+                    changed_database,
+                    TableRef(
+                        "AwsDataCatalog",
+                        changed_database,
+                        changed_table,
+                        target.connection_name,
+                        target.region,
+                    ),
+                    'SELECT * FROM "normal""database"."first""table" LIMIT 5',
+                ),
+                (
+                    "#athena-catalog",
+                    changed_catalog,
+                    TableRef(
+                        changed_catalog,
+                        "catalog_database",
+                        "catalog_table",
+                        target.connection_name,
+                        target.region,
+                    ),
+                    'SELECT * FROM "catalog_database"."catalog_table" LIMIT 5',
+                ),
+            ):
+                picker = app.query_one(selector, ContextPicker)
+                assert await pilot.click(picker)
+                await wait_until(
+                    lambda picker=picker: picker.is_open and picker.query_one(OptionList).has_focus,
+                    what=f"normal-launch {selector} mouse-opened options",
+                )
+                await pilot.pause()
+                await _choose_visible_option(pilot, picker.query_one(OptionList), value, "mouse")
+                try:
+                    await wait_until(
+                        lambda expected_ref=expected_ref, expected_sql=expected_sql: (
+                            athena.selected_table_ref == expected_ref
+                            and app.query_one("#athena-editor", TextArea).text == expected_sql
+                        ),
+                        what=f"normal-launch {selector} automatic table and visible SQL",
+                    )
+                except AssertionError as exc:
+                    raise AssertionError(
+                        f"picker={picker.value!r}, context={athena.context!r}, "
+                        f"table={athena.selected_table_ref!r}, sql={athena.query.sql!r}, "
+                        f"tables={athena.tables.state!r}/{athena.tables.error_text!r}, "
+                        f"visible={app.query_one('#athena-editor', TextArea).text!r}"
+                    ) from exc
+                await drain_workers(app)
+                await pilot.pause()
+                assert picker.value == value
+                assert not picker.is_open
+                assert athena.context.catalog == expected_ref.catalog_name
+                assert athena.context.database == expected_ref.database_name
+                assert athena.context.connection_name == target.connection_name
+                assert athena.context.region == target.region
+                assert athena.context.workgroup == "dev-analytics"
+                assert athena.query.context == athena.context
+                assert athena.query.sql == expected_sql
+                assert (
+                    app.query_one("#athena-table", ContextPicker).value == expected_ref.table_name
+                )
+                assert athena.workgroup_detail.output_location == "s3://athena-results/dev/"
+                assert not any(call.method == "start_query" for call in client.calls)
+                assert app._task is None
+            completed = True
+        finally:
+            app.exit()
+
+    try:
+        await app.run_async(headless=True, size=(120, 40), auto_pilot=journey)
+        assert app._exception is None
+        assert completed, "normal application exited before completing the actual handoff"
+    finally:
+        loop.set_task_factory(original_factory)
         with contextlib.suppress(Exception):
             await ctx.root_vm.content_host.shutdown()
         ctx.root_vm.dispose()

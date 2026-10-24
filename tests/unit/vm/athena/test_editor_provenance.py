@@ -12,7 +12,11 @@ from aws_tui.vm.service_source_vm import ServiceSelectionStore
 from tests.athena_drafts_helpers import CTX, record, runtime_at
 from tests.helpers import wait_until
 from tests.unit.vm.athena.test_draft_recovery import yes
-from tests.unit.vm.athena.test_page_vm import PageClient, make_page_vm
+from tests.unit.vm.athena.test_page_vm import (
+    PageClient,
+    _accept_sql_replacement,
+    make_page_vm,
+)
 
 
 @pytest.mark.parametrize("staged", [False, True])
@@ -28,7 +32,8 @@ async def test_replacement_preserves_foreign_draft_origin_and_run_guard(tmp_path
         origin = source.context
         sql = "SELECT * FROM unqualified_table"
         source.query.set_sql(sql)
-        await source.select_database("other_database")
+        # An accepted empty-table context keeps custom SQL bound to its origin.
+        await source.select_database("other_database", confirm=_accept_sql_replacement)
         assert source.query.draft_execution_blocked
         snapshot = source.export_snapshot()
         await source.shutdown()
@@ -55,7 +60,7 @@ async def test_replacement_preserves_foreign_draft_origin_and_run_guard(tmp_path
         await replacement.query.execute()
         assert client.start_calls == []
 
-        await replacement.select_database(origin.database)
+        await replacement.select_database(origin.database, confirm=_accept_sql_replacement)
         assert not replacement.query.draft_execution_blocked
         await replacement.query.execute()
         assert len(client.start_calls) == 1
@@ -143,7 +148,7 @@ async def test_restored_foreign_editor_can_be_explicitly_cleared_and_retyped(tmp
     try:
         await source.setup()
         source.query.set_sql("SELECT * FROM original_table")
-        await source.select_database("other_database")
+        await source.select_database("other_database", confirm=_accept_sql_replacement)
         snapshot = source.export_snapshot()
         await target.setup()
         await target.restore_snapshot(snapshot)
@@ -263,7 +268,7 @@ async def test_pending_foreign_origin_clear_keeps_its_exact_deletion_target(tmp_
         origin = source.context
         source.query.set_sql("SELECT 'ORIGINAL'")
         await source._draft_session.flush(deadline=asyncio.get_running_loop().time() + 2)
-        await source.select_database("other_database")
+        await source.select_database("other_database", confirm=_accept_sql_replacement)
         other = record(source.context.cache_key, "SELECT 'PROTECTED_OTHER'")
         assert store.save(other, permit=DraftPermit()).code is None
         monkeypatch.setattr("aws_tui.vm.athena.drafts_vm.DEBOUNCE_SECONDS", 3600)
@@ -472,13 +477,13 @@ async def test_transferred_unsaved_editor_can_recover_exact_original_draft(tmp_p
         origin = source.context
         source.query.set_sql("SELECT 'SAVED_ORIGINAL'")
         await source._draft_session.flush(deadline=asyncio.get_running_loop().time() + 2)
-        await source.select_database("other_database")
+        await source.select_database("other_database", confirm=_accept_sql_replacement)
         source.query.set_sql("SELECT 'UNSAVED_EDITOR'")
         snapshot = source.export_snapshot()
         await target.setup()
         await target.restore_snapshot(snapshot)
         assert target.query.draft_execution_blocked
-        await target.select_database(origin.database)
+        await target.select_database(origin.database, confirm=_accept_sql_replacement)
 
         assert await target.restore_draft(draft_id(origin.cache_key), yes)
 

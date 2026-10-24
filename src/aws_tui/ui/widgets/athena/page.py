@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Awaitable, Callable
 from functools import partial
 from typing import ClassVar, cast
 
@@ -358,17 +359,17 @@ class AthenaPage(DeferredWorkerMixin, HubSubscriberMixin, Widget):
             )
         elif event.control.id == "athena-workgroup" and value != self._vm.context.workgroup:
             self._run_lifecycle_worker(
-                partial(self._vm.select_workgroup, value),
+                partial(self._select_context_from_picker, self._vm.select_workgroup, value),
                 group="athena-context",
             )
         elif event.control.id == "athena-catalog" and value != self._vm.context.catalog:
             self._run_lifecycle_worker(
-                partial(self._vm.select_catalog, value),
+                partial(self._select_context_from_picker, self._vm.select_catalog, value),
                 group="athena-context",
             )
         elif event.control.id == "athena-database" and value != self._vm.context.database:
             self._run_lifecycle_worker(
-                partial(self._vm.select_database, value),
+                partial(self._select_context_from_picker, self._vm.select_database, value),
                 group="athena-context",
             )
 
@@ -415,6 +416,15 @@ class AthenaPage(DeferredWorkerMixin, HubSubscriberMixin, Widget):
         return await ask_sql_confirmation(
             self, hub=self._hub, dispatcher=self._vm.dispatcher, message=message
         )
+
+    async def _select_context_from_picker(
+        self, selector: Callable[..., Awaitable[None]], value: str
+    ) -> None:
+        try:
+            await selector(value, confirm=self._confirm_sql)
+        finally:
+            if self.is_mounted and self.is_attached and self.is_running:
+                self.call_after_refresh(self._refresh_page)
 
     async def _select_table_from_picker(self, value: str) -> None:
         try:
@@ -861,6 +871,7 @@ class AthenaPage(DeferredWorkerMixin, HubSubscriberMixin, Widget):
             not self._picker_coordination_available()
             or self._vm.active_view != "query"
             or self._vm.query.is_context_resolving
+            or self._vm.context_tables_managed
         ):
             return
         context = self._vm.context
@@ -868,7 +879,13 @@ class AthenaPage(DeferredWorkerMixin, HubSubscriberMixin, Widget):
         if not all(context.cache_key) or request == self._table_request_context:
             return
         self._table_request_context = request
-        self._run_lifecycle_worker(self._vm.tables.refresh, group="athena-tables")
+        self._run_lifecycle_worker(self._refresh_tables_for_view, group="athena-tables")
+
+    async def _refresh_tables_for_view(self) -> None:
+        # A queued startup request may run after an explicit parent choice has
+        # taken ownership of the listing. Recheck when the worker actually runs.
+        if not self._vm.context_tables_managed:
+            await self._vm.tables.refresh()
 
     def _on_focus_availability_changed(
         self,

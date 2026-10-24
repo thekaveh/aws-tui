@@ -20,7 +20,7 @@ from aws_tui.vm.chrome.confirm_vm import ConfirmationVM
 from tests.helpers import drain_workers, focus_and_settle, wait_until
 from tests.unit.ui.athena.test_page import _AthenaApp
 from tests.unit.vm.athena.test_completion_vm import client
-from tests.unit.vm.athena.test_page_vm import make_page_vm
+from tests.unit.vm.athena.test_page_vm import _accept_sql_replacement, make_page_vm
 
 
 @asynccontextmanager
@@ -349,7 +349,9 @@ async def test_context_change_while_completion_picker_open_cannot_apply_old_choi
             for i in range(listing.option_count)
             if "amount" in str(listing.get_option_at_index(i).prompt)
         )
-        await vm.select_database("other")
+        # Accept the empty-table context change while preserving the authored
+        # SQL, so the stale completion decision is still exercised.
+        await vm.select_database("other", confirm=_accept_sql_replacement)
         await choose(app, pilot, choice)
         await drain_workers(app)
         assert vm.query.context.database == "other"
