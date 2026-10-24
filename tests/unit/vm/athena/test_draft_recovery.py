@@ -13,7 +13,11 @@ from aws_tui.infra.athena_draft_store import DraftPermit, DraftStoreResult
 from aws_tui.infra.crash_dump import CrashDump
 from aws_tui.infra.log_sink import LogSink
 from tests.athena_drafts_helpers import record, runtime_at
-from tests.unit.vm.athena.test_page_vm import PageClient, make_page_vm
+from tests.unit.vm.athena.test_page_vm import (
+    PageClient,
+    _accept_sql_replacement,
+    make_page_vm,
+)
 
 WARNING = "Draft context is unavailable or changed. Select the exact original context and retry."
 
@@ -92,15 +96,17 @@ async def test_restore_installs_only_sql_and_binds_origin(tmp_path, monkeypatch)
     assert page.results.rows == ()
     assert page.query.execution_ref is None
     assert client.start_calls == []
-    await page.select_workgroup("analysts")
+    # Accept a context change with no tables to preserve the authored draft
+    # and continue exercising its exact-origin execution guard.
+    await page.select_workgroup("analysts", confirm=_accept_sql_replacement)
     assert page.query.draft_execution_blocked
     page.keep_current_editor()
     assert page.query.draft_execution_blocked
     await page.query.execute_command.execute_async()
     assert client.start_calls == []
-    await page.select_workgroup("primary")
+    await page.select_workgroup("primary", confirm=_accept_sql_replacement)
     assert not page.query.draft_execution_blocked
-    await page.select_workgroup("analysts")
+    await page.select_workgroup("analysts", confirm=_accept_sql_replacement)
     page.query.set_sql("")
     assert not page.query.draft_execution_blocked
     await close(page, runtime)
@@ -124,7 +130,7 @@ async def test_confirmation_races_refuse_replacement(tmp_path, monkeypatch, chan
     if change == "editor":
         page.query.set_sql("SELECT 'NEWER'")
     elif change == "context":
-        await page.select_workgroup("analysts")
+        await page.select_workgroup("analysts", confirm=_accept_sql_replacement)
     elif change == "delete":
         assert await runtime.delete(saved.id)
     elif change == "record":

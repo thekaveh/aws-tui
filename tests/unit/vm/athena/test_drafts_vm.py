@@ -10,6 +10,7 @@ from aws_tui.domain.query import QueryContext
 from aws_tui.infra.athena_draft_store import DraftPermit, DraftStoreResult
 from tests.athena_drafts_helpers import CTX, record, runtime_at, store_at
 from tests.helpers import wait_until
+from tests.unit.vm.athena.test_page_vm import _accept_sql_replacement
 
 
 async def test_latest_edit_is_saved_under_its_captured_context(tmp_path):
@@ -1182,7 +1183,7 @@ async def _unschedulable_page(runtime, *, incomplete):
         await page.setup()
         page.query.set_sql("SELECT 1")
         await page._draft_session.flush(deadline=asyncio.get_running_loop().time() + 2)
-        await page.select_workgroup("analysts")
+        await page.select_workgroup("analysts", confirm=_accept_sql_replacement)
     page.query.set_sql("SELECT 'UNSCHEDULED_PRIVATE'")
     assert page.query.draft_state == "context_required"
     return page, client
@@ -1257,7 +1258,7 @@ async def test_unschedulable_retired_origin_supersession(tmp_path, monkeypatch, 
         assert newer.query.sql == "SELECT 1"
     else:
         if resolution == "other_origin":
-            await newer.select_workgroup("analysts")
+            await newer.select_workgroup("analysts", confirm=_accept_sql_replacement)
         newer.query.set_sql("SELECT 3")
     await newer.shutdown()
     newer.dispose()
@@ -1359,7 +1360,7 @@ async def test_unschedulable_revision_survives_older_physical_completion(
     runtime._prepare_final(page._draft_session)
     try:
         assert entered.wait(1)
-        await page.select_workgroup("analysts")
+        await page.select_workgroup("analysts", confirm=_accept_sql_replacement)
         page.query.set_sql("SELECT unschedulable")
         await page.shutdown()
         page.dispose()

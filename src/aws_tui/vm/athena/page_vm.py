@@ -264,6 +264,8 @@ class AthenaPageVM:
         )
         self.tables = AthenaTablesVM(client=client, context=self._context, hub=hub)
         self._selected_table_ref: TableRef | None = None
+        self._context_table_selection_revision: int | None = None
+        self._context_table_listing_revision: int | None = None
         self._table_query_prime: tuple[TableRef, int | None] | None = None
         self._table_query_prime_token: object | None = None
         self._table_query_prime_sql = ""
@@ -303,7 +305,9 @@ class AthenaPageVM:
         """Count explicit context choices, excluding background discovery."""
         return self._context_choice_revision
 
-    async def select_table(self, table_name: str, *, confirm: Confirm | None = None) -> None:
+    async def select_table(
+        self, table_name: str, *, confirm: Confirm | None = None, activate_query: bool = True
+    ) -> None:
         if (
             not self._is_alive()
             or self.tables.context != self._context
@@ -364,7 +368,8 @@ class AthenaPageVM:
         ):
             return
         self._selected_table_ref = ref
-        self._select_view_state("query")
+        if activate_query:
+            self._select_view_state("query")
         self._notify("selected_table_ref")
 
     @property
@@ -1236,48 +1241,159 @@ class AthenaPageVM:
             ),
         )
 
-    async def select_workgroup(self, workgroup: str) -> None:
-        if not self._is_alive():
+    @property
+    def context_tables_managed(self) -> bool:
+        """Explicit choices own their listing; the view only loads ordinary startup."""
+        return (
+            self._context_table_selection_revision is not None
+            or self._context_table_listing_revision == self.tables.context_revision
+        )
+
+    async def select_workgroup(self, workgroup: str, *, confirm: Confirm | None = None) -> None:
+        if not self._is_alive() or not any(row.name == workgroup for row in self.workgroups):
             return
-        if not any(row.name == workgroup for row in self.workgroups):
+        await self._select_context_tables(
+            lambda: self._select_workgroup(
+                workgroup,
+                preferred_catalog=self._selection_store.get(self._selection_scope, "catalog"),
+                preferred_database=self._selection_store.get(self._selection_scope, "database"),
+                setup_active=True,
+            ),
+            confirm=confirm,
+        )
+
+    async def select_catalog(self, catalog: str, *, confirm: Confirm | None = None) -> None:
+        if not self._is_alive() or not any(row.name == catalog for row in self.catalogs):
             return
+        await self._select_context_tables(
+            lambda: self._select_catalog(
+                catalog,
+                preferred_database=self._selection_store.get(self._selection_scope, "database"),
+                setup_active=True,
+            ),
+            confirm=confirm,
+        )
+
+    async def select_database(self, database: str, *, confirm: Confirm | None = None) -> None:
+        if not self._is_alive() or not any(
+            row.ref.database_name == database for row in self.databases
+        ):
+            return
+        await self._select_context_tables(lambda: self._select_database(database), confirm=confirm)
+
+    async def _select_context_tables(
+        self, select_context: Callable[[], Awaitable[None]], *, confirm: Confirm | None
+    ) -> None:
         self._context_choice_revision += 1
+        choice = self._context_choice_revision
+        previous = self._selected_table_ref
+
+        def choice_current() -> bool:
+            return self._is_alive() and self._context_choice_revision == choice
+
+        # Decide before publishing any new context. A refusal keeps the selected
+        # table, source context and edited document together.
+        if (
+            not await self.authoring.confirm_replacement(
+                confirm=confirm or _decline_sql_replace,
+                still_selected=choice_current,
+            )
+            or not choice_current()
+        ):
+            return
+        editor = self.query.editor_revision
+        document = self.authoring.ownership_revision
+        guard = self.query._draft_recovery_guard_revision
+        if not self.authoring.dirty and self.authoring.export_snapshot().origin == "Table query":
+            editor += int(self.query.sql != "")
+            document += 1
+            if (
+                not await self.authoring.replace_sql(
+                    "",
+                    confirm=_decline_sql_replace,
+                    origin="Table query",
+                    still_selected=choice_current,
+                )
+                or not choice_current()
+                or self.query.editor_revision != editor
+                or self.authoring.ownership_revision != document
+                or self.query._draft_recovery_guard_revision != guard
+            ):
+                return
+
+        def owns_document() -> bool:
+            return (
+                choice_current()
+                and self.query.editor_revision == editor
+                and self.authoring.ownership_revision == document
+                and self.query._draft_recovery_guard_revision == guard
+            )
+
+        self._context_table_selection_revision = choice
+        self.abandon_table_query_prime()
         self._context_selection_required = False
-        await self._select_workgroup(
-            workgroup,
-            preferred_catalog=self._selection_store.get(
-                self._selection_scope,
-                "catalog",
-            ),
-            preferred_database=self._selection_store.get(
-                self._selection_scope,
-                "database",
-            ),
-            setup_active=True,
-        )
+        try:
+            if not owns_document():
+                return
+            await select_context()
+            if not owns_document() or not all(self._context.cache_key):
+                return
+            context = self._context
+            generation = self._context_generation
+            self._context_table_listing_revision = self.tables.context_revision
+            await self.tables.refresh()
 
-    async def select_catalog(self, catalog: str) -> None:
-        if not self._is_alive():
-            return
-        if not any(row.name == catalog for row in self.catalogs):
-            return
-        self._context_choice_revision += 1
-        await self._select_catalog(
-            catalog,
-            preferred_database=self._selection_store.get(
-                self._selection_scope,
-                "database",
-            ),
-            setup_active=True,
-        )
+            def listing_current() -> bool:
+                return (
+                    owns_document()
+                    and self._is_current_context(generation)
+                    and self.tables.context == context
+                )
 
-    async def select_database(self, database: str) -> None:
-        if not self._is_alive():
-            return
-        if not any(row.ref.database_name == database for row in self.databases):
-            return
-        self._context_choice_revision += 1
-        await self._select_database(database)
+            def preferred_available() -> bool:
+                return (
+                    any(row.ref.table_name == previous.table_name for row in self.tables.items)
+                    if previous is not None
+                    else bool(self.tables.items)
+                )
+
+            if not listing_current() or self.tables.error_text is not None:
+                return
+            discovered = await self._load_until_discovered(
+                preferred_available,
+                has_more=lambda: listing_current() and self.tables.has_more,
+                current_token=lambda: self.tables.continuation_token,
+                item_count=lambda: len(self.tables.items),
+                load_more=self.tables.load_more,
+                failed=lambda: not listing_current() or self.tables.error_text is not None,
+            )
+            # An incomplete/failed listing cannot prove a retained table absent.
+            if not listing_current():
+                return
+            if discovered is None or (not discovered and self.tables.limit_reached):
+                if self.tables.error_text is None:
+                    self.tables.report_incomplete_discovery()
+                return
+            ref = next(
+                (
+                    row.ref
+                    for row in self.tables.items
+                    if previous is not None and row.ref.table_name == previous.table_name
+                ),
+                next((row.ref for row in self.tables.items), None),
+            )
+            if ref is not None:
+
+                async def already_confirmed(_message: str) -> bool:
+                    return owns_document()
+
+                await self.select_table(
+                    ref.table_name, confirm=already_confirmed, activate_query=False
+                )
+        finally:
+            if self._context_table_selection_revision == choice:
+                self._context_table_selection_revision = None
+                self._notify("context")
 
     async def _select_database(self, database: str) -> None:
         generation = self._begin_context_change(

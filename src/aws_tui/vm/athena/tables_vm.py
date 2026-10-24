@@ -76,6 +76,10 @@ class AthenaTablesVM:
         return self._ready() and self._pager.has_more
 
     @property
+    def continuation_token(self) -> str | None:
+        return self._pager.current_token
+
+    @property
     def limit_reached(self) -> bool:
         return self._pager.limit_reached
 
@@ -86,6 +90,14 @@ class AthenaTablesVM:
     @property
     def on_property_changed(self) -> rx.Observable[str]:
         return self._on_property_changed.observable
+
+    def report_incomplete_discovery(self) -> None:
+        """Expose bounded discovery without claiming that a table is absent."""
+        if not self._ready():
+            return
+        self._state = PaneState.ERROR
+        self._error_text = "Athena table discovery did not complete"
+        self._notify_all()
 
     async def refresh(self) -> None:
         if self._disposed or self._shutdown_started:

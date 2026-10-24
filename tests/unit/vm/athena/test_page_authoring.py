@@ -148,7 +148,7 @@ async def test_document_change_during_preflight_retires_snapshot_restore(tmp_pat
         await page.setup()
         page.query.set_sql("SELECT 1")
         before = page.export_snapshot()
-        await page.select_workgroup("analysts")
+        await page.select_workgroup("analysts", confirm=yes)
         client.block_workgroup_detail_for = before.context.workgroup
         pending = asyncio.create_task(page.restore_snapshot(before))
         await wait_until(client.workgroup_detail_started.is_set, what="snapshot preflight started")
