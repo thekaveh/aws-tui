@@ -133,8 +133,9 @@ walkthrough.
 
 ## 4. Athena handoffs
 
-`Shift+Q` opens the selected table in Athena with a quoted
-`SELECT * ... LIMIT 5` statement. `Shift+V` on a visible selected snapshot
+Select a database and table, then choose **Athena** from the bottom Commands bar or press `Shift+Q`.
+Athena opens with the selected source, region, catalog, database and table, plus a quoted `SELECT * ... LIMIT 5` statement.
+`Shift+V` on a visible selected snapshot
 adds `FOR VERSION AS OF <snapshot-id>`. Both requests preserve catalog,
 database, table, connection, and region in immutable messages. The destination
 editor is prefilled for review; neither command executes SQL.

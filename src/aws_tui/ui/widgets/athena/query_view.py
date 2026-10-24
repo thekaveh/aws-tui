@@ -174,6 +174,7 @@ class AthenaQueryView(DeferredWorkerMixin, Widget):
         self._drafts_sub: DisposableBase | None = None
         self._page_sub: DisposableBase | None = None
         self._replacement_revision = -1
+        self._editor_vm_revision = -1
         self._authoring_pending = False
         self._syncing_editor = False
         self._layout_screen: Screen[object] | None = None
@@ -268,7 +269,13 @@ class AthenaQueryView(DeferredWorkerMixin, Widget):
     def on_text_area_changed(self, event: TextArea.Changed) -> None:
         if event.text_area.id != "athena-editor" or self._syncing_editor:
             return
-        self._vm.set_sql(event.text_area.text)
+        sql = event.text_area.text
+        expected_revision = self._vm.editor_revision + int(sql != self._vm.sql)
+        self._vm.set_sql(sql)
+        # SQL observers run synchronously and may install a newer document.
+        # Acknowledge only this native edit, so that later VM SQL still projects.
+        if self._vm.sql == sql and self._vm.editor_revision == expected_revision:
+            self._editor_vm_revision = expected_revision
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
         if event.button.id == "athena-execute":
@@ -587,16 +594,25 @@ class AthenaQueryView(DeferredWorkerMixin, Widget):
             detail = self.query_one("#athena-query-detail-text", Static)
         except Exception:
             return
+        replacement_changed = (
+            self._replacement_revision != self._page_vm.authoring.replacement_revision
+        )
         if sync_editor and (
-            editor.text != self._vm.sql
-            or self._replacement_revision != self._page_vm.authoring.replacement_revision
+            replacement_changed or self._editor_vm_revision != self._vm.editor_revision
         ):
-            self._syncing_editor = True
-            try:
-                editor.text = self._vm.sql
-                self._replacement_revision = self._page_vm.authoring.replacement_revision
-            finally:
-                self._syncing_editor = False
+            # A queued refresh with no new VM document must preserve native
+            # input whose Changed message has not reached the VM yet.
+            if editor.text != self._vm.sql or replacement_changed:
+                self._syncing_editor = True
+                try:
+                    # Changed is queued by Textual. A projection must not later
+                    # echo its old text over a newer VM document.
+                    with editor.prevent(TextArea.Changed):
+                        editor.text = self._vm.sql
+                    self._replacement_revision = self._page_vm.authoring.replacement_revision
+                finally:
+                    self._syncing_editor = False
+            self._editor_vm_revision = self._vm.editor_revision
         execute.disabled = not self._vm.execute_command.can_execute()
         cancel.disabled = not self._vm.cancel_command.can_execute()
         authoring = self._page_vm.authoring

@@ -2522,3 +2522,80 @@ async def test_metadata_only_workgroup_error_projects_in_query_detail() -> None:
     finally:
         await vm.shutdown()
         vm.dispose()
+
+
+@pytest.mark.asyncio
+async def test_programmatic_editor_projection_cannot_echo_over_newer_generated_sql() -> None:
+    vm, client = _build_vm()
+    await vm.setup()
+    try:
+        async with _AthenaApp(vm).run_test() as pilot:
+            view = pilot.app.query_one(AthenaQueryView)
+            editor = pilot.app.query_one("#athena-editor", TextArea)
+            vm.query.set_sql('SELECT * FROM "default"."old_table" LIMIT 5')
+            await wait_until(
+                lambda: editor.text == vm.query.sql, what="initial table SQL projected"
+            )
+            # Parent selection first retires its old generated SQL, then adopts
+            # the resolved table while Textual still has the clear's events queued.
+            vm.query.set_sql("")
+            view._refresh()
+            assert editor.text == ""
+            newer = 'SELECT * FROM "other"."new_table" LIMIT 5'
+            vm.query.set_sql(newer)
+            await pilot.pause()
+            assert vm.query.sql == newer
+            assert editor.text == newer
+            assert client.start_calls == []
+    finally:
+        await vm.shutdown()
+        vm.dispose()
+
+
+@pytest.mark.asyncio
+async def test_stale_vm_projection_preserves_native_input_before_changed_delivery() -> None:
+    vm, client = _build_vm()
+    await vm.setup()
+    try:
+        async with _AthenaApp(vm).run_test() as pilot:
+            view = pilot.app.query_one(AthenaQueryView)
+            editor = pilot.app.query_one("#athena-editor", TextArea)
+            await pilot.pause()
+            editor.insert("SELECT 42")
+            assert vm.query.sql == ""
+            # A previously queued refresh carries no new VM SQL to project.
+            view._refresh()
+            assert editor.text == "SELECT 42"
+            await wait_until(lambda: vm.query.sql == "SELECT 42", what="native edit acknowledged")
+            assert client.start_calls == []
+    finally:
+        await vm.shutdown()
+        vm.dispose()
+
+
+@pytest.mark.asyncio
+async def test_native_sql_acknowledgement_does_not_claim_a_reentrant_vm_replacement() -> None:
+    vm, client = _build_vm()
+    await vm.setup()
+    subscription = None
+    try:
+        async with _AthenaApp(vm).run_test() as pilot:
+            editor = pilot.app.query_one("#athena-editor", TextArea)
+            await pilot.pause()
+            newer = "SELECT 2 -- newer document"
+
+            def replace(property_name):
+                if property_name == "sql" and vm.query.sql == "SELECT 1":
+                    vm.query.set_sql(newer)
+
+            subscription = vm.query.on_property_changed.subscribe(replace)
+            editor.insert("SELECT 1")
+            await wait_until(lambda: vm.query.sql == newer, what="reentrant SQL replacement")
+            await pilot.pause()
+            assert editor.text == vm.query.sql == newer
+            assert client.start_calls == []
+    finally:
+        if subscription is not None:
+            subscription.dispose()
+        await vm.shutdown()
+        vm.dispose()

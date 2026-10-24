@@ -68,8 +68,11 @@ async def test_explicit_table_selection_quotes_names_and_retires_old_database_ch
         assert page.selected_table_ref == ref
         assert page.query.sql == 'SELECT * FROM "default"."orders ""quoted""" LIMIT 5'
         await page.select_workgroup("analysts")
-        assert page.selected_table_ref is None
-        assert page.tables.items == ()
+        assert page.selected_table_ref == TableRef(
+            "AwsDataCatalog", "events", 'orders "quoted"', "analytics", "us-west-2"
+        )
+        assert page.query.sql == 'SELECT * FROM "events"."orders ""quoted""" LIMIT 5'
+        assert len(page.tables.items) == 1
         assert page.tables.context == page.context == page.query.context
         page.query.set_sql("SELECT 42")
         await page.select_table('orders "quoted"')

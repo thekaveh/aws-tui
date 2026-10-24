@@ -90,8 +90,16 @@ async def test_athena_selects_database_then_table_and_primes_visible_query(
             await _choose(pilot, app.query_one("#athena-database", ContextPicker), database, method)
             await _wait_for_service_setup(ctx, app, pilot)
             assert vm.context.database == database
-            assert table_picker.value is None
-            assert vm.query.sql == ""
+            await wait_until(
+                lambda: table_picker.value == "a_default_table", what="automatic first table choice"
+            )
+            starter = 'SELECT * FROM "other""database"."a_default_table" LIMIT 5'
+            assert vm.query.sql == starter
+            assert app.query_one("#athena-editor", TextArea).text == starter
+            assert vm.selected_table_ref == TableRef(
+                "AwsDataCatalog", database, "a_default_table", "demo-dev", "us-east-1"
+            )
+            assert not any(call.method == "start_query" for call in client.calls)
             await wait_until(lambda: not table_picker.disabled, what="selected database tables")
             assert tuple(row.ref.table_name for row in vm.tables.items) == (
                 "a_default_table",

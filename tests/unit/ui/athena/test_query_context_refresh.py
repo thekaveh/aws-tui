@@ -16,7 +16,7 @@ from aws_tui.ui.widgets.context_picker import ContextPicker
 from aws_tui.vm.file_manager.pane_vm import PaneState
 from tests.helpers import drain_workers, wait_until
 from tests.unit.ui.athena.test_page import _AthenaApp
-from tests.unit.vm.athena.test_page_vm import PageClient, make_page_vm
+from tests.unit.vm.athena.test_page_vm import PageClient, _accept_sql_replacement, make_page_vm
 
 
 def _option_ids(app, selector):
@@ -465,7 +465,7 @@ async def test_mounted_refresh_preserves_real_durable_draft_provenance(tmp_path,
     origin = vm.context
     await vm._draft_session.flush(deadline=asyncio.get_running_loop().time() + 2)
     if origin_mismatch:
-        await vm.select_database("other")
+        await vm.select_database("other", confirm=_accept_sql_replacement)
         assert vm.query.draft_state == "context_required"
         assert not vm.query.execute_command.can_execute()
     before = vm.query.export_editor_snapshot()
@@ -519,8 +519,8 @@ async def test_older_detail_cannot_override_newer_refresh_or_same_identity_round
         if superseding == "refresh":
             await vm.refresh_query_context()
         else:
-            await vm.select_workgroup("analysts")
-            await vm.select_workgroup("primary")
+            await vm.select_workgroup("analysts", confirm=_accept_sql_replacement)
+            await vm.select_workgroup("primary", confirm=_accept_sql_replacement)
         before = vm.export_snapshot()
         release.set()
         await refreshing

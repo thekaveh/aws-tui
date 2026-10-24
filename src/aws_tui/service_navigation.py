@@ -6,7 +6,7 @@ View host capture/publication and actual UI worker operations stay in those
 ports; this module never reads application-private attributes.
 
 ServiceNavigation owns navigation generation/current owner, serialization
-locks, task-scoped selection suppression, navigation/rollback task lifetime
+locks, publication-scoped selection suppression, navigation/rollback task lifetime
 and the remembered S3 local-fallback identity. Adoption drains transfer
 workers, checks ownership and required identity, applies remembered retry
 policy, switches the VM, then publishes the view. Failed replacement retains
@@ -27,6 +27,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Protocol, TypedDict, Unpack
 
 from aws_tui.infra.connection_resolver import Connection
+from aws_tui.vm.selection_projection import SelectionChangedMessage, project_selection
 
 if TYPE_CHECKING:
     from aws_tui.infra.aws_session import TokenState
@@ -84,7 +85,6 @@ class ServiceNavigation:
         self._table_lock = asyncio.Lock()
         self._navigations: set[asyncio.Task[None]] = set()
         self._rollbacks: set[asyncio.Task[bool]] = set()
-        self._suppression: tuple[asyncio.Task[Any] | None, str] | None = None
         self._local_fallback = False
         self._fallback_connection: Connection | None = None
 
@@ -159,21 +159,16 @@ class ServiceNavigation:
 
     @contextlib.contextmanager
     def suppress_selection(self, selected: str | None) -> Iterator[None]:
-        current = asyncio.current_task()
-        token = (current, selected) if current is not None and selected is not None else None
-        self._suppression = token
-        try:
+        with project_selection(self, selected):
             yield
-        finally:
-            if self._suppression is token:
-                self._suppression = None
 
-    def consume_selection(self, selected: str) -> bool:
-        token = self._suppression
-        if token is not None and token[0] is asyncio.current_task() and token[1] == selected:
-            self._suppression = None
-            return True
-        return False
+    def consume_selection(self, selected: str, publication: object) -> bool:
+        if not isinstance(publication, SelectionChangedMessage):
+            return False
+        projection = publication.projection
+        return (
+            projection is not None and projection.owner is self and projection.selected == selected
+        )
 
     @property
     def local_fallback(self) -> bool:
