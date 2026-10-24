@@ -3,7 +3,7 @@
 Approved in chat on 2026-10-24. This repair addresses failures reproduced on
 the current checkout using normal application launch and controlled providers.
 
-## Behavior
+## 1. Behavior
 
 Selecting an Iceberg table in Glue and invoking Athena from the bottom command
 bar opens Athena with the exact connection, region, catalog, database and table.
@@ -20,7 +20,7 @@ protects manually edited SQL before replacement; cancelling preserves the
 document and coherent selection. Late metadata results cannot overwrite a
 newer selection, authored edit, or navigation intent.
 
-## Repair boundaries
+## 2. Repair boundaries
 
 Keep RootVM and ContentHostVM responsible for adoption and lifecycle. Identify
 programmatic navigation projections by explicit publication provenance rather
@@ -38,7 +38,7 @@ from edited SQL. Update context, selected table and generated SQL together;
 metadata failures must remain visible, without substituting an unrelated
 default context or leaving obsolete generated SQL marked ready.
 
-## Verification and delivery
+## 3. Verification and delivery
 
 Add regression tests before production changes and record their failing
 assertions. Cover normal App.run_async/CLI behavior in addition to run_test,

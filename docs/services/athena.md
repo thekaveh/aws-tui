@@ -11,6 +11,14 @@ under the next supported AWS source. `Shift+W`, `Shift+C`, and `Shift+D` open
 the corresponding selector. Changing any parent context retires loaders,
 results, and app-owned execution state from the prior identity.
 
+After a workgroup, catalog or database change, Athena retains the previous table name when available.
+Otherwise, it selects the first available table and generates a quoted `SELECT * FROM "database"."table" LIMIT 5`.
+An empty database has no selected table or generated query.
+Context changes keep the active view open, including History and Saved.
+
+Choosing another table updates the starter query without executing it.
+Athena asks before replacing modified SQL; declining keeps the previous selection and editor.
+
 On Query, focus a context selector and press `r` to refresh context metadata and tables.
 Refresh reloads workgroup details, catalogs and databases while preserving valid selections, SQL, draft ownership and execution results.
 A failed read shows its own error while other refreshed metadata remains usable.
@@ -250,8 +258,12 @@ for restart and shutdown details.
 
 ## 7. Cross-service handoffs
 
-Glue table and Iceberg snapshot requests prefill the editor under the same
-connection and region. `i` inserts a copied table reference only when its
+Select a table in Glue, then choose **Athena** from the bottom Commands bar.
+Athena opens with that table's connection, region, catalog, database and table selected.
+Its workgroup and output settings come from the selected Athena source.
+Iceberg snapshot requests also prefill the editor under the same source.
+
+`i` inserts a copied table reference only when its
 source identity matches the active Athena context. The command palette can
 open one unambiguous query table in Glue or a validated successful result
 artifact in S3. None of these handoffs substitutes another profile.

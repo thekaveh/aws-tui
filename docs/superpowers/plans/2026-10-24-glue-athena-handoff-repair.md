@@ -8,7 +8,7 @@
 
 **Tech Stack:** Python 3.11–3.13, asyncio, Textual, VMx, pytest, controlled in-memory AWS providers.
 
-## Global Constraints
+## 1. Global Constraints
 
 - Exact Glue connection, region, catalog, database and table must reach Athena; use applicable same-source workgroup/output settings.
 - Generate quoted read-only SELECT with LIMIT 5; never execute automatically.
@@ -19,7 +19,7 @@
 - Isolated configuration and controlled providers only; no live AWS account/resource scope is authorized.
 - Preserve Atlas, Docker/Ollama, shared infrastructure, dependencies, global launchers, repository protections and unrelated PRs.
 
-## Task 1: Repair normal-launch navigation and refresh lifecycle
+## 2. Task 1: Repair normal-launch navigation and refresh lifecycle
 
 **Files:** `src/aws_tui/service_navigation.py`, `src/aws_tui/app.py`, selection-publication code in `src/aws_tui/vm/nav_menu_vm.py` (a focused supporting module if needed); `tests/unit/test_service_navigation.py`, `tests/integration/test_glue_athena_direct_selection.py` or a focused normal-launch test module.
 
@@ -31,7 +31,7 @@
 - [ ] Carry stable projection ownership in selection publication, independent of delivery task identity; do not globally suppress all same-service messages. Replace the two failing App refresh barriers with supported mounted-node synchronization. Preserve cancellation/rollback guards.
 - [ ] Run navigation unit tests and focused Glue/Athena integration tests. Review the diff for lifecycle, shutdown, message-value privacy and genuine user supersession. Commit with `[skip ci]`.
 
-## Task 2: Coordinate Athena context, table and generated SQL
+## 3. Task 2: Coordinate Athena context, table and generated SQL
 
 **Files:** `src/aws_tui/vm/athena/page_vm.py`, existing authoring/query helpers only as needed; `tests/unit/vm/athena/` and `tests/integration/test_athena_table_selection.py`.
 
@@ -43,7 +43,7 @@
 - [ ] Implement one context-selection completion path using current revision/document ownership. Reuse select_table/authoring replacement and identifier quoting; preserve manual edits and table handoff ownership. Clear only untouched generated SQL for an empty database and expose metadata failures.
 - [ ] Run affected Athena unit/integration suites and navigation handoff regressions. Review and commit with `[skip ci]`.
 
-## Task 3: Verify actual entrypoint and integrate
+## 4. Task 3: Verify actual entrypoint and integrate
 
 **Files:** applicable public Athena workflow documentation and changelog; verification evidence outside the source tree.
 

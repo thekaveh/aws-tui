@@ -63,6 +63,8 @@ Glue, Athena, and Iceberg integration target v0.9.0: they are new minor-version 
 
 ### Fixed
 
+- **Glue-to-Athena navigation.** The bottom Athena command preserves the selected table during normal application startup. Database and catalog changes select an available table and update its starter query. Replacing modified SQL still requires confirmation; selection never executes SQL automatically.
+
 - **Athena execution and recovery.** Exact catalog/database context accompanies generated SQL. Run stays disabled during resolution. Queries remain stoppable after polling errors; failed Stop preserves ownership and prevents replacement. Metadata refresh retains valid choices and scoped failures.
 
 - **Storage integrity.** Overwrite and deletion clean up owned staging safely, protect concurrent replacements and report uncertain publication outcomes. Deferred move APIs refuse ambiguous self-copy aliases before mutation. Existing S3-prefix merges remain distinct from refused whole-tree replacement and unsupported absent-tree publication; partial outcomes are explicit.
