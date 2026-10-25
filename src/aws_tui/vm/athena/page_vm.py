@@ -47,6 +47,7 @@ from aws_tui.vm.athena.authoring_vm import AthenaAuthoringVM, AuthoringDocumentS
 from aws_tui.vm.athena.completion_vm import AthenaCompletionVM
 from aws_tui.vm.athena.draft_recovery import validate_draft_context
 from aws_tui.vm.athena.drafts_vm import AthenaDraftsVM
+from aws_tui.vm.athena.export_vm import AthenaExportVM
 from aws_tui.vm.athena.history_vm import AthenaHistorySnapshot, AthenaHistoryVM
 from aws_tui.vm.athena.query_vm import AthenaEditorSnapshot, AthenaQuerySnapshot, AthenaQueryVM
 from aws_tui.vm.athena.results_vm import AthenaResultsVM
@@ -295,6 +296,17 @@ class AthenaPageVM:
             ),
             is_current=self._is_alive,
             notify=lambda: self._notify("completion"),
+        )
+        self.exports = AthenaExportVM(
+            client=client,
+            results=self.results,
+            context=lambda: self._context,
+            context_revision=lambda: self._context_choice_revision,
+            is_current=lambda: self._is_alive() and self._active_view == "results",
+            notify=lambda: self._notify("exports"),
+        )
+        self._exports_subscription = self.results.on_property_changed.subscribe(
+            lambda _name: self.exports.invalidate(), on_completed=self.exports.cancel
         )
 
     @property
@@ -2262,6 +2274,7 @@ class AthenaPageVM:
         self.query.close_input_admission()
         self.authoring.close_input_admission()
         self.completion.close_input_admission()
+        self.exports.cancel()
 
     async def shutdown(self) -> None:
         async with self._shutdown_lock:
@@ -2301,6 +2314,7 @@ class AthenaPageVM:
                 self.tables.shutdown(),
                 self.authoring.shutdown(),
                 self.completion.shutdown(),
+                self.exports.aclose(),
             )
             await self._drain_page_tasks()
             self._shutdown_complete = True
@@ -2311,6 +2325,8 @@ class AthenaPageVM:
         if not self._input_admission_closed:
             self.close_input_admission()
         self._disposed = True
+        self.exports.cancel()
+        self._exports_subscription.dispose()
         self._lifecycle_generation += 1
         self._context_generation += 1
         self._workgroup_pager.dispose()
@@ -3112,6 +3128,8 @@ class AthenaPageVM:
     def _notify(self, property_name: str) -> None:
         if self._disposed:
             return
+        if hasattr(self, "exports"):
+            self.exports.invalidate()
         send_value_free(
             self._hub,
             PropertyChangedMessage.create(

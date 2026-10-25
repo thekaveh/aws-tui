@@ -78,7 +78,11 @@ _OPERATION_SOURCES = {
     "athena": ("src/aws_tui/domain/athena.py", "src/aws_tui/domain/athena_runner.py"),
     "emr-serverless": ("src/aws_tui/domain/emr_serverless.py",),
     "glue": ("src/aws_tui/domain/glue.py",),
-    "s3": ("src/aws_tui/domain/s3_fs.py", "scripts/test-services/s3/seed.py"),
+    "s3": (
+        "src/aws_tui/domain/s3_fs.py",
+        "scripts/test-services/s3/seed.py",
+        "src/aws_tui/domain/athena.py",
+    ),
     "sts": ("src/aws_tui/infra/aws_session.py", "src/aws_tui/domain/glue.py"),
     "logs": ("src/aws_tui/domain/emr_cloudwatch_logs.py",),
 }

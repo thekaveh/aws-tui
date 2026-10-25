@@ -226,6 +226,7 @@ focused soft fill, and single keyboard focus stop as Glue.
 | Filter loaded results | `Alt+F` | `athena.filter_results`; literal case-insensitive substring; Apply, Clear, Cancel. |
 | Sort selected column | `Alt+S` | `athena.sort_results`; ascending → descending → loaded order; lexical strings, null last. |
 | Reset local result controls | `Alt+R` | `athena.reset_results`; clears filter and sort. |
+| Export result rows to a local file | `Alt+X` | `athena.export_results`; review loaded-view or complete-execution CSV/JSON, or the original AWS CSV artifact. |
 | Switch AWS source | `Shift+S` | Runs `app.swap_source` and rebuilds Athena under the next resolver-ordered supported AWS profile and region. The bordered **Source** selector can instead choose an exact source. |
 | Insert copied table reference | `i` | Runs `athena.insert_table_ref`, selecting Query when needed and inserting at the editor cursor or replacing its active selection. It refuses a copied connection/region that differs from Athena's active source and leaves both editor and typed clipboard unchanged. It never switches profiles because that could discard unrelated editor state. |
 | Open result artifact in S3 | `:` / `Ctrl+K`, then **Open Athena result in S3** | `athena.open_result_location` is palette-only and absent from `KeymapStore.DEFAULT_BINDINGS`; it validates the successful execution's exact connection, region, and S3 URI before navigating. |
@@ -240,13 +241,13 @@ detail. The active-view controls are:
 
 - **Query:** editor, enabled Run, enabled Stop, enabled Drafts, SQL, query status, execution detail.
 - **History:** history list, enabled Load more, enabled Results, history detail.
-- **Results:** results table, enabled Load more.
+- **Results:** results table, enabled Load more, enabled Export.
 - **Saved:** named queries, enabled named-query Load more, prepared statements,
   enabled prepared-statement Load more, saved-query detail, enabled Open in
   editor.
 
 Unavailable buttons are omitted, and `Shift+Tab` is the exact reverse order.
-The six result actions appear with configured keys in Help and the Athena
+Result actions appear with configured keys in Help and the Athena
 command palette. See [loaded result semantics](services/athena.md#5-inspect-and-control-loaded-results)
 for JSON encoding, paging scope, reset behavior, and clipboard limitations.
 
@@ -459,6 +460,7 @@ matching `ActionRegistry` handler. Use these IDs in your keybinding overrides.
 | `athena.save_snippet` | none (`Unbound`) | yes | Store current SQL in the local snippet library |
 | `athena.load_more` | `l` | yes | Fetch the next available result page |
 | `athena.inspect_cell` | `alt+enter` | yes | Inspect complete original selected cell |
+| `athena.export_results` | `alt+x` | yes | Review and export loaded or complete results to a local file |
 | `athena.copy_cell` | `alt+c` | yes | Copy original selected cell as JSON |
 | `athena.copy_row` | `alt+shift+c` | yes | Copy selected row as a JSON array |
 | `athena.filter_results` | `alt+f` | yes | Filter already loaded rows literally |

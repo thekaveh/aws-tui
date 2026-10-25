@@ -245,7 +245,19 @@ def test_athena_operation_ledger_and_minimum_iam_are_exact() -> None:
         "text",
     )
     assert tuple(operation_block.splitlines()) == ATHENA_BOTO_OPERATIONS
-    assert set(re.findall(r"await client\.([a-z_]+)", client_source)) == set(ATHENA_BOTO_OPERATIONS)
+    tree = ast.parse(client_source)
+    artifact = next(
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.AsyncFunctionDef) and node.name == "iter_result_artifact"
+    )
+    artifact_source = ast.get_source_segment(client_source, artifact)
+    assert artifact_source is not None
+    artifact_operations = set(re.findall(r"await client\.([a-z_]+)", artifact_source))
+    assert artifact_operations == {"head_object", "get_object"}
+    assert set(re.findall(r"await client\.([a-z_]+)", client_source)) == (
+        set(ATHENA_BOTO_OPERATIONS) | artifact_operations
+    )
 
     policy = json.loads(
         _fenced_block_after(

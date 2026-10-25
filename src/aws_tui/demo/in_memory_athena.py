@@ -750,6 +750,52 @@ class InMemoryAthena:
         except KeyError:
             raise NotFoundError("Athena query results not found") from None
 
+    async def iter_result_artifact(
+        self,
+        expected: QueryExecutionDetail,
+        *,
+        max_bytes: int,
+        chunk_bytes: int = 64 * 1024,
+    ) -> AsyncIterator[bytes]:
+        self._raise_if_denied()
+        actual = await self.get_query_execution(expected.summary.ref.execution_id)
+        location = parse_s3_uri(actual.output_location)
+        if (
+            type(max_bytes) is not int
+            or max_bytes < 0
+            or type(chunk_bytes) is not int
+            or not 1 <= chunk_bytes <= 64 * 1024
+            or actual.summary.ref != expected.summary.ref
+            or actual.context != expected.context
+            or actual.output_location != expected.output_location
+            or actual.managed_query_results_enabled != expected.managed_query_results_enabled
+            or actual.managed_query_results_enabled
+            or actual.summary.state is not QueryState.SUCCEEDED
+            or actual.summary.statement_type != "DML"
+            or location is None
+            or not location.path.endswith(".csv")
+            or self._result_store is None
+        ):
+            raise ValidationError("Original demo CSV is unavailable or export settings changed")
+        path = PathRef((location.bucket, *location.path.removeprefix("/").split("/")))
+        entry = await self._result_store.stat(path)
+        if entry.size is None or entry.size > max_bytes:
+            raise ValidationError("Original demo result exceeds export limits")
+        source = await self._result_store.read_stream(path, chunk_size=chunk_bytes)
+        received = 0
+        try:
+            async for chunk in source:
+                received += len(chunk)
+                if received > max_bytes or received > entry.size:
+                    raise ValidationError("Original demo result exceeds export limits")
+                yield chunk
+        finally:
+            close = getattr(source, "aclose", None)
+            if close is not None:
+                await close()
+        if received != entry.size:
+            raise ValidationError("Original demo result is incomplete")
+
     async def list_named_queries_page(
         self,
         workgroup: str,

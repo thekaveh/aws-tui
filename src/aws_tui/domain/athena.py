@@ -4,10 +4,10 @@ from __future__ import annotations
 
 import asyncio
 from collections import deque
-from collections.abc import Mapping, Sequence
+from collections.abc import AsyncIterator, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Any, NoReturn
+from typing import Any, Literal, NoReturn
 
 import botocore.exceptions
 
@@ -43,6 +43,7 @@ from aws_tui.domain.query import (
     ResultColumn,
     ResultPage,
 )
+from aws_tui.domain.s3_uri import parse_s3_uri
 from aws_tui.domain.sql_authoring import CompletionTable
 from aws_tui.domain.sql_policy import ReadOnlySqlPolicy
 from aws_tui.infra.aws_session import AwsSession
@@ -102,6 +103,21 @@ class QueryContextRejectedError(ValidationError):
 
 class WorkgroupRejectedError(ValidationError):
     """Athena rejected the selected workgroup."""
+
+
+class ResultArtifactAccessError(PermissionDeniedError):
+    """A value-free, service-specific result-read denial."""
+
+    def __init__(self, service: Literal["Athena", "S3", "encryption"]) -> None:
+        if type(service) is not str or service not in {"Athena", "S3", "encryption"}:
+            raise ValueError("Invalid result access category")
+        self.service = service
+        message = (
+            "Check result encryption key access"
+            if service == "encryption"
+            else f"Check {service} result read permissions"
+        )
+        super().__init__(message)
 
 
 _ACCESS_DENIED_CODES = frozenset({"AccessDenied", "AccessDeniedException"})
@@ -852,6 +868,82 @@ class AthenaClient:
                 sensitive_values=(execution_id, start_token or ""),
             )
 
+    async def iter_result_artifact(
+        self,
+        expected: QueryExecutionDetail,
+        *,
+        max_bytes: int,
+        chunk_bytes: int = 64 * 1024,
+    ) -> AsyncIterator[bytes]:
+        """Read the reviewed execution's original CSV, never initiating SQL.
+
+        The coordinator owns the elapsed-time/request budgets. This operation
+        performs exactly one metadata read, one HEAD and one conditional GET.
+        """
+        if (
+            type(max_bytes) is not int
+            or max_bytes < 0
+            or type(chunk_bytes) is not int
+            or not 1 <= chunk_bytes <= 64 * 1024
+            or expected.summary.ref.connection_name != self._connection.name
+            or expected.summary.ref.region != self._connection.region
+            or expected.context.connection_name != self._connection.name
+            or expected.context.region != self._connection.region
+            or expected.context.workgroup != expected.summary.ref.workgroup
+        ):
+            raise ValidationError("Original result export settings are invalid")
+        service: Literal["Athena", "S3"] = "Athena"
+        try:
+            actual = await self.get_query_execution(expected.summary.ref.execution_id)
+            location = parse_s3_uri(actual.output_location)
+            if (
+                actual.summary.ref != expected.summary.ref
+                or actual.context != expected.context
+                or actual.output_location != expected.output_location
+                or actual.managed_query_results_enabled != expected.managed_query_results_enabled
+                or actual.managed_query_results_enabled
+                or actual.summary.state != QueryState.SUCCEEDED
+                or expected.summary.state != QueryState.SUCCEEDED
+                or actual.summary.statement_type != "DML"
+                or location is None
+                or not location.path.endswith(".csv")
+            ):
+                raise ValidationError("Original CSV is unavailable or execution settings changed")
+            service = "S3"
+            async with await self._aws_session.client(self._connection, "s3") as client:
+                key = location.path.removeprefix("/")
+                head = await client.head_object(Bucket=location.bucket, Key=key)
+                size, etag, version = _artifact_metadata(head, max_bytes=max_bytes)
+                kwargs: dict[str, Any] = {
+                    "Bucket": location.bucket,
+                    "Key": key,
+                    "IfMatch": etag,
+                }
+                if version is not None:
+                    kwargs["VersionId"] = version
+                response = await client.get_object(**kwargs)
+                body = response["Body"]
+                # aiobotocore's context manager yields the raw HTTP response;
+                # continue reading through StreamingBody for sized reads.
+                async with body:
+                    if _artifact_metadata(response, max_bytes=max_bytes) != (size, etag, version):
+                        raise ValidationError("Original result artifact changed")
+                    received = 0
+                    while True:
+                        chunk = await body.read(chunk_bytes)
+                        if type(chunk) is not bytes or len(chunk) > chunk_bytes:
+                            raise ValidationError("Invalid original result stream")
+                        if not chunk:
+                            break
+                        received += len(chunk)
+                        if received > size or received > max_bytes:
+                            raise ValidationError("Original result export limit exceeded")
+                        yield chunk
+                    if received != size:
+                        raise ValidationError("Original result artifact is incomplete")
+        except Exception as exc:
+            _raise_artifact_error(exc, service=service)
+
     async def list_named_queries_page(
         self,
         workgroup: str,
@@ -1023,7 +1115,67 @@ class AthenaClient:
                 _optional_mapping(status, "AthenaError"),
                 query=query,
             ),
+            managed_query_results_enabled=_optional_bool(
+                _optional_mapping(execution, "ManagedQueryResultsConfiguration"),
+                "Enabled",
+                default=False,
+            ),
         )
+
+
+def _artifact_metadata(response: Any, *, max_bytes: int) -> tuple[int, str, str | None]:
+    size = response.get("ContentLength")
+    etag = response.get("ETag")
+    version = response.get("VersionId")
+    if (
+        type(size) is not int
+        or size < 0
+        or size > max_bytes
+        or type(etag) is not str
+        or not etag
+        or len(etag) > 1024
+        or (
+            version is not None and (type(version) is not str or not version or len(version) > 1024)
+        )
+    ):
+        raise ValidationError("Original result artifact metadata is invalid or exceeds limits")
+    return size, etag, version
+
+
+def _raise_artifact_error(exc: Exception, *, service: Literal["Athena", "S3"]) -> NoReturn:
+    """Return value-free diagnostics, including provider-supplied failures."""
+    if isinstance(exc, botocore.exceptions.ClientError):
+        code = str(exc.response.get("Error", {}).get("Code", ""))
+        if code in {"NoSuchKey", "NoSuchVersion", "NotFound", "404", "ResourceNotFoundException"}:
+            raise NotFoundError("Original results are unavailable or expired") from None
+        if "kms" in code.casefold():
+            raise ResultArtifactAccessError("encryption") from None
+        if code in _ACCESS_DENIED_CODES or code == "403":
+            raise ResultArtifactAccessError(service) from None
+        if code in {"PreconditionFailed", "412"}:
+            raise ValidationError(
+                "Original result artifact changed; review the export again"
+            ) from None
+        mapped = _map_athena_error(exc, sensitive_values=())
+    else:
+        mapped = (
+            exc if isinstance(exc, ProviderError) else _map_athena_error(exc, sensitive_values=())
+        )
+    if isinstance(mapped, AuthRequiredError):
+        raise AuthRequiredError("Refresh AWS credentials before exporting results") from None
+    if isinstance(mapped, PermissionDeniedError):
+        raise ResultArtifactAccessError(service) from None
+    if isinstance(mapped, NotFoundError):
+        raise NotFoundError("Original results are unavailable or expired") from None
+    if isinstance(mapped, ProviderUnreachableError):
+        raise ProviderUnreachableError(f"{service} result endpoint is unavailable") from None
+    if isinstance(mapped, ThrottledError):
+        raise ThrottledError(f"{service} result reads are throttled; retry later") from None
+    if isinstance(mapped, ValidationError):
+        raise ValidationError(
+            "Original CSV is unavailable, changed, invalid or exceeds export limits"
+        ) from None
+    raise ProviderError(f"{service} result export failed; no complete file was published") from None
 
 
 def _page_kwargs(start_token: str | None) -> dict[str, object]:
@@ -1346,6 +1498,7 @@ __all__ = [
     "AthenaWorkgroupDetail",
     "AthenaWorkgroupSummary",
     "QueryContextRejectedError",
+    "ResultArtifactAccessError",
     "ResultConfigurationRequiredError",
     "ResultLocationUnavailableError",
     "WorkgroupRejectedError",

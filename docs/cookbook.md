@@ -754,6 +754,7 @@ modes:
 
     `s3:GetObject` is
     also required to retrieve output and to browse the artifact through S3.
+    Original CSV export pins an observed object version when available and then requires `s3:GetObjectVersion` for that version.
     See
     [Work with query results and recent queries](https://docs.aws.amazon.com/athena/latest/ug/querying.html)
     and the AWS
