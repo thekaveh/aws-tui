@@ -52,6 +52,8 @@ _EXPECTED: set[tuple[str, str, bool, bool]] = {
     ("T", "dispatch('app.cycle_theme')", True, False),
     ("comma", "dispatch('app.open_settings')", True, False),
     ("c", "dispatch('pane.copy')", True, False),
+    ("m", "dispatch('pane.move')", False, False),
+    ("n", "dispatch('pane.new')", False, False),
     ("p", "dispatch('pane.copy_entry_path')", True, False),
     ("P", "dispatch('pane.copy_path')", True, False),
     ("d", "dispatch('pane.delete')", True, False),
@@ -123,14 +125,11 @@ def test_default_bindings_match_runtime_contract(app_context_factory) -> None:  
     assert _installed(app) == _EXPECTED
 
 
-def test_no_handlerless_keys_bound(app_context_factory) -> None:  # type: ignore[no-untyped-def]
+def test_file_mutation_keys_have_registered_handlers(app_context_factory) -> None:  # type: ignore[no-untyped-def]
     app = AwsTuiApp(app_context_factory())
-    keys = set(app._bindings.key_to_bindings)
-    assert ("Q", "dispatch('glue.query_in_athena')", False, False) in _installed(app)
-    # Deferred (handlerless) actions' keys must NOT be bound: move (m), new (n).
-    # (`space`->quick_look and `:`/`ctrl+k`->command_palette are now wired.)
-    for k in ("m", "n"):
-        assert k not in keys, f"{k} should be unbound (handlerless)"
+    for key, action in (("m", "pane.move"), ("n", "pane.new")):
+        assert app._actions.has(action)
+        assert (key, f"dispatch('{action}')", False, False) in _installed(app)
 
 
 def test_auth_recovery_has_durable_key_and_palette_entry(app_context_factory) -> None:  # type: ignore[no-untyped-def]

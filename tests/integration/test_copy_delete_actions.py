@@ -10,13 +10,14 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import AsyncIterator
+from dataclasses import replace
 
 import pytest
 from textual.widgets import Static
 
 from aws_tui.app import AwsTuiApp
 from aws_tui.demo.in_memory_fs import InMemoryFS
-from aws_tui.domain.filesystem import EntryKind, FileEntry, PathRef
+from aws_tui.domain.filesystem import FileEntry, PathRef
 from aws_tui.ui.widgets.pane import EntryRow, Pane
 from aws_tui.vm.file_manager.dual_pane_vm import DualPaneVM
 from tests.helpers import wait_until
@@ -55,12 +56,7 @@ class _BlockingReadFS(InMemoryFS):
 
     async def stat(self, path: PathRef) -> FileEntry:
         if path.segments and path.segments[-1] == "alpha.txt":
-            return FileEntry(
-                name="alpha.txt",
-                kind=EntryKind.FILE,
-                size=10_000_000,
-                modified=None,
-            )
+            return replace(await super().stat(path), size=10_000_000)
         return await super().stat(path)
 
 
@@ -206,8 +202,10 @@ async def test_mark_keys_do_not_change_delete_target_behind_confirm_modal(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("operation", ["copy", "move"])
 async def test_switching_to_settings_cancels_active_copy_worker(
     app_context_factory: AppContextBuilder,
+    operation: str,
 ) -> None:
     """Page swaps must stop in-flight copy bytes before disposing DualPaneVM."""
     fs = _BlockingReadFS()
@@ -219,7 +217,7 @@ async def test_switching_to_settings_cancels_active_copy_worker(
         await pilot.pause()
         await pilot.pause()
 
-        await pilot.press("c")
+        await pilot.press("c" if operation == "copy" else "m")
         await pilot.pause()
         await pilot.press("enter")
         await asyncio.wait_for(fs.read_started.wait(), timeout=2.0)
@@ -245,12 +243,18 @@ async def test_delete_worker_does_not_cancel_an_in_flight_copy(
     from aws_tui.app import (
         _TRANSFER_COPY_GROUP,
         _TRANSFER_DELETE_GROUP,
+        _TRANSFER_MUTATION_GROUP,
         _TRANSFER_WORKER_GROUPS,
     )
 
     assert _TRANSFER_COPY_GROUP != _TRANSFER_DELETE_GROUP
     # The content-swap cancellation must still reach both.
-    assert set(_TRANSFER_WORKER_GROUPS) == {_TRANSFER_COPY_GROUP, _TRANSFER_DELETE_GROUP}
+    assert set(_TRANSFER_WORKER_GROUPS) == {
+        _TRANSFER_COPY_GROUP,
+        _TRANSFER_DELETE_GROUP,
+        _TRANSFER_MUTATION_GROUP,
+    }
+    assert len(set(_TRANSFER_WORKER_GROUPS)) == 3
 
     cancelled: list[str] = []
 

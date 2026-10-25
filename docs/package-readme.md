@@ -5,14 +5,14 @@ Linux and Windows. It supports Python 3.11, 3.12 and 3.13.
 
 ## 1. Capabilities
 
-- Manage S3 and local files in two panes, including copy, delete and previews.
+- Manage S3 and local files in two panes: copy, move, rename, create folders, delete and preview.
 - Inspect EMR Serverless applications, job runs and logs; clone an existing
   Spark run or cancel an active run.
 - Browse AWS Glue resources and Iceberg metadata.
 - Review and execute allowed read-only SQL in Athena, then inspect results and history.
 
 Glue-to-Athena handoffs prefill queries without executing them. Athena execution
-can incur AWS charges and write results. S3 copy/delete and EMR clone/cancel
+can incur AWS charges and write results. S3 file operations and EMR clone/cancel
 operations modify resources.
 
 ## 2. Installation
@@ -35,8 +35,7 @@ checkout's code and project environment. See the
 
 To explore a standalone installation, run `aws-tui --demo`.
 From a checkout, run `uv run aws-tui --demo`. AWS data is synthetic and no
-AWS requests are sent. The local pane uses real files; local copy and delete
-affect your filesystem.
+AWS requests are sent. The local pane uses real files; local file operations can modify your filesystem.
 
 The optional DuckDB extra enables Glue Iceberg **Peek**, which reads rows
 from S3 without Athena. See the

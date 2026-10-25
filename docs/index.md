@@ -10,8 +10,8 @@ Start with the demo to explore sample resources without AWS credentials.
 
 ## 1. What you can do
 
-- Browse S3 or S3-compatible storage alongside local files; copy, delete and
-  preview entries.
+- Browse S3 or S3-compatible storage alongside local files; copy, move, rename,
+  create folders, delete and preview entries.
 - Inspect EMR applications, job runs and logs; clone existing Spark runs and
   request cancellation of active runs.
 - Browse Glue databases, tables, jobs and crawlers, including Iceberg metadata.
@@ -35,7 +35,7 @@ No aws-tui package is published on PyPI.
 3. Use [Keybindings](keybindings.md) and the [Cookbook](cookbook.md) for navigation and common workflows.
 
 The demo sends no AWS requests, but its local pane uses real files.
-Local copy and delete operations affect your filesystem.
+Local file operations can modify your filesystem.
 
 ## 3. Service guides
 

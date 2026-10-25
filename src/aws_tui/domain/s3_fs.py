@@ -943,7 +943,7 @@ class S3FS:
         key = f"{key}/"
         try:
             async with self._client() as s3:
-                await s3.put_object(Bucket=bucket, Key=key, Body=b"")
+                await s3.put_object(Bucket=bucket, Key=key, Body=b"", IfNoneMatch="*")
         except _AUTH_FAILURE_EXCEPTIONS as exc:
             raise _auth_error(exc) from exc
         except _TRANSPORT_FAILURE_EXCEPTIONS as exc:
