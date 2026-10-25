@@ -35,6 +35,7 @@ from aws_tui.infra.connection_resolver import Connection
 from aws_tui.vm._observable import send_value_free
 from aws_tui.vm.chrome.confirm_vm import ConfirmPath, ConfirmRequest
 from aws_tui.vm.emr_serverless.applications_vm import ApplicationsVM
+from aws_tui.vm.emr_serverless.dashboard_vm import DashboardTarget, DashboardVM
 from aws_tui.vm.emr_serverless.job_run_detail_vm import JobRunDetailVM
 from aws_tui.vm.emr_serverless.job_run_logs_vm import JobRunLogsVM, LogSource
 from aws_tui.vm.emr_serverless.job_runs_vm import JobRunsVM
@@ -131,6 +132,66 @@ class EmrServerlessPageVM:
             hub=hub,
             dispatcher=dispatcher,
         )
+        self._dashboard_revision = 0
+        self._dashboard_accepting = True
+        self._dashboard_selection = self._dashboard_selection_key()
+        self.dashboards = DashboardVM(
+            client=client,
+            target=self.dashboard_target,
+            is_current=lambda: not self._disposed and not self._shutdown_started,
+        )
+        self._dashboard_subscriptions = (
+            self.applications.on_property_changed.subscribe(self._dashboard_selection_changed),
+            self.job_runs.on_property_changed.subscribe(self._dashboard_selection_changed),
+        )
+
+    def _dashboard_selection_key(self) -> tuple[str | None, str | None, str | None]:
+        return (
+            self.applications.selected_id,
+            self.job_runs.application_id,
+            self.job_runs.selected_id,
+        )
+
+    def _dashboard_selection_changed(self, _property: str) -> None:
+        selection = self._dashboard_selection_key()
+        if selection != self._dashboard_selection:
+            self._dashboard_selection = selection
+            self._dashboard_revision += 1
+            self.dashboards.invalidate()
+
+    def dashboard_target(self) -> DashboardTarget | None:
+        if self._disposed or self._shutdown_started or not self._dashboard_accepting:
+            return None
+        run = self.job_runs.selected_summary
+        application = next(
+            (
+                app
+                for app in self.applications.applications
+                if app.id == self.applications.selected_id
+            ),
+            None,
+        )
+        if (
+            application is None
+            or application.type not in {"SPARK", "HIVE"}
+            or run is None
+            or run.application_id != application.id
+            or self.job_runs.application_id != application.id
+        ):
+            return None
+        return DashboardTarget(
+            self._source,
+            application.id,
+            run.job_run_id,
+            application.name,
+            application.type,
+            self._dashboard_revision,
+        )
+
+    def close_dashboard_intake(self) -> None:
+        """Fence external delivery before asynchronous page cleanup begins."""
+        self._dashboard_accepting = False
+        self.dashboards.invalidate()
 
     @property
     def connection(self) -> Connection:
@@ -377,6 +438,9 @@ class EmrServerlessPageVM:
             return
         self._disposed = True
         self._operations.close()
+        self.close_dashboard_intake()
+        for subscription in self._dashboard_subscriptions:
+            subscription.dispose()
         self.job_run_logs.dispose()
         self.job_run_detail.dispose()
         self.job_runs.dispose()
@@ -385,7 +449,9 @@ class EmrServerlessPageVM:
 
     async def shutdown(self) -> None:
         self._shutdown_started = True
+        self.close_dashboard_intake()
         self._operations.close()
+        await self.dashboards.aclose()
         await self._operations.cancel_and_drain()
         await self.job_run_logs.shutdown()
 

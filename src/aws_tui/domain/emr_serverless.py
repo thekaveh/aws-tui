@@ -9,6 +9,7 @@ the viewmodels; generic submission remains deferred."""
 from __future__ import annotations
 
 import re
+from collections.abc import Mapping
 from copy import deepcopy
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -20,6 +21,7 @@ from botocore.config import Config as BotoConfig
 
 from aws_tui.domain.aws_auth import AWS_AUTH_ERROR_CODES, AWS_CREDENTIAL_EXCEPTIONS
 from aws_tui.domain.aws_transport import AWS_TRANSPORT_EXCEPTIONS
+from aws_tui.domain.emr_dashboard import DashboardLink, validate_dashboard_url
 from aws_tui.domain.emr_job_request import build_start_job_run_request
 from aws_tui.domain.filesystem import (
     AuthRequiredError,
@@ -238,6 +240,15 @@ class EmrServerlessClientProtocol(Protocol):
         job_run_id: str,
     ) -> JobRunDetail: ...
 
+    async def get_dashboard_for_job_run(
+        self,
+        application_id: str,
+        job_run_id: str,
+        *,
+        attempt: int | None = None,
+        access_system_profile_logs: bool = False,
+    ) -> DashboardLink: ...
+
     async def cancel_job_run(self, application_id: str, job_run_id: str) -> None: ...
 
     async def start_job_run(
@@ -329,6 +340,42 @@ def _map_boto_error(exc: BaseException) -> ProviderError | None:
 map_boto_error = _map_boto_error
 
 
+def _safe_dashboard_error(error: Exception) -> ProviderError:
+    """Classify dashboard failures without retaining messages or original causes."""
+    error_type: type[ProviderError] = ProviderError
+    if isinstance(error, AWS_CREDENTIAL_EXCEPTIONS):
+        error_type = AuthRequiredError
+    elif isinstance(error, _TRANSPORT_FAILURE_EXCEPTIONS):
+        error_type = ProviderUnreachableError
+    elif isinstance(error, botocore.exceptions.ClientError):
+        # Error metadata is untrusted too. Classification must never raise
+        # inside the raw provider handler and expose its private context.
+        try:
+            response = error.response
+            details = response.get("Error") if isinstance(response, Mapping) else None
+            code = details.get("Code") if isinstance(details, Mapping) else None
+            if type(code) is str:
+                error_type = (
+                    AuthRequiredError
+                    if code in AWS_AUTH_ERROR_CODES
+                    else _CLIENT_ERROR_CODE_MAP.get(code, ProviderError)
+                )
+        except Exception:
+            error_type = ProviderError
+    elif isinstance(error, botocore.exceptions.ParamValidationError | ValidationError):
+        error_type = ValidationError
+    messages: dict[type[ProviderError], str] = {
+        AuthRequiredError: "EMR Serverless dashboard authentication required",
+        PermissionDeniedError: "EMR Serverless dashboard access denied",
+        NotFoundError: "EMR Serverless dashboard target not found",
+        ValidationError: "Invalid EMR Serverless dashboard request or response",
+        ThrottledError: "EMR Serverless dashboard request throttled",
+        ProviderUnreachableError: "EMR Serverless dashboard provider unreachable",
+        ProviderError: "EMR Serverless dashboard request failed",
+    }
+    return error_type(messages[error_type])
+
+
 # ── Async aioboto3 facade ────────────────────────────────────────────────
 
 
@@ -349,6 +396,45 @@ class EmrServerlessClient:
     ) -> None:
         self._session = session
         self._region_name = region_name
+
+    async def get_dashboard_for_job_run(
+        self,
+        application_id: str,
+        job_run_id: str,
+        *,
+        attempt: int | None = None,
+        access_system_profile_logs: bool = False,
+    ) -> DashboardLink:
+        """Fetch one fresh private link for an explicitly reviewed run."""
+        if any(
+            type(value) is not str or re.fullmatch(r"[a-z0-9]{1,64}", value) is None
+            for value in (application_id, job_run_id)
+        ):
+            raise ValidationError("Invalid EMR Serverless dashboard identifiers") from None
+        if (attempt is not None and (type(attempt) is not int or attempt < 1)) or type(
+            access_system_profile_logs
+        ) is not bool:
+            raise ValidationError("Invalid EMR Serverless dashboard options") from None
+        request: dict[str, Any] = {
+            "applicationId": application_id,
+            "jobRunId": job_run_id,
+            "accessSystemProfileLogs": access_system_profile_logs,
+        }
+        if attempt is not None:
+            request["attempt"] = attempt
+        failure: ProviderError
+        try:
+            async with self._session.client(
+                "emr-serverless", region_name=self._region_name, config=_EMR_BOTO_CONFIG
+            ) as client:
+                response = await client.get_dashboard_for_job_run(**request)
+                if not isinstance(response, Mapping):
+                    raise ValidationError("Invalid EMR Serverless dashboard response")
+                return DashboardLink(validate_dashboard_url(response.get("url")))
+        except Exception as error:
+            failure = _safe_dashboard_error(error)
+        # Raise outside the handler so no private provider error remains in context.
+        raise failure from None
 
     async def list_applications(self) -> list[ApplicationSummary]:
         try:

@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 from collections.abc import AsyncGenerator
 from dataclasses import replace
 from datetime import datetime, timedelta
@@ -36,6 +37,7 @@ from aws_tui.domain.emr_cloudwatch_logs import (
     cloudwatch_stream_listing,
     safe_cloudwatch_error,
 )
+from aws_tui.domain.emr_dashboard import DashboardLink
 from aws_tui.domain.emr_job_request import build_start_job_run_request
 from aws_tui.domain.emr_logs import LogChunk, LogFile, LogFileKind, LogFilter
 from aws_tui.domain.emr_serverless import (
@@ -48,7 +50,7 @@ from aws_tui.domain.emr_serverless import (
     JobRunSummary,
     parse_cloudwatch_monitoring,
 )
-from aws_tui.domain.filesystem import NotFoundError, ProviderError
+from aws_tui.domain.filesystem import NotFoundError, ProviderError, ValidationError
 
 # Mirrors aws_tui.demo.in_memory_fs._DEMO_LATENCY_SEC. Surfaces the
 # UI's loading… placeholders during demo runs.
@@ -74,6 +76,7 @@ class InMemoryEmr:
         # Monotonic suffix so multiple ``start_job_run`` calls produce
         # unique ids without the tests needing to seed them.
         self._next_run_seq: int = 1
+        self._next_dashboard_seq: int = 1
         # Mirrors AWS's clientToken de-duplication: a repeated token
         # returns the run already created for it instead of starting
         # a second one.
@@ -443,6 +446,42 @@ class InMemoryEmr:
         await asyncio.sleep(_DEMO_LATENCY_SEC)
         self.calls.append(("get_job_run", (application_id, job_run_id)))
         return self._details[(application_id, job_run_id)]
+
+    async def get_dashboard_for_job_run(
+        self,
+        application_id: str,
+        job_run_id: str,
+        *,
+        attempt: int | None = None,
+        access_system_profile_logs: bool = False,
+    ) -> DashboardLink:
+        """Return a fresh synthetic link; demo browser dispatch is disabled."""
+        if any(
+            type(value) is not str or re.fullmatch(r"[a-z0-9-]{1,64}", value) is None
+            for value in (application_id, job_run_id)
+        ):
+            raise ValidationError("Invalid EMR Serverless dashboard identifiers") from None
+        if (attempt is not None and (type(attempt) is not int or attempt < 1)) or type(
+            access_system_profile_logs
+        ) is not bool:
+            raise ValidationError("Invalid EMR Serverless dashboard options") from None
+        await asyncio.sleep(_DEMO_LATENCY_SEC)
+        self.calls.append(
+            (
+                "get_dashboard_for_job_run",
+                (application_id, job_run_id, attempt, access_system_profile_logs),
+            )
+        )
+        app = self._apps.get(application_id)
+        if app is None or job_run_id not in self._runs.get(application_id, {}):
+            raise NotFoundError("EMR Serverless dashboard target not found") from None
+        if app.type not in {"SPARK", "HIVE"}:
+            raise ValidationError("EMR Serverless dashboard application type unsupported") from None
+        sequence = self._next_dashboard_seq
+        self._next_dashboard_seq += 1
+        return DashboardLink(
+            f"https://demo.emr-serverless.amazonaws.com/dashboard?synthetic={sequence}"
+        )
 
     async def cancel_job_run(self, application_id: str, job_run_id: str) -> None:
         """Cancel only the selected run, preserving immutable read snapshots."""

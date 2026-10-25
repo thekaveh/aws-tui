@@ -34,6 +34,7 @@ _MODELED_OPERATIONS = {
         "ListApplications",
         "ListJobRuns",
         "GetJobRun",
+        "GetDashboardForJobRun",
         "StartJobRun",
         "CancelJobRun",
     },
@@ -125,6 +126,12 @@ _CONSUMED_INPUT_MEMBERS = {
         "states",
     },
     ("emr-serverless", "GetJobRun"): {"applicationId", "jobRunId"},
+    ("emr-serverless", "GetDashboardForJobRun"): {
+        "applicationId",
+        "jobRunId",
+        "attempt",
+        "accessSystemProfileLogs",
+    },
     ("emr-serverless", "CancelJobRun"): {"applicationId", "jobRunId"},
     ("glue", "GetTables"): {"CatalogId", "DatabaseName", "NextToken"},
     ("glue", "GetCrawlerMetrics"): {"CrawlerNameList"},
@@ -624,3 +631,39 @@ def test_athena_reuse_nested_request_contract() -> None:
     assert age.type_name == "integer"
     assert age.metadata["min"] == 0
     assert age.metadata["max"] == 10080
+
+
+def test_emr_dashboard_consumed_request_and_response_contract() -> None:
+    """Pin the new operation's exact consumed fields and locked SDK constraints."""
+    fields = {"applicationId", "jobRunId", "attempt", "accessSystemProfileLogs"}
+    assert _CONSUMED_INPUT_MEMBERS[("emr-serverless", "GetDashboardForJobRun")] == fields
+    model = botocore.session.get_session().get_service_model("emr-serverless")
+    operation = model.operation_model("GetDashboardForJobRun")
+    shape = operation.input_shape
+    assert shape is not None
+    assert set(shape.members) == fields
+    assert set(shape.required_members) == {"applicationId", "jobRunId"}
+    for name in ("applicationId", "jobRunId"):
+        assert shape.members[name].type_name == "string"
+        assert shape.members[name].metadata == {"min": 1, "max": 64, "pattern": "[0-9a-z]+"}
+    assert shape.members["attempt"].type_name == "integer"
+    assert shape.members["attempt"].metadata["min"] == 1
+    assert shape.members["accessSystemProfileLogs"].type_name == "boolean"
+    output = operation.output_shape
+    assert output is not None
+    assert output.members["url"].type_name == "string"
+    assert output.members["url"].metadata == {"min": 1, "max": 2048}
+    ledger = _text("docs/contract-ledger.md")
+    assert set(_text_ledger_block(ledger, "Exact EMR Serverless boto operation ledger")) == (
+        _source_aws_operations("emr-serverless")
+    )
+
+
+def test_emr_dashboard_permission_and_action_reference() -> None:
+    """Readers need the exact IAM action and remappable public action IDs."""
+    permission = "emr-serverless:GetDashboardForJobRun"
+    assert permission in _text("docs/services/emr-serverless.md")
+    assert permission in _text("docs/contract-ledger.md")
+    actions = _action_id_table_actions(_text("docs/keybindings.md"))
+    assert actions.count("emr.dashboard.open") == 1
+    assert actions.count("emr.dashboard.copy") == 1

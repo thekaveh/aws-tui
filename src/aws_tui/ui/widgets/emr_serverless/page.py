@@ -15,8 +15,10 @@ from typing import TYPE_CHECKING, ClassVar, Literal
 from aws_tui.vm.chrome.focus_coordinator_vm import FocusSlot
 
 if TYPE_CHECKING:
+    from aws_tui.ui.widgets.emr_serverless.dashboard_modal import DashboardModal
     from aws_tui.vm.chrome.focus_coordinator_vm import FocusCoordinatorVM
 
+from reactivex.abc import DisposableBase
 from textual import events
 from textual.app import ComposeResult
 from textual.binding import Binding, BindingType
@@ -39,6 +41,7 @@ from aws_tui.ui.widgets.emr_serverless.job_runs_pane import JobRunsPane
 from aws_tui.ui.widgets.overlay_option_list import PickerOpenIntent
 from aws_tui.ui.widgets.service_source_header import ServiceSourceHeader
 from aws_tui.vm.emr_serverless.clone_vm import JobRunCloneVM
+from aws_tui.vm.emr_serverless.dashboard_vm import DashboardTarget
 from aws_tui.vm.emr_serverless.job_run_logs_vm import LogSource
 from aws_tui.vm.emr_serverless.page_vm import EmrServerlessPageVM
 from aws_tui.vm.service_source_vm import ServiceSourceContext
@@ -140,6 +143,8 @@ class EmrServerlessPage(DeferredWorkerMixin, Widget):
         super().__init__(id=id, classes=classes)
         self._vm: EmrServerlessPageVM = vm
         self._clone_active = False
+        self._dashboard_modal: DashboardModal | None = None
+        self._dashboard_subscriptions: tuple[DisposableBase, ...] = ()
         self._hub: MessageHub[Message] = hub
         self._keymap = keymap or KeymapStore()
         self._source_candidates = source_candidates
@@ -220,6 +225,12 @@ class EmrServerlessPage(DeferredWorkerMixin, Widget):
             self.call_after_refresh(self._maybe_focus_left)
 
     def on_unmount(self) -> None:
+        if self._dashboard_modal is not None:
+            self._dashboard_modal.invalidate()
+        self._vm.dashboards.invalidate()
+        for subscription in self._dashboard_subscriptions:
+            subscription.dispose()
+        self._dashboard_subscriptions = ()
         self._vm.job_run_logs.stop_follow()
         self._clone_active = False
         self._picker_open_intent.cancel()
@@ -465,6 +476,57 @@ class EmrServerlessPage(DeferredWorkerMixin, Widget):
                 self._clone_active = False
 
         self._run_lifecycle_worker(create, group="emr-new-job", exclusive=False)
+
+    def _invalidate_dashboard(self, _name: str = "") -> None:
+        modal = self._dashboard_modal
+        if modal is not None and not self._vm.dashboards.available(modal.target):
+            modal.invalidate()
+
+    async def action_dashboard(self, mode: Literal["open", "copy"]) -> None:
+        from aws_tui.ui.widgets.emr_serverless.dashboard_modal import DashboardModal
+
+        if (
+            not self._cancel_owner_current()
+            or self._dashboard_modal is not None
+            or self._vm.dashboard_target() is None
+            or self._vm.dashboards.busy
+        ):
+            return
+        ctx = self.app.app_ctx  # type: ignore[attr-defined]
+
+        async def copy_link(url: str) -> None:
+            await self.app._put_dashboard_on_clipboard(url)  # type: ignore[attr-defined]
+
+        def closed_open(target: DashboardTarget) -> None:
+            notifications.success(
+                ctx.root_vm.chrome.toast_stack,
+                subject="Job",
+                message=(
+                    f"browser open request sent for {target.source.label} / "
+                    f"{target.application_id} / {target.job_run_id}"
+                ),
+            )
+
+        modal = DashboardModal(
+            self._vm,
+            browser=ctx.browser,
+            copy_link=copy_link,
+            mode=mode,
+            on_closed_open=closed_open,
+        )
+        self._dashboard_modal = modal
+        self._dashboard_subscriptions = (
+            self._vm.applications.on_property_changed.subscribe(self._invalidate_dashboard),
+            self._vm.job_runs.on_property_changed.subscribe(self._invalidate_dashboard),
+        )
+
+        def closed(_result: object) -> None:
+            for subscription in self._dashboard_subscriptions:
+                subscription.dispose()
+            self._dashboard_subscriptions = ()
+            self._dashboard_modal = None
+
+        await self.app.push_screen(modal, closed)
 
     def _new_job_source_current(self, application_id: str) -> bool:
         return self._cancel_owner_current() and self._vm.can_submit_new_job(application_id)

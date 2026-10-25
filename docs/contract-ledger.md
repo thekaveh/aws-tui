@@ -788,3 +788,54 @@ Unpatched HTTP controls cover creation, empty-object updates, and unchanged seco
 Separate test-server controls validate the serialized completion condition and its matching/mismatching outcomes.
 Those controls do not establish native Moto support or live AWS parity.
 Native Windows/Linux and live AWS remain unverified.
+
+## 17. EMR dashboard links
+
+`botocore==1.40.61`, EMR Serverless API `2021-07-13`
+
+`GetDashboardForJobRun` consumes `applicationId`, `jobRunId`, optional `attempt`,
+and explicit `accessSystemProfileLogs`. Both identifiers are required lowercase
+alphanumeric strings of 1–64 characters.
+
+An attempt is a positive integer;
+booleans are rejected. Omission selects the latest attempt. System profile logs
+require an explicit opt-in; the request sends `false` by default.
+The request uses the reviewed connection's session, region and existing EMR SDK config.
+
+The response supplies `url`, a string of 1–2048 characters. The
+[AWS API contract](https://docs.aws.amazon.com/emr-serverless/latest/APIReference/API_GetDashboardForJobRun.html)
+sets its validity to one hour after generation. Each accepted Open or Copy
+requests a new link. IAM requires `emr-serverless:GetDashboardForJobRun`.
+
+Admission requires HTTPS and a DNS subdomain of `amazonaws.com` or
+`amazonaws.com.cn`, with no credentials or port other than 443.
+Whitespace, control characters, backslashes and malformed percent escapes are
+refused. Valid paths, queries and fragments remain unchanged. Provider errors
+use fixed categories; private URL values do not enter diagnostics or saved state.
+
+`emr.dashboard.open` (`U`) and `emr.dashboard.copy` (`Alt+U`) open a review for
+the selected Spark/Hive run. Captured source, region, application, run and
+selection revision guard delivery. Cancellation or changed ownership prevents
+pending handoff. Already admitted browser or clipboard work drains for its
+original target; an OS request cannot be recalled.
+
+A successful browser return means dispatch was requested, not that a page loaded.
+Browser failure requests clipboard fallback only while the reviewed target remains current.
+Clipboard delivery requests defer to the existing native/terminal outcome feedback.
+Demo returns fresh synthetic URLs and disables native browser dispatch.
+
+Exact EMR Serverless boto operation ledger (6):
+
+```text
+ListApplications
+ListJobRuns
+GetJobRun
+GetDashboardForJobRun
+StartJobRun
+CancelJobRun
+```
+
+Contract tests compare this inventory with source calls and the installed SDK model.
+Provider tests check exact request fields, captured region, input/URL validation,
+error privacy and synthetic demo behavior. These controlled checks do not
+establish live AWS permissions, browser page load or native-platform delivery.

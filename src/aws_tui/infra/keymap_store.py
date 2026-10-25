@@ -161,6 +161,8 @@ class KeymapStore:
         # EMR and to ``pane.copy`` on the file manager.
         "emr.clone": ("c",),
         "emr.new_job": ("N",),
+        "emr.dashboard.open": ("U",),
+        "emr.dashboard.copy": ("alt+u",),
         "emr.cancel": ("x",),
         "emr.logs.filter": ("f",),
         "emr.logs.source": ("ctrl+s",),
