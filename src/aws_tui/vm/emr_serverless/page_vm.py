@@ -160,6 +160,21 @@ class EmrServerlessPageVM:
         as :attr:`dispatcher`."""
         return self._hub
 
+    def can_submit_new_job(self, application_id: str | None = None) -> bool:
+        selected = self.applications.selected_id
+        if (
+            self._disposed
+            or self._shutdown_started
+            or not self._operations.accepting
+            or self.applications.state is not PaneState.IDLE
+            or selected is None
+            or (application_id is not None and selected != application_id)
+        ):
+            return False
+        return any(
+            app.id == selected and app.type == "SPARK" for app in self.applications.applications
+        )
+
     def can_clone_source(self, application_id: str, job_run_id: str) -> bool:
         detail = self.job_run_detail.detail
         return (
@@ -491,10 +506,26 @@ class EmrServerlessPageVM:
         # uri, the logs VM transitions to NO_LOG_CONFIG.
         self._sync_logs_target_from_detail()
 
-    async def refresh_job_runs(self) -> None:
-        """Refresh runs and reconcile detail/log targets with the result."""
+    async def refresh_job_runs(self, *, application_id: str | None = None) -> None:
+        """Refresh only the requested application, then reconcile its detail/logs."""
+
+        def current() -> bool:
+            return application_id is None or (
+                self.applications.selected_id == application_id
+                and self.job_runs.application_id == application_id
+            )
+
+        if not current():
+            return
         previous_selected = self.job_runs.selected_id
-        if not await self._run(self.job_runs.refresh):
+        refresh = (
+            self.job_runs.refresh
+            if application_id is None
+            else lambda: self.job_runs.refresh(expected_application_id=application_id)
+        )
+        if not await self._run(refresh):
+            return
+        if not current():
             return
         runs = self.job_runs.runs
         selected = self.job_runs.selected_id

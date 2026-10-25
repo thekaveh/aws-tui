@@ -63,6 +63,7 @@ _EXPECTED_ACTION_EFFECTS = {
         "Select the next EMR Serverless application and load its runs. This does not start a job."
     ),
     "emr.clone": "Open the clone workflow for the selected EMR Serverless job run.",
+    "emr.new_job": "Review and submit a new Spark job for the selected application.",
     "emr.cancel": "Confirm the exact source and run before requesting cancellation.",
     "emr.logs.source": "Choose the configured S3 or CloudWatch log destination for this run.",
     "emr.logs.follow": "Start or stop serial read-only CloudWatch log polling for the exact stream.",
@@ -101,6 +102,7 @@ _EXPECTED_ACTION_REQUIREMENTS = {
     "pane.new": "Requires a ready file pane; S3 bucket creation is unsupported.",
     "pane.delete": "Requires a deletable selected item.",
     "emr.clone": "Requires a selected cloneable job run.",
+    "emr.new_job": "Requires a selected Spark application; no previous run is needed.",
     "emr.cancel": "Requires a selected active job run and no pending cancellation request.",
     "emr.logs.source": "Requires focused EMR logs and two configured destinations.",
     "emr.logs.follow": "Requires focused CloudWatch logs with enabled monitoring. Stop remains available during reads.",

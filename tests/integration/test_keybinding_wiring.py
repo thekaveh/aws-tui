@@ -60,6 +60,7 @@ _EXPECTED: set[tuple[str, str, bool, bool]] = {
     ("S", "dispatch('app.swap_source')", True, False),
     ("A", "dispatch('emr.next_application')", True, False),
     ("c", "dispatch('emr.clone')", False, False),
+    ("N", "dispatch('emr.new_job')", False, False),
     ("x", "dispatch('emr.cancel')", False, False),
     ("f", "dispatch('emr.logs.filter')", False, False),
     ("ctrl+s", "dispatch('emr.logs.source')", False, True),

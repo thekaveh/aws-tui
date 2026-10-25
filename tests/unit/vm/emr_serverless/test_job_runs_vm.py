@@ -670,3 +670,34 @@ async def test_selection_made_during_poll_survives_changed_rows(monkeypatch):
     assert vm.selected_id == "r2"
     assert any(run.job_run_id == "r5" for run in vm.runs)
     vm.dispose()
+
+
+@pytest.mark.asyncio
+async def test_expected_application_is_checked_after_refresh_lock_admission():
+    vm, fake = _make()
+    _seed_runs(fake, "a1")
+    _seed_runs(fake, "b1")
+    vm.set_application("a1")
+    await vm._paging_lock.acquire()
+    task = None
+    try:
+
+        async def refresh_original():
+            await vm.refresh(expected_application_id="a1")
+
+        task = asyncio.create_task(refresh_original())
+        await asyncio.sleep(0)
+        vm.set_application("b1")
+        before = list(fake.calls)
+        vm._paging_lock.release()
+        await task
+        assert fake.calls == before
+        assert vm.application_id == "b1"
+        assert vm.runs == ()
+    finally:
+        if vm._paging_lock.locked():
+            vm._paging_lock.release()
+        if task is not None:
+            await asyncio.gather(task, return_exceptions=True)
+        vm.dispose()
+        fake.dispose()

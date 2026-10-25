@@ -15,7 +15,7 @@ connection and region separate from other sources.
   rename files, create folders, delete entries and preview file contents.
   Connect to AWS S3 or S3-compatible storage.
 - **EMR Serverless:** browse applications and job runs, inspect S3 or CloudWatch
-  logs, clone an existing Spark run and cancel an active run.
+  logs, submit a new Spark job, clone an existing run and cancel an active run.
 - **Glue and Iceberg:** inspect databases, tables, jobs, crawlers and Iceberg
   metadata. Open a selected table or snapshot in Athena with a starter query.
 - **Athena:** choose query context, review and execute allowed read-only SQL,
@@ -31,7 +31,7 @@ Glue inspection is read-only. Glue-to-Athena handoffs prefill a
 `SELECT * … LIMIT 5` query without executing it. Athena execution can incur
 AWS charges and write query results, subject to your AWS permissions and workgroup settings.
 
-S3 file operations can modify objects. EMR clone and cancel
+S3 file operations can modify objects. EMR submit, clone and cancel
 operations modify job state. Destructive operations require confirmation.
 See the [service guides](#6-documentation) for each operation's conditions.
 

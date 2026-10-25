@@ -12,7 +12,7 @@ Start with the demo to explore sample resources without AWS credentials.
 
 - Browse S3 or S3-compatible storage alongside local files; copy, move, rename,
   create folders, delete and preview entries.
-- Inspect EMR applications, job runs and logs; clone existing Spark runs and
+- Inspect EMR applications, job runs and logs; submit new Spark jobs, clone existing runs and
   request cancellation of active runs.
 - Browse Glue databases, tables, jobs and crawlers, including Iceberg metadata.
 - Review and execute allowed read-only SQL in Athena, then inspect results
@@ -22,7 +22,7 @@ Start with the demo to explore sample resources without AWS credentials.
 
 Glue table and Iceberg snapshot handoffs prefill Athena queries without
 executing them. Athena queries can incur AWS charges and write query results.
-S3 file operations and EMR clone or cancel actions can modify resources.
+S3 file operations and EMR submit, clone or cancel actions can modify resources.
 
 ## 2. Get started
 
