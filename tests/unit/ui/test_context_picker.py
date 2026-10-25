@@ -658,8 +658,8 @@ async def test_context_picker_disables_opening_when_disabled() -> None:
     picker = _picker()
 
     async with PickerHost(picker).run_test() as pilot:
+        await focus_and_settle(picker, require_focusable=True)
         picker.set_state(disabled=True)
-        await focus_and_settle(picker)
         await pilot.press("enter")
 
         assert picker.disabled is True
