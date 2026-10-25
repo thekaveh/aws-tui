@@ -31,6 +31,7 @@ from aws_tui.domain.transfer_journal import TransferJournal
 from aws_tui.domain.unavailable_navigation_fs import UnavailableNavigationFS
 from aws_tui.infra.connection_resolver import Connection
 from aws_tui.infra.redaction import safe_endpoint_display
+from aws_tui.services.mutation_policy import MutationCheckFactory, protect_remote
 from aws_tui.vm.credential_recovery import connection_history_identity
 from aws_tui.vm.file_manager.dual_pane_vm import DualPaneVM
 from aws_tui.vm.file_manager.pane_vm import PaneVM
@@ -133,6 +134,7 @@ class S3Service:
         dispatcher: Dispatcher,
         local_root: Path | None = None,
         s3_fs_factory: S3FsFactory | None = None,
+        mutation_check_factory: MutationCheckFactory | None = None,
         initial_left_path: PathRef | None = None,
         initial_right_path: PathRef | None = None,
         initial_local_root: Path | None = None,
@@ -144,6 +146,7 @@ class S3Service:
         self._hub: MessageHub[Message] | None = hub
         self._dispatcher: Dispatcher = dispatcher
         self._local_root: Path | None = local_root
+        self._mutation_check_factory = mutation_check_factory
         self._s3_fs_factory: S3FsFactory | None = s3_fs_factory
         self._last_navigation: tuple[NavigationTarget, NavigationTarget] | None = None
         self._navigation_capture_failed = False
@@ -441,15 +444,18 @@ class S3Service:
     def build_remote_provider(self, connection: Connection) -> FileSystemProvider:
         """Pull from the test factory, or build a fresh :class:`S3FS`."""
         if self._s3_fs_factory is not None:
-            return self._s3_fs_factory(connection)
+            return protect_remote(
+                self._s3_fs_factory(connection), connection, self._mutation_check_factory
+            )
         session = _aioboto3_session_for(connection)
-        return S3FS(
+        provider = S3FS(
             session=session,
             bucket=None,
             endpoint_url=connection.endpoint_url,
             force_path_style=connection.force_path_style,
             verify_tls=connection.verify_tls,
         )
+        return protect_remote(provider, connection, self._mutation_check_factory)
 
 
 def _strip_scheme(url: str | None) -> str | None:
@@ -481,12 +487,16 @@ def _format_pane_title(connection: Connection) -> str:
             parts.append(connection.profile)
         if connection.region:
             parts.append(connection.region)
+        if connection.protected:
+            parts.append("Protected")
         return " · ".join(parts)
     if connection.kind == "s3-compatible":
         parts = ["s3-compatible", connection.name]
         endpoint = _strip_scheme(connection.endpoint_url)
         if endpoint:
             parts.append(endpoint)
+        if connection.protected:
+            parts.append("Protected")
         return " · ".join(parts)
     # Fallback for any future kind — keep the old shape.
     parts = [connection.kind]

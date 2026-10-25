@@ -19,6 +19,7 @@ from aws_tui.domain.filesystem import (
     NotFoundError,
     PathRef,
 )
+from aws_tui.domain.mutation_guard import PROTECTED_MESSAGE, ConnectionProtectedError
 from aws_tui.domain.transfer_history import (
     FailureReason,
     TransferConnectionIdentity,
@@ -389,6 +390,8 @@ class TransferHistoryVM:
                 if reason == "persistence_error"
                 else "The new copy could not be completed."
             )
+            if isinstance(error, ConnectionProtectedError):
+                message = PROTECTED_MESSAGE
             raise RecoveryRefused(reason, message) from None
         finally:
             if new_id is not None:

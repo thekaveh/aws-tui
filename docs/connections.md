@@ -46,7 +46,7 @@ theme = "carbon"
 
 Connection fields such as `profile`, `region`, `endpoint_url`,
 `credentials`, `access_key_id`, `secret_access_key`, and `session_token`
-must be TOML strings when present. `force_path_style` and `verify_tls`
+must be TOML strings when present. `protected`, `force_path_style` and `verify_tls`
 must be TOML booleans (`true` / `false`), not quoted strings. `endpoint_url` must be an HTTP(S) endpoint. URL paths are preserved, but
 do not include URL username/password, query strings, or fragments.
 
@@ -119,11 +119,9 @@ region, the selected profile's configured region, `AWS_DEFAULT_REGION`, then
 `us-east-1`. This matches the botocore profile and region environment
 contracts consumed by the pinned SDK.
 
-> The dedicated command-palette path (`: connection materialize <name>`) is spec'd but deferred to v0.9.
-> It would promote an auto-discovered AWS profile into a real `[connections.*]` block.
-> The palette doesn't register connection-management entries in v0.8.x. To materialize today, add
-> the `[connections.<name>]` block to `<config-dir>/config.toml`
-> by hand (the schema is shown in [§1](#1-config-schema)).
+Auto-discovered profiles do not need an application configuration entry.
+Saving their protection setting in Settings creates one. For other persistent
+overrides, add a `[connections.<name>]` block using the schema in [section 1](#1-config-schema).
 
 For each SSO-backed AWS connection, `AwsSession.probe_token(conn)` performs a
 cheap freshness check **without calling AWS**:
@@ -387,3 +385,50 @@ inspection and cleanup.
 Recovery does not replace a service while an Athena query or EMR cancellation is active.
 Edits and selection changes made during its verification read invalidate the candidate.
 Retry after the operation finishes or the selected read target settles.
+
+
+## 9. Connection protection
+
+Open **Settings → Connection protection**. Each row identifies its connection,
+kind, region and current policy. Select **Enable protection** to block new remote
+changes through that connection. Existing configurations default to unprotected.
+Saving a discovered AWS profile creates a persistent connection entry.
+Credential edits preserve the policy. Demo mode disables these controls.
+
+You can also set the boolean directly:
+
+```toml
+[connections.analytics]
+kind = "aws"
+profile = "analytics"
+protected = true
+```
+
+Protected file panes and AWS service source selectors display **Protected**.
+Each pane keeps its own connection policy. A local pane remains writable when
+its remote companion is protected.
+
+| Operation through a protected connection | Policy |
+| --- | --- |
+| Browse metadata, list objects, inspect details or read existing results | Allowed |
+| Download objects or historical versions to an unprotected destination | Allowed |
+| Upload, sync, delete, move, rename or create an S3 folder marker | Blocked |
+| Recover an historical object version to a new S3 key | Blocked |
+| Retry a transfer that writes to the protected destination | Blocked |
+| Move from a protected source, including a download that deletes its source | Blocked |
+| Submit an EMR run or start an Athena query | Blocked |
+| Inspect Iceberg metadata through a new Athena execution | Blocked |
+| Cancel an existing Athena query or EMR run | Allowed under existing ownership and confirmation checks |
+
+The application checks the bound connection after confirmation and before a
+provider mutation starts. Changing the visible source does not redirect an
+approved operation. Accepted provider calls retain their cleanup behavior;
+later calls in a batch receive fresh checks. A refusal can leave earlier,
+successful batch items in place. Review the transfer outcome before retrying.
+Disabling protection never replays blocked work.
+
+This setting is an application guard, not an AWS authorization boundary.
+[AWS Identity and Access Management](https://docs.aws.amazon.com/IAM/latest/UserGuide/access_policies.html) remains authoritative. Other clients and
+separately configured aliases can still use their own permissions. Names such
+as `prod` do not enable protection automatically. Use the protected configured
+connection explicitly when launching with `--connection`.

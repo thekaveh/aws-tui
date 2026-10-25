@@ -1299,3 +1299,34 @@ async def test_cancel_during_effective_destination_write_drains_before_mutation(
     assert set(path.name for path in destination.iterdir()) == {TRANSFER_NAME}
     await dual.shutdown()
     dual.dispose()
+
+
+async def test_history_retry_rechecks_protection_after_confirmation(tmp_path):
+    from aws_tui.domain.mutation_guard import ConnectionProtectedError, GuardedRemote
+    from aws_tui.vm.file_manager.transfer_history_vm import RecoveryRefused
+
+    vm, dual, tid, _, destination, providers, _ = await history_case(tmp_path)
+    protected = False
+
+    async def check():
+        if protected:
+            raise ConnectionProtectedError("Connection is protected; remote changes are blocked")
+
+    dest_identity = identity(dual.right.provider)
+    providers[dest_identity] = GuardedRemote(providers[dest_identity], check)
+
+    async def decide(plan):
+        nonlocal protected
+        protected = True
+        return ConflictResolution.ERROR
+
+    try:
+        with pytest.raises(RecoveryRefused) as refused:
+            await vm.retry(tid, decide)
+        assert refused.value.reason == "permission_denied"
+        assert "Settings" in str(refused.value)
+        assert list(destination.iterdir()) == []
+    finally:
+        await vm.shutdown()
+        await dual.shutdown()
+        dual.dispose()

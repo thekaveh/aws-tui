@@ -178,6 +178,8 @@ class S3ConnectionsVM:
             )
         with self._config_store.transaction():
             old_entry = self._config_store.load().connections.get(name)
+            if old_entry is not None:
+                entry = replace(entry, protected=old_entry.protected)
             old_secrets = self._read_keychain_credentials(old_entry)
             staged_service = self._next_revision_service(name, old_entry)
             self._ensure_credential_service_available(entry, staged_service)

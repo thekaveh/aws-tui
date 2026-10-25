@@ -55,6 +55,18 @@ class ConnectionChangedMessage:
 
 
 @dataclass(frozen=True, slots=True)
+class ConnectionProtectionChangedMessage:
+    """Metadata-only policy update; no credential or route replacement."""
+
+    connection: Connection
+    sender_name: str = "connection_protection"
+
+    @property
+    def sender_object(self) -> object:
+        return self
+
+
+@dataclass(frozen=True, slots=True)
 class ThemeChangedMessage:
     """Published by ``RootVM`` when the active theme changes.
 

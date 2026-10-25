@@ -66,6 +66,7 @@ from aws_tui.domain.filesystem import (
     TransferProgress,
     UnsupportedSourceError,
 )
+from aws_tui.domain.mutation_guard import ensure_mutation_allowed
 
 #: Maximum ``" (N)"`` suffixes the ``RENAME`` conflict resolver will try
 #: before giving up. 1000 is plenty for any plausible user-driven copy
@@ -270,6 +271,7 @@ class CrossFsCopy:
         - ``on_conflict`` is consulted *before* opening the source stream
           so we don't waste bandwidth.
         """
+        await ensure_mutation_allowed(self._destination)
         return await self._copy_entry(
             src,
             dst,
@@ -1484,6 +1486,8 @@ class CrossFsMove(CrossFsCopy):
         progress: ProgressCallback | None = None,
         on_conflict: ConflictResolution = ConflictResolution.ERROR,
     ) -> bool:
+        await ensure_mutation_allowed(self._source)
+        await ensure_mutation_allowed(self._destination)
         shared_paths = self._potentially_shared_move_paths(src, dst)
         if self._same_storage_path(src, dst) or (
             shared_paths is not None and shared_paths[0] == shared_paths[1]

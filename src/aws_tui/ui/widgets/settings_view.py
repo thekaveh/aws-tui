@@ -19,6 +19,7 @@ from vmx import Message, MessageHub
 
 from aws_tui.ui.widgets.modal_button import ModalButton
 from aws_tui.ui.widgets.settings.athena_drafts_panel import AthenaDraftsPanel
+from aws_tui.ui.widgets.settings.connection_protection_panel import ConnectionProtectionPanel
 from aws_tui.ui.widgets.settings.s3_connections_panel import S3ConnectionsPanel
 from aws_tui.vm.chrome.focus_coordinator_vm import FocusSlot
 from aws_tui.vm.settings.settings_vm import SettingsVM
@@ -73,6 +74,13 @@ class SettingsView(Widget):
                 id="section-connections",
             ):
                 yield S3ConnectionsPanel(vm=self._vm.s3, hub=self._hub)
+            if self._vm.protection is not None:
+                with Collapsible(
+                    title="Connection protection",
+                    collapsed=False,
+                    id="section-connection-protection",
+                ):
+                    yield ConnectionProtectionPanel(vm=self._vm.protection)
             if self._vm.athena_drafts is not None:
                 with Collapsible(
                     title="Athena SQL drafts", collapsed=False, id="section-athena-drafts"

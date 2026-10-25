@@ -15,6 +15,7 @@ from aws_tui.domain.filesystem import (
     ThrottledError,
     ValidationError,
 )
+from aws_tui.domain.mutation_guard import PROTECTED_MESSAGE, ConnectionProtectedError
 from aws_tui.vm.file_manager.pane_vm import PaneState
 
 
@@ -24,6 +25,8 @@ def map_provider_error(
     fallback: str,
 ) -> tuple[PaneState, str]:
     """Map provider failures without copying sensitive exception text."""
+    if isinstance(exc, ConnectionProtectedError):
+        return PaneState.FORBIDDEN, PROTECTED_MESSAGE
     if isinstance(exc, AuthRequiredError):
         return PaneState.AUTH_REQUIRED, "AWS authentication is required"
     if isinstance(exc, ProviderUnreachableError):

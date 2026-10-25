@@ -24,6 +24,7 @@ from aws_tui.domain.filesystem import (
     ThrottledError,
     ValidationError,
 )
+from aws_tui.domain.mutation_guard import PROTECTED_MESSAGE, ConnectionProtectedError
 from aws_tui.domain.query import (
     QueryContext,
     QueryExecutionDetail,
@@ -559,6 +560,8 @@ async def _await_task_through_cancellation(task: asyncio.Task[T]) -> T:
 
 def _prepared_provider_error(exc: BaseException, *, phase: str) -> _PreparedRunError:
     error_type: type[ProviderError]
+    if isinstance(exc, ConnectionProtectedError):
+        return _PreparedRunError(ConnectionProtectedError, PROTECTED_MESSAGE)
     if isinstance(exc, ResultConfigurationRequiredError):
         error_type = ResultConfigurationRequiredError
     elif isinstance(exc, ResultLocationUnavailableError):

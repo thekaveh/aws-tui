@@ -13,6 +13,7 @@ from vmx.lifecycle.status import ConstructionStatus
 from vmx.services.dispatcher import Dispatcher
 
 from aws_tui.vm.athena.drafts_vm import AthenaDraftsVM
+from aws_tui.vm.settings.connection_protection_vm import ConnectionProtectionVM
 from aws_tui.vm.settings.s3_connections_vm import S3ConnectionsVM
 
 
@@ -31,9 +32,11 @@ class SettingsVM:
         *,
         s3: S3ConnectionsVM,
         athena_drafts: AthenaDraftsVM | None = None,
+        protection: ConnectionProtectionVM | None = None,
         hub: MessageHub[Message],
         dispatcher: Dispatcher,
     ) -> None:
+        self.protection = protection
         self._s3: S3ConnectionsVM = s3
         self._athena_drafts = athena_drafts
         self._inner: ComponentVM = (

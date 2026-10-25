@@ -15,6 +15,7 @@ from aws_tui.domain.sql_authoring import CompletionTable
 from aws_tui.domain.sql_policy import ReadOnlySqlPolicy
 from aws_tui.infra.aws_session import AwsSession
 from aws_tui.infra.connection_resolver import Connection
+from aws_tui.services.mutation_policy import MutationCheckFactory, protect_remote
 from aws_tui.vm.athena.drafts_vm import AthenaDraftsVM
 from aws_tui.vm.athena.page_vm import AthenaPageVM
 from aws_tui.vm.service_source_vm import SelectionScope, ServiceSelectionStore, navigation_seed
@@ -130,11 +131,13 @@ class AthenaService:
         dispatcher: Dispatcher,
         aws_session: AwsSession,
         athena_client_factory: AthenaClientFactory | None = None,
+        mutation_check_factory: MutationCheckFactory | None = None,
         sql_policy_factory: SqlPolicyFactory | None = None,
         selection_store: ServiceSelectionStore | None = None,
         drafts: AthenaDraftsVM | None = None,
         source_check_factory: Callable[[Connection], Callable[[], Awaitable[bool]]] | None = None,
     ) -> None:
+        self._mutation_check_factory = mutation_check_factory
         self._drafts = drafts
         self._source_check_factory = source_check_factory
         self._hub = hub
@@ -205,6 +208,7 @@ class AthenaService:
                 connection=connection,
             )
         )
+        client = protect_remote(client, connection, self._mutation_check_factory)
         source_check = (
             self._source_check_factory(connection)
             if self._source_check_factory is not None

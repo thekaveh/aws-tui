@@ -136,3 +136,11 @@ before adoption. It performs metadata reads, but submits no query or job and
 replays no transfer or mutation. Missing destinations remain errors; Open does
 not substitute another resource. Finish active operations before opening saved
 navigation. Failed preparation preserves the current screen.
+
+
+## 7. Connection protection
+
+Use **Settings → Connection protection** or set `protected = true` in the
+connection's configuration block. The default is false. See
+[Connection protection](connections.md#9-connection-protection) for permitted
+reads, blocked changes, cancellation and application-only limits.
