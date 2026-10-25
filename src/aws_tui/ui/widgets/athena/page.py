@@ -54,6 +54,7 @@ _ATHENA_FOCUS_ORDER = (
     FocusSlot.ATHENA_CANCEL,
     FocusSlot.ATHENA_DRAFTS,
     FocusSlot.ATHENA_AUTHORING,
+    FocusSlot.ATHENA_QUERY_OPTIONS,
     FocusSlot.ATHENA_STATUS,
     FocusSlot.ATHENA_SAVED_PREPARED_MORE,
     FocusSlot.ATHENA_DETAIL,
@@ -675,6 +676,7 @@ class AthenaPage(DeferredWorkerMixin, HubSubscriberMixin, Widget):
                 (FocusSlot.ATHENA_CANCEL, self.query_one("#athena-cancel", Button)),
                 (FocusSlot.ATHENA_DRAFTS, self.query_one("#athena-drafts", Button)),
                 (FocusSlot.ATHENA_AUTHORING, self.query_one("#athena-authoring", Button)),
+                (FocusSlot.ATHENA_QUERY_OPTIONS, self.query_one("#athena-query-options", Button)),
                 (FocusSlot.ATHENA_STATUS, self.query_one("#athena-query-status", Widget)),
                 (
                     FocusSlot.ATHENA_DETAIL,

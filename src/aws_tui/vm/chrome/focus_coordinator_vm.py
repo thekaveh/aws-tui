@@ -91,6 +91,7 @@ class FocusSlot(StrEnum):
     ATHENA_CANCEL = "athena.cancel"
     ATHENA_DRAFTS = "athena.drafts"
     ATHENA_AUTHORING = "athena.authoring"
+    ATHENA_QUERY_OPTIONS = "athena.query_options"
     ATHENA_STATUS = "athena.status"
     ATHENA_DETAIL = "athena.detail"
     ATHENA_HISTORY_MORE = "athena.history.more"

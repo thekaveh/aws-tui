@@ -21,12 +21,14 @@ from vmx import Message as HubMessage
 from vmx import MessageHub
 
 from aws_tui.domain.query import QueryContext
+from aws_tui.ui.formatters import humanize_bytes
 from aws_tui.ui.widgets._worker import DeferredWorkerMixin
 from aws_tui.ui.widgets.athena.authoring_dialogs import (
     SqlChoiceModal,
     SqlValueModal,
     ask_sql_confirmation,
 )
+from aws_tui.ui.widgets.athena.query_options_modal import QueryOptionsModal
 from aws_tui.ui.widgets.glue.detail_rows import display_value
 from aws_tui.vm.athena.page_vm import AthenaPageVM
 
@@ -137,6 +139,7 @@ class AthenaQueryView(DeferredWorkerMixin, Widget):
     }
     AthenaQueryView #athena-drafts { width: 8; min-width: 8; height: 3; padding: 0; margin: 0 1 0 0; }
     AthenaQueryView #athena-authoring { width: 7; min-width: 7; height: 3; padding: 0; margin: 0 1 0 0; }
+    AthenaQueryView #athena-query-options { width: 7; min-width: 7; height: 3; padding: 0; margin: 0 1 0 0; }
     AthenaQueryView #athena-query-status {
         width: 1fr;
         height: 3;
@@ -176,6 +179,7 @@ class AthenaQueryView(DeferredWorkerMixin, Widget):
         self._replacement_revision = -1
         self._editor_vm_revision = -1
         self._authoring_pending = False
+        self._options_pending = False
         self._syncing_editor = False
         self._layout_screen: Screen[object] | None = None
 
@@ -208,6 +212,13 @@ class AthenaQueryView(DeferredWorkerMixin, Widget):
                 compact=True,
                 flat=True,
                 tooltip="SQL completion, formatting, files and local snippets",
+            )
+            yield Button(
+                "Reuse",
+                id="athena-query-options",
+                compact=True,
+                flat=True,
+                tooltip="Configure per-query result reuse",
             )
             status = Static("", id="athena-query-status", markup=False)
             status.can_focus = True
@@ -286,6 +297,30 @@ class AthenaQueryView(DeferredWorkerMixin, Widget):
             self.post_message(self.OpenDrafts())
         elif event.button.id == "athena-authoring":
             self.dispatch_authoring("menu")
+        elif event.button.id == "athena-query-options":
+            if self._options_pending or not self.authoring_available():
+                return
+            self._options_pending = True
+            context = self._vm.context
+            revision = self._page_vm.context_choice_revision
+
+            async def show_options() -> None:
+                modal = QueryOptionsModal(
+                    self._vm,
+                    current=lambda: (
+                        self.is_mounted
+                        and self._page_vm._is_alive()
+                        and self._vm.context == context
+                        and self._page_vm.context_choice_revision == revision
+                    ),
+                )
+                try:
+                    await self.app.push_screen_wait(modal)
+                finally:
+                    modal.invalidate()
+                    self._options_pending = False
+
+            self._run_lifecycle_worker(show_options, group="athena-query-options", exclusive=False)
 
     def authoring_available(self, command: str = "menu") -> bool:
         return (
@@ -634,6 +669,7 @@ class AthenaQueryView(DeferredWorkerMixin, Widget):
         status.update(f"{document}{' *' if authoring.dirty else ''} · {message}")
         status.tooltip = str(authoring.path) if authoring.path else "Unsaved local SQL document"
         self.query_one("#athena-authoring", Button).disabled = not self.authoring_available()
+        self.query_one("#athena-query-options", Button).disabled = not self.authoring_available()
         detail.update(self._detail_text())
         drafts = self._page_vm.drafts
         button = self.query_one("#athena-drafts", Button)
@@ -698,6 +734,32 @@ class AthenaQueryView(DeferredWorkerMixin, Widget):
                 )
             )
         workgroup = self._page_vm.workgroup_detail
+        if workgroup is not None and workgroup.summary.name != self._vm.context.workgroup:
+            workgroup = None
+        cutoff = "Unavailable (workgroup metadata not loaded)"
+        if workgroup is not None:
+            value = workgroup.bytes_scanned_cutoff
+            if value is None:
+                cutoff = "Not reported by workgroup"
+            elif type(value) is not int or value < 10_000_000:
+                cutoff = "Invalid workgroup metadata"
+            else:
+                readable = (
+                    humanize_bytes(value)
+                    .replace("kB", "KiB")
+                    .replace("MB", "MiB")
+                    .replace("GB", "GiB")
+                    .replace("TB", "TiB")
+                )
+                cutoff = f"{value} bytes ({readable})"
+        rows.append(f"Scan cutoff     {cutoff}")
+        reason = self._vm.reuse_unavailable_reason
+        reuse = (
+            f"On · up to {self._vm.reuse_max_age_minutes} minutes"
+            if self._vm.reuse_enabled
+            else "Off"
+        )
+        rows.append(f"Result reuse    {reuse}" + (f" · {reason}" if reason else ""))
         if workgroup is not None:
             managed = workgroup.managed_query_results_enabled
             rows.extend(
@@ -715,6 +777,7 @@ class AthenaQueryView(DeferredWorkerMixin, Widget):
                 (
                     f"Engine          {display_value(self._vm.engine_version)}",
                     f"Bytes scanned   {display_value(stats.bytes_scanned)}",
+                    f"Reused result   {'Yes' if stats.reused_previous_result else 'No'}",
                     f"Queue           {display_value(stats.queue_ms)} ms",
                     f"Planning        {display_value(stats.planning_ms)} ms",
                     f"Engine time     {display_value(stats.engine_ms)} ms",

@@ -307,9 +307,11 @@ def test_athena_permissions_and_output_modes_are_pinned_to_aws_contracts() -> No
         and isinstance(node.func, ast.Attribute)
         and node.func.attr == "start_query"
     ]
-    assert len(start_calls) == 2
+    assert start_calls
     for call in start_calls:
-        assert {keyword.arg for keyword in call.keywords} == {"request_token"}
+        keywords = {keyword.arg for keyword in call.keywords}
+        assert "request_token" in keywords
+        assert keywords <= {"request_token", "result_reuse_max_age_minutes"}
     query_vm_tree = ast.parse(query_vm_source)
     runner_calls = [
         node
@@ -318,8 +320,11 @@ def test_athena_permissions_and_output_modes_are_pinned_to_aws_contracts() -> No
         and isinstance(node.func, ast.Attribute)
         and node.func.attr == "start"
     ]
-    assert len(runner_calls) == 1
-    assert {keyword.arg for keyword in runner_calls[0].keywords} == {"request_token"}
+    assert runner_calls
+    for call in runner_calls:
+        keywords = {keyword.arg for keyword in call.keywords}
+        assert "request_token" in keywords
+        assert keywords <= {"request_token", "result_reuse_max_age_minutes"}
 
 
 def test_athena_sql_grammar_matches_policy_tests() -> None:

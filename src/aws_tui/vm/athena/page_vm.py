@@ -249,6 +249,7 @@ class AthenaPageVM:
             validate_draft_execution=self._validate_draft_execution,
             drafts_enabled=lambda: drafts is not None and drafts.enabled,
             execution_context_available=self._workgroup_allows_execution,
+            reuse_unavailable_reason=self._query_reuse_unavailable_reason,
         )
         self.history = AthenaHistoryVM(
             client=client,
@@ -3067,6 +3068,16 @@ class AthenaPageVM:
             and any(row.name == self._context.catalog for row in self.catalogs)
             and any(row.ref.database_name == self._context.database for row in self.databases)
         )
+
+    def _query_reuse_unavailable_reason(self) -> str | None:
+        detail = self._workgroup_detail
+        if not self._enabled_workgroup_available() or detail is None:
+            return "Result reuse requires current enabled workgroup metadata"
+        if not valid_athena_workgroup_detail(detail):
+            return "Result reuse is unavailable because workgroup metadata is invalid"
+        if detail.managed_query_results_enabled:
+            return "Managed query results do not support result reuse"
+        return None
 
     def _enabled_workgroup_available(self) -> bool:
         detail = self._workgroup_detail

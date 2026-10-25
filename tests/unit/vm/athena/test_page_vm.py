@@ -1924,8 +1924,10 @@ async def test_same_context_snapshot_restores_after_failed_context_refresh_witho
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("reuse", [False, True])
 async def test_snapshot_publication_is_coherent_and_isolates_all_observer_failures(
     caplog: pytest.LogCaptureFixture,
+    reuse: bool,
 ) -> None:
     client = PageClient()
     source_store = ServiceSelectionStore()
@@ -1942,6 +1944,8 @@ async def test_snapshot_publication_is_coherent_and_isolates_all_observer_failur
     destination_store = ServiceSelectionStore()
     destination = make_page_vm(client, selection_store=destination_store)
     await destination.setup()
+    if reuse:
+        destination.query.set_reuse_options(enabled=True, max_age_minutes=42)
     destination.query.set_sql("UNCHANGED_DESTINATION_SQL")
     observed: dict[str, list[bool]] = {
         "page": [],

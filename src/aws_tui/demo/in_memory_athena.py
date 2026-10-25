@@ -617,13 +617,25 @@ class InMemoryAthena:
         *,
         request_token: str,
         output_location: str | None = None,
+        result_reuse_max_age_minutes: int | None = None,
     ) -> QueryExecutionRef:
-        self._record("start_query", sql, context, request_token, output_location)
+        if result_reuse_max_age_minutes is None:
+            self._record("start_query", sql, context, request_token, output_location)
+        else:
+            self._record(
+                "start_query",
+                sql,
+                context,
+                request_token,
+                output_location,
+                result_reuse_max_age_minutes,
+            )
         self._raise_if_denied()
         argument_error = self._start_argument_error(
             context,
             request_token=request_token,
             output_location=output_location,
+            result_reuse_max_age_minutes=result_reuse_max_age_minutes,
         )
         if argument_error is not None:
             context = QueryContext("", "", "", "", "")
@@ -642,6 +654,8 @@ class InMemoryAthena:
             *context.cache_key,
             output_location,
         )
+        if result_reuse_max_age_minutes is not None:
+            request_fingerprint += _fingerprint(str(result_reuse_max_age_minutes))
         known = self._request_tokens.get(token_fingerprint)
         if known is not None:
             if known.request_fingerprint != request_fingerprint:
@@ -881,6 +895,7 @@ class InMemoryAthena:
         *,
         request_token: str,
         output_location: str | None,
+        result_reuse_max_age_minutes: int | None,
     ) -> str | None:
         if type(context) is not QueryContext or any(
             not _valid_required_text(value) for value in context.cache_key
@@ -891,6 +906,18 @@ class InMemoryAthena:
         workgroup = self.workgroup_details.get(context.workgroup)
         if workgroup is None or workgroup.summary.state != "ENABLED":
             return "Athena query context is unavailable"
+        if result_reuse_max_age_minutes is not None:
+            if (
+                type(result_reuse_max_age_minutes) is not int
+                or not 0 <= result_reuse_max_age_minutes <= 10_080
+            ):
+                return "result reuse age must be an integer from 0 to 10080 minutes"
+            if output_location is not None:
+                return "result reuse cannot use a caller output location"
+            if workgroup.summary.name != context.workgroup:
+                return "result reuse requires the selected enabled workgroup"
+            if workgroup.managed_query_results_enabled:
+                return "result reuse is unavailable for managed query results"
         if not any(
             catalog.name == context.catalog for catalog in self.catalogs.get(context.workgroup, ())
         ):
