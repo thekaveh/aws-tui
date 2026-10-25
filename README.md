@@ -11,8 +11,9 @@ connection and region separate from other sources.
 
 ## 1. Capabilities
 
-- **S3 and local files:** browse two independent panes, copy files, delete
-  entries and preview file contents. Connect to AWS S3 or S3-compatible storage.
+- **S3 and local files:** browse two independent panes, copy or move entries,
+  rename files, create folders, delete entries and preview file contents.
+  Connect to AWS S3 or S3-compatible storage.
 - **EMR Serverless:** browse applications and job runs, inspect S3 or CloudWatch
   logs, clone an existing Spark run and cancel an active run.
 - **Glue and Iceberg:** inspect databases, tables, jobs, crawlers and Iceberg
@@ -30,7 +31,7 @@ Glue inspection is read-only. Glue-to-Athena handoffs prefill a
 `SELECT * … LIMIT 5` query without executing it. Athena execution can incur
 AWS charges and write query results, subject to your AWS permissions and workgroup settings.
 
-S3 copy and delete operations modify files or objects. EMR clone and cancel
+S3 file operations can modify objects. EMR clone and cancel
 operations modify job state. Destructive operations require confirmation.
 See the [service guides](#6-documentation) for each operation's conditions.
 
@@ -76,7 +77,7 @@ replace `uv run aws-tui` with `aws-tui`.
 ### 4.1. Explore the demo
 
 The demo uses synthetic AWS data and sends no AWS requests. Its local pane
-uses your real filesystem; local copy and delete operations affect real files.
+uses your real filesystem; local file operations can modify real files.
 
 ```bash
 uv run aws-tui --demo

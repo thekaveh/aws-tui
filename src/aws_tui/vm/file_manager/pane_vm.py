@@ -43,6 +43,7 @@ from vmx.services.dispatcher import Dispatcher
 
 from aws_tui.domain.filesystem import (
     AuthRequiredError,
+    ConflictError,
     DirectoryNavigationVerifier,
     EntryKind,
     FileEntry,
@@ -57,6 +58,7 @@ from aws_tui.domain.transfer_history import TransferConnectionIdentity
 from aws_tui.infra.redaction import redact_text
 from aws_tui.vm._observable import ObserverSafeSubject, send_value_free
 from aws_tui.vm.file_manager.entry_vm import EntryState, EntryVM
+from aws_tui.vm.file_manager.file_names import require_entry_name
 from aws_tui.vm.service_diagnostics import report_unexpected_service_error
 
 #: Module-level singleton for the default initial path (root).
@@ -217,8 +219,7 @@ def _require_single_segment(name: str) -> None:
     already refused deeper down by the providers, but rejecting it here gives a
     clear message instead of a provider error.
     """
-    if name in {".", ".."} or any(character in name for character in ("/", "\\")):
-        raise ProviderError(f"name must be a single path segment: {name!r}")
+    require_entry_name(name)
 
 
 def _summary_text(
@@ -1188,18 +1189,96 @@ class PaneVM:
         if not name:
             return
         _require_single_segment(name)
-        await self._provider.mkdir(self._path.join(name))
-        await self._reload()
+        if self._disposed or self.state not in {PaneState.IDLE, PaneState.EMPTY}:
+            raise ProviderError("folder location is no longer ready")
+        provider, base = self._provider, self._path
+        path = base.join(name)
+        try:
+            try:
+                await provider.stat(path)
+            except NotFoundError:
+                pass
+            else:
+                raise ConflictError(f"entry already exists: {path.as_posix()}")
+            await provider.mkdir(path)
+        finally:
+            await self.refresh_after_mutation(provider, base)
 
     async def rename_cursor(self, new_name: str) -> None:
         target = self._cursor_target()
         if target is None or not new_name:
             return
+        await self.rename_entry(target, new_name)
+
+    async def rename_entry(self, target: EntryVM, new_name: str) -> None:
+        """Rename the captured entry, regardless of which row has the cursor."""
         _require_single_segment(new_name)
-        old_path = self._path.join(target.entry.name)
-        new_path = self._path.join(new_name)
-        await self._provider.rename(old_path, new_path)
-        await self._reload()
+        if (
+            self._disposed
+            or self.state not in {PaneState.IDLE, PaneState.EMPTY}
+            or target.is_parent_link
+            or not any(entry is target for entry in self._entries)
+        ):
+            raise ProviderError("rename target is no longer in the current listing")
+        provider, base = self._provider, self._path
+        try:
+            await provider.rename(base.join(target.entry.name), base.join(new_name))
+        finally:
+            await self.refresh_after_mutation(provider, base, renamed=(target, new_name))
+
+    async def refresh_after_mutation(
+        self,
+        provider: FileSystemProvider,
+        base: PathRef,
+        *,
+        renamed: tuple[EntryVM, str] | None = None,
+    ) -> None:
+        """Refresh the affected location without selecting a different user's row."""
+
+        def current() -> bool:
+            return not self._disposed and self._provider is provider and self._path == base
+
+        async def refresh() -> None:
+            if not current():
+                return
+            cursor = self.selected_entry
+            cursor_name = cursor.entry.name if cursor is not None else None
+            renamed_cursor = renamed is not None and cursor is renamed[0]
+            marks = {entry.entry.name for entry in self._entries if entry.is_marked}
+            generation = self._reload_generation + 1
+            await self._reload()
+            if not current() or self._reload_generation != generation:
+                return
+            self.set_marked_entries(
+                (entry for entry in self._entries if entry.entry.name in marks), marked=True
+            )
+            if (
+                renamed_cursor
+                and renamed is not None
+                and not any(entry.entry.name == cursor_name for entry in self._entries)
+            ):
+                cursor_name = renamed[1]
+            index = next(
+                (
+                    i
+                    for i, entry in enumerate(self.filtered_entries)
+                    if entry.entry.name == cursor_name
+                ),
+                None,
+            )
+            if index is not None:
+                self.move_cursor_to(index)
+
+        task = asyncio.create_task(refresh())
+        cancelled = False
+        while not task.done():
+            try:
+                await asyncio.shield(task)
+            except asyncio.CancelledError:
+                cancelled = True
+        task.result()
+        if cancelled:
+            raise asyncio.CancelledError
 
     # ── Internal: listing & state ───────────────────────────────────────────
 

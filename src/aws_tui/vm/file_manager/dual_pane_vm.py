@@ -19,6 +19,7 @@ import contextlib
 import logging
 from collections.abc import Awaitable, Callable
 from enum import StrEnum
+from functools import partial
 from typing import TYPE_CHECKING
 
 import reactivex as rx
@@ -27,7 +28,7 @@ from vmx.lifecycle.status import ConstructionStatus
 from vmx.services.dispatcher import Dispatcher
 
 from aws_tui.domain.cross_fs import ConflictResolution, CrossFsCopy, CrossFsMove
-from aws_tui.domain.filesystem import EntryKind, PathRef, ProviderError
+from aws_tui.domain.filesystem import EntryKind, FileSystemProvider, PathRef, ProviderError
 from aws_tui.domain.transfer_history import TransferHistoryDescriptor
 from aws_tui.domain.transfer_journal import TransferJournal
 from aws_tui.vm._observable import ObserverSafeSubject, send_value_free
@@ -347,9 +348,23 @@ class DualPaneVM:
         task.add_done_callback(_done)
         return task
 
-    async def _refresh_after_operation(self, *panes: PaneVM) -> None:
-        """Refresh panes before returning while surviving caller cancellation."""
-        tasks = [task for pane in panes if (task := self._schedule_owned_refresh(pane))]
+    async def _refresh_after_operation(
+        self,
+        *panes: PaneVM,
+        locations: tuple[tuple[FileSystemProvider, PathRef], ...] | None = None,
+    ) -> None:
+        """Refresh owned locations; move must preserve newer navigation and selection."""
+        tasks = []
+        for index, pane in enumerate(panes):
+            if locations is None:
+                task = self._schedule_owned_refresh(pane)
+            else:
+                provider, base = locations[index]
+                task = self._schedule_owned_operation(
+                    partial(pane.refresh_after_mutation, provider, base)
+                )
+            if task is not None:
+                tasks.append(task)
         if tasks:
             await asyncio.shield(asyncio.gather(*tasks))
 
@@ -553,18 +568,18 @@ class DualPaneVM:
                 finally:
                     self._active_transfer_ids.discard(transfer_id)
         finally:
-            await self.transfer_runtime.settle_batch(
-                [(tid, entry.entry.size) for entry, tid in transfer_ids],
-                consumed,
-            )
-            # Refresh BOTH panes inside the finally — see
-            # ``copy_across`` for the rationale. Move is even more
-            # sensitive: files 1..K-1 are both copied AND deleted
-            # from src, so the source pane must redraw or the user
-            # sees ghost rows for entries that are gone. Same
-            # owned, shielded refresh as copy_across so outer-worker
-            # cancellation doesn't strand the panes in LOADING.
-            await self._refresh_after_operation(src_pane, dst_pane)
+            try:
+                await self.transfer_runtime.settle_batch(
+                    [(tid, entry.entry.size) for entry, tid in transfer_ids],
+                    consumed,
+                )
+            finally:
+                # A history failure must not leave completed moves as ghost rows.
+                await self._refresh_after_operation(
+                    src_pane,
+                    dst_pane,
+                    locations=((source_provider, src_base), (destination_provider, dst_base)),
+                )
 
     async def delete_in_focused(self) -> None:
         """Attempt every marked original path, aggregating provider failures.

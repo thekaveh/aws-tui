@@ -125,7 +125,9 @@ async def test_stat_uses_only_requested_directory(directory, content):
 async def test_mkdir_writes_exact_marker(directory):
     fs, client, path, marker, outside = directory
     await fs.mkdir(path)
-    assert client.mutations == [("put", {"Bucket": "reports-bucket", "Key": marker, "Body": b""})]
+    assert client.mutations == [
+        ("put", {"Bucket": "reports-bucket", "Key": marker, "Body": b"", "IfNoneMatch": "*"})
+    ]
     assert all(client.objects[key] == etag for key, etag in outside.items())
 
 

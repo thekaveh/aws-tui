@@ -55,6 +55,8 @@ _EXPECTED_ACTION_EFFECTS = {
     "pane.switch_focus": "Move keyboard focus to the next operational pane.",
     "pane.descend": "Open the selected item or descend into the selected location.",
     "pane.copy": "Copy the selected item through the existing transfer workflow.",
+    "pane.move": "Move selected entries to the other pane, or rename a single entry.",
+    "pane.new": "Create a folder in the focused directory after review.",
     "pane.delete": "Delete the selected item through the existing confirmation workflow.",
     "pane.refresh": "Reload the active operational surface from its current source.",
     "emr.next_application": (
@@ -95,6 +97,8 @@ _EXPECTED_ACTION_EFFECTS = {
 
 _EXPECTED_ACTION_REQUIREMENTS = {
     "pane.copy": "Requires a copyable selected item.",
+    "pane.move": "Requires a selected entry and a ready destination pane.",
+    "pane.new": "Requires a ready file pane; S3 bucket creation is unsupported.",
     "pane.delete": "Requires a deletable selected item.",
     "emr.clone": "Requires a selected cloneable job run.",
     "emr.cancel": "Requires a selected active job run and no pending cancellation request.",
