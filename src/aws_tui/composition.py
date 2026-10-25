@@ -32,12 +32,14 @@ if TYPE_CHECKING:
 from vmx import Message, MessageHub, RxDispatcher
 from vmx.services.dispatcher import Dispatcher
 
+from aws_tui.domain.emr_dashboard import validate_dashboard_url
 from aws_tui.domain.filesystem import PermissionDeniedError
 from aws_tui.domain.mutation_guard import PROTECTED_MESSAGE, ConnectionProtectedError, MutationCheck
 from aws_tui.domain.transfer_history import TransferConnectionIdentity
 from aws_tui.domain.transfer_journal import TransferJournal
 from aws_tui.infra.athena_draft_store import AthenaDraftStore
 from aws_tui.infra.aws_session import AwsSession
+from aws_tui.infra.browser import BrowserPort, DisabledBrowser, NativeBrowser
 from aws_tui.infra.clipboard import ClipboardPort, NativeClipboard
 from aws_tui.infra.config_store import Config, ConfigStore, ConnectionEntry, Defaults, Keybindings
 from aws_tui.infra.connection_resolver import Connection, ConnectionNotFound, ConnectionResolver
@@ -296,6 +298,7 @@ class AppContext:
         "athena_drafts_shutdown_warning",
         "athena_drafts_vm",
         "aws_session",
+        "browser",
         "clipboard",
         "clipboard_vm",
         "command_palette_vm",
@@ -350,6 +353,7 @@ class AppContext:
         focus_coordinator: FocusCoordinatorVM | None = None,
         table_clipboard_vm: TableClipboardVM | None = None,
         clipboard: ClipboardPort | None = None,
+        browser: BrowserPort | None = None,
         clipboard_vm: ClipboardVM | None = None,
         duckdb_port: DuckDbPort | None = None,
         transfer_history_vm: TransferHistoryVM | None = None,
@@ -476,6 +480,13 @@ class AppContext:
         if clipboard_vm is None:
             self.clipboard_vm.construct()
         self.demo = demo
+        self.browser: BrowserPort = (
+            DisabledBrowser()
+            if demo
+            else browser
+            if browser is not None
+            else NativeBrowser(validate_dashboard_url)
+        )
         # Populated lazily in demo mode; each AWS source owns a separate
         # provider so profile switches cannot share clone mutations or data.
         self.demo_emrs: dict[str, InMemoryEmr] = demo_emrs if demo_emrs is not None else {}
@@ -520,6 +531,7 @@ def build_app_context(
     cache_dir: Path | None = None,
     demo: bool = False,
     clipboard: ClipboardPort | None = None,
+    browser: BrowserPort | None = None,
     duckdb_port: DuckDbPort | None = None,
     launch: ResolvedLaunch | None = None,
 ) -> AppContext:
@@ -564,6 +576,7 @@ def build_app_context(
             launch=launch,
             log_sink=log_sink,
             clipboard=clipboard,
+            browser=browser,
             duckdb_port=duckdb_port,
         )
     except BaseException:
@@ -578,6 +591,7 @@ def _build_app_context(
     demo: bool,
     log_sink: LogSink,
     clipboard: ClipboardPort | None = None,
+    browser: BrowserPort | None = None,
     duckdb_port: DuckDbPort | None = None,
     launch: ResolvedLaunch | None = None,
 ) -> AppContext:
@@ -852,6 +866,7 @@ def _build_app_context(
             focus_coordinator=focus_coordinator,
             table_clipboard_vm=table_clipboard_vm,
             clipboard=clipboard,
+            browser=browser,
             duckdb_port=resolved_duckdb_port,
             demo=demo,
             launch=launch,
