@@ -311,6 +311,7 @@ _ATHENA_RESULT_ACTIONS = frozenset(
         "athena.filter_results",
         "athena.sort_results",
         "athena.reset_results",
+        "athena.export_results",
     }
 )
 # Copy and delete run in SEPARATE exclusive groups. Sharing one group meant
@@ -891,6 +892,7 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
             "filter_results",
             "sort_results",
             "reset_results",
+            "export_results",
         ):
             self._actions.register(f"athena.{action}", partial(self._athena_result_control, action))
         self._actions.register(
