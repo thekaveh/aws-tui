@@ -202,6 +202,7 @@ class KeymapStore:
         "athena.filter_results": ("alt+f",),
         "athena.sort_results": ("alt+s",),
         "athena.reset_results": ("alt+r",),
+        "athena.export_results": ("alt+x",),
     }
 
     def __init__(self, *, overlay: dict[str, str | list[str]] | None = None) -> None:

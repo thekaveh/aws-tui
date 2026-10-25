@@ -231,12 +231,53 @@ no loaded rows match. Local controls never rewrite or rerun SQL or fetch all
 pages.
 
 Source/context changes, execution replacement or reload, and page
-shutdown reset selection, filter, and sort and invalidate an open inspector. These settings are transient. Full-execution export is separate scope in
-[#254](https://github.com/thekaveh/aws-tui/issues/254).
+shutdown reset selection, filter, and sort and invalidate an open inspector. These settings are transient.
 
-These six actions can be remapped in `[keybindings]`; Help and the Athena
+Result actions can be remapped in `[keybindings]`; Help and the Athena
 command palette display their actual configured keys. They apply to the
 current Results view and yield while typing in an editor or modal.
+
+### 5.1. Export results to a local file
+
+Choose **Export** on Results, press `Alt+X`, or select **Export Athena results to a local file** in the command palette.
+Choose a scope, format and local destination. The parent directory must exist.
+Select **Review**, check the source, execution, scope and destination, then select **Export**.
+An existing file requires the separate replacement switch after review. **Edit** returns to the form.
+
+**Loaded view** exports a captured snapshot of the visible rows, including the current filter and sort order.
+Later changes to those controls do not change the reviewed snapshot.
+**Complete execution** reads the original execution independently of the 10,000-row display ceiling and ignores local filters.
+Its review shows an unknown row count. Neither mode reruns SQL.
+
+Normalized CSV and JSON preserve column positions, duplicate names and string values without numeric conversion.
+CSV uses UTF-8, LF record endings and a header with the original column names.
+Its data fields encode null as `\N` and double every backslash in non-null strings; empty strings remain empty fields.
+
+To decode a data field, recognize an exact `\N` as null; otherwise replace each doubled backslash with one backslash.
+Apply ordinary CSV parsing first. Header names do not use this escape convention.
+Quotes, commas and embedded newlines use CSV quoting.
+
+JSON contains ordered `columns` metadata and positional `rows` arrays.
+Each column has `name`, `type` and `nullable` fields. Null is JSON `null`; an empty string is `""`.
+
+**Original AWS CSV** is a complete-execution option that copies the original customer-S3 artifact unchanged.
+Its values follow AWS's encoding, rather than the normalized CSV convention above.
+It requires a successful DML execution with an available CSV output artifact and appropriate S3 and encryption-key access.
+Version-pinned retrieval also requires `s3:GetObjectVersion`; the metadata check requires `s3:GetObject`.
+For Athena-managed or missing-S3 output, choose normalized CSV or JSON to retrieve rows through Athena.
+
+Exports stop at 256 MiB, 1,000,000 normalized rows, 10,000 provider requests or 300 seconds of processing.
+Original AWS CSV has an unknown row count; byte, request and time limits still apply.
+Results stream through bounded pages and write chunks; these limits are independent of the display ceiling.
+
+Expired results, changed metadata, invalid pages and exceeded limits prevent publication of an incomplete file.
+
+Cancel before publication leaves the destination unchanged. Cancellation drains outstanding local writes before removing private staging files.
+If publication has already succeeded, the app reports completion.
+Changing source, context or execution invalidates the export; it never redirects to another execution.
+Existing-file replacement checks the reviewed version before atomic replacement, but cannot exclude every concurrent external writer.
+Persistent cleanup failures can leave a private temporary file. On platforms without directory descriptors, a moved parent directory can also prevent cleanup.
+Local exports remain available for protected connections because they do not modify AWS resources.
 
 ## 6. Local SQL draft recovery
 

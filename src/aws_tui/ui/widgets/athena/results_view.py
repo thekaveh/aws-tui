@@ -12,6 +12,7 @@ from textual.widgets import Button, DataTable, Static
 
 from aws_tui.ui.widgets._focus_guard import is_on_active_screen
 from aws_tui.ui.widgets._worker import DeferredWorkerMixin
+from aws_tui.ui.widgets.athena.export_modal import AthenaExportModal
 from aws_tui.ui.widgets.athena.load_more_button import AthenaLoadMoreButton
 from aws_tui.ui.widgets.athena.result_cell_modal import AthenaResultCellModal
 from aws_tui.ui.widgets.athena.result_filter_modal import AthenaResultFilterModal
@@ -86,7 +87,9 @@ class AthenaResultsView(DeferredWorkerMixin, Widget):
         self._sub: DisposableBase | None = None
         self._refresh_pending = False
         self._table_snapshot: object | None = None
-        self._overlay: AthenaResultCellModal | AthenaResultFilterModal | None = None
+        self._overlay: (
+            AthenaResultCellModal | AthenaResultFilterModal | AthenaExportModal | None
+        ) = None
         self._overlay_generation: int | None = None
 
     def compose(self) -> ComposeResult:
@@ -99,6 +102,9 @@ class AthenaResultsView(DeferredWorkerMixin, Widget):
         )
         with Horizontal(id="athena-results-controls"):
             yield Static("", id="athena-results-footer", markup=False)
+            yield Button(
+                "Export", id="athena-export-results", tooltip="Export result rows to a local file"
+            )
             yield AthenaLoadMoreButton(
                 id="athena-more-results",
                 tooltip="Load more result rows",
@@ -123,6 +129,8 @@ class AthenaResultsView(DeferredWorkerMixin, Widget):
     def on_button_pressed(self, event: Button.Pressed) -> None:
         if event.button.id == "athena-more-results":
             self.dispatch_load_more()
+        elif event.button.id == "athena-export-results":
+            self.action_export_results()
 
     def dispatch_load_more(self) -> None:
         if self._vm.is_loading_more:
@@ -151,6 +159,7 @@ class AthenaResultsView(DeferredWorkerMixin, Widget):
         status = self.query_one("#athena-results-summary", Static)
         footer = self.query_one("#athena-results-footer", Static)
         load_more = self.query_one("#athena-more-results", AthenaLoadMoreButton)
+        self.query_one("#athena-export-results", Button).disabled = self._vm.execution_id is None
         if not all(widget.is_mounted for widget in (table, status, footer, load_more)):
             return
         table.border_title = "query results"
@@ -321,11 +330,27 @@ class AthenaResultsView(DeferredWorkerMixin, Widget):
         self._overlay = modal
         self._overlay_generation = generation
 
-        def closed(_result: None) -> None:
+        def closed(_result: str | None) -> None:
             if self._overlay is modal:
                 self._overlay = None
                 self._overlay_generation = None
             self.call_after_refresh(self._restore_table, generation, selection)
+
+        self.app.push_screen(modal, closed)
+
+    def action_export_results(self) -> None:
+        if not self._can_act() or self._vm.execution_id is None or self._page_vm.exports.busy:
+            return
+        generation = self._vm.projection_generation
+        modal = AthenaExportModal(self._page_vm)
+        self._overlay = modal
+        self._overlay_generation = generation
+
+        def closed(_result: str | None) -> None:
+            if self._overlay is modal:
+                self._overlay = None
+                self._overlay_generation = None
+            self.call_after_refresh(self._restore_table, generation, self._vm.selection)
 
         self.app.push_screen(modal, closed)
 

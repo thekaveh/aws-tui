@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Awaitable, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable
 from typing import Any, ClassVar, Protocol
 
 from vmx import Message, MessageHub
@@ -11,6 +11,7 @@ from vmx.services.dispatcher import Dispatcher
 from aws_tui.domain.athena import AthenaClient
 from aws_tui.domain.athena_runner import AthenaQueryRunner
 from aws_tui.domain.navigation_workspace import NavigationTarget
+from aws_tui.domain.query import QueryExecutionDetail
 from aws_tui.domain.sql_authoring import CompletionTable
 from aws_tui.domain.sql_policy import ReadOnlySqlPolicy
 from aws_tui.infra.aws_session import AwsSession
@@ -83,6 +84,7 @@ class AthenaClientProtocol(Protocol):
         context: Any,
         *,
         request_token: str,
+        result_reuse_max_age_minutes: int | None = None,
     ) -> Any: ...
 
     async def stop_query(self, execution_id: str) -> None: ...
@@ -93,6 +95,14 @@ class AthenaClientProtocol(Protocol):
         *,
         start_token: str | None = None,
     ) -> Any: ...
+
+    def iter_result_artifact(
+        self,
+        expected: QueryExecutionDetail,
+        *,
+        max_bytes: int,
+        chunk_bytes: int = 64 * 1024,
+    ) -> AsyncIterator[bytes]: ...
 
     async def list_named_queries_page(
         self,

@@ -78,6 +78,7 @@ class QueryExecutionDetail:
     output_location: str | None = field(repr=False)
     engine_version: str | None
     error: AthenaQueryError | None
+    managed_query_results_enabled: bool = False
 
 
 @dataclass(frozen=True, slots=True)

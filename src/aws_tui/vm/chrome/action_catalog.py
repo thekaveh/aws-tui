@@ -296,6 +296,12 @@ ACTION_SPECS: tuple[ActionSpec, ...] = (
         key_source="unbound",
     ),
     ActionSpec(
+        "athena.export_results",
+        "Export Athena results to a local file",
+        "Athena",
+        service_ids=frozenset(("athena",)),
+    ),
+    ActionSpec(
         "athena.open_in_glue",
         "Open query table in Glue",
         "Athena",

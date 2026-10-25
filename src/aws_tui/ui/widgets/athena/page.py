@@ -55,6 +55,7 @@ _ATHENA_FOCUS_ORDER = (
     FocusSlot.ATHENA_DRAFTS,
     FocusSlot.ATHENA_AUTHORING,
     FocusSlot.ATHENA_QUERY_OPTIONS,
+    FocusSlot.ATHENA_EXPORT,
     FocusSlot.ATHENA_STATUS,
     FocusSlot.ATHENA_SAVED_PREPARED_MORE,
     FocusSlot.ATHENA_DETAIL,
@@ -712,6 +713,7 @@ class AthenaPage(DeferredWorkerMixin, HubSubscriberMixin, Widget):
                     FocusSlot.ATHENA_SECONDARY,
                     self.query_one("#athena-more-results", Button),
                 ),
+                (FocusSlot.ATHENA_EXPORT, self.query_one("#athena-export-results", Button)),
             )
         else:
             candidates = (
