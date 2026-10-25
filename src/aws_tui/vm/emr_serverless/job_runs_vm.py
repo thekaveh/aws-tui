@@ -274,8 +274,13 @@ class JobRunsVM:
             states.add(state)
         self.set_state_filter(frozenset(states))
 
-    async def refresh(self) -> None:
+    async def refresh(self, *, expected_application_id: str | None = None) -> None:
         async with self._paging_lock:
+            if (
+                expected_application_id is not None
+                and self._application_id != expected_application_id
+            ):
+                return
             await self._refresh_locked()
 
     async def _refresh_locked(self) -> None:

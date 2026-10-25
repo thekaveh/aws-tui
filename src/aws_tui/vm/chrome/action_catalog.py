@@ -362,6 +362,13 @@ ACTION_SPECS: tuple[ActionSpec, ...] = (
     ),
     ActionSpec("pane.quick_look", "Quick Look", "File operations", service_ids=frozenset(("s3",))),
     ActionSpec(
+        "emr.new_job",
+        "New Spark job",
+        "EMR Serverless",
+        keywords=("submit", "blank", "create", "job"),
+        service_ids=frozenset(("emr-serverless",)),
+    ),
+    ActionSpec(
         "emr.clone",
         "Clone selected EMR job run",
         "EMR Serverless",

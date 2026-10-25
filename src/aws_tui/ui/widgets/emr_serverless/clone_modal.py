@@ -22,6 +22,7 @@ from aws_tui.domain.filesystem import (
     ThrottledError,
     ValidationError,
 )
+from aws_tui.domain.mutation_guard import PROTECTED_MESSAGE, ConnectionProtectedError
 from aws_tui.ui.widgets._worker import DeferredWorkerMixin
 from aws_tui.ui.widgets.modal_button import ModalButton as _ModalButton
 from aws_tui.vm.emr_serverless.clone_vm import JobRunCloneVM
@@ -30,6 +31,8 @@ from aws_tui.vm.emr_serverless.clone_vm import JobRunCloneVM
 def _submission_error(exc: Exception) -> str:
     # Provider/SDK exception strings may echo arbitrary arguments and policies.
     # Keep actionable categories without copying those strings into diagnostics.
+    if isinstance(exc, ConnectionProtectedError):
+        return PROTECTED_MESSAGE
     if isinstance(exc, AuthRequiredError):
         return "Authentication required. Reauthenticate the selected profile (SSO: aws sso login), then retry."
     if isinstance(exc, PermissionDeniedError):
@@ -97,7 +100,7 @@ class JobRunCloneModal(DeferredWorkerMixin, ModalScreen[str | None]):
 
     def compose(self) -> ComposeResult:
         with Container():
-            yield Static("Clone job run", classes="modal-title", id="clone-title")
+            yield Static(self._vm.form_title, classes="modal-title", id="clone-title")
             with VerticalScroll(id="clone-edit"):
                 yield Static("Name (optional)", classes="modal-field-label")
                 yield Input(
@@ -197,7 +200,7 @@ class JobRunCloneModal(DeferredWorkerMixin, ModalScreen[str | None]):
         self.query_one("#clone-review-scroll").display = review
         self.query_one("#clone-review", Static).update(self._vm.review_text if review else "")
         self.query_one("#clone-title", Static).update(
-            "Review clone job run" if review else "Clone job run"
+            self._vm.review_title if review else self._vm.form_title
         )
         self.query_one("#clone-review", Static).display = review
         self.query_one("#clone-back").display = review
@@ -240,7 +243,11 @@ class JobRunCloneModal(DeferredWorkerMixin, ModalScreen[str | None]):
         if self._submitting:
             return
         if not self.reviewing:
-            self._show_error("Review the clone before submitting")
+            self._show_error(
+                "Review the new job before submitting"
+                if self._vm.is_new_job
+                else "Review the clone before submitting"
+            )
             return
         if (
             self._reviewed_token != self._vm.client_token

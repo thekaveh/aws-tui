@@ -1164,13 +1164,25 @@ async def test_non_spark_source_never_opens_clone_form(tmp_path: Path, driver: d
 
 
 @pytest.mark.parametrize("outcome", ["submit", "cancel", "source-change", "page-removal"])
-async def test_full_app_clone_review_lifecycle(tmp_path: Path, outcome: str) -> None:
+async def test_full_app_clone_review_lifecycle(
+    tmp_path: Path, outcome: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
     from textual.widgets import Static, TextArea
 
+    from aws_tui.demo.in_memory_fs import InMemoryFS
+    from aws_tui.infra.aws_session import TokenProbeResult
     from tests.helpers import focus_and_settle
 
+    # The positive submission fixture must satisfy fresh source metadata admission.
+    aws_config = tmp_path / "aws-config"
+    aws_config.write_text("[profile dev]\nregion=us-east-1\n")
+    monkeypatch.setenv("AWS_CONFIG_FILE", str(aws_config))
     config_dir = _prep(tmp_path, _AWS_TOML)
     ctx, fake = _make_ctx_with_emr_fake(config_dir, tmp_path / "cache")
+    ctx.registry.get("s3")._s3_fs_factory = lambda _: InMemoryFS()
+    monkeypatch.setattr(
+        ctx.aws_session, "probe_token", lambda _: TokenProbeResult(TokenState.CONNECTED)
+    )
     fake.add_job_run_detail(application_id="00emr", job_run_id="r-source")
     app = AwsTuiApp(ctx)
     try:
