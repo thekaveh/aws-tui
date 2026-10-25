@@ -345,6 +345,15 @@ ACTION_SPECS: tuple[ActionSpec, ...] = (
         "pane.copy", "Copy selected entries", "File operations", service_ids=frozenset(("s3",))
     ),
     ActionSpec(
+        "pane.move",
+        "Move or rename selected entries",
+        "File operations",
+        service_ids=frozenset(("s3",)),
+    ),
+    ActionSpec(
+        "pane.new", "Create a new folder", "File operations", service_ids=frozenset(("s3",))
+    ),
+    ActionSpec(
         "pane.delete", "Delete selected entries", "File operations", service_ids=frozenset(("s3",))
     ),
     ActionSpec("pane.mark_up", "Extend selection up", "Selection", service_ids=frozenset(("s3",))),

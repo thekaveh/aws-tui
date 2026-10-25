@@ -19,6 +19,8 @@ from tests.integration.test_keyboard_selection import RecordingFS, _bytes, marks
 
 ACTIONS = [
     ("pane.copy", "c"),
+    ("pane.move", "m"),
+    ("pane.new", "n"),
     ("pane.delete", "d"),
     ("pane.copy_entry_path", "p"),
     ("pane.copy_path", "P"),

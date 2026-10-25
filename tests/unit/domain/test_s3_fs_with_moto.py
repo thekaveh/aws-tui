@@ -440,3 +440,25 @@ async def test_read_stream_of_a_present_key_still_streams(s3_endpoint: str) -> N
     stream = await fs.read_stream(PathRef.from_posix("/here.txt"))
 
     assert await _drain(stream) == b"payload"
+
+
+@pytest.mark.parametrize("versioned", [False, True])
+async def test_mkdir_never_replaces_existing_marker_bytes_or_adds_version(
+    s3_endpoint: str, versioned: bool
+) -> None:
+    bucket = "conditional-marker-versioned" if versioned else "conditional-marker-plain"
+    await _make_bucket(s3_endpoint, bucket)
+    async with _session().client("s3", endpoint_url=s3_endpoint) as client:
+        if versioned:
+            await client.put_bucket_versioning(
+                Bucket=bucket, VersioningConfiguration={"Status": "Enabled"}
+            )
+        await client.put_object(Bucket=bucket, Key="folder/", Body=b"valuable marker bytes")
+        fs = _fs(s3_endpoint, bucket=bucket)
+        with pytest.raises(ConflictError):
+            await fs.mkdir(PathRef(("folder",)))
+        response = await client.get_object(Bucket=bucket, Key="folder/")
+        async with response["Body"] as body:
+            assert await body.read() == b"valuable marker bytes"
+        versions = await client.list_object_versions(Bucket=bucket, Prefix="folder/")
+        assert len(versions.get("Versions", [])) == 1

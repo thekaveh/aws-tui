@@ -2,17 +2,11 @@
 
 Use the default shortcuts below or customize them in
 `<config-dir>/config.toml`. Only actions with registered handlers receive live
-bindings; the reference identifies deferred actions.
+bindings.
 
 The cross-platform defaults avoid F-keys and terminal-specific command
 modifiers. They are letter-driven, with the command palette (`:` or `Ctrl+K`)
 as the universal escape hatch.
-
-> **Wiring status:** rows below tagged `(deferred)` are
-> declared in `KeymapStore.DEFAULT_BINDINGS` but the matching
-> `action_*` handler has not yet been added to `AwsTuiApp`. They
-> remain valid action IDs, but `BindingResolver` leaves them unbound
-> until the matching handler ships.
 
 ## 1. Default bindings
 
@@ -51,10 +45,10 @@ explicit meaning.
 | Action | Default | Notes |
 |---|---|---|
 | Copy across panes | `c` | Streams through `CrossFsCopy`, shows confirm modal |
-| Move across panes | `pane.move` action — *(deferred)* | The move handler is not yet wired in `AwsTuiApp`. The always-visible navigation rail does not claim `m`, so the key remains available when move wiring lands. |
+| Move across panes | `m` | Review captured entries, both connections and destination; stop on conflict without replacement |
 | Delete (with confirm) | `d` | Confirm modal; destructive ops always ask |
-| New folder | `pane.new` action — *(deferred)* | No handler wired in v0.8.x |
-| Rename in place | `pane.move` action — *(deferred)* | Bundled into the move handler; not wired |
+| New folder | `n` | Enter a basename, then confirm the focused directory; S3 bucket creation is unsupported |
+| Rename in place | `m`, then **Rename** | Available for one marked entry or the cursor row; enter a basename, then confirm |
 | Refresh pane | `r` | |
 | Copy cursor entry path | `p` | Copies the full path of the entry under the cursor. Also listed in the command palette as **Copy cursor entry path**. |
 | Copy pane path | `P` (`shift+p`) | Copies the pane's current directory path; the pane's top border is also a click target. Also listed in the command palette as **Copy pane path**. |
@@ -83,10 +77,8 @@ explicit meaning.
 | Open Settings | `,` (comma) | Opens the in-app Settings nav page directly. Equivalent to arrow-keying down to the Settings row in the rail and pressing `Enter`. |
 | Switch source | `Shift+S` (`S`) | On S3, cycles the focused pane through `local` and resolver-ordered configured sources. On single-context AWS services such as EMR, Glue, and Athena, rebuilds the current service under the next supported AWS profile. |
 
-> **Nav-menu visibility:** the left rail is always visible at a single
-> fixed width and shows text labels (Settings is docked at the bottom with its
-> settings icon). The former `m`-key collapse/expand toggle was dropped because there is no longer a collapsed mode to toggle into.
-> `BindingResolver` does not emit `m` because the deferred `pane.move` action has no registered handler (§1.3).
+The service rail is always visible. Settings appears at its bottom.
+`m` opens the file-manager move and rename review (§1.3).
 
 ### 1.6. Connection and Authentication
 
@@ -380,9 +372,7 @@ for source states, limits, late-arrival behavior and credential recovery.
 ## 3. Action IDs
 
 The `wired?` column marks whether `AwsTuiApp` currently registers a
-matching `ActionRegistry` handler. `(deferred)` rows are valid action
-IDs you can overlay ahead of time; `BindingResolver` leaves them
-unbound until a handler ships.
+matching `ActionRegistry` handler. Use these IDs in your keybinding overrides.
 
 | Action ID | Default key | Wired? | What it does |
 |---|---|---|---|
@@ -421,9 +411,9 @@ unbound until a handler ships.
 | `pane.clear_selection` | `u` | yes | Clear all marks, including hidden rows, and retain mode |
 | `pane.exit_multiselect` | `ctrl+v` | yes | Clear marks and exit mode; yield to editor paste |
 | `pane.copy` | `c` | yes | Copy marked entries to other pane |
-| `pane.move` | `m` | *(deferred)* | Move marked entries (or rename one); the always-visible navigation rail leaves `m` available when the wiring lands. |
+| `pane.move` | `m` | yes | Review a move to the opposite pane, or rename one captured entry |
 | `pane.delete` | `d` | yes | Delete marked entries (confirms) |
-| `pane.new` | `n` | *(deferred)* | New folder / bucket |
+| `pane.new` | `n` | yes | Review creation of a folder in the focused directory; cannot create buckets |
 | `pane.refresh` | `r` | yes | Re-run `provider.list()` |
 | `pane.copy_entry_path` | `p` | yes | Copy the cursor entry's full path to the clipboard; keyed and palette-visible (**Copy cursor entry path**, file manager only) |
 | `pane.copy_path` | `P` (`shift+p`) | yes | Copy the pane's current path to the clipboard; keyed and palette-visible (**Copy pane path**, file manager only) |

@@ -29,6 +29,7 @@ from vmx import PropertyChangedMessage
 
 if TYPE_CHECKING:
     from aws_tui.domain.filesystem import FileEntry, FileSystemProvider, PathRef
+    from aws_tui.vm.file_manager.entry_vm import EntryVM
     from aws_tui.vm.file_manager.pane_vm import PaneVM
 
 from textual.app import App, ComposeResult
@@ -103,6 +104,7 @@ from aws_tui.ui.widgets.crash_modal import CrashModal
 from aws_tui.ui.widgets.dual_pane import DualPane
 from aws_tui.ui.widgets.emr_serverless.application_picker import ApplicationPicker
 from aws_tui.ui.widgets.emr_serverless.page import EmrServerlessPage
+from aws_tui.ui.widgets.file_operation_modals import FileNameModal, MoveReviewModal
 from aws_tui.ui.widgets.first_run import (
     FIRST_RUN_FORM_CSS,
     PROBE_FAILED,
@@ -319,7 +321,8 @@ _ATHENA_RESULT_ACTIONS = frozenset(
 # Exclusivity within each group still prevents two concurrent copies.
 _TRANSFER_COPY_GROUP = "transfer-copy"
 _TRANSFER_DELETE_GROUP = "transfer-delete"
-_TRANSFER_WORKER_GROUPS = (_TRANSFER_COPY_GROUP, _TRANSFER_DELETE_GROUP)
+_TRANSFER_MUTATION_GROUP = "transfer-mutation"
+_TRANSFER_WORKER_GROUPS = (_TRANSFER_COPY_GROUP, _TRANSFER_DELETE_GROUP, _TRANSFER_MUTATION_GROUP)
 
 # Action ids that :meth:`AwsTuiApp.action_dispatch` still honours while a
 # screen sits on the stack (or the coordinator reports modal precedence).
@@ -794,6 +797,8 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
                 f"service.open.{service_id}", partial(self._select_discovery_service, service_id)
             )
         self._actions.register("pane.copy", self.action_copy)
+        self._actions.register("pane.move", self.action_move)
+        self._actions.register("pane.new", self.action_new_folder)
         self._actions.register("pane.copy_entry_path", self.action_copy_entry_path)
         self._actions.register("pane.copy_path", self.action_copy_path)
         self._actions.register("pane.delete", self.action_delete)
@@ -4034,7 +4039,7 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
         entries = pane.filtered_entries or pane.entries
         target = entries[pane.cursor_index] if 0 <= pane.cursor_index < len(entries) else None
         return (
-            frozenset({"pane.copy", "pane.delete"})
+            frozenset({"pane.copy", "pane.move", "pane.delete"})
             if getattr(target, "name", None) == ".."
             or getattr(getattr(target, "entry", None), "name", None) == ".."
             else frozenset()
@@ -4127,10 +4132,11 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
                 destination = dual.right if pane is dual.left else dual.left
                 if destination.state not in {PaneState.IDLE, PaneState.EMPTY}:
                     reasons["pane.copy"] = "busy"
+                    reasons["pane.move"] = "busy"
                 selected = pane.selected_entry
                 # Copy/delete use marks first; the footer's parent-row denial
                 # applies only to their cursor fallback in discovery.
-                for action in ("pane.copy", "pane.delete"):
+                for action in ("pane.copy", "pane.move", "pane.delete"):
                     if pane.marked_entries:
                         if reasons.get(action) == "selection_required":
                             reasons.pop(action)
@@ -6068,11 +6074,25 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
         used_cursor_fallback: bool,
         is_current: Callable[[], bool],
     ) -> None:
-        """Run ``DualPaneVM.copy_across`` from a worker. Errors are
-        toasted, never re-raised."""
+        """Keep the copy worker entry point compatible with existing callers."""
+        await self._run_file_transfer(
+            dual, src_pane, targets, used_cursor_fallback, is_current, operation="copy"
+        )
+
+    async def _run_file_transfer(
+        self,
+        dual: object,
+        src_pane: object,
+        targets: list[object],
+        used_cursor_fallback: bool,
+        is_current: Callable[[], bool],
+        *,
+        operation: Literal["copy", "move"],
+    ) -> None:
+        """Dispatch the reviewed transfer through its existing durable VM runtime."""
         ctx = self._app_ctx
-        copy_across = getattr(dual, "copy_across", None)
-        if copy_across is None:
+        transfer = getattr(dual, f"{operation}_across", None)
+        if transfer is None:
             return
         if not is_current():
             self._file_confirmation_invalidated()
@@ -6083,35 +6103,200 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
             if not is_current():
                 self._file_confirmation_invalidated()
                 return
-            await copy_across()
+            await transfer()
         except Exception as exc:
             ctx.log_sink.error(
-                "app.copy.failed",
+                f"app.{operation}.failed",
                 error=str(exc),
                 error_type=type(exc).__name__,
                 file_count=len(targets),
                 **_mutation_log_context(dual),
             )
-            # User feedback: "when a copy or delete fails, I see an
-            # error box shown ON the command section at the bottom
-            # which then disappears. I want all such errors be
-            # handled gracefully and be shown as toast notifications
-            # on top right with their proper icons and emojis". The
-            # ``notifications.error`` helper routes through the
-            # canonical ``ToastStack`` (top-right, ✖ glyph,
-            # ``$danger`` colour, 30-s auto-dismiss); Textual's
-            # bare ``self.notify`` paints over the Commands strip
-            # and steals the eye there.
             notifications.error(
                 ctx.root_vm.chrome.toast_stack,
-                toast_id="copy-failed",
+                toast_id=f"{operation}-failed",
                 subject="Transfer",
-                message=f"copy failed: {exc}",
+                message=f"{operation} failed: {exc}",
             )
         finally:
             self._refresh_transfer_history()
             if used_cursor_fallback:
                 _flash_cursor_fallback_marks(src_pane, targets, marked=False)
+
+    @staticmethod
+    def _file_operation_location(pane: PaneVM) -> str:
+        identity = pane.identity_label
+        if not identity:
+            key = pane.current_connection_key
+            identity = " · ".join(part for part in key if part) if key else "Local"
+        return f"{identity}\n{pane.viewmodel.border_title}"
+
+    async def action_move(self) -> None:
+        """Review a move to the opposite pane, or rename one captured entry."""
+        dual = self._dual_pane()
+        source = self._ready_file_action_pane()
+        if dual is None or source is None:
+            return
+        destination = dual.other_pane
+        if destination.state not in {PaneState.IDLE, PaneState.EMPTY}:
+            return
+        targets = list(source.marked_entries)
+        fallback = not targets
+        if fallback:
+            target = source.selected_entry
+            if target is None or target.is_parent_link:
+                return
+            targets = [target]
+        if self._app_ctx.confirm_vm.is_open or self._confirmation_pending:
+            return
+        self.record_action("pane.move")
+        is_current = self._file_confirmation_guard(
+            dual, source, list(targets), fallback, destination
+        )
+        review = MoveReviewModal(
+            source_identity=self._file_operation_location(source),
+            destination_identity=self._file_operation_location(destination),
+            source_paths=tuple(str(source.path.join(entry.name)) for entry in targets),
+            destination_path=str(destination.path),
+        )
+        self._confirmation_pending = True
+        self.run_worker(
+            self._confirm_move(dual, source, list(targets), fallback, review, is_current),
+            group="confirmation",
+        )
+
+    async def _confirm_move(
+        self,
+        dual: DualPaneVM,
+        source: PaneVM,
+        targets: list[object],
+        fallback: bool,
+        review: MoveReviewModal,
+        is_current: Callable[[], bool],
+    ) -> None:
+        try:
+            if not is_current():
+                self._file_confirmation_invalidated()
+                return
+            choice = await self.push_screen_wait(review)
+            if choice is None:
+                return
+            if not is_current():
+                self._file_confirmation_invalidated()
+                return
+            if choice == "rename" and len(targets) == 1:
+                await self._confirm_file_name(source, targets[0], is_current)
+            elif choice == "move":
+                self._run_lifecycle_worker(
+                    partial(
+                        self._run_file_transfer,
+                        dual,
+                        source,
+                        targets,
+                        fallback,
+                        is_current,
+                        operation="move",
+                    ),
+                    group=_TRANSFER_MUTATION_GROUP,
+                    exclusive=False,
+                )
+        finally:
+            self._confirmation_pending = False
+
+    async def action_new_folder(self) -> None:
+        """Collect and review a basename at the captured focused directory."""
+        dual = self._dual_pane()
+        source = self._ready_file_action_pane()
+        if dual is None or source is None:
+            return
+        if self._app_ctx.confirm_vm.is_open or self._confirmation_pending:
+            return
+        self.record_action("pane.new")
+        is_current = self._file_confirmation_guard(dual, source, list(source.marked_entries), False)
+        self._confirmation_pending = True
+        self.run_worker(self._confirm_new_folder(source, is_current), group="confirmation")
+
+    async def _confirm_new_folder(self, source: PaneVM, is_current: Callable[[], bool]) -> None:
+        try:
+            await self._confirm_file_name(source, None, is_current)
+        finally:
+            self._confirmation_pending = False
+
+    async def _confirm_file_name(
+        self, source: PaneVM, target: object | None, is_current: Callable[[], bool]
+    ) -> None:
+        if not is_current():
+            self._file_confirmation_invalidated()
+            return
+        old_name = getattr(target, "name", "")
+        operation = "rename" if target is not None else "new folder"
+        name = await self.push_screen_wait(
+            FileNameModal(
+                title="Rename entry" if target is not None else "New folder",
+                location=self._file_operation_location(source),
+                initial=old_name,
+            )
+        )
+        if name is None:
+            return
+        if not is_current():
+            self._file_confirmation_invalidated()
+            return
+        paths = []
+        if target is not None:
+            paths.append(ConfirmPath(label="From", path=str(source.path.join(old_name))))
+        paths.append(ConfirmPath(label="To", path=str(source.path.join(name))))
+        request = ConfirmRequest(
+            title="Rename entry?" if target is not None else "Create new folder?",
+            paths=tuple(paths),
+            body_lines=(
+                self._file_operation_location(source),
+                "Conflict policy: ERROR (no replacement).",
+            ),
+            confirm_label="Rename" if target is not None else "Create",
+        )
+        ctx = self._app_ctx
+        dialogs = TextualDialogService(self, ctx.confirm_vm, hub=ctx.hub)
+        if not await ctx.confirm_vm.ask(request, dialog_service=dialogs):
+            return
+        if not is_current():
+            self._file_confirmation_invalidated()
+            return
+        self._run_lifecycle_worker(
+            partial(self._run_name_mutation, source, target, name, operation, is_current),
+            group=_TRANSFER_MUTATION_GROUP,
+            exclusive=False,
+        )
+
+    async def _run_name_mutation(
+        self,
+        source: PaneVM,
+        target: object | None,
+        name: str,
+        operation: str,
+        is_current: Callable[[], bool],
+    ) -> None:
+        if not is_current():
+            self._file_confirmation_invalidated()
+            return
+        try:
+            if target is None:
+                await source.make_directory(name)
+            else:
+                await source.rename_entry(cast("EntryVM", target), name)
+        except Exception as exc:
+            ctx = self._app_ctx
+            ctx.log_sink.error(
+                f"app.file.{operation.replace(' ', '_')}.failed",
+                error=str(exc),
+                error_type=type(exc).__name__,
+            )
+            notifications.error(
+                ctx.root_vm.chrome.toast_stack,
+                toast_id="file-mutation-failed",
+                subject="Transfer",
+                message=f"{operation} failed: {exc}",
+            )
 
     async def action_delete(self) -> None:
         """Delete the focused pane's marked entries (or the cursor row if

@@ -644,3 +644,22 @@ async def test_delete_empty_directory_conditions_the_marker_delete_on_its_etag(
     client.delete_object.assert_awaited_once_with(
         Bucket="bucket", Key="empty/", IfMatch='"marker-etag"'
     )
+
+
+async def test_cross_bucket_rename_refuses_before_opening_mutation_client(monkeypatch):
+    session = MagicMock()
+    fs = S3FS(session=session, bucket=None)
+    source = PathRef(("first-bucket", "source"))
+    destination = PathRef(("second-bucket", "destination"))
+
+    async def stat(path):
+        if path == source:
+            return FileEntry(
+                name="source", kind=EntryKind.FILE, size=1, modified=None, etag="source-etag"
+            )
+        raise NotFoundError(path.as_posix())
+
+    monkeypatch.setattr(fs, "stat", stat)
+    with pytest.raises(ProviderError, match="cross-bucket rename"):
+        await fs.rename(source, destination)
+    session.client.assert_not_called()

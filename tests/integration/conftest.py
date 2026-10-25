@@ -158,6 +158,7 @@ def app_context_factory() -> Iterator[AppContextBuilder]:
             fresh empty :class:`InMemoryFS`. The same provider is
             returned for every connection — tests typically only need
             one.
+        keymap: shared keymap for runtime bindings, hints and help.
         initial_theme: theme name set on the returned context.
             Defaults to ``"carbon"``.
         clipboard: clipboard port injected into the context. Defaults to
@@ -176,6 +177,7 @@ def app_context_factory() -> Iterator[AppContextBuilder]:
         fs: FileSystemProvider | None = None,
         initial_theme: str = "carbon",
         clipboard: ClipboardPort | None = None,
+        keymap: KeymapStore | None = None,
     ) -> AppContext:
         tmp = Path(tempfile.mkdtemp(prefix="aws-tui-ictx-"))
         created_tmpdirs.append(tmp)
@@ -184,7 +186,7 @@ def app_context_factory() -> Iterator[AppContextBuilder]:
 
         log = LogSink(base_dir=tmp / "log")
         config_store = ConfigStore(path=tmp / "config.toml")
-        keymap = KeymapStore()
+        keymap = keymap or KeymapStore()
         theme = ThemeStore()
         aws_session = AwsSession()
         journal = TransferJournal(base_dir=tmp / "transfers")

@@ -52,6 +52,8 @@ def test_main_screen_renders_nav_and_panes(theme: str) -> None:
     assert "License" in svg, f"banner pedigree missing in main-screen SVG for {theme!r}"
     assert "S3" in svg, f"nav menu S3 label missing in main-screen SVG for theme {theme!r}"
     assert "TRANSFERS" in svg, f"transfer heading missing in main-screen SVG for theme {theme!r}"
+    assert "move" in svg, f"hint-legend move label missing for theme {theme!r}"
+    assert "new" in svg, f"hint-legend new-folder label missing for theme {theme!r}"
     assert "copy" in svg, f"hint-legend 'copy' label missing for theme {theme!r}"
     assert "delete" in svg, f"hint-legend 'delete' label missing for theme {theme!r}"
 
