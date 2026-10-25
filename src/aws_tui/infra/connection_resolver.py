@@ -116,6 +116,7 @@ class Connection:
     session_token: str | None = None
     force_path_style: bool = False
     verify_tls: bool = True
+    protected: bool = False
 
     def __repr__(self) -> str:
         # Mirror the dataclass-default shape but mask secret fields.
@@ -254,11 +255,32 @@ class ConnectionResolver:
                 return connection
         raise ConnectionNotFound(name)
 
-    def resolve_profile(self, name: str) -> Connection:
-        """Resolve an exact discovered AWS profile, ignoring configured aliases."""
-        for connection in self._auto_connections():
+    def resolve_selected_metadata(self, name: str) -> Connection:
+        """Resolve one exact source without dereferencing any credentials."""
+        cfg = self._config_store.load()
+        entry = cfg.connections.get(name)
+        if entry is not None:
+            return self._explicit_connections(
+                replace(cfg, connections={name: entry}), metadata_only=True
+            )[0]
+        return self.resolve_profile(name)
+
+    def resolve_profile(self, name: str, *, strict: bool = False) -> Connection:
+        """Resolve a discovered profile; strict admission refuses malformed sources."""
+        invalid_sources: set[str] = set()
+        connections = self._auto_connections(invalid_sources if strict else None)
+        if invalid_sources:
+            raise ConfigError("AWS profile source cannot be verified")
+        for connection in connections:
             if connection.profile == name:
-                return connection
+                entry = self._config_store.load().connections.get(connection.name)
+                protected = bool(
+                    entry is not None
+                    and entry.kind == "aws"
+                    and entry.profile == connection.profile
+                    and entry.protected
+                )
+                return replace(connection, protected=protected)
         raise ConnectionNotFound(name)
 
     def resolve_default(self) -> Connection | None:
@@ -314,6 +336,7 @@ class ConnectionResolver:
             endpoint_url=conn.endpoint_url,
             force_path_style=conn.force_path_style,
             verify_tls=conn.verify_tls,
+            protected=conn.protected,
         )
         self._config_store.add_connection(entry)
         return entry
@@ -337,6 +360,7 @@ class ConnectionResolver:
                         or _default_aws_region(),
                         source=SOURCE_CONFIG,
                         profile=entry.profile,
+                        protected=entry.protected,
                     )
                 )
             elif entry.kind == "s3-compatible":
@@ -357,6 +381,7 @@ class ConnectionResolver:
                         session_token=session_token,
                         force_path_style=entry.force_path_style,
                         verify_tls=entry.verify_tls,
+                        protected=entry.protected,
                     )
                 )
         return out

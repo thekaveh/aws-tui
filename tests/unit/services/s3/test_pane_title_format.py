@@ -94,3 +94,18 @@ def test_strip_scheme_handles_edge_cases() -> None:
     assert _strip_scheme(None) is None
     assert _strip_scheme("") == ""
     assert _strip_scheme("localhost:64093") == "localhost:64093"  # no scheme — unchanged
+
+
+def test_protected_pane_title_identifies_its_own_connection():
+    from aws_tui.infra.connection_resolver import Connection
+    from aws_tui.services.s3.service import _format_pane_title
+
+    connection = Connection(
+        name="protected",
+        profile="synthetic",
+        kind="aws",
+        region="us-east-1",
+        source="config",
+        protected=True,
+    )
+    assert "Protected" in _format_pane_title(connection)

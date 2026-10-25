@@ -261,3 +261,36 @@ async def test_retry_review_is_retired_by_refresh_after_prepare_but_can_replan(c
     assert vm.state != "closed"
     await vm.load()
     assert vm.accepts(vm.prepare())
+
+
+async def test_protection_enabled_after_review_blocks_all_upload_requests(context):
+    from aws_tui.domain.filesystem import PermissionDeniedError
+    from aws_tui.domain.mutation_guard import GuardedRemote
+
+    existing, source, target, destination, runtime = context
+    protected = False
+
+    async def check():
+        if protected:
+            raise PermissionDeniedError("Connection is protected; remote changes are blocked")
+
+    await target.swap_provider(
+        GuardedRemote(destination, check), path_protocol="s3:", connection_key=("aws", "fixture")
+    )
+    await target.navigate_to(PathRef(("bucket", "prefix")))
+    vm = type(existing)(source=source, destination=target, hub=existing._hub)
+    vm.construct()
+    try:
+        await vm.load()
+        prepared = vm.prepare()
+        vm.accept(prepared)
+        protected = True
+        await vm.execute(prepared, runtime)
+        assert vm.snapshot.status == UploadStatus.FAILED
+        assert not destination.writes
+        assert not destination.objects
+        protected = False
+        assert not destination.writes
+    finally:
+        await vm.shutdown()
+        vm.dispose()

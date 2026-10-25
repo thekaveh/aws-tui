@@ -173,6 +173,7 @@ from aws_tui.vm.glue.page_vm import GluePageVM, GlueView
 from aws_tui.vm.messages import (
     ConnectionChangedMessage,
     ConnectionListChangedMessage,
+    ConnectionProtectionChangedMessage,
     CopyTableReferenceRequest,
     OpenAthenaTableRequest,
     OpenGlueTableRequest,
@@ -7547,6 +7548,21 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
     def _on_connection_list_changed(self, msg: object) -> None:
         """Hub subscriber: drop deleted connection names from the
         unreachable set AND reload any pane bound to a changed connection."""
+        if isinstance(msg, ConnectionProtectionChangedMessage):
+            root = self._app_ctx.root_vm
+            active = root.active_connection
+            current = msg.connection
+            if (
+                active is not None
+                and root.active_auth_state is not None
+                and (active.kind, active.name, active.profile, active.endpoint_url)
+                == (current.kind, current.name, current.profile, current.endpoint_url)
+            ):
+                root.refresh_connection_state(
+                    replace(active, protected=current.protected),
+                    root.active_auth_state,
+                )
+            return
         if not isinstance(msg, ConnectionListChangedMessage):
             return
         if msg.change == "deleted":
@@ -8971,12 +8987,16 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
         so the shared connection list/selection state survives across
         rebuilds — only the thin ComponentVM wrapper is recreated.
         """
+        from aws_tui.vm.settings.connection_protection_vm import ConnectionProtectionVM
         from aws_tui.vm.settings.settings_vm import SettingsVM
 
         ctx = self._app_ctx
         await self._cancel_transfer_workers_before_content_swap()
         settings_vm = SettingsVM(
             s3=ctx.s3_connections_vm,
+            protection=ConnectionProtectionVM(
+                config=ctx.config_store, resolver=ctx.connection_resolver, hub=ctx.hub
+            ),
             athena_drafts=ctx.athena_drafts_vm,
             hub=ctx.hub,
             dispatcher=ctx.dispatcher,

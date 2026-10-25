@@ -46,6 +46,7 @@ from aws_tui.infra.aws_session import AwsSession
 from aws_tui.infra.connection_resolver import Connection
 from aws_tui.infra.duckdb import DuckDbPort
 from aws_tui.services.glue.comparison import GlueComparisonRouter
+from aws_tui.services.mutation_policy import MutationCheckFactory, protect_remote
 from aws_tui.vm.glue.comparison_ports import ComparisonCatalogClient
 from aws_tui.vm.glue.comparison_vm import GlueComparisonVM
 from aws_tui.vm.glue.iceberg_vm import IcebergInspectionUnavailableError
@@ -246,6 +247,7 @@ class GlueService:
         dispatcher: Dispatcher,
         aws_session: AwsSession,
         glue_client_factory: GlueClientFactory | None = None,
+        mutation_check_factory: MutationCheckFactory | None = None,
         athena_client_factory: AthenaClientFactory | None = None,
         selection_store: ServiceSelectionStore | None = None,
         duckdb_port: DuckDbPort | None = None,
@@ -253,6 +255,7 @@ class GlueService:
         self._hub = hub
         self._dispatcher = dispatcher
         self._aws_session = aws_session
+        self._mutation_check_factory = mutation_check_factory
         self._client_factory = glue_client_factory
         self._athena_client_factory = athena_client_factory
         self._selections = selection_store or ServiceSelectionStore()
@@ -345,6 +348,7 @@ class GlueService:
             if self._athena_client_factory is not None
             else AthenaClient(aws_session=self._aws_session, connection=connection)
         )
+        athena_client = protect_remote(athena_client, connection, self._mutation_check_factory)
         return GluePageVM(
             client=client,
             iceberg_inspector=_ContextualIcebergInspector(

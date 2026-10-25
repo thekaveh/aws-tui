@@ -17,6 +17,7 @@ class ServiceSourceContext:
     connection_name: str
     profile: str | None
     region: str
+    protected: bool = False
 
     @classmethod
     def from_connection(cls, connection: Connection) -> ServiceSourceContext:
@@ -24,6 +25,7 @@ class ServiceSourceContext:
             connection_name=connection.name,
             profile=connection.profile,
             region=connection.region,
+            protected=connection.protected,
         )
 
     @property
@@ -36,6 +38,8 @@ class ServiceSourceContext:
         if self.profile and self.profile != self.connection_name:
             parts.append(self.profile)
         parts.append(self.region)
+        if self.protected:
+            parts.append("Protected")
         return " · ".join(parts)
 
 

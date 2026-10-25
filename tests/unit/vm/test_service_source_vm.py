@@ -59,3 +59,18 @@ def test_selection_store_clone_commits_only_requested_scope() -> None:
     assert store.get(scope, "active_view") == "jobs"
     assert store.get(scope, "job_name") == "nightly"
     assert store.get(unrelated, "workgroup") == "updated-after-clone"
+
+
+def test_source_protection_is_displayed_without_changing_routing_key():
+    from dataclasses import replace
+
+    from aws_tui.infra.connection_resolver import Connection
+
+    connection = Connection(
+        name="dev", profile="dev", kind="aws", region="us-east-1", source="config"
+    )
+    normal = ServiceSourceContext.from_connection(connection)
+    protected = ServiceSourceContext.from_connection(replace(connection, protected=True))
+    assert protected.connection_key == normal.connection_key
+    assert "Protected" in protected.label
+    assert "Protected" not in normal.label
