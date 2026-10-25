@@ -18,10 +18,11 @@ from tests.integration.test_glue_page import open_service
 from tests.unit.vm.athena.test_page_vm import PageClient
 
 
+@pytest.mark.parametrize("reuse", [False, True])
 @pytest.mark.parametrize("size", [(80, 24), (120, 45)])
 @pytest.mark.parametrize("entry", ["keyboard", "mouse", "palette"])
 async def test_settings_protection_survives_navigation_and_denies_query(
-    tmp_path, monkeypatch, entry, size
+    tmp_path, monkeypatch, entry, size, reuse
 ):
     config_dir = tmp_path / "config"
     config_dir.mkdir()
@@ -59,6 +60,8 @@ async def test_settings_protection_survives_navigation_and_denies_query(
             await open_service(ctx, pilot, "athena")
             page = ctx.root_vm.content_host.current
             assert isinstance(page, AthenaPageVM)
+            if reuse:
+                page.query.set_reuse_options(enabled=True, max_age_minutes=60)
             assert "Protected" in app.query_one(ServiceSourceHeader)._source.label
             editor = app.query_one("#athena-editor", TextArea)
             await seed_athena_sql(pilot, page.query, editor, "SELECT 1")

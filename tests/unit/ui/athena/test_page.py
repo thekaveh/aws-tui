@@ -102,7 +102,13 @@ def _cycle_athena_target_ids(
     [
         (
             "query",
-            ("athena-editor", "athena-authoring", "athena-query-status", "athena-query-detail"),
+            (
+                "athena-editor",
+                "athena-authoring",
+                "athena-query-options",
+                "athena-query-status",
+                "athena-query-detail",
+            ),
         ),
         (
             "history",
