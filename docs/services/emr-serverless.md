@@ -165,52 +165,80 @@ and `logs:FilterLogEvents` on the configured group. It does not require
 job's writer permissions are separate; see
 [AWS CloudWatch logging configuration](https://docs.aws.amazon.com/emr/latest/EMR-Serverless-UserGuide/logging.html).
 
-## 3. Clone workflow
+## 3. Submit Spark jobs
+
+Create a blank job for a selected Spark application, or clone a previous Spark
+run. Both workflows use the same edit and review controls. They require
+`emr-serverless:StartJobRun` and permission to pass the execution role.
+
+### 3.1. Create a new job
+
+Select a Spark application, then press `Shift+N` or choose **New Spark job**
+from the command palette. The action is `emr.new_job`; it works without previous
+runs or a loaded run detail. Hive and unknown application types cannot open it.
+
+Enter an execution role ARN and entry point. Name, arguments, Spark parameters
+and advanced settings are optional. The blank form does not copy any prior run.
+Review identifies the connection, profile, region, application, role and effective
+request. Application defaults remain inherited and unknown; they are not inferred.
+
+<a id="3-clone-workflow" name="3-clone-workflow"></a>
+
+### 3.2. Clone a run
 
 Press `c` on a selected Spark run to open a prefilled form. Hive, missing or
 unsupported job drivers are refused before the Spark form opens. The form
 preserves the source name, execution role, entry point, arguments and Spark
-parameters. Arguments use a JSON array of strings, preserving empty strings, embedded newlines and whitespace. `null` omits the argument field and `[]` sends an explicit empty array.
+parameters. Clone review identifies the source run and compares each preserved
+or changed value.
 
-Spark parameters use a JSON string or `null` to omit
-them. JSON escapes preserve mixed line endings and Unicode separators exactly
-through editing and review.
+### 3.3. Edit and review
 
-The advanced JSON object carries the source's `configurationOverrides`
-(application and monitoring configuration), `executionTimeoutMinutes`,
-`retryPolicy`, `mode`, `executionIamPolicy` and `tags`. Both `BATCH` and
-`STREAMING` are supported. Remove a key to omit it; explicit empty objects and
-zero timeouts remain distinct from omission. Unsupported keys or values are
-refused with a reason rather than silently dropped. The installed SDK model
+Arguments use a JSON array of strings. Empty strings, embedded newlines,
+whitespace and Unicode retain their boundaries. `null` omits the argument field;
+`[]` sends an explicit empty array. Spark parameters use a JSON string or `null`.
+JSON escapes preserve mixed line endings and Unicode separators exactly.
+
+The advanced JSON object supports `configurationOverrides` (application and
+monitoring configuration), `executionTimeoutMinutes`, `retryPolicy`, `mode`,
+`executionIamPolicy` and `tags`. Both `BATCH` and `STREAMING` are supported.
+Remove a key to omit it. Explicit empty objects and zero timeouts remain
+distinct from omission; AWS still enforces release-specific constraints.
+Unsupported keys or values are refused with a reason. The installed SDK model
 defines supported nested settings.
 
-Choose **Review** (or press Enter in a single-line field) before **Submit**. Review identifies the source run, connection, profile, region, application and
-execution role. It lists preserved settings and every changed source/proposed
-value. Application release, network, image and worker settings are inherited
-from the current application; equality with the source run is unknown. Hidden
-application defaults are also unknown.
+Choose **Review** before **Submit**, or press Enter in a single-line field.
+Application release, network, image and worker settings are inherited from the
+current application. For clones, equality with the source application is unknown.
+Hidden application defaults are also unknown. Run identifiers, status, timestamps,
+attempts and resource usage are read-only outputs; they are not copied.
 
-Run identifiers, status, timestamps,
-attempts and resource usage are read-only outputs and are not copied. Scroll
-through the review; Tab reaches the fixed Back, Cancel and Submit buttons even
-at 80×24. Back preserves the form; further edits require a fresh review.
+Scroll through the review. Tab reaches the fixed Back, Cancel and Submit buttons
+even at 80×24. Back preserves the form; further edits require a fresh review.
+Cancel before submission makes no submit call. A changed source or application
+invalidates the form instead of redirecting its request.
+
+### 3.4. Submit and retry
 
 Submit calls the public EMR Serverless `StartJobRun` API. Validation and provider
-errors keep the modal open with category-specific recovery guidance. Submission
-errors and observable diagnostics exclude argument, policy and credential
-values. A source change invalidates the open clone. The service does not expose
-a blank submit form. During submission,
-**Close** dismisses the form; it does not cancel a job AWS may have accepted.
+errors retain the form and show category-specific recovery guidance. Protected
+connections explain how to change protection in Settings. Error messages and
+diagnostics exclude argument, policy and credential values.
 
-Submission carries an app-owned `clientToken`. The token is minted when the
-clone form opens and reused after an ambiguous failure if the request remains
-unchanged. Retry that unchanged review after a lost response. This lets AWS resolve the same request instead of creating a second job. Every request-affecting edit,
-including advanced nested settings, rotates the token; reapplying equal values
-does not.
+New-job success identifies the returned run and original application. It refreshes
+that application's runs and selects the new run when listed. Eventual consistency
+or filtering can delay its appearance. A changed current application is not
+refreshed or selected by the old request's completion.
 
-Successful submission or closing and reopening the form starts a new
-intent. Before reopening after an uncertain outcome, inspect the application's
-runs because the earlier request may already have succeeded.
+Submission carries an app-owned `clientToken`. An unchanged retry after an
+ambiguous failure reuses that token. Every request-affecting edit, including
+advanced settings, rotates it; reapplying equal values does not. Concurrent Submit
+activations cannot start another request.
+
+During submission, **Close** dismisses the form. It does not cancel a job AWS
+may have accepted. Successful submission or reopening the form starts a new
+intent. Before reopening after an uncertain outcome, inspect the original
+application's runs because the earlier request may already have succeeded.
 
 ## 4. Cancel selected run
 

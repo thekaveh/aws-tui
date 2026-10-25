@@ -452,6 +452,69 @@ class EmrServerlessPage(DeferredWorkerMixin, Widget):
             return True
         return False
 
+    async def action_new_job(self) -> None:
+        """Open one blank form for the selected application, including zero runs."""
+        if self._clone_active or not self._vm.can_submit_new_job():
+            return
+        self._clone_active = True
+
+        async def create() -> None:
+            try:
+                await self._new_job()
+            finally:
+                self._clone_active = False
+
+        self._run_lifecycle_worker(create, group="emr-new-job", exclusive=False)
+
+    def _new_job_source_current(self, application_id: str) -> bool:
+        return self._cancel_owner_current() and self._vm.can_submit_new_job(application_id)
+
+    async def _new_job(self) -> None:
+        application_id = self._vm.applications.selected_id
+        if application_id is None or not self._new_job_source_current(application_id):
+            return
+        source_label = self._vm.source.label
+        vm = JobRunCloneVM(
+            None,
+            application_id=application_id,
+            client=self._vm.client,
+            hub=self._hub,
+            dispatcher=self._vm.dispatcher,
+            source=self._vm.source,
+            source_is_current=lambda: self._new_job_source_current(application_id),
+        )
+        vm.construct()
+        modal = JobRunCloneModal(vm, hub=self._hub)
+        try:
+            try:
+                new_id = await self.app.push_screen_wait(modal)
+            except Exception:
+                self._post_advisory_toast(
+                    "Job",
+                    "New job form closed unexpectedly; reopen it from the selected application",
+                )
+                return
+            if new_id is None:
+                return
+            with contextlib.suppress(Exception):
+                stack = self.app._app_ctx.root_vm.chrome.toast_stack  # type: ignore[attr-defined]
+                notifications.success(
+                    stack,
+                    subject="Job",
+                    message=(f"job submitted on {source_label} / {application_id} ({new_id})"),
+                )
+            if not self._new_job_source_current(application_id):
+                return
+            await self._vm.refresh_job_runs(application_id=application_id)
+            if self._new_job_source_current(application_id) and any(
+                run.job_run_id == new_id for run in self._vm.job_runs.runs
+            ):
+                await self._vm.select_job_run(new_id)
+        finally:
+            if modal.is_attached and modal.is_active:
+                modal.action_cancel()
+            vm.dispose()
+
     async def action_clone_selected_run(self) -> None:
         """Start one lifecycle-owned worker; push_screen_wait requires one."""
         if self._clone_active:

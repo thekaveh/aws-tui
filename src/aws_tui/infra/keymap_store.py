@@ -160,6 +160,7 @@ class KeymapStore:
         # EMR-page-only. The App routes this deliberate alias to clone on
         # EMR and to ``pane.copy`` on the file manager.
         "emr.clone": ("c",),
+        "emr.new_job": ("N",),
         "emr.cancel": ("x",),
         "emr.logs.filter": ("f",),
         "emr.logs.source": ("ctrl+s",),

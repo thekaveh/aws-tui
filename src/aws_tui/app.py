@@ -805,6 +805,7 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
         self._actions.register("app.swap_source", self._handle_swap_source)
         self._actions.register("emr.next_application", self.action_next_emr_application)
         self._actions.register("emr.clone", self.action_clone_emr_run)
+        self._actions.register("emr.new_job", self.action_new_emr_job)
         self._actions.register("emr.cancel", self.action_cancel_emr_run)
         self._actions.register("emr.logs.filter", self.action_filter_emr_logs)
         self._actions.register("emr.logs.source", self.action_cycle_emr_log_source)
@@ -2817,6 +2818,7 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
         groups = {
             *_TRANSFER_WORKER_GROUPS,
             "emr-clone",
+            "emr-new-job",
             "emr-clone-submit",
             "emr-cancel",
             "glue-iceberg-select-view",
@@ -3992,7 +3994,12 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
         """Existing footer predicates, with an optional underlying focus snapshot."""
         emr = self._emr_page()
         if emr is not None:
-            return frozenset() if emr.vm.can_cancel_selected_run() else frozenset({"emr.cancel"})
+            emr_disabled: set[str] = set()
+            if not emr.vm.can_cancel_selected_run():
+                emr_disabled.add("emr.cancel")
+            if not emr.vm.can_submit_new_job():
+                emr_disabled.add("emr.new_job")
+            return frozenset(emr_disabled)
         athena = self._athena_page()
         if athena is not None:
             disabled: set[str] = set()
@@ -4242,6 +4249,8 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
                 reasons["glue.open_s3_location"] = "selection_required"
         emr = self._emr_page()
         if emr is not None:
+            if not emr.vm.can_submit_new_job():
+                reasons["emr.new_job"] = "selection_required"
             emr_detail = emr.vm.job_run_detail.detail
             if emr_detail is None or not emr.vm.can_clone_source(
                 emr_detail.application_id, emr_detail.job_run_id
@@ -6709,6 +6718,19 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
         page = self._emr_page()
         if page is not None:
             page.action_next_application()
+
+    async def action_new_emr_job(self) -> None:
+        if (
+            len(self.screen_stack) > 1
+            or self._app_ctx.focus_coordinator.is_modal
+            or self._shutdown_task is not None
+            or self.service_navigation.closed
+        ):
+            return
+        page = self._emr_page()
+        if page is not None and page.vm.can_submit_new_job():
+            self.record_action("emr.new_job")
+            await page.action_new_job()
 
     async def action_clone_emr_run(self) -> None:
         page = self._emr_page()

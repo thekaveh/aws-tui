@@ -130,6 +130,7 @@ focused editable widget can consume text first.
 | Scroll run details | `↑` / `↓`, `k` / `j`, `PageUp` / `PageDown`, `Home` / `End` | Focus detail with `Tab` from runs. Scroll lines, pages, or to the content boundaries without changing the selected run. |
 | Select run (explicit) | `Enter` | Re-emits `RunSelected` for the cursor row. |
 | Refresh | `r` | Forces an immediate poll on the active pane (apps if LEFT focused on the picker, runs if LEFT focused on the runs list, detail if RIGHT focused). |
+| New Spark job | `Shift+N` (`N`) | `emr.new_job`: open a blank edit/review form for the selected Spark application, including applications with no runs |
 | Cancel selected job run | `x` | `emr.cancel`: danger confirmation names the exact source, application and run; starts on Keep running. Request cancellation is available only for SUBMITTED, PENDING, SCHEDULED, QUEUED and RUNNING, while idle. Requires `emr-serverless:CancelJobRun`. Acknowledgement leaves cached state untouched; existing polling observes CANCELLING/CANCELLED. The Commands hint and palette use the same action. |
 | Clone selected job run | `c` | Opens the Spark clone form from the focused run. Edit arguments, Spark parameters and advanced settings as JSON, choose Review, inspect source identity and changes, then Submit. Enter in a single-line field opens review; Tab reaches the fixed footer. Unsupported drivers are refused. Escape closes the form; it does not cancel an AWS job already submitted. |
 | Cycle pane focus | `Tab` / `Shift+Tab` | 6-slot cycle: nav rail → source selector → application selector → runs pane → detail pane → logs pane → nav rail. |
@@ -271,6 +272,7 @@ A binding can be a single keystroke or a list of fallback keystrokes:
 "app.cycle_theme" = "T"
 "app.swap_source" = "S"
 "emr.next_application" = "A"
+"emr.new_job" = "N"
 "emr.cancel" = "x"
 "glue.catalog" = "1"
 "glue.jobs" = "2"
@@ -421,6 +423,7 @@ matching `ActionRegistry` handler. Use these IDs in your keybinding overrides.
 | `emr.next_application` | `A` (`shift+a`) | yes | Cycle to the next EMR application |
 | `emr.cancel` | `x` (when EMR page mounted) | yes | Confirm the exact selected active run before requesting cancellation; never retries automatically. |
 | `emr.clone` | `c` (when EMR page mounted) | yes | Open the EMR clone-job-run modal pre-filled from the focused run. |
+| `emr.new_job` | `N` (`shift+n`) | yes | Review a new Spark job for the selected application; no source run is required |
 | `emr.logs.source` | `ctrl+s` (when EMR logs pane focused) | yes | Cycle configured S3/CloudWatch log destinations |
 | `emr.logs.follow` | `ctrl+alt+l` (when EMR logs pane focused) | yes | Start/stop following the selected CloudWatch stream |
 | `emr.logs.filter` | `f` (when EMR logs pane focused) | yes | Open the EMR logs filter modal |

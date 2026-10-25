@@ -7,12 +7,12 @@ Linux and Windows. It supports Python 3.11, 3.12 and 3.13.
 
 - Manage S3 and local files in two panes: copy, move, rename, create folders, delete and preview.
 - Inspect EMR Serverless applications, job runs and logs; clone an existing
-  Spark run or cancel an active run.
+  Spark run, submit a new job or cancel an active run.
 - Browse AWS Glue resources and Iceberg metadata.
 - Review and execute allowed read-only SQL in Athena, then inspect results and history.
 
 Glue-to-Athena handoffs prefill queries without executing them. Athena execution
-can incur AWS charges and write results. S3 file operations and EMR clone/cancel
+can incur AWS charges and write results. S3 file operations and EMR submit/clone/cancel
 operations modify resources.
 
 ## 2. Installation

@@ -72,8 +72,15 @@ def test_keybindings_describes_shipped_palette_and_runtime_resolver() -> None:
     assert "Dynamic `connection switch <name>` palette entries are not registered" not in text
     assert "All live App-level bindings are installed through `BindingResolver`" in text
     assert "Only actions with registered handlers receive live" in text
-    assert "`BindingResolver` leaves them unbound until a handler ships" in text
     assert "causes the app to fall back to the default keymap" in text
+
+
+def test_keybindings_describes_new_spark_submission_without_a_source_run() -> None:
+    text = _text("docs/keybindings.md")
+
+    assert "| New Spark job | `Shift+N` (`N`) |" in text
+    assert "| `emr.new_job` | `N` (`shift+n`) | yes |" in text
+    assert "including applications with no runs" in text
 
 
 def test_unreleased_changelog_does_not_contradict_shipped_handlers_or_demo() -> None:

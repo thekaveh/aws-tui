@@ -1,8 +1,8 @@
-"""JobRunCloneVM — backs the EMR clone-job-run modal.
+"""JobRunCloneVM — backs the EMR Spark job edit/review modal.
 
-Pre-populates from a :class:`JobRunDetail`, lets the view bind the
-five Spark fields plus advanced request settings, and (via :meth:`submit`) calls
-``client.start_job_run`` to fire the re-run. On failure a
+Pre-populates from a :class:`JobRunDetail` or starts blank for a captured
+application ID, lets the view bind the five Spark fields plus advanced request
+settings, and (via :meth:`submit`) calls ``client.start_job_run``. On failure a
 :class:`ProviderError` is re-raised so the modal can surface a
 typed inline error without dismissing.
 
@@ -22,7 +22,11 @@ from vmx import ComponentVM, Message, MessageHub, PropertyChangedMessage
 from vmx.lifecycle.status import ConstructionStatus
 from vmx.services.dispatcher import Dispatcher
 
-from aws_tui.domain.emr_job_request import validate_clone_settings, validate_spark_driver
+from aws_tui.domain.emr_job_request import (
+    build_start_job_run_request,
+    validate_clone_settings,
+    validate_spark_driver,
+)
 from aws_tui.domain.emr_serverless import EmrServerlessClientProtocol, JobRunDetail
 from aws_tui.domain.filesystem import ValidationError
 from aws_tui.vm._observable import send_value_free
@@ -41,9 +45,9 @@ _FIELDS: tuple[str, ...] = (
 
 
 class JobRunCloneVM:
-    """Form-state + submit/cancel for the clone-job-run modal.
+    """Form-state + submit/cancel for the Spark job edit/review modal.
 
-    The instance is single-shot: construct with the source detail,
+    The instance is single-shot: construct with a source detail or application ID,
     push the modal, await :meth:`submit` (or :meth:`cancel`), then
     dispose. Reusing across modals would require resetting the
     future and the form snapshot — the orchestrator builds a fresh
@@ -53,8 +57,9 @@ class JobRunCloneVM:
 
     def __init__(
         self,
-        detail: JobRunDetail,
+        detail: JobRunDetail | None,
         *,
+        application_id: str | None = None,
         client: EmrServerlessClientProtocol,
         hub: MessageHub[Message],
         dispatcher: Dispatcher,
@@ -66,27 +71,37 @@ class JobRunCloneVM:
         self._source_detail = deepcopy(detail)
         self._source = source
         self._source_is_current = source_is_current
-        self._settings: dict[str, Any] = {
-            key: deepcopy(value)
-            for key, value in {
-                "configurationOverrides": detail.configuration_overrides,
-                "executionTimeoutMinutes": detail.execution_timeout_minutes,
-                "retryPolicy": detail.retry_policy,
-                "mode": detail.mode,
-                "executionIamPolicy": detail.execution_iam_policy,
-                "tags": detail.tags,
-            }.items()
-            if value is not None
-        }
-        self._application_id: str = detail.application_id
+        self._settings: dict[str, Any] = (
+            {
+                key: deepcopy(value)
+                for key, value in {
+                    "configurationOverrides": detail.configuration_overrides,
+                    "executionTimeoutMinutes": detail.execution_timeout_minutes,
+                    "retryPolicy": detail.retry_policy,
+                    "mode": detail.mode,
+                    "executionIamPolicy": detail.execution_iam_policy,
+                    "tags": detail.tags,
+                }.items()
+                if value is not None
+            }
+            if detail is not None
+            else {}
+        )
+        self._application_id: str = (
+            detail.application_id if detail is not None else application_id or ""
+        )
         # Pre-populated form state. Tuple for arguments (immutable
         # snapshot the view can render row-per-line); str / None for
         # the rest.
-        self._name: str | None = detail.name
-        self._execution_role_arn: str = detail.execution_role_arn
-        self._entry_point: str = detail.entry_point or ""
-        self._entry_point_arguments: tuple[str, ...] | None = detail.entry_point_arguments
-        self._spark_submit_parameters: str | None = detail.spark_submit_parameters
+        self._name: str | None = detail.name if detail is not None else None
+        self._execution_role_arn: str = detail.execution_role_arn if detail is not None else ""
+        self._entry_point: str = (detail.entry_point or "") if detail is not None else ""
+        self._entry_point_arguments: tuple[str, ...] | None = (
+            detail.entry_point_arguments if detail is not None else None
+        )
+        self._spark_submit_parameters: str | None = (
+            detail.spark_submit_parameters if detail is not None else None
+        )
         # One idempotency token per form intent. Reused verbatim when a
         # submit attempt raises (the ambiguous-retry case AWS's clientToken
         # exists for), rotated when a field value changes or a submit
@@ -98,6 +113,7 @@ class JobRunCloneVM:
         # a VM-side future, so there's no Future to resolve here.
         self._cancelled: bool = False
         self._submitted_id: str | None = None
+        self._submitting: bool = False
         self._disposed: bool = False
         self._inner: ComponentVM = (
             ComponentVM.builder().name("emr.job_run_clone").services(hub, dispatcher).build()
@@ -108,6 +124,18 @@ class JobRunCloneVM:
     @property
     def application_id(self) -> str:
         return self._application_id
+
+    @property
+    def is_new_job(self) -> bool:
+        return self._source_detail is None
+
+    @property
+    def form_title(self) -> str:
+        return "New Spark job" if self.is_new_job else "Clone job run"
+
+    @property
+    def review_title(self) -> str:
+        return "Review new Spark job" if self.is_new_job else "Review clone job run"
 
     @property
     def name(self) -> str | None:
@@ -138,7 +166,7 @@ class JobRunCloneVM:
         return self._inner.name
 
     @property
-    def source_detail(self) -> JobRunDetail:
+    def source_detail(self) -> JobRunDetail | None:
         return deepcopy(self._source_detail)
 
     @property
@@ -147,6 +175,8 @@ class JobRunCloneVM:
 
     @property
     def unsupported_driver_reason(self) -> str | None:
+        if self._source_detail is None:
+            return None
         try:
             validate_spark_driver(self._source_detail.job_driver)
         except ValidationError as exc:
@@ -163,7 +193,7 @@ class JobRunCloneVM:
 
     @property
     def review_text(self) -> str:
-        """Complete user-facing comparison; never sent through diagnostics."""
+        """Complete request or source comparison; never sent through diagnostics."""
         detail = self._source_detail
         source = self._source
         identity = (
@@ -173,6 +203,25 @@ class JobRunCloneVM:
             if source is not None
             else "Connection / profile / region: unknown"
         )
+        if detail is None:
+            request = build_start_job_run_request(
+                self._application_id,
+                **self._request_fields(client_token="<app-owned; redacted>"),
+            )
+            return "\n".join(
+                [
+                    identity,
+                    f"Application: {self._application_id}",
+                    f"Execution role: {self._execution_role_arn}",
+                    "",
+                    "Application defaults: Inherited from current application; effective values unknown.",
+                    "Omitted request settings: unknown; application or service defaults may apply.",
+                    "clientToken: app-owned idempotency token; opaque value redacted.",
+                    "",
+                    "Effective StartJobRun request:",
+                    json.dumps(request, ensure_ascii=False, indent=2),
+                ]
+            )
         lines = [
             f"Source run: {detail.job_run_id}",
             identity,
@@ -299,9 +348,11 @@ class JobRunCloneVM:
         and remaining service-side validation.
         """
         if self._disposed or self._cancelled:
-            return False, "clone is no longer active"
+            return False, "job form is no longer active"
         if self._source_is_current is not None and not self._source_is_current():
-            return False, "The source changed. Reopen the clone from the current source"
+            return False, "The source changed. Reopen the job form from the current source"
+        if not self._application_id.strip():
+            return False, "application ID is required"
         unsupported = self.unsupported_driver_reason
         if unsupported is not None:
             return False, unsupported
@@ -323,28 +374,48 @@ class JobRunCloneVM:
         Returns the new ``job_run_id`` on success. Re-raises any
         :class:`ProviderError` so the modal can render the error
         inline (without dismissing)."""
+        if self._submitting:
+            raise ValidationError("A job submission is already in progress")
         valid, reason = self.is_valid()
         if not valid:
-            raise ValidationError(reason or "clone form is invalid")
-        settings = self.settings
-        new_id: str = await self._client.start_job_run(
-            self._application_id,
-            execution_role_arn=self._execution_role_arn,
-            entry_point=self._entry_point,
-            entry_point_arguments=self._entry_point_arguments,
-            spark_submit_parameters=self._spark_submit_parameters,
-            client_token=self._client_token,
-            name=self._name,
-            configuration_overrides=settings.get("configurationOverrides"),
-            execution_timeout_minutes=settings.get("executionTimeoutMinutes"),
-            retry_policy=settings.get("retryPolicy"),
-            mode=settings.get("mode"),
-            execution_iam_policy=settings.get("executionIamPolicy"),
-            tags=settings.get("tags"),
-        )
-        self._submitted_id = new_id
-        self._client_token = uuid4().hex
+            raise ValidationError(reason or "job form is invalid")
+        application_id = self._application_id
+        token = self._client_token
+        fields = self._request_fields(client_token=token)
+        self._submitting = True
+        try:
+            new_id: str = await self._client.start_job_run(application_id, **fields)
+        finally:
+            self._submitting = False
+        if (
+            not self._disposed
+            and not self._cancelled
+            and (self._source_is_current is None or self._source_is_current())
+        ):
+            self._submitted_id = new_id
+            # An edit during the await owns a newer token. Completing the old
+            # request must not replace it, including after an ambiguous retry.
+            if self._client_token == token:
+                self._client_token = uuid4().hex
         return new_id
+
+    def _request_fields(self, *, client_token: str) -> dict[str, Any]:
+        """Capture every request field, including nested settings, before awaiting."""
+        settings = self.settings
+        return {
+            "execution_role_arn": self._execution_role_arn,
+            "entry_point": self._entry_point,
+            "entry_point_arguments": self._entry_point_arguments,
+            "spark_submit_parameters": self._spark_submit_parameters,
+            "client_token": client_token,
+            "name": self._name,
+            "configuration_overrides": settings.get("configurationOverrides"),
+            "execution_timeout_minutes": settings.get("executionTimeoutMinutes"),
+            "retry_policy": settings.get("retryPolicy"),
+            "mode": settings.get("mode"),
+            "execution_iam_policy": settings.get("executionIamPolicy"),
+            "tags": settings.get("tags"),
+        }
 
     def cancel(self) -> None:
         """Mark the VM as cancelled. The modal widget's own dismiss
