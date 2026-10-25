@@ -117,42 +117,42 @@ async def focus_and_settle(
     widget: Widget,
     *,
     timeout: float = DEFAULT_DRAIN_TIMEOUT_SECONDS,
+    require_focusable: bool = False,
 ) -> None:
-    """Focus ``widget`` and wait for the focus to actually land.
+    """Retry deferred focus, with readiness checks for known-ready targets.
 
-    ``Widget.focus()`` defers through ``call_later`` and ``App.set_focus`` is a
-    no-op while the widget is not yet focusable, so ``widget.focus()`` followed
-    immediately by ``pilot.press(...)`` sends the key wherever focus happens to
-    be at that moment. That is order- and load-dependent: it passes alone and
-    fails in a full run, which is exactly how
-    ``test_enter_and_space_press_all_enabled_iceberg_buttons`` failed with a
-    30-second timeout while passing standalone, in its own file, and across its
-    whole subtree.
+    Textual can drop a deferred request while visibility or enabled state is
+    changing. The default therefore allows temporary unavailability. Callers
+    that have established readiness can use ``require_focusable=True`` to fail
+    immediately when that precondition is false. Ancestor display is checked
+    separately because Textual's ``focusable`` excludes CSS display.
 
-    Waiting on the precondition rather than assuming it keeps the test honest:
-    a widget that genuinely cannot take focus now fails saying so, instead of
-    silently asserting against a key that went somewhere else.
-
-    Waiting alone is not enough, though, and that is the defect #276 names. The
-    two facts in the paragraph above combine badly: ``focus()`` defers through
-    ``call_later``, and by the time that deferred call runs ``App.set_focus`` is
-    a *no-op* if the widget is not focusable yet. The request is dropped
-    silently. Polling ``has_focus`` after a single ``focus()`` therefore waits
-    out the whole timeout for a request that will never be honoured -- which is
-    how this reads as "never took focus within Ns" on a loaded runner while
-    passing standalone. So the request is re-issued each cycle: the first cycle
-    in which the widget *can* take focus is the one that lands it.
+    Detached or unmounted targets always fail promptly. Failure messages name
+    the target and current preconditions instead of only reporting elapsed time.
     """
     deadline = asyncio.get_running_loop().time() + timeout
-    widget.focus()
-    while not widget.has_focus:
+
+    while True:
+        displayed = all(node.display for node in widget.ancestors_with_self)
+        disabled = any(getattr(node, "disabled", False) for node in widget.ancestors_with_self)
+        target = f"{type(widget).__name__}(id={widget.id!r})"
+        state = (
+            f"is_attached={widget.is_attached}, is_mounted={widget.is_mounted}, "
+            f"focusable={widget.focusable}, visible={widget.visible}, "
+            f"displayed={displayed}, disabled={disabled}, loading={widget.loading}"
+        )
+        if not widget.is_attached or not widget.is_mounted:
+            raise AssertionError(f"{target} cannot take focus: {state}")
+        ready = widget.focusable and displayed
+        if require_focusable and not ready:
+            raise AssertionError(f"{target} failed focus precondition: {state}")
+        if ready and widget.has_focus:
+            return
         if asyncio.get_running_loop().time() >= deadline:
-            raise AssertionError(
-                f"{type(widget).__name__}(id={widget.id!r}) never took focus within {timeout}s"
-            )
-        await asyncio.sleep(0.01)
-        if not widget.has_focus:
+            raise AssertionError(f"{target} never took focus within {timeout}s: {state}")
+        if ready:
             widget.focus()
+        await asyncio.sleep(0.01)
 
 
 async def seed_athena_sql(pilot: object, query_vm: object, editor: TextArea, sql: str) -> None:

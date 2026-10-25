@@ -498,7 +498,7 @@ async def test_enter_and_space_press_all_enabled_iceberg_buttons(
         inspector.errors.pop("snapshots")
         retry = pilot.app.query_one("#glue-iceberg-retry", Button)
         assert not retry.disabled
-        await focus_and_settle(retry)
+        await focus_and_settle(retry, require_focusable=True)
         await pilot.press(key)
         await wait_until(
             lambda: len(vm.catalog.iceberg.snapshots) == 1,
@@ -512,7 +512,7 @@ async def test_enter_and_space_press_all_enabled_iceberg_buttons(
 
         more = pilot.app.query_one("#glue-iceberg-more", Button)
         assert not more.disabled
-        await focus_and_settle(more)
+        await focus_and_settle(more, require_focusable=True)
         if delayed_focus:
             # Release real callbacks queued by the earlier snapshot load only
             # after the user has moved from Retry to the enabled pager.
@@ -533,7 +533,7 @@ async def test_enter_and_space_press_all_enabled_iceberg_buttons(
 
         time_travel = pilot.app.query_one("#glue-iceberg-time-travel", Button)
         assert not time_travel.disabled
-        await focus_and_settle(time_travel)
+        await focus_and_settle(time_travel, require_focusable=True)
         await pilot.press(key)
         await wait_until(
             lambda: pilot.app.action_ids == ["glue.time_travel_in_athena"],
