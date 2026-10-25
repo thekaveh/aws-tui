@@ -25,6 +25,7 @@ from aws_tui.domain.athena_runner import AthenaQueryRunner
 from aws_tui.domain.filesystem import (
     PermissionDeniedError,
     ProviderError,
+    ValidationError,
 )
 from aws_tui.domain.query import (
     AthenaQueryError,
@@ -127,6 +128,7 @@ class AthenaQueryVM:
         validate_draft_execution: Callable[[QueryContext], Awaitable[bool]] | None = None,
         drafts_enabled: Callable[[], bool] | None = None,
         execution_context_available: Callable[[], bool] | None = None,
+        reuse_unavailable_reason: Callable[[], str | None] | None = None,
     ) -> None:
         self._draft_session = draft_session
         self._draft_recovery_guard = False
@@ -134,6 +136,12 @@ class AthenaQueryVM:
         self._validate_draft_execution = validate_draft_execution
         self._drafts_enabled = drafts_enabled or (lambda: False)
         self._execution_context_available = execution_context_available or (lambda: True)
+        self._reuse_unavailable_reason = reuse_unavailable_reason or (lambda: None)
+        self._reuse_enabled = False
+        self._reuse_max_age_minutes = 60
+        self._snapshot_reuse_options_changed = False
+        self._request_intent_key: str | None = None
+        self._request_intent_token: str | None = None
         self._last_execution_available = self._execution_context_available()
         self._client = client
         self._runner = runner or AthenaQueryRunner(
@@ -303,6 +311,48 @@ class AthenaQueryVM:
     @property
     def context(self) -> QueryContext:
         return self._context
+
+    @property
+    def reuse_enabled(self) -> bool:
+        return self._reuse_enabled
+
+    @property
+    def reuse_max_age_minutes(self) -> int:
+        return self._reuse_max_age_minutes
+
+    @property
+    def reuse_unavailable_reason(self) -> str | None:
+        return self._reuse_unavailable_reason()
+
+    def set_reuse_options(self, *, enabled: bool, max_age_minutes: int) -> None:
+        if self._disposed or self._shutdown_started or self._input_admission_closed:
+            raise ValidationError("Query options are unavailable")
+        if type(enabled) is not bool:
+            raise ValidationError("Result reuse must be enabled or disabled")
+        if type(max_age_minutes) is not int or not 0 <= max_age_minutes <= 10080:
+            raise ValidationError("Reuse age must be an integer from 0 through 10080 minutes")
+        reason = self.reuse_unavailable_reason
+        if enabled and reason is not None:
+            raise ValidationError(reason)
+        if (enabled, max_age_minutes) == (self._reuse_enabled, self._reuse_max_age_minutes):
+            return
+        self._reuse_enabled = enabled
+        self._reuse_max_age_minutes = max_age_minutes
+        self._forget_request_intent()
+        self._notify("reuse_options")
+
+    def _forget_request_intent(self) -> None:
+        self._request_intent_key = None
+        self._request_intent_token = None
+
+    def _reset_reuse_options(self, *, notify: bool = True) -> bool:
+        changed = self._reuse_enabled or self._reuse_max_age_minutes != 60
+        self._reuse_enabled = False
+        self._reuse_max_age_minutes = 60
+        self._forget_request_intent()
+        if changed and notify:
+            self._notify("reuse_options")
+        return changed
 
     @property
     def runner(self) -> AthenaQueryRunner:
@@ -548,6 +598,7 @@ class AthenaQueryVM:
         if not self.can_restore_draft_provenance(prepared.draft):
             raise ValueError("Athena editor provenance is unavailable")
         self._context = prepared.context
+        self._snapshot_reuse_options_changed = self._reset_reuse_options(notify=False)
         self._results._install_snapshot(prepared.results, context=prepared.context)
         self._generation += 1
         self._install_editor(
@@ -570,11 +621,15 @@ class AthenaQueryVM:
         self._is_submitting = False
 
     def _notify_snapshot_restored(self) -> None:
+        reuse_changed = self._snapshot_reuse_options_changed
+        self._snapshot_reuse_options_changed = False
         self._results._notify_snapshot_restored()
         self._notify("sql")
         self._notify("validation_error")
         self._notify_execution()
         self._notify("is_executing")
+        if reuse_changed:
+            self._notify("reuse_options")
         if self._draft_session is not None or self._draft_recovery_guard:
             self._draft_changed("")
 
@@ -714,6 +769,7 @@ class AthenaQueryVM:
                 self._retain_cleanup(self._execution_ref)
             self._owns_active_query = False
             self._context = context
+            self._reset_reuse_options()
             if self._draft_session is not None:
                 self._draft_session.context_changed(context)
             self._results.set_context(context)
@@ -853,6 +909,17 @@ class AthenaQueryVM:
                     self._validation_error = str(exc)
                     self._notify("validation_error")
                 return
+            submission_context = self._context
+            reuse_age = self._reuse_max_age_minutes if self._reuse_enabled else None
+            intent_key = hashlib.sha256(
+                repr(
+                    (submission_context.cache_key, normalized_sql, self._editor_revision, reuse_age)
+                ).encode()
+            ).hexdigest()
+            if self._request_intent_key != intent_key or self._request_intent_token is None:
+                self._request_intent_key = intent_key
+                self._request_intent_token = _request_token(submission_context)
+            request_token = self._request_intent_token
             if not await self._retire_owned_query_before_run(generation):
                 return
             self._reset_execution_state()
@@ -862,14 +929,22 @@ class AthenaQueryVM:
             self._notify("validation_error")
             self._notify("is_submitting")
             self._notify("pane_state")
-            submission_context = self._context
-            request_token = _request_token(submission_context)
 
             async def submit_current_query() -> QueryExecutionRef:
                 # Context/shutdown can acquire the retirement lock before this
                 # scheduled task runs. Fence the actual provider dispatch too.
                 if not self._execution_request_is_current(generation):
                     raise asyncio.CancelledError
+                if reuse_age is not None:
+                    reason = self.reuse_unavailable_reason
+                    if reason is not None:
+                        raise ValidationError(reason)
+                    return await self._runner.start(
+                        normalized_sql,
+                        submission_context,
+                        request_token=request_token,
+                        result_reuse_max_age_minutes=reuse_age,
+                    )
                 return await self._runner.start(
                     normalized_sql,
                     submission_context,
@@ -905,6 +980,8 @@ class AthenaQueryVM:
             if generation != self._generation or self._disposed:
                 await self._stop_stale_submission(ref)
                 return
+            if self._request_intent_token == request_token:
+                self._forget_request_intent()
             if not self._ref_matches_context(ref, self._context):
                 await self._reject_out_of_context(ref, generation)
                 return
@@ -967,6 +1044,11 @@ class AthenaQueryVM:
             return self._execution_request_is_current(generation)
 
     def refresh_execution_availability(self) -> None:
+        reason = self.reuse_unavailable_reason
+        if self._reuse_enabled and reason is not None:
+            self._reuse_enabled = False
+            self._forget_request_intent()
+            self._notify("reuse_options")
         available = self._execution_context_available()
         if available != self._last_execution_available:
             self._last_execution_available = available
@@ -1009,6 +1091,7 @@ class AthenaQueryVM:
             ref = self._execution_ref
             if self._owns_active_query and ref is not None and not await self._try_stop(ref):
                 return
+            self._forget_request_intent()
             self._lifecycle_transition = True
             self._generation += 1
             self._owns_active_query = False

@@ -152,12 +152,43 @@ results. Only a successful customer-S3 execution has an artifact that can be
 opened in the S3 service.
 
 The Query view orders Query controls, Query editor, then Execution detail. SQL,
-Run, Stop, and query status participate in keyboard focus traversal when available. At the minimum supported terminal size of 80×24, the app uses a one-line banner
+Run, Stop, Reuse, and query status participate in keyboard focus traversal when available. At the minimum supported terminal size of 80×24, the app uses a one-line banner
 that names the service, source, region, and demo status. Compact controls and a
 scrollable Execution detail pane leave at least three rows for the SQL editor.
 
 Tab to Execution detail and use the Up and Down arrows to read additional rows. Resizing keeps typed SQL, context selections, and keyboard focus; taller terminals
 restore the spacious banner and query layout.
+
+### 4.1. Read the scan cutoff
+
+Execution detail shows the selected workgroup's per-query scan cutoff as exact
+bytes and a readable size. **Not reported** means the workgroup supplied no
+cutoff. **Unavailable** means current metadata is missing; **Invalid** identifies
+an unusable reported value. Zero is not treated as unlimited.
+
+`LIMIT 5` limits returned rows. It does not limit scanned bytes or charges.
+The app does not change workgroup limits or estimate query costs.
+
+### 4.2. Configure result reuse
+
+1. Select **Reuse** in Query controls.
+2. Enable reuse and enter a maximum age from 0 through 10080 minutes.
+3. Select **Apply**. **Cancel** leaves the previous settings unchanged.
+
+Reuse defaults off; the initial maximum age is 60 minutes. The controls are
+unavailable until current workgroup metadata permits reuse. Managed results and
+caller output overrides cannot be combined with reuse. Changing context clears
+the settings. They are not saved with a local SQL file.
+
+AWS decides whether an eligible previous result can be reused. Results can be
+stale within the selected age. For example, `LIMIT` without `ORDER BY` is not
+eligible. Enabling reuse does not guarantee that a query avoids scanning data.
+See [AWS reuse limitations](https://docs.aws.amazon.com/athena/latest/ug/reusing-query-results.html).
+
+Execution detail shows AWS-reported **Reused result** beside **Bytes scanned**.
+A successful execution without reuse remains successful. An unchanged retry
+after a submission error retains its request token and options. Editing the SQL
+or options starts a new intent. Explicit cancellation retires that intent.
 
 <a id="7-inspect-and-control-loaded-results" name="7-inspect-and-control-loaded-results"></a>
 

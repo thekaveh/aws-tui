@@ -76,6 +76,7 @@ class AthenaRunnerClient(Protocol):
         context: QueryContext,
         *,
         request_token: str,
+        result_reuse_max_age_minutes: int | None = None,
     ) -> QueryExecutionRef: ...
 
     async def get_query_execution(
@@ -144,8 +145,16 @@ class AthenaQueryRunner:
         context: QueryContext,
         *,
         request_token: str,
+        result_reuse_max_age_minutes: int | None = None,
     ) -> QueryExecutionRef:
         normalized_sql = self.validate(sql, context)
+        if result_reuse_max_age_minutes is not None:
+            return await self._client.start_query(
+                normalized_sql,
+                context,
+                request_token=request_token,
+                result_reuse_max_age_minutes=result_reuse_max_age_minutes,
+            )
         ref = await self._client.start_query(
             normalized_sql,
             context,

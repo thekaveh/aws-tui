@@ -111,6 +111,7 @@ _CONSUMED_INPUT_MEMBERS = {
         "QueryExecutionContext",
         "WorkGroup",
         "ResultConfiguration",
+        "ResultReuseConfiguration",
     },
     ("emr-serverless", "ListApplications"): {"maxResults", "nextToken"},
     ("emr-serverless", "ListJobRuns"): {
@@ -608,3 +609,14 @@ def test_cloudwatch_operation_ledger_matches_reader_contract() -> None:
         "logStreamNames",
     ):
         assert required in section
+
+
+def test_athena_reuse_nested_request_contract() -> None:
+    model = botocore.session.get_session().get_service_model("athena")
+    shape = model.operation_model("StartQueryExecution").input_shape
+    reuse = shape.members["ResultReuseConfiguration"].members["ResultReuseByAgeConfiguration"]
+    assert reuse.members["Enabled"].type_name == "boolean"
+    age = reuse.members["MaxAgeInMinutes"]
+    assert age.type_name == "integer"
+    assert age.metadata["min"] == 0
+    assert age.metadata["max"] == 10080

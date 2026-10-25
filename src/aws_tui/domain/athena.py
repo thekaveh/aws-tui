@@ -662,6 +662,7 @@ class AthenaClient:
         *,
         request_token: str,
         output_location: str | None = None,
+        result_reuse_max_age_minutes: int | None = None,
     ) -> QueryExecutionRef:
         normalized_sql = self._sql_policy.validate(sql)
         if (
@@ -669,6 +670,24 @@ class AthenaClient:
             or context.region != self._connection.region
         ):
             raise ValidationError("query context does not match the active AWS connection")
+        if result_reuse_max_age_minutes is not None:
+            if (
+                type(result_reuse_max_age_minutes) is not int
+                or not 0 <= result_reuse_max_age_minutes <= 10_080
+            ):
+                raise ValidationError("result reuse age must be an integer from 0 to 10080 minutes")
+            if output_location is not None:
+                raise ValidationError("result reuse cannot use a caller output location")
+            try:
+                workgroup = await self.get_workgroup(context.workgroup)
+            except ProviderError:
+                raise
+            except Exception as exc:
+                _raise_mapped_athena_error(exc, unknown_message="Athena request failed")
+            if workgroup.summary.name != context.workgroup or workgroup.summary.state != "ENABLED":
+                raise ValidationError("result reuse requires the selected enabled workgroup")
+            if workgroup.managed_query_results_enabled:
+                raise ValidationError("result reuse is unavailable for managed query results")
 
         kwargs: dict[str, object] = {
             "QueryString": normalized_sql,
@@ -682,6 +701,13 @@ class AthenaClient:
         if output_location is not None:
             kwargs["ResultConfiguration"] = {
                 "OutputLocation": output_location,
+            }
+        if result_reuse_max_age_minutes is not None:
+            kwargs["ResultReuseConfiguration"] = {
+                "ResultReuseByAgeConfiguration": {
+                    "Enabled": True,
+                    "MaxAgeInMinutes": result_reuse_max_age_minutes,
+                },
             }
 
         try:
