@@ -25,6 +25,7 @@ from aws_tui.domain.emr_cloudwatch_logs import (
     CloudWatchLogStream,
     safe_cloudwatch_error,
 )
+from aws_tui.domain.emr_dashboard import DashboardLink
 from aws_tui.domain.emr_logs import (
     EmrServerlessLogsClient,
     EmrServerlessLogsClientProtocol,
@@ -137,6 +138,18 @@ class _FailedEmrClient:
 
     async def get_job_run(self, application_id: str, job_run_id: str) -> JobRunDetail:
         raise self._fresh_error()
+
+    async def get_dashboard_for_job_run(
+        self,
+        application_id: str,
+        job_run_id: str,
+        *,
+        attempt: int | None = None,
+        access_system_profile_logs: bool = False,
+    ) -> DashboardLink:
+        # A failed connection can carry an SDK URL in its original message.
+        # Retain the failure kind, never the dashboard operation's raw text.
+        raise self._error_type("EMR Serverless dashboard provider is unavailable") from None
 
     async def cancel_job_run(self, application_id: str, job_run_id: str) -> None:
         raise self._fresh_error()

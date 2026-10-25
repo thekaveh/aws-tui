@@ -368,6 +368,20 @@ ACTION_SPECS: tuple[ActionSpec, ...] = (
     ),
     ActionSpec("pane.quick_look", "Quick Look", "File operations", service_ids=frozenset(("s3",))),
     ActionSpec(
+        "emr.dashboard.open",
+        "Open EMR dashboard",
+        "EMR Serverless",
+        keywords=("Spark", "Tez", "history", "browser"),
+        service_ids=frozenset(("emr-serverless",)),
+    ),
+    ActionSpec(
+        "emr.dashboard.copy",
+        "Copy EMR dashboard link",
+        "EMR Serverless",
+        keywords=("Spark", "Tez", "history", "clipboard"),
+        service_ids=frozenset(("emr-serverless",)),
+    ),
+    ActionSpec(
         "emr.new_job",
         "New Spark job",
         "EMR Serverless",

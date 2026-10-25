@@ -1,7 +1,7 @@
 # EMR Serverless
 
 The EMR Serverless service is an AWS-only operational view for applications,
-job runs, details, and S3 or CloudWatch logs. It is read-mostly: browsing and log
+job runs, details, dashboards, and S3 or CloudWatch logs. It is read-mostly: browsing and log
 inspection are read-only. Focused workflows clone an existing run or request
 cancellation of one selected active run.
 
@@ -165,6 +165,42 @@ and `logs:FilterLogEvents` on the configured group. It does not require
 job's writer permissions are separate; see
 [AWS CloudWatch logging configuration](https://docs.aws.amazon.com/emr/latest/EMR-Serverless-UserGuide/logging.html).
 
+### 2.3. Open or copy a dashboard link
+
+Select a run from a Spark or Hive application. Press `U` (`Shift+U`) for
+**Open EMR dashboard**, or `Alt+U` for **Copy EMR dashboard link**.
+Both actions open the same review dialog, with the requested action focused.
+Help and the command palette show these actions and their configured shortcuts.
+They are remappable as `emr.dashboard.open` and `emr.dashboard.copy`.
+
+Review the connection, profile, region, application and run before delivery.
+Leave **Attempt** blank for the latest attempt, or enter a positive whole number.
+**Access system profile logs** starts off. Enable it explicitly when you need
+system profile logs for a Lake Formation-enabled job.
+
+Choose **Open** or **Copy** after review. Each accepted action requests a fresh
+link for that exact run; repeated actions do not reuse a cached link.
+AWS links expire one hour after generation. Request another link after expiry.
+The [AWS dashboard API reference](https://docs.aws.amazon.com/emr-serverless/latest/APIReference/API_GetDashboardForJobRun.html)
+describes live Spark/Tez interfaces and persistent interfaces for completed jobs.
+
+**Open** sends a browser request. Its acknowledgement does not confirm that the
+page loaded or that AWS accepted the link. If browser dispatch is unavailable
+or fails, aws-tui requests clipboard delivery of that fresh link.
+**Copy** requests clipboard delivery directly. Check the clipboard feedback:
+a delivery request alone does not confirm a native copy or terminal acceptance.
+
+Close or Escape cancels pending retrieval. Changing source, region, application
+or run prevents pending delivery to the old target. Returning to the same run
+requires a new review. A browser or clipboard request already admitted for
+delivery cannot be recalled. Page teardown waits for owned work.
+
+The AWS identity needs `emr-serverless:GetDashboardForJobRun` permission.
+Dashboard access is read-only and is available on protected connections.
+Private links are not written to aws-tui logs, history or saved workspaces.
+The external browser and clipboard can retain a delivered link.
+Demo links are synthetic, and demo mode disables native browser dispatch.
+
 ## 3. Submit Spark jobs
 
 Create a blank job for a selected Spark application, or clone a previous Spark
@@ -275,7 +311,7 @@ truthful. Key repeats and polls never submit an automatic cancellation.
 ## 5. Architecture
 
 `EmrServerlessService` composes `EmrServerlessPageVM`, which owns
-`ApplicationsVM`, `JobRunsVM`, `JobRunDetailVM`, and `JobRunLogsVM`.
+`ApplicationsVM`, `JobRunsVM`, `JobRunDetailVM`, `JobRunLogsVM`, and `DashboardVM`.
 `EmrServerlessClient` maps botocore responses into typed domain records.
 `EmrServerlessLogsClient` reads the selected run's monitoring objects through
 S3 and CloudWatch. VMx owns lifecycle, commands, observable state, paging, and modal results;

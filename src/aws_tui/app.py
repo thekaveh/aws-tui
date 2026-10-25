@@ -807,6 +807,8 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
         self._actions.register("emr.next_application", self.action_next_emr_application)
         self._actions.register("emr.clone", self.action_clone_emr_run)
         self._actions.register("emr.new_job", self.action_new_emr_job)
+        self._actions.register("emr.dashboard.open", self.action_open_emr_dashboard)
+        self._actions.register("emr.dashboard.copy", self.action_copy_emr_dashboard)
         self._actions.register("emr.cancel", self.action_cancel_emr_run)
         self._actions.register("emr.logs.filter", self.action_filter_emr_logs)
         self._actions.register("emr.logs.source", self.action_cycle_emr_log_source)
@@ -4001,6 +4003,8 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
                 emr_disabled.add("emr.cancel")
             if not emr.vm.can_submit_new_job():
                 emr_disabled.add("emr.new_job")
+            if emr.vm.dashboard_target() is None or emr.vm.dashboards.busy:
+                emr_disabled.update(("emr.dashboard.open", "emr.dashboard.copy"))
             return frozenset(emr_disabled)
         athena = self._athena_page()
         if athena is not None:
@@ -4251,6 +4255,9 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
                 reasons["glue.open_s3_location"] = "selection_required"
         emr = self._emr_page()
         if emr is not None:
+            if emr.vm.dashboard_target() is None or emr.vm.dashboards.busy:
+                reasons["emr.dashboard.open"] = "selection_required"
+                reasons["emr.dashboard.copy"] = "selection_required"
             if not emr.vm.can_submit_new_job():
                 reasons["emr.new_job"] = "selection_required"
             emr_detail = emr.vm.job_run_detail.detail
@@ -5801,7 +5808,10 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
             pane.commit_provider_recovery(candidate)
         return PaneState.IDLE
 
-    async def _put_on_clipboard(self, value: str, label: str) -> None:
+    async def _put_dashboard_on_clipboard(self, value: str) -> None:
+        await self._put_on_clipboard(value, "EMR dashboard link", retain=False)
+
+    async def _put_on_clipboard(self, value: str, label: str, *, retain: bool = True) -> None:
         """Copy ``value`` on both channels and report what actually happened.
 
         Two channels, only one of which can be checked. ``copy_to_clipboard``
@@ -5838,6 +5848,11 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
                 "clipboard.osc52_write_failed",
                 error_type=type(exc).__name__,
             )
+        finally:
+            # Textual keeps the last OSC52 payload in its public clipboard
+            # cache. Signed links must not outlive delivery in that cache.
+            if not retain and self._clipboard == value:
+                self._clipboard = ""
         # Two offloads stand between a wedged ``xclip`` and a frozen app, and
         # neither substitutes for the other: the VM's ``run_sync`` keeps the
         # blocking call off the event loop, and every caller reaches this
@@ -6733,6 +6748,25 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
         if page is not None and page.vm.can_submit_new_job():
             self.record_action("emr.new_job")
             await page.action_new_job()
+
+    async def action_open_emr_dashboard(self) -> None:
+        await self._emr_dashboard("open")
+
+    async def action_copy_emr_dashboard(self) -> None:
+        await self._emr_dashboard("copy")
+
+    async def _emr_dashboard(self, mode: Literal["open", "copy"]) -> None:
+        if (
+            len(self.screen_stack) > 1
+            or self._app_ctx.focus_coordinator.is_modal
+            or self._shutdown_task is not None
+            or self.service_navigation.closed
+        ):
+            return
+        page = self._emr_page()
+        if page is not None and page.vm.dashboard_target() is not None:
+            self.record_action(f"emr.dashboard.{mode}")
+            await page.action_dashboard(mode)
 
     async def action_clone_emr_run(self) -> None:
         page = self._emr_page()
@@ -9647,6 +9681,7 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
         return self._crash_report
 
     def _close_service_navigation_intake(self) -> None:
+        self._close_emr_dashboard_intake()
         if self.service_navigation.closed:
             return
         self.service_navigation.close_intake()
@@ -9654,6 +9689,11 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
         if subscription is not None:
             subscription.dispose()
         self._service_navigation_sub = None
+
+    def _close_emr_dashboard_intake(self) -> None:
+        page = getattr(self._app_ctx.root_vm.content_host, "current", None)
+        if isinstance(page, EmrServerlessPageVM):
+            page.close_dashboard_intake()
 
     async def _drain_table_navigation(self) -> None:
         await self.service_navigation.drain()
@@ -9677,6 +9717,7 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
             return
         task = getattr(self, "_shutdown_task", None)
         if task is None:
+            self._close_emr_dashboard_intake()
             task = asyncio.create_task(self._perform_aws_tui_shutdown())
             self._shutdown_task = task
         while not task.done():

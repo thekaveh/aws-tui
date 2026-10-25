@@ -130,6 +130,8 @@ focused editable widget can consume text first.
 | Scroll run details | `↑` / `↓`, `k` / `j`, `PageUp` / `PageDown`, `Home` / `End` | Focus detail with `Tab` from runs. Scroll lines, pages, or to the content boundaries without changing the selected run. |
 | Select run (explicit) | `Enter` | Re-emits `RunSelected` for the cursor row. |
 | Refresh | `r` | Forces an immediate poll on the active pane (apps if LEFT focused on the picker, runs if LEFT focused on the runs list, detail if RIGHT focused). |
+| Open EMR dashboard | `U` (`Shift+U`) | `emr.dashboard.open`: review the selected Spark/Hive run and options, then choose Open or Copy. |
+| Copy EMR dashboard link | `Alt+U` | `emr.dashboard.copy`: open the same review with Copy focused; fetch a fresh link after acceptance. |
 | New Spark job | `Shift+N` (`N`) | `emr.new_job`: open a blank edit/review form for the selected Spark application, including applications with no runs |
 | Cancel selected job run | `x` | `emr.cancel`: danger confirmation names the exact source, application and run; starts on Keep running. Request cancellation is available only for SUBMITTED, PENDING, SCHEDULED, QUEUED and RUNNING, while idle. Requires `emr-serverless:CancelJobRun`. Acknowledgement leaves cached state untouched; existing polling observes CANCELLING/CANCELLED. The Commands hint and palette use the same action. |
 | Clone selected job run | `c` | Opens the Spark clone form from the focused run. Edit arguments, Spark parameters and advanced settings as JSON, choose Review, inspect source identity and changes, then Submit. Enter in a single-line field opens review; Tab reaches the fixed footer. Unsupported drivers are refused. Escape closes the form; it does not cancel an AWS job already submitted. |
@@ -143,6 +145,10 @@ focused editable widget can consume text first.
 | Open log filter modal | `f` | Edit regex patterns, toggle "Show all" or "Match case"; ``Apply`` re-fetches S3; CloudWatch filters retained loaded data without a request. |
 | Reset log filter | `Shift+F` | Clears the logs filter and returns to the default log view. |
 | Scroll log lines up / down | `↑` `↓` (also `k` / `j`) | Navigate the loaded log line view (when RIGHT-logs pane is focused). |
+
+Both dashboard actions appear in Help and the command palette with their resolved
+shortcuts. See [dashboard review and delivery](services/emr-serverless.md#23-open-or-copy-a-dashboard-link)
+for attempts, system profile logs, expiry, permissions and clipboard outcomes.
 
 > **Right-pane refresh note:** `r` refreshes the currently focused
 > right-side surface: detail focus reloads the selected job-run detail;
@@ -274,6 +280,8 @@ A binding can be a single keystroke or a list of fallback keystrokes:
 "app.swap_source" = "S"
 "emr.next_application" = "A"
 "emr.new_job" = "N"
+"emr.dashboard.open" = "U"
+"emr.dashboard.copy" = "alt+U"
 "emr.cancel" = "x"
 "glue.catalog" = "1"
 "glue.jobs" = "2"
@@ -327,7 +335,7 @@ The bindings that are wired today include:
 
 - `q`, `Ctrl+C`, `Tab` / `Shift+Tab`, `↑/↓` (and `j/k`), `Enter`, `Backspace`, `left`, `→`.
 - `r`, `a`, `?`, `:`, `t`, `T`, `,` (comma → Settings), `c`, `d`, `x`.
-- `S` (Shift+S), `A` (Shift+A), Glue `1` / `2` / `3`, Athena `1` / `2` / `3` / `4`.
+- `U` (Shift+U), `Alt+U`, `S` (Shift+S), `A` (Shift+A), Glue `1` / `2` / `3`, Athena `1` / `2` / `3` / `4`.
 - `F`, `G`, `y`, `Q`, `W`, `C`, `D`, `i`, `V`, `Ctrl+Enter`, `Esc`, `l`, `p`, `P` (Shift+P), `Space`, `f`, `Shift+↑`, and `Shift+↓`.
 
 ### 2.1. Migrating custom x bindings
@@ -424,6 +432,8 @@ matching `ActionRegistry` handler. Use these IDs in your keybinding overrides.
 | `emr.next_application` | `A` (`shift+a`) | yes | Cycle to the next EMR application |
 | `emr.cancel` | `x` (when EMR page mounted) | yes | Confirm the exact selected active run before requesting cancellation; never retries automatically. |
 | `emr.clone` | `c` (when EMR page mounted) | yes | Open the EMR clone-job-run modal pre-filled from the focused run. |
+| `emr.dashboard.open` | `U` (`shift+u`) | yes | Review the selected Spark/Hive run before requesting a fresh browser link |
+| `emr.dashboard.copy` | `alt+U` | yes | Review the selected Spark/Hive run before requesting fresh-link clipboard delivery |
 | `emr.new_job` | `N` (`shift+n`) | yes | Review a new Spark job for the selected application; no source run is required |
 | `emr.logs.source` | `ctrl+s` (when EMR logs pane focused) | yes | Cycle configured S3/CloudWatch log destinations |
 | `emr.logs.follow` | `ctrl+alt+l` (when EMR logs pane focused) | yes | Start/stop following the selected CloudWatch stream |
