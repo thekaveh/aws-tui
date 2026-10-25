@@ -32,6 +32,8 @@ if TYPE_CHECKING:
 from vmx import Message, MessageHub, RxDispatcher
 from vmx.services.dispatcher import Dispatcher
 
+from aws_tui.domain.filesystem import PermissionDeniedError
+from aws_tui.domain.mutation_guard import PROTECTED_MESSAGE, ConnectionProtectedError, MutationCheck
 from aws_tui.domain.transfer_history import TransferConnectionIdentity
 from aws_tui.domain.transfer_journal import TransferJournal
 from aws_tui.infra.athena_draft_store import AthenaDraftStore
@@ -105,12 +107,62 @@ def connection_route(connection: Connection) -> tuple[object, ...]:
     )
 
 
+def same_connection_source(captured: Connection, current: Connection) -> bool:
+    expected, observed = connection_route(captured), connection_route(current)
+    return expected == observed or (
+        captured.source == "auto-aws-profile"
+        and current.source == "config"
+        and expected[:3] + expected[4:] == observed[:3] + observed[4:]
+    )
+
+
+def make_mutation_check_factory(
+    config: ConfigStore,
+    resolver: ConnectionResolver,
+) -> Callable[[Connection], MutationCheck]:
+    """Read policy for the captured route off-loop, without reading credentials."""
+
+    def factory(captured: Connection) -> MutationCheck:
+        def check_blocking() -> None:
+            try:
+                cfg = config.load()
+                entry = cfg.connections.get(captured.name)
+                if captured.source == "config" and entry is None:
+                    raise PermissionDeniedError("Connection source changed; reopen the operation")
+                current = resolver.resolve_selected_metadata(captured.name)
+                if current.kind == "aws" and current.profile:
+                    resolver.resolve_profile(current.profile, strict=True)
+                if not same_connection_source(captured, current):
+                    raise PermissionDeniedError("Connection source changed; reopen the operation")
+                after = config.load().connections.get(captured.name)
+                policy_matches = after is not None and (
+                    current.source == "config"
+                    or (after.kind == current.kind == "aws" and after.profile == current.profile)
+                )
+                if current.protected or (policy_matches and after is not None and after.protected):
+                    raise ConnectionProtectedError(PROTECTED_MESSAGE)
+                if after != entry:
+                    raise PermissionDeniedError("Connection source changed; reopen the operation")
+            except PermissionDeniedError:
+                raise
+            except Exception:
+                raise PermissionDeniedError(
+                    "Connection source cannot be verified; reopen the operation"
+                ) from None
+
+        async def check() -> None:
+            await asyncio.to_thread(check_blocking)
+
+        return check
+
+    return factory
+
+
 def make_source_check_factory(
     config: ConfigStore,
     resolver: ConnectionResolver,
 ) -> Callable[[Connection], Callable[[], Awaitable[bool]]]:
     def factory(captured: Connection) -> Callable[[], Awaitable[bool]]:
-        expected_route = connection_route(captured)
         baseline: tuple[object, ...] | None = None
         initialization_attempted = False
         check_lock = asyncio.Lock()
@@ -128,7 +180,7 @@ def make_source_check_factory(
                     if captured.source == "config"
                     else None
                 )
-                if before != after or connection_route(current) != expected_route:
+                if before != after or not same_connection_source(captured, current):
                     return None
                 return after
             except Exception:
@@ -175,8 +227,10 @@ class _LaunchConnectionResolver(ConnectionResolver):
         # match its retained source, even if an edit now equals the CLI override.
         if current.name != launch.underlying.name:
             return current
-        if connection_route(current) != connection_route(launch.underlying) or (
+        promoted = launch.underlying.source == "auto-aws-profile" and current.source == "config"
+        if not same_connection_source(launch.underlying, current) or (
             current.source == "config"
+            and not promoted
             and entry_source_identity(self._config_store.load().connections.get(current.name))
             != entry_source_identity(launch.source_entry)
         ):
@@ -198,6 +252,17 @@ class _LaunchConnectionResolver(ConnectionResolver):
 
     def resolve(self, name: str) -> Connection:
         return self.resolve_selected(name)
+
+    def resolve_selected_metadata(self, name: str) -> Connection:
+        if (
+            self._launch.request.profile is not None
+            and self._launch.connection is not None
+            and name == self._launch.connection.name
+        ):
+            current = super().resolve_profile(self._launch.request.profile)
+        else:
+            current = super().resolve_selected_metadata(name)
+        return self._apply_session(current, strict=True)
 
     def list(self) -> list[Connection]:
         connections = super().list()
@@ -669,6 +734,9 @@ def _build_app_context(
         )
         rollback.callback(athena_drafts_vm.dispose)
         source_check_factory = make_source_check_factory(config_store, connection_resolver)
+        mutation_check_factory = (
+            None if demo else make_mutation_check_factory(config_store, connection_resolver)
+        )
         # ── Registry ───────────────────────────────────────────────────────────
         registry = ServiceRegistry()
         s3_service = S3Service(
@@ -676,6 +744,7 @@ def _build_app_context(
             hub=hub,
             dispatcher=dispatcher,
             s3_fs_factory=s3_fs_factory,
+            mutation_check_factory=mutation_check_factory,
             initial_local_root=(
                 launch.location.native_root
                 if launch is not None and launch.location is not None
@@ -704,6 +773,7 @@ def _build_app_context(
             hub=hub,
             dispatcher=dispatcher,
             emr_client_factory=emr_client_factory,
+            mutation_check_factory=mutation_check_factory,
         )
         registry.register(cast("Service", emr_service))
 
@@ -712,6 +782,7 @@ def _build_app_context(
             dispatcher=dispatcher,
             aws_session=aws_session,
             glue_client_factory=glue_client_factory,
+            mutation_check_factory=mutation_check_factory,
             athena_client_factory=athena_client_factory,
             selection_store=service_selections,
             duckdb_port=resolved_duckdb_port,
@@ -725,6 +796,7 @@ def _build_app_context(
             athena_client_factory=athena_client_factory,
             selection_store=service_selections,
             drafts=athena_drafts_vm,
+            mutation_check_factory=mutation_check_factory,
             source_check_factory=source_check_factory,
         )
         registry.register(cast("Service", athena_service))

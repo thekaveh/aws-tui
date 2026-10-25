@@ -445,3 +445,111 @@ def test_unreadable_profile_source_still_reports_one_cli_line(sources, monkeypat
         app_module.main()
     assert result.value.code == 2
     assert len(capsys.readouterr().err.splitlines()) == 1
+
+
+async def test_retained_source_mutation_guard_preserves_region_override(retained_session):
+    from aws_tui.composition import make_mutation_check_factory
+    from aws_tui.domain.filesystem import PermissionDeniedError
+
+    store, resolver, launch, edit = retained_session
+    check = make_mutation_check_factory(store, resolver)(launch.connection)
+    await check()
+    edit()
+    with pytest.raises(PermissionDeniedError):
+        await check()
+
+
+async def test_cli_policy_materialization_keeps_session_region_out_of_config(retained_session):
+    from vmx import MessageHub
+
+    from aws_tui.composition import make_mutation_check_factory, make_source_check_factory
+    from aws_tui.domain.filesystem import PermissionDeniedError
+    from aws_tui.vm.settings.connection_protection_vm import ConnectionProtectionVM
+
+    store, resolver, launch, _ = retained_session
+    # The fixture's read-only store protects other tests, not this isolated fixture.
+    writable = ConfigStore(path=store.path)
+    vm = ConnectionProtectionVM(config=writable, resolver=resolver, hub=MessageHub())
+    captured = launch.connection
+    check = make_mutation_check_factory(writable, resolver)(captured)
+    read_check = make_source_check_factory(writable, resolver)(captured)
+    assert await read_check()
+    row = next(row for row in await vm.rows() if row.name == captured.name)
+    if row.kind != captured.kind:
+        await check()
+        return  # Exact CLI profile and same-name configured alias have separate policies.
+    await vm.set_protected(row, True)
+    with pytest.raises(PermissionDeniedError, match="protected"):
+        await check()
+    assert await read_check()
+    row = next(row for row in await vm.rows() if row.name == captured.name)
+    await vm.set_protected(row, False)
+    await check()
+    assert await read_check()
+    saved = writable.load().connections[captured.name]
+    assert saved.region != captured.region
+
+
+async def test_auto_profile_policy_does_not_persist_cli_region(sources):
+    from dataclasses import replace
+
+    from vmx import MessageHub
+
+    from aws_tui.composition import (
+        _LaunchConnectionResolver,
+        make_mutation_check_factory,
+        make_source_check_factory,
+    )
+    from aws_tui.launch import LaunchRequest, ResolvedLaunch
+    from aws_tui.vm.settings.connection_protection_vm import ConnectionProtectionVM
+
+    store = ConfigStore(path=sources / "config.toml")
+    store.remove_connection("analytics")
+    underlying = ConnectionResolver(config_store=store).resolve_profile("analytics")
+    captured = replace(underlying, region="ap-southeast-2")
+    launch = ResolvedLaunch(
+        request=LaunchRequest(profile="analytics", region=captured.region),
+        underlying=underlying,
+        connection=captured,
+        service_id="athena",
+        location=None,
+    )
+    resolver = _LaunchConnectionResolver(config_store=store, keychain=None, launch=launch)
+    vm = ConnectionProtectionVM(config=store, resolver=resolver, hub=MessageHub())
+    check = make_mutation_check_factory(store, resolver)(captured)
+    read_check = make_source_check_factory(store, resolver)(captured)
+    assert await read_check()
+    row = next(row for row in await vm.rows() if row.name == captured.name)
+    await vm.set_protected(row, True)
+    saved = store.load().connections[captured.name]
+    assert saved.region != captured.region
+    assert await read_check()
+    row = next(row for row in await vm.rows() if row.name == captured.name)
+    await vm.set_protected(row, False)
+    await check()
+
+
+async def test_unrelated_same_name_s3_policy_does_not_protect_exact_cli_aws_profile(sources):
+    from dataclasses import replace
+
+    from aws_tui.composition import _LaunchConnectionResolver, make_mutation_check_factory
+    from aws_tui.launch import LaunchRequest, ResolvedLaunch
+
+    store = ConfigStore(path=sources / "config.toml")
+    entry = store.load().connections["analytics"]
+    assert entry.kind == "s3-compatible"
+    store.update_connection(entry.name, replace(entry, protected=True))
+    underlying = ConnectionResolver(config_store=store).resolve_profile("analytics")
+    launch = ResolvedLaunch(
+        request=LaunchRequest(profile="analytics"),
+        underlying=underlying,
+        connection=underlying,
+        service_id="athena",
+        location=None,
+    )
+    resolver = _LaunchConnectionResolver(config_store=store, keychain=None, launch=launch)
+    await make_mutation_check_factory(store, resolver)(underlying)()
+    assert (
+        next(row for row in resolver.list_metadata() if row.name == "analytics").kind
+        == "s3-compatible"
+    )

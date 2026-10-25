@@ -323,3 +323,36 @@ async def test_cancellation_and_hiding_keep_receipts_and_replan_unattempted_subs
     assert vm.remaining_count == 4
     assert not vm.can_retry
     assert sum(row.state == "canceled" for row in vm.rows) == 4
+
+
+async def test_protection_enabled_after_review_blocks_all_upload_requests(context):
+    from aws_tui.domain.filesystem import PermissionDeniedError
+    from aws_tui.domain.mutation_guard import GuardedRemote
+
+    existing, source, target, destination, runtime = context
+    protected = False
+
+    async def check():
+        if protected:
+            raise PermissionDeniedError("Connection is protected; remote changes are blocked")
+
+    await target.swap_provider(
+        GuardedRemote(destination, check), path_protocol="s3:", connection_key=("aws", "fixture")
+    )
+    await target.navigate_to(PathRef(("bucket", "prefix")))
+    vm = type(existing)(source=source, destination=target, hub=existing._hub)
+    vm.construct()
+    try:
+        await vm.load()
+        prepared = vm.prepare()
+        vm.accept(prepared)
+        protected = True
+        await vm.execute(prepared, runtime)
+        assert vm.snapshot.status == UploadStatus.FAILED
+        assert not destination.writes
+        assert not destination.objects
+        protected = False
+        assert not destination.writes
+    finally:
+        await vm.shutdown()
+        vm.dispose()

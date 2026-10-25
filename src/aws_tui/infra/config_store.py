@@ -321,6 +321,7 @@ class ConnectionEntry:
     session_token: str | None = None
     force_path_style: bool = False
     verify_tls: bool = True
+    protected: bool = False
 
     def __repr__(self) -> str:
         masked_id = "***" if self.access_key_id else None
@@ -471,6 +472,9 @@ class ConfigStore:
                     field="force_path_style",
                     default=False,
                     table=f"connections.{name}",
+                ),
+                protected=_bool_field(
+                    body, field="protected", default=False, table=f"connections.{name}"
                 ),
                 verify_tls=_bool_field(
                     body,
@@ -694,6 +698,8 @@ class ConfigStore:
                     body["session_token"] = entry.session_token
                 if entry.force_path_style:
                     body["force_path_style"] = True
+                if entry.protected:
+                    body["protected"] = True
                 if not entry.verify_tls:
                     body["verify_tls"] = False
                 conns[name] = body

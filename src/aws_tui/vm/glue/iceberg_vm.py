@@ -43,6 +43,7 @@ from aws_tui.domain.iceberg_interpretation import (
     current_observation,
     explain_snapshot,
 )
+from aws_tui.domain.mutation_guard import PROTECTED_MESSAGE, ConnectionProtectedError
 from aws_tui.infra.duckdb import DuckDbPort, NativeDuckDb
 from aws_tui.vm._observable import ObserverSafeSubject, send_value_free
 from aws_tui.vm.file_manager.pane_vm import PaneState
@@ -1037,6 +1038,8 @@ class GlueIcebergVM:
 
 
 def _map_iceberg_provider_error(exc: ProviderError) -> tuple[PaneState, str]:
+    if isinstance(exc, ConnectionProtectedError):
+        return PaneState.FORBIDDEN, PROTECTED_MESSAGE
     if isinstance(exc, AuthRequiredError):
         return PaneState.AUTH_REQUIRED, "AWS authentication is required"
     if isinstance(exc, LakeFormationPermissionError | PermissionDeniedError):

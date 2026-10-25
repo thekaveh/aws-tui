@@ -46,6 +46,7 @@ from aws_tui.domain.emr_serverless import (
 from aws_tui.domain.filesystem import ProviderError
 from aws_tui.domain.navigation_workspace import NavigationTarget
 from aws_tui.infra.connection_resolver import Connection
+from aws_tui.services.mutation_policy import MutationCheckFactory, protect_remote
 from aws_tui.vm.emr_serverless.page_vm import EmrServerlessPageVM
 from aws_tui.vm.service_source_vm import SelectionScope, ServiceSelectionStore, navigation_seed
 from aws_tui.vm.services_protocol import RecoveryServiceVM, ServiceDescriptor
@@ -196,10 +197,12 @@ class EmrServerlessService:
         hub: MessageHub[Message],
         dispatcher: Dispatcher,
         emr_client_factory: EmrClientFactory | None = None,
+        mutation_check_factory: MutationCheckFactory | None = None,
         emr_logs_client_factory: EmrLogsClientFactory | None = None,
     ) -> None:
         self._hub: MessageHub[Message] = hub
         self._dispatcher: Dispatcher = dispatcher
+        self._mutation_check_factory = mutation_check_factory
         self._client_factory: EmrClientFactory | None = emr_client_factory
         self._logs_client_factory: EmrLogsClientFactory | None = emr_logs_client_factory
         self._selection_store = ServiceSelectionStore()
@@ -249,7 +252,9 @@ class EmrServerlessService:
         connection: Connection,
         selections: ServiceSelectionStore,
     ) -> EmrServerlessPageVM:
-        client = self._make_client(connection)
+        client = protect_remote(
+            self._make_client(connection), connection, self._mutation_check_factory
+        )
         logs_client = self._make_logs_client(connection, client=client)
         return EmrServerlessPageVM(
             client=client,
