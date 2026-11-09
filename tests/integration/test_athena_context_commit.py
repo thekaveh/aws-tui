@@ -29,9 +29,20 @@ from tests.integration.test_glue_athena_navigation import (
 @pytest.mark.asyncio
 @pytest.mark.parametrize("size", [(80, 24), (120, 40)])
 @pytest.mark.parametrize("route", ["bottom-bar", "palette-service"])
-@pytest.mark.parametrize("field", ["workgroup", "catalog", "database", "source"])
+@pytest.mark.parametrize(
+    ("field", "has_tables"),
+    [
+        pytest.param("workgroup", False, id="workgroup-empty"),
+        pytest.param("workgroup", True, id="workgroup-tables"),
+        pytest.param("catalog", False, id="catalog-empty"),
+        pytest.param("catalog", True, id="catalog-tables"),
+        pytest.param("database", False, id="database-empty"),
+        pytest.param("database", True, id="database-tables"),
+        pytest.param("source", False, id="source"),
+    ],
+)
 async def test_glue_iceberg_handoff_can_commit_a_different_athena_context(
-    tmp_path: Path, size: tuple[int, int], field: str, route: str
+    tmp_path: Path, size: tuple[int, int], field: str, has_tables: bool, route: str
 ) -> None:
     ctx = build_app_context(config_dir=tmp_path / "config", cache_dir=tmp_path / "cache", demo=True)
     client = _athena_client(ctx, "demo-dev")
@@ -41,6 +52,16 @@ async def test_glue_iceberg_handoff_can_commit_a_different_athena_context(
     client.add_catalog("dev-analytics", "review-catalog")
     client.add_database("dev-analytics", "review-catalog", "review_database")
     client.add_database("dev-analytics", "AwsDataCatalog", "review_database")
+    if has_tables:
+        # Neither table matches the outgoing Glue table: a real context change
+        # must select the first available table and replace its generated SQL.
+        for workgroup, catalog in (
+            ("review-workgroup", "AwsDataCatalog"),
+            ("dev-analytics", "review-catalog"),
+            ("dev-analytics", "AwsDataCatalog"),
+        ):
+            for table in ("a_review_orders", "z_review_other"):
+                client.add_table(workgroup, catalog, "review_database", table)
     app = AwsTuiApp(ctx)
     try:
         async with app.run_test(size=size) as pilot:
@@ -84,6 +105,9 @@ async def test_glue_iceberg_handoff_can_commit_a_different_athena_context(
             assert vm.context.region == "us-east-1"
             assert vm.context.catalog == ref.catalog_name
             assert vm.context.database == ref.database_name
+            assert vm.selected_table_ref == ref
+            assert app.query_one("#athena-table", ContextPicker).value == ref.table_name
+            assert not vm.authoring.dirty
             for name in ("workgroup", "catalog", "database"):
                 picker = app.query_one(f"#athena-{name}", ContextPicker)
                 assert picker.value == getattr(vm.context, name)
@@ -139,6 +163,10 @@ async def test_glue_iceberg_handoff_can_commit_a_different_athena_context(
                 assert app.query_one(ServiceSourceHeader).tooltip.plain == current.source.label
                 assert current.query.sql == ""
                 assert app.query_one("#athena-editor", TextArea).text == current.query.sql
+                assert current.selected_table_ref is None
+                assert app.query_one("#athena-table", ContextPicker).value is None
+                assert current.tables.context == current.context
+                assert not current.authoring.dirty
                 for name in ("workgroup", "catalog", "database"):
                     assert app.query_one(f"#athena-{name}", ContextPicker).value == getattr(
                         current.context, name
@@ -152,8 +180,34 @@ async def test_glue_iceberg_handoff_can_commit_a_different_athena_context(
             assert getattr(vm.context, field) == target
             assert picker.value == target
             assert not picker.is_open
-            assert vm.query.sql == sql
-            assert app.query_one("#athena-editor", TextArea).text == sql
+            expected_workgroup = "review-workgroup" if field == "workgroup" else "dev-analytics"
+            expected_catalog = "review-catalog" if field == "catalog" else "AwsDataCatalog"
+            assert vm.context.workgroup == expected_workgroup
+            assert vm.context.catalog == expected_catalog
+            assert vm.context.database == "review_database"
+            assert vm.tables.context == vm.context
+            for name in ("workgroup", "catalog", "database"):
+                assert app.query_one(f"#athena-{name}", ContextPicker).value == getattr(
+                    vm.context, name
+                )
+            if has_tables:
+                assert tuple(row.ref.table_name for row in vm.tables.items) == (
+                    "a_review_orders",
+                    "z_review_other",
+                )
+                assert vm.selected_table_ref == TableRef(
+                    expected_catalog, "review_database", "a_review_orders", "demo-dev", "us-east-1"
+                )
+                assert app.query_one("#athena-table", ContextPicker).value == "a_review_orders"
+                expected_sql = 'SELECT * FROM "review_database"."a_review_orders" LIMIT 5'
+            else:
+                assert not vm.tables.items
+                assert vm.selected_table_ref is None
+                assert app.query_one("#athena-table", ContextPicker).value is None
+                expected_sql = ""
+            assert vm.query.sql == expected_sql
+            assert app.query_one("#athena-editor", TextArea).text == expected_sql
+            assert not vm.authoring.dirty
             assert vm.query.execution_ref is None
             assert not any(call.method == "start_query" for call in client.calls)
     finally:
@@ -193,6 +247,7 @@ async def test_palette_athena_without_an_active_glue_table_keeps_normal_navigati
             assert app.query_one("#athena-editor", TextArea).text == current.query.sql
             if origin == "athena":
                 assert current is previous
+                assert current.authoring.dirty
             assert current.query.execution_ref is None
             assert not any(
                 call.method == "start_query" for call in _athena_client(ctx, "demo-dev").calls

@@ -17,7 +17,11 @@ from tests.integration.test_athena_drafts import mounted_draft_app
 from tests.integration.test_credential_recovery import _connected_probe
 from tests.integration.test_glue_page import open_service
 from tests.unit.vm.athena.test_draft_recovery import yes
-from tests.unit.vm.athena.test_page_vm import PageClient, make_page_vm
+from tests.unit.vm.athena.test_page_vm import (
+    PageClient,
+    _accept_sql_replacement,
+    make_page_vm,
+)
 
 
 async def test_staged_editor_label_changes_when_its_saved_snapshot_is_superseded(tmp_path):
@@ -82,7 +86,8 @@ async def test_failed_glue_handoff_restores_mounted_draft_origin_and_run_guard(
         sql = "SELECT * FROM unqualified_table"
         editor = app.query_one("#athena-editor", TextArea)
         await seed_athena_sql(pilot, source.query, editor, sql)
-        await source.select_database("other_database")
+        # Accept the empty-table context change while retaining the draft's origin.
+        await source.select_database("other_database", confirm=_accept_sql_replacement)
         assert source.query.draft_execution_blocked
 
         await app.action_open_athena_table_in_glue()
@@ -102,7 +107,7 @@ async def test_failed_glue_handoff_restores_mounted_draft_origin_and_run_guard(
         await replacement.query.execute()
         assert client.start_calls == []
 
-        await replacement.select_database(origin.database)
+        await replacement.select_database(origin.database, confirm=_accept_sql_replacement)
         await wait_until(
             lambda: not app.query_one("#athena-execute", Button).disabled,
             what="returning to the draft origin enabled Run",
@@ -138,7 +143,7 @@ async def test_actual_credential_recovery_preserves_draft_execution_authority(
         await seed_athena_sql(pilot, source.query, app.query_one("#athena-editor", TextArea), sql)
         if not incomplete:
             await source._draft_session.flush(deadline=asyncio.get_running_loop().time() + 2)
-            await source.select_database("other_database")
+            await source.select_database("other_database", confirm=_accept_sql_replacement)
         assert source.query.draft_execution_blocked
         original_connection = ctx.root_vm.active_connection
         assert original_connection is not None
@@ -166,7 +171,7 @@ async def test_actual_credential_recovery_preserves_draft_execution_authority(
             recovered.query.set_sql("")
             recovered.query.set_sql("SELECT 1")
         else:
-            await recovered.select_database(origin.database)
+            await recovered.select_database(origin.database, confirm=_accept_sql_replacement)
         await recovered.query.execute()
         assert len(candidate.start_calls) == 1
         assert candidate.start_calls[0][1] == recovered.context
@@ -198,7 +203,7 @@ async def test_failed_s3_handoff_preserves_mounted_foreign_draft_guard(tmp_path,
         origin = source.context
         sql = "SELECT * FROM unqualified_table"
         await seed_athena_sql(pilot, source.query, app.query_one("#athena-editor", TextArea), sql)
-        await source.select_database("other_database")
+        await source.select_database("other_database", confirm=_accept_sql_replacement)
         await source.select_view("history")
         await source.select_history_execution("history-primary")
         assert source.query.draft_execution_blocked

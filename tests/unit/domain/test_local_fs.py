@@ -1272,10 +1272,24 @@ async def test_read_stream_closes_descriptor_when_fstat_fails(
 
     (tmp_path / "payload.txt").write_bytes(b"payload")
     closed: list[int] = []
+    real_fstat = os.fstat
+    real_close = os.close
+
+    def _failing_fstat(fd: int) -> os.stat_result:
+        if fd == 777:
+            raise OSError("boom")
+        return real_fstat(fd)
+
+    def _recording_close(fd: int) -> None:
+        if fd == 777:
+            closed.append(fd)
+        else:
+            real_close(fd)
+
     open_name = "_windows_open" if os.name == "nt" else "_rooted_open"
     monkeypatch.setattr(local_fs, open_name, lambda *_args, **_kwargs: 777)
-    monkeypatch.setattr(local_fs.os, "fstat", lambda _fd: (_ for _ in ()).throw(OSError("boom")))
-    monkeypatch.setattr(local_fs.os, "close", closed.append)
+    monkeypatch.setattr(local_fs.os, "fstat", _failing_fstat)
+    monkeypatch.setattr(local_fs.os, "close", _recording_close)
 
     stream = await LocalFS(root=tmp_path).read_stream(PathRef.from_posix("/payload.txt"))
     with pytest.raises(ProviderError):
