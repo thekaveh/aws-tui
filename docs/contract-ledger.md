@@ -850,3 +850,36 @@ which affects the publisher's Sigstore trust chain in versions through 1.14.2.
 This pin changes the publishing dependency. It does not enable automatic
 release triggers or authorize a release. Publication remains subject to the
 owner's workflow and approval requirements in [Releasing](RELEASING.md).
+
+## 19. 2026-11-08 dependency maintenance pass
+
+This entry records current pins. Earlier dated passes retain their historical pins and evidence.
+The declared dependency ranges are unchanged, including the DuckDB `<2` cap.
+
+| Consumer | Current locked versions |
+| --- | --- |
+| Runtime and AWS SDK | `aioboto3==15.5.0`, `aiobotocore==2.25.1`, `botocore==1.40.61`, `textual==8.2.8`, `vmx==3.23.0`, `reactivex==5.1.0`, `rich==15.0.0`, `keyring==25.7.0`, `tomli-w==1.2.0`, `platformdirs==4.14.5`, `sqlglot==30.24.0`, `pyarrow==26.0.0`, `anyio==4.15.1`, `aiofiles==25.1.0`, `regex==2026.9.29` |
+| Optional local preview | `duckdb==1.5.5` |
+| Developer tooling | `pytest==9.2.0`, `pytest-asyncio==1.4.1`, `ruff==0.17.3`, `mypy==2.4.1`, `pre-commit==4.7.0`, `hatchling==1.32.4`, `testcontainers==4.15.0`, `textual-dev==1.8.0` |
+| Documentation glyph rendering | `fonttools==4.67.0` |
+
+`build-system.requires` constrained to `hatchling>=1.31.0,<2` remains unchanged.
+The local harness retains `adobe/s3mock:5.2.3@sha256:ab01a6946750f451ca215a47e91030695b260e4003b8a5a6201d25029b8fca92`.
+
+SQLGlot supplies Athena parsing, read-only statement admission, AST traversal and Iceberg type interpretation.
+Its parser precedence changes require the SQL-policy, authoring and Iceberg regression suites.
+Platformdirs supplies public config/cache path helpers; its update includes root, XDG and home-resolution fixes.
+FontTools supplies `TTFont`, glyph pens and transforms for the documentation hero's vendored Fira Code fonts.
+
+The developer tools retain the existing test plugins, asynchronous fixtures, Python 3.11 lint target and configured type checks.
+The [existing consumed contracts](#16-2026-10-17-dependency-maintenance-pass) describe the unchanged runtime and build interfaces.
+
+The immutable tool refs are `astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2` (`v10.3.3`),
+`ruff-pre-commit@25bcf95026b96e2dd3c0aec3090c3d6ef6ca2e6c` (`v0.17.3`),
+`pre-commit-hooks@3e8a8703264a2f4a69428a0aa4dcb512790b2c8c` (`v6.0.0`),
+and `taplo-pre-commit@ade0f95ddcf661c697d4670d2cfcbe95d0048a0a` (`v0.9.3`).
+Setup-uv changes manifest lookup and cache reporting; workflows retain explicit `uv==0.13.4`.
+The [publisher trust contract](#18-release-publisher-trust-contract) remains current.
+
+Local contract checks cover path selection, SQL admission and authoring, Iceberg interpretation, glyph rendering, workflow guards and ledger parity.
+These macOS checks do not establish native Windows/Linux behavior, live AWS compatibility or hosted Actions execution.
