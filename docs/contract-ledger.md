@@ -839,3 +839,14 @@ Contract tests compare this inventory with source calls and the installed SDK mo
 Provider tests check exact request fields, captured region, input/URL validation,
 error privacy and synthetic demo behavior. These controlled checks do not
 establish live AWS permissions, browser page load or native-platform delivery.
+
+## 18. Release publisher trust contract
+
+The manual release workflow pins `pypa/gh-action-pypi-publish@7245906fb61fa33a13554f9d5fb856fe61758086` (`v1.14.3`, peeled commit).
+Both TestPyPI and PyPI publishing use this ref. Version 1.14.3 fixes
+[GHSA-5xjx-3w67-w9x9](https://github.com/advisories/GHSA-5xjx-3w67-w9x9),
+which affects the publisher's Sigstore trust chain in versions through 1.14.2.
+
+This pin changes the publishing dependency. It does not enable automatic
+release triggers or authorize a release. Publication remains subject to the
+owner's workflow and approval requirements in [Releasing](RELEASING.md).

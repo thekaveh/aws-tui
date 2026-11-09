@@ -91,6 +91,7 @@ def test_athena_query_records_have_exact_frozen_slot_contract() -> None:
             "output_location",
             "engine_version",
             "error",
+            "managed_query_results_enabled",
         ),
         ResultColumn: ("name", "type_name", "nullable"),
         ResultPage: ("columns", "rows", "next_token"),
