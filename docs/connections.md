@@ -207,9 +207,11 @@ Why this is useful day-to-day:
   budget across the ordered connection list. Connections that do not fit in
   that launch budget remain available for explicit selection after the local
   fallback mounts.
-- **Cross-account / cross-vendor transfers** — put one account on the left pane and a different account on the right pane. Each pane cycles independently. Then press `c` (copy) to stream between them via `CrossFsCopy`, with no intermediate local hop. The
-  `CrossFsMove` engine exists, but `m` move UI wiring is deferred to
-  v0.9.
+- **Cross-account / cross-vendor transfers** — select one account in each pane.
+  Each pane cycles independently. Press `c` to copy or `m` to review a move
+  between them, without an intermediate local file.
+  See [file operations](services/s3.md#5-file-operations)
+  for confirmation, conflicts and provider limits.
 
 The `,` key opens **Settings** where you can add, edit, or delete
 `s3-compatible` connections (see the

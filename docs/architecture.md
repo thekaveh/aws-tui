@@ -61,15 +61,15 @@ VMs to build service pages, but it cannot import Textual widgets.
 
     - `vm/emr_serverless/` — `EmrServerlessPageVM` plus its
         `ApplicationsVM` / `JobRunsVM` / `JobRunDetailVM` / `JobRunLogsVM` children
-        (the read-mostly EMR Serverless browser with logs streaming and focused
-        clone submission).
+        (the read-mostly EMR Serverless browser with logs streaming and reviewed
+        new-job or clone submission).
         Its immutable `ServiceSourceContext` carries the active connection name, optional distinct AWS profile, and region to the service view. The shared `ServiceSourceHeader` renders that identity above the EMR application picker.
 
         `ServiceSelectionStore` scopes remembered service selections by
         `(service_id, connection_name, region)`.
-        `JobRunCloneVM` backs the clone-job-run modal — a
-        sibling VM under `vm/emr_serverless/clone_vm.py`, instantiated
-        per modal-mount with the focused run as the source.
+        `JobRunCloneVM` backs the new-job and clone forms in
+        `vm/emr_serverless/clone_vm.py`. Each modal gets a new VM, using
+        the selected application for a new job or the selected run for a clone.
 
     - `vm/glue/` — `GluePageVM` with independent Catalog, Jobs, and
         Crawlers child VMs. `GlueCatalogVM` owns a `GlueIcebergVM` child that
@@ -122,8 +122,8 @@ VMs to build service pages, but it cannot import Textual widgets.
     `src/aws_tui/services/`. S3 manages files and transfers.
 
     EMR Serverless provides application listings, run details, state filters and logs.
+    Press `Shift+N` to review a new Spark job for the selected application.
     Press `c` to clone and edit a run, or `x` to request confirmed cancellation.
-    Submission without an existing run remains unavailable.
 
     Glue provides read-only Catalog, Jobs and Crawlers views.
     Athena provides read-only queries, history, results and saved-query views.
@@ -178,7 +178,7 @@ production modules do not import the demo package.
 
 ### 1.1. Destructive move identity
 
-The deferred `CrossFsMove` API checks storage identity before publication or
+`CrossFsMove` checks storage identity before publication or
 source deletion. `MoveNamespaceResolver` resolves a concrete resource without
 I/O; `S3FS` includes the bucket and literal key components, preserving configured
 prefixes and repeated separators. A virtual service root has no single resource
@@ -195,7 +195,9 @@ explicit IDs establish disjoint stores; one unknown ID remains ambiguous.
 These IDs are caller assertions, never inferred from URLs, DNS, profiles or
 credentials. They cannot override an already-known same canonical endpoint/path.
 This is not a connection-config option, backend discovery, or authorization
-mechanism. Move commands remain unavailable in the UI.
+mechanism. The file manager exposes reviewed moves through `m`;
+see the [S3 guide](services/s3.md#5-file-operations)
+for operation conditions and provider limits.
 
 ## 2. Composition root
 The two top-level files `src/aws_tui/composition.py` and
