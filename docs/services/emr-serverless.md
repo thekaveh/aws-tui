@@ -1,9 +1,9 @@
 # EMR Serverless
 
 The EMR Serverless service is an AWS-only operational view for applications,
-job runs, details, dashboards, and S3 or CloudWatch logs. It is read-mostly: browsing and log
-inspection are read-only. Focused workflows clone an existing run or request
-cancellation of one selected active run.
+job runs, details, dashboards, and S3 or CloudWatch logs. Browsing and log
+inspection are read-only. Reviewed workflows submit a new Spark job, clone
+an existing run, or request cancellation of one selected active run.
 
 ## 1. Source and application context
 

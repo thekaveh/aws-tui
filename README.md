@@ -137,9 +137,6 @@ transfers with unknown outcomes. Recovery verifies endpoints before starting
 an explicit new copy. Automatic replay and multipart resume are unsupported.
 See [transfer recovery](docs/cookbook.md#4-inspect-transfer-history-and-recovery-after-a-restart) before retrying an interrupted operation.
 
-File move, rename and new-folder actions are unavailable. EMR provides cloning of
-existing Spark runs rather than a blank job submission form.
-
 ## 6. Documentation
 
 | Task | Guide |
