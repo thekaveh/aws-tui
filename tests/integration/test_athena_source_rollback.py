@@ -14,7 +14,7 @@ from tests.helpers import drain_workers, seed_athena_sql
 from tests.integration.test_athena_drafts import mounted_draft_app
 from tests.integration.test_credential_recovery import _connected_probe
 from tests.integration.test_glue_page import open_service
-from tests.unit.vm.athena.test_page_vm import PageClient
+from tests.unit.vm.athena.test_page_vm import PageClient, _accept_sql_replacement
 
 
 @asynccontextmanager
@@ -86,7 +86,8 @@ async def test_source_rollback_restores_exact_editor_context_and_provenance(
             await session.flush(deadline=asyncio.get_running_loop().time() + 2)
             assert source.query.draft_state == "saved"
         if draft_state == "context_required":
-            await source.select_database("other_database")
+            await source.select_database("other_database", confirm=_accept_sql_replacement)
+            assert source.context.database == "other_database"
         assert source.query.draft_state == draft_state
         context = source.context
         provenance = source.export_editor_snapshot()
@@ -761,8 +762,10 @@ async def test_unavailable_original_database_keeps_sql_and_blocks_execution(
             assert await ctx.athena_drafts_vm.set_enabled(True)
         client = source._client
         client.databases["primary", "AwsDataCatalog"].append("vanishing")
-        await source.select_catalog("federated")
-        await source.select_catalog("AwsDataCatalog")
+        await source.select_catalog("federated", confirm=_accept_sql_replacement)
+        assert source.context.catalog == "federated"
+        await source.select_catalog("AwsDataCatalog", confirm=_accept_sql_replacement)
+        assert source.context.catalog == "AwsDataCatalog"
         source.query.set_sql("")
         await source.select_database("vanishing")
         assert source.context.database == "vanishing"
