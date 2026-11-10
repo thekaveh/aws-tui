@@ -883,3 +883,48 @@ The [publisher trust contract](#18-release-publisher-trust-contract) remains cur
 
 Local contract checks cover path selection, SQL admission and authoring, Iceberg interpretation, glyph rendering, workflow guards and ledger parity.
 These macOS checks do not establish native Windows/Linux behavior, live AWS compatibility or hosted Actions execution.
+
+## 20. 2026-11-09 dependency maintenance pass
+
+
+This entry records current pins. Earlier dated passes retain their historical pins and evidence.
+The declared dependency ranges are unchanged, including the DuckDB `<2` cap.
+
+| Consumer | Current locked versions |
+| --- | --- |
+| Runtime and AWS SDK | `aioboto3==15.5.0`, `aiobotocore==2.25.1`, `botocore==1.40.61`, `textual==8.2.8`, `vmx==3.23.0`, `reactivex==5.1.0`, `rich==15.0.0`, `keyring==25.7.0`, `tomli-w==1.2.0`, `platformdirs==4.14.5`, `sqlglot==30.24.0`, `pyarrow==26.0.0`, `anyio==4.16.0`, `aiofiles==25.1.0`, `regex==2026.9.29` |
+| Optional local preview | `duckdb==1.5.5` |
+| Developer tooling | `pip==26.3`, `pytest==9.2.0`, `pytest-asyncio==1.4.1.post1`, `ruff==0.17.4`, `mypy==2.4.1`, `pre-commit==4.7.0`, `hatchling==1.33.0`, `testcontainers==4.15.0`, `textual-dev==1.8.0` |
+| Documentation glyph rendering | `fonttools==4.67.0` |
+
+`build-system.requires` constrained to `hatchling>=1.31.0,<2` remains unchanged.
+The local harness retains `adobe/s3mock:5.2.3@sha256:ab01a6946750f451ca215a47e91030695b260e4003b8a5a6201d25029b8fca92`.
+
+AnyIO supplies filesystem operations, thread ownership and cancellation, and Athena polling sleeps.
+The existing descriptor claims/drains and preview engine-owner shielding remain required:
+canceling an awaiter does not prove its native worker stopped. Production Athena polling
+uses positive backoff delays. Pytest retains asyncio auto mode and function-scoped fixture loops.
+Ruff retains its Python 3.11 target and current rule set. Pip supplies local artifact installation
+and its bundled trust store; external `certifi==2026.10.19` remains unchanged.
+Hatchling supplies the locked build backend, dynamic version and package contents.
+
+The immutable tool refs are `astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2` (`v10.3.3`),
+`ruff-pre-commit@c0f278f1254ccc8fb09676bcdb8d847e7db493e5` (`v0.17.4`),
+`pre-commit-hooks@3e8a8703264a2f4a69428a0aa4dcb512790b2c8c` (`v6.0.0`),
+and `taplo-pre-commit@ade0f95ddcf661c697d4670d2cfcbe95d0048a0a` (`v0.9.3`).
+The Homebrew PR action is `peter-evans/create-pull-request@15733dbdfeedb4f7fdb73d13c6f5ac83b710fab8` (`v8.1.2`).
+The reviewed upstream release refs and complete PyPI artifact records inform these pins;
+they do not establish independent cryptographic signature verification.
+Workflows retain explicit `uv==0.13.4` and the
+[publisher trust contract](#18-release-publisher-trust-contract).
+
+Candidate acceptance covers lock-object preservation, lint/type/config checks,
+async ownership and cancellation consumers, workflow/build guards, documentation parity,
+pip's bundled CA labels, locked builds and separate local wheel/sdist pip installs.
+Record actual local results and limitations in the maintenance implementation report.
+Local YAML checks do not establish hosted Actions execution. macOS checks do not
+establish Windows/Linux behavior or live AWS compatibility.
+
+DuckDB 2 remains a separate migration: minimum OS/glibc decisions, supported-platform
+native cancellation/connection cleanup, signed extension availability and complete
+isolated Iceberg/S3 setup and error-classification gates remain required.

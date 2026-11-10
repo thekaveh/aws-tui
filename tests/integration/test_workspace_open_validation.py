@@ -7,6 +7,7 @@ from textual.widgets import TextArea
 
 from aws_tui.demo.in_memory_fs import InMemoryFS
 from aws_tui.domain.filesystem import PathRef
+from aws_tui.domain.mutation_guard import GuardedRemote
 from aws_tui.domain.navigation_workspace import Bookmark, FileLocation, NavigationTarget
 from aws_tui.domain.workspace_store import WorkspaceStore
 from aws_tui.ui.widgets.workspace_library_modal import WorkspaceOpenRequest
@@ -65,7 +66,8 @@ async def test_record_change_during_metadata_read_is_rechecked_before_adoption(
                 release.set()
                 await task
                 if kind == "unrelated_parent_change":
-                    assert pane.provider is replacement_provider
+                    assert isinstance(pane.provider, GuardedRemote)
+                    assert pane.provider._target is replacement_provider
                     assert pane.path == PathRef()
                     assert any(
                         "Bookmark opened" in toast.model.text
