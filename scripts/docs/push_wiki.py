@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import argparse
 import contextlib
+import hashlib
+import json
 import os
 import re
 import shlex
@@ -11,7 +13,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Final
 from urllib.parse import urlsplit
 
@@ -27,6 +29,8 @@ _DEFAULT_IDENT = {
     "GIT_COMMITTER_NAME": "aws-tui docs bot",
     "GIT_COMMITTER_EMAIL": "docs-bot@users.noreply.github.com",
 }
+
+_OWNERSHIP_FILE = ".aws-tui-wiki-owned.json"
 
 
 def authenticated_remote(
@@ -75,22 +79,135 @@ def _env_with_ident() -> dict[str, str]:
     return env
 
 
+def _owned_path(name: str) -> PurePosixPath:
+    """Accept only unambiguous relative paths outside Git and our registry."""
+    if (
+        not isinstance(name, str)
+        or not name
+        or "\\" in name
+        or ":" in name
+        or any(ord(char) < 32 for char in name)
+        or any(
+            part in {"", ".", ".."}
+            or part.endswith((".", " "))
+            or part.casefold() in {".git", _OWNERSHIP_FILE}
+            for part in name.split("/")
+        )
+    ):
+        raise ValueError(f"Unsafe wiki ownership path: {name!r}")
+    return PurePosixPath(name)
+
+
+def _unique_json_keys(pairs: list[tuple[str, object]]) -> dict[str, object]:
+    result: dict[str, object] = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError(f"Duplicate wiki ownership key: {key!r}")
+        result[key] = value
+    return result
+
+
+def _read_ownership(path: Path) -> dict[str, str]:
+    if not path.exists():
+        return {}
+    try:
+        record = json.loads(path.read_text(encoding="utf-8"), object_pairs_hook=_unique_json_keys)
+    except (ValueError, UnicodeError) as exc:
+        raise ValueError(f"Invalid wiki ownership registry: {exc}") from exc
+    if (
+        not isinstance(record, dict)
+        or set(record) != {"schema", "files"}
+        or type(record["schema"]) is not int
+        or record["schema"] != 1
+        or not isinstance(record["files"], dict)
+    ):
+        raise ValueError("Invalid wiki ownership registry: expected schema 1 and a files map")
+    files = record["files"]
+    for name, digest in files.items():
+        relative = _owned_path(name)
+        if not isinstance(digest, str) or re.fullmatch(r"[0-9a-f]{64}", digest) is None:
+            raise ValueError(f"Invalid wiki ownership digest: {name!r}")
+        if any(parent.as_posix() in files for parent in relative.parents):
+            raise ValueError(f"Overlapping wiki ownership file paths: {name!r}")
+    return files
+
+
+def _validate_destination(root: Path, relative: PurePosixPath, *, directory: bool = False) -> None:
+    """Check every touched component without following a destination symlink."""
+    current = root
+    for index, part in enumerate(relative.parts):
+        current = current / part
+        if current.is_symlink():
+            raise ValueError(f"Wiki destination symlink: {current}")
+        if current.exists():
+            expect_directory = directory or index < len(relative.parts) - 1
+            if not (current.is_dir() if expect_directory else current.is_file()):
+                raise ValueError(f"Wiki destination type conflict: {current}")
+            if not expect_directory and current.stat().st_nlink > 1:
+                raise ValueError(f"Wiki destination hard link: {current}")
+
+
+def _file_hash(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
 def sync_wiki(src: str | Path, repo_dir: str | Path) -> None:
-    src = Path(src)
-    repo_dir = Path(repo_dir)
-    for existing in repo_dir.iterdir():
-        if existing.name == ".git":
-            continue
-        if existing.is_dir():
-            shutil.rmtree(existing)
-        else:
-            existing.unlink()
-    for item in src.iterdir():
-        target = repo_dir / item.name
+    """Copy canonical generated files and retire only verified, owned files.
+
+    Validate the complete plan before writes. Publication uses a temporary clone;
+    this is not a filesystem transaction or protection against concurrent edits.
+    """
+    src, repo_dir = Path(src), Path(repo_dir)
+    for root in (src, repo_dir):
+        if root.is_symlink():
+            raise ValueError(f"Wiki tree root is a symlink: {root}")
+        if not root.is_dir():
+            raise ValueError(f"Wiki tree root must be an existing directory: {root}")
+    src, repo_dir = src.resolve(), repo_dir.resolve()
+    if src == repo_dir or src in repo_dir.parents or repo_dir in src.parents:
+        raise ValueError("Wiki source and destination trees must not overlap")
+
+    registry = repo_dir / _OWNERSHIP_FILE
+    _validate_destination(repo_dir, PurePosixPath(_OWNERSHIP_FILE))
+    previous = _read_ownership(registry)
+    files: dict[str, Path] = {}
+    directories: list[PurePosixPath] = []
+    for item in sorted(src.rglob("*")):
+        relative = _owned_path(item.relative_to(src).as_posix())
+        if item.is_symlink():
+            raise ValueError(f"Wiki source symlink: {item}")
         if item.is_dir():
-            shutil.copytree(item, target)
+            directories.append(relative)
+            _validate_destination(repo_dir, relative, directory=True)
+        elif item.is_file():
+            files[relative.as_posix()] = item
+            _validate_destination(repo_dir, relative)
         else:
-            shutil.copy2(item, target)
+            raise ValueError(f"Unsupported wiki source file type: {item}")
+
+    if not files:
+        raise ValueError("Wiki generated source is empty; refusing synchronization")
+
+    retired: list[Path] = []
+    for name, digest in previous.items():
+        relative = _owned_path(name)
+        _validate_destination(repo_dir, relative)
+        if name not in files:
+            target = repo_dir / relative
+            if target.exists():
+                if _file_hash(target) != digest:
+                    raise ValueError(f"Retired owned wiki file was modified: {name}")
+                retired.append(target)
+    ownership = {name: _file_hash(item) for name, item in files.items()}
+    record = json.dumps({"schema": 1, "files": ownership}, indent=2, sort_keys=True) + "\n"
+
+    for target in retired:
+        target.unlink()
+    for relative in directories:
+        (repo_dir / relative).mkdir(parents=True, exist_ok=True)
+    for name, item in files.items():
+        shutil.copy2(item, repo_dir / name)
+    registry.write_text(record, encoding="utf-8")
 
 
 # Every ``git`` call here gets a deadline. Without one, an SSH endpoint that
