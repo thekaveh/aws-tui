@@ -350,6 +350,14 @@ deploy.
 Verify without publishing anything: `make docs-wiki` renders the surface and
 runs `push_wiki --check`, which performs no network access.
 
+Keep `.aws-tui-wiki-owned.json` in the wiki repository; it records generated
+paths and SHA-256 hashes. The first sync claims current generated paths and
+preserves unknown files. Later syncs remove retired generated files only when
+their bytes match the recorded hash. Empty generated sources or edited retired
+files stop synchronization before writes; reconcile them before retrying.
+Current generated paths are overwritten. Keep handwritten pages and assets at
+separate paths.
+
 ## 5. Version policy
 
 Semantic Versioning. Pre-1.0 we're explicit:
