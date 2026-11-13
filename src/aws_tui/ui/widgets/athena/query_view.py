@@ -213,13 +213,16 @@ class AthenaQueryView(DeferredWorkerMixin, Widget):
                 flat=True,
                 tooltip="SQL completion, formatting, files and local snippets",
             )
-            yield Button(
+            button = Button(
                 "Reuse",
                 id="athena-query-options",
                 compact=True,
                 flat=True,
                 tooltip="Configure per-query result reuse",
             )
+            # Textual 8.2.8 rejects CSS line-pad: 0; the public style property accepts it.
+            button.styles.line_pad = 0
+            yield button
             status = Static("", id="athena-query-status", markup=False)
             status.can_focus = True
             yield status
