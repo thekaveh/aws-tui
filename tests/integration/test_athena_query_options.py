@@ -1,4 +1,5 @@
 from dataclasses import replace
+from xml.etree import ElementTree
 
 import pytest
 from textual.widgets import Input, Static, Switch
@@ -140,6 +141,7 @@ async def test_actual_demo_reuse_submission_and_modal_fit_at_supported_sizes(tmp
     from aws_tui.composition import build_app_context
     from tests.helpers import drain_workers
     from tests.integration.test_glue_page import open_service
+    from tests.snapshot.test_demo_mode import _dismiss_demo_startup_advisory
 
     ctx = build_app_context(config_dir=tmp_path / "config", cache_dir=tmp_path / "cache", demo=True)
     app = AwsTuiApp(ctx)
@@ -147,7 +149,22 @@ async def test_actual_demo_reuse_submission_and_modal_fit_at_supported_sizes(tmp
         async with app.run_test(size=size) as pilot:
             await open_service(ctx, pilot, "athena")
             page = ctx.root_vm.content_host.current
-            modal = await open_options(app, pilot)
+            await _dismiss_demo_startup_advisory(pilot)
+            await pilot.pause()
+            rendered = "".join(
+                "".join(node.itertext())
+                for node in ElementTree.fromstring(app.export_screenshot()).iter(
+                    "{http://www.w3.org/2000/svg}text"
+                )
+            ).replace("\xa0", " ")
+            assert "Reuse" in rendered
+            options = app.query_one("#athena-query-options")
+            assert options.region.width == 7
+            assert await pilot.click(options)
+            await wait_until(
+                lambda: bool(app.screen.query("#athena-reuse-enabled")), what="clicked reuse form"
+            )
+            modal = app.screen
             apply = modal.query_one("#athena-reuse-apply")
             assert apply.region.width > 0
             assert apply.region.bottom <= size[1]
