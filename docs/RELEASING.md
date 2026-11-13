@@ -1,6 +1,9 @@
 # Releasing aws-tui
 
-How to cut a release.
+Prepare source, verify the supported platforms, then publish through an authorized channel.
+
+The current tree has prepared 0.9.0 source and a dated changelog section.
+Package publication remains pending. Git installation remains the supported path until publication is confirmed.
 
 GitHub Actions workflows are manual-only. Routine development and promotion
 use the applicable local checks in CONTRIBUTING §5. Pushing a tag does not
@@ -48,8 +51,8 @@ sed -i.bak 's/__version__ = "[^"]*"/__version__ = "X.Y.Z"/' \
 #    Regenerate PYPI.md with make docs-package after changing its source.
 
 # 4. Re-record the snapshot goldens. `__version__` is rendered into the
-#    brand banner subtitle (ui/widgets/brand_banner.py), so every demo-mode
-#    golden embeds the version string and the bump makes them stale.
+#    brand banner subtitle (ui/widgets/brand_banner.py). Whole-app demo, Athena
+#    and first-run goldens embed it. Review every diff for intended version changes.
 uv run pytest tests/snapshot --snapshot-update
 
 # 5. Re-render the README/site hero. scripts/docs/render_hero.py rasterizes it
@@ -91,10 +94,10 @@ promotion source locally and record its commit and results in the PR. If
     the Linux result.
 
 - **Release classification.** Glue, Athena, and Iceberg integration are
-    minor-version feature work targeting v0.9.0. They must remain in
-    **Unreleased** until that cut and must not be presented as a v0.8.0 headline
-    or included in a v0.8.1 patch. Do not change `src/aws_tui/version.py` while
-    verifying Unreleased work.
+    minor-version feature work included in the prepared 0.9.0 source.
+    For later releases, classify new features as minor-version work and keep
+    them in **Unreleased** until the corresponding source cut.
+    Match the version constant, dated changelog heading and eventual tag.
 
 - **Demo-mode smoke.** Run `AWS_TUI_DEMO=1 uv run aws-tui` from the release-PR
     branch. Verify that the **DEMO MODE** chip appears in the banner. Verify that the four demo connections (`demo-dev`, `demo-prod`, `demo-shared`, `demo-minio`) cycle through Shift+S. Verify that the S3 pane shows demo objects. Verify that the EMR pane shows two applications plus about 10 job runs across states. Verify that clone-from-detail visibly walks SUBMITTED→SCHEDULED→RUNNING→SUCCESS within about 5 seconds.
@@ -159,13 +162,17 @@ promotion source locally and record its commit and results in the PR. If
 If any smoke step breaks, fix forward; do **not** tag the release.
 
 The release commit must contain a dated changelog heading for the exact package
-version. The workflow rejects `Pending` headings. The current tree contains v0.9 feature work while package metadata still reads `0.8.0`. Prepare v0.9 by bumping the version and cutting its changelog section in the release PR. Do not tag the current tree as v0.8.0.
+version. The workflow rejects `Pending` headings.
 
-The v0.9.0 release PR must also dispose of the undated `## [0.8.0] - Pending`
-heading. `scripts/cut-changelog.sh` inserts the new section *above* it and has no branch that dates an already-declared heading. Left alone, it stays in the file forever as a released-looking entry for a build that was never published.
+The 0.9.0 source cut preserves the complete unpublished 0.8 body in the
+[dated maintainer record](superpowers/notes/2026-11-12-unpublished-0.8-development-history.md).
+Its release notes link that record directly and compare `v0.7.0...v0.9.0`.
+There is no live Pending 0.8 entry or invented 0.8 release date.
 
-Fold its body into the new `[0.9.0]` section. Delete the heading together with its `[0.8.0]:` reference link at the bottom of the file. Nothing downstream
-depends on it: `0.8.0` was never tagged and never reached PyPI.
+For future cuts, preserve valid history when curating unpublished staging notes.
+Link any historical archive directly from the dated release section.
+Review the comparison range to include the entire development period.
+`scripts/cut-changelog.sh` preserves the previous Unreleased base; verify it after any editorial consolidation.
 
 Then tag the promotion merge commit on `main` and push the tag:
 
@@ -213,8 +220,8 @@ Use this whenever the release machinery itself changes. This includes a new job,
 gh workflow run release.yml --ref <branch-or-tag-with-workflow-changes> -f target=testpypi
 ```
 
-The dry-run skips the GitHub Release + Homebrew steps and pushes
-the wheel to test.pypi.org instead. The workflow rewrites the package
+This rehearsal uploads the wheel to TestPyPI. It requires separate publication authorization and is not a local dry run.
+It skips the GitHub Release and Homebrew steps. The workflow rewrites the package
 version to `X.Y.Z.dev<run_number>` for this lane so rehearsals are
 repeatable despite TestPyPI's immutable versions. Use `--ref` to point at the branch or tag containing the release-workflow changes you are rehearsing. Otherwise, GitHub runs the workflow from the default branch.
 Verify the install end-to-end:
