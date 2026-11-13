@@ -337,6 +337,17 @@ def test_athena_compact_snapshot_content_guards(theme: str) -> None:
     assert "1&#160;query" not in rebound
 
 
+def _loaded_footer_is_rendered(svg: str) -> bool:
+    texts = (
+        "".join(node.itertext())
+        for node in ElementTree.fromstring(svg).iter("{http://www.w3.org/2000/svg}text")
+    )
+    # Ignore border/icon-only spans so a footer wrapped across terminal
+    # rows retains its visible words in reading order.
+    rendered = " ".join(text for text in texts if any(c.isalnum() for c in text))
+    return "more available" in " ".join(rendered.split())
+
+
 @pytest.mark.parametrize(("theme", "size"), FULL_APP_CASES)
 @pytest.mark.parametrize("state", ["results", "inspector", "filter"])
 def test_athena_result_inspection_full_app_snapshot(theme, size, state, snap_compare):
@@ -375,7 +386,7 @@ def test_athena_result_inspection_full_app_snapshot(theme, size, state, snap_com
             )
         else:
             await wait_until(
-                lambda: "more&#160;available" in pilot.app.export_screenshot(),
+                lambda: _loaded_footer_is_rendered(pilot.app.export_screenshot()),
                 what="snapshot loaded-only footer rendered",
             )
             assert pilot.app.query_one(DataTable).row_count == 5
@@ -414,7 +425,7 @@ def test_athena_result_inspection_full_app_content_guard(theme, size, state):
         assert "5 visible" in rendered
         assert "5 loaded" in rendered
         assert "· local" in rendered
-        assert "more available" in rendered
+        assert _loaded_footer_is_rendered(snapshot)
         assert "duplicate" in rendered
         assert "demo-dev" in rendered
         assert "DEMO MODE" in rendered
@@ -425,7 +436,7 @@ async def _show_full_app_selected_table(pilot: Pilot[None]) -> None:
     app = cast(DemoModeApp, pilot.app)
     page = app.query_one(AthenaPage)
     await wait_until(lambda: bool(page.vm.tables.items), what="snapshot table metadata loaded")
-    ref = page.vm.tables.items[-1].ref
+    ref = next(table.ref for table in page.vm.tables.items if table.ref.table_name == "events")
 
     async def accept_replacement(_message: str) -> bool:
         return True  # Capture the accepted table state; dialog cases live in UI tests.
@@ -436,8 +447,8 @@ async def _show_full_app_selected_table(pilot: Pilot[None]) -> None:
     editor = app.query_one("#athena-editor", TextArea)
     assert picker.value == ref.table_name
     assert page.vm.selected_table_ref == ref
-    assert ref.table_name in editor.text
-    assert editor.text.endswith(" LIMIT 5")
+    assert page.vm.context.database == "dev_events"
+    assert editor.text == 'SELECT * FROM "dev_events"."events" LIMIT 5'
     assert editor.region.height >= 3
     assert page.vm.query.execution_ref is None
 
@@ -449,3 +460,19 @@ def test_athena_selected_table_full_app_snapshot(theme: str, size: tuple[int, in
         assert snap_compare(app, terminal_size=size, run_before=_show_full_app_selected_table)
     finally:
         app.app_ctx.root_vm.dispose()
+
+
+@pytest.mark.parametrize(("theme", "size"), FULL_APP_CASES)
+def test_athena_selected_table_full_app_snapshot_content_guard(theme, size):
+    snapshot = _named_snapshot(
+        f"test_athena_selected_table_full_app_snapshot[{theme}-{size[0]}x{size[1]}]"
+    )
+    rendered = "".join(
+        "".join(node.itertext())
+        for node in ElementTree.fromstring(snapshot).iter("{http://www.w3.org/2000/svg}text")
+    ).replace("\xa0", " ")
+    assert 'SELECT * FROM "dev_events"."events" LIMIT 5' in rendered
+    assert "Reuse" in rendered
+    assert "Scan cutoff     100000000 bytes (95.4 MiB)" in rendered
+    if size[1] == 40:
+        assert "Result reuse    Off" in rendered
