@@ -64,7 +64,12 @@ class AthenaDraftsApp(App[None]):
         if self.state in ("manager", "stale-context"):
             await self.runtime.refresh()
             if self.state == "stale-context":
-                await self.vm.select_workgroup("analysts")
+
+                async def accept_context_change(_message):
+                    return True
+
+                await self.vm.select_workgroup("analysts", confirm=accept_context_change)
+                assert self.vm.context.workgroup == "analysts"
 
                 async def accept():
                     return True
