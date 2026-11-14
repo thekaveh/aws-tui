@@ -11,7 +11,7 @@ The Unreleased section is the promotion queue for the next package release. Entr
 
 ## [0.9.0] - 2026-11-12
 
-Source prepared locally; package publication remains pending. Install from the Git repository until a published channel is confirmed.
+As of local source preparation on 2026-11-12, package publication remains pending and Git installation is supported until a published channel is confirmed.
 
 Glue, Athena, and Iceberg integration are minor-version feature work in 0.9.0.
 This release combines development since 0.7.0, including the unpublished 0.8 staging period (`cd2c9e8`).
@@ -106,7 +106,7 @@ The PyPI project-name request is tracked in [pypi/support#11264](https://github.
 - Native Windows directory publication remains unresolved ([#234](https://github.com/thekaveh/aws-tui/issues/234)); required Windows settings stress evidence is still missing ([#274](https://github.com/thekaveh/aws-tui/issues/274)).
 - Unhandled fatal errors write a crash report and exit; they do not open the optional in-app crash-choice dialog.
 
-The complete [unpublished 0.8 development history](docs/superpowers/notes/2026-11-12-unpublished-0.8-development-history.md) preserves the original Pending section, including superseded claims.
+The complete [unpublished 0.8 development history](https://github.com/thekaveh/aws-tui/blob/main/docs/superpowers/notes/2026-11-12-unpublished-0.8-development-history.md) preserves the original Pending section, including superseded claims.
 
 Detailed pre-curation implementation notes are retained in the [dated maintainer record](https://github.com/thekaveh/aws-tui/blob/main/docs/superpowers/notes/2026-10-22-unreleased-implementation-history.md).
 

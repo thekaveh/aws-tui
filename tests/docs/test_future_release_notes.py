@@ -78,6 +78,10 @@ def test_prepared_release_extraction_keeps_current_notes_and_linked_history() ->
     assert "Zebra striping is now actually visible in all ten themes" not in body
     assert "metadata remains" not in body
     assert "target v0.9.0" not in body
+    assert (
+        "As of local source preparation on 2026-11-12, package publication remains pending "
+        "and Git installation is supported until a published channel is confirmed."
+    ) in body
     assert "Full-execution Athena export" not in body
     assert "Full-execution export remains separate scope" not in body
     assert "[0.9.0]: https://github.com/thekaveh/aws-tui/compare/v0.7.0...v0.9.0" in source
@@ -86,7 +90,10 @@ def test_prepared_release_extraction_keeps_current_notes_and_linked_history() ->
 
     link = re.search(r"\[unpublished 0\.8 development history\]\(([^)]+)\)", body)
     assert link is not None
-    archive = (ROOT / link[1]).read_bytes()
+    repository_url = "https://github.com/thekaveh/aws-tui/blob/main/"
+    archive_path = "docs/superpowers/notes/2026-11-12-unpublished-0.8-development-history.md"
+    assert link[1] == repository_url + archive_path
+    archive = (ROOT / link[1].removeprefix(repository_url)).read_bytes()
     original = archive.split(b"`````markdown\n", 1)[1].split(b"`````\n", 1)[0]
     assert original.startswith(b"## [0.8.0] - Pending\n")
     original_body = original.removeprefix(b"## [0.8.0] - Pending\n")

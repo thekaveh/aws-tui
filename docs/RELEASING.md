@@ -220,7 +220,7 @@ Use this whenever the release machinery itself changes. This includes a new job,
 gh workflow run release.yml --ref <branch-or-tag-with-workflow-changes> -f target=testpypi
 ```
 
-This rehearsal uploads the wheel to TestPyPI. It requires separate publication authorization and is not a local dry run.
+This rehearsal uploads both the wheel and source distribution (sdist) to TestPyPI. It requires separate publication authorization and is not a local dry run.
 It skips the GitHub Release and Homebrew steps. The workflow rewrites the package
 version to `X.Y.Z.dev<run_number>` for this lane so rehearsals are
 repeatable despite TestPyPI's immutable versions. Use `--ref` to point at the branch or tag containing the release-workflow changes you are rehearsing. Otherwise, GitHub runs the workflow from the default branch.
