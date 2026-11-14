@@ -9639,13 +9639,9 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
     async def show_crash_modal(self, report: CrashReport) -> CrashChoice:
         """Push the crash modal for ``report`` and await the user's choice.
 
-        Public so tests and recovery flows can drive the modal without
-        also having to raise an exception. The in-app crash path
-        (``_handle_exception``) does not currently call this — see
-        ``CHANGELOG.md``'s ``Deferred / v0.9 roadmap`` block. (The label
-        this used to cite, ``deferred-from-m6``, no longer exists anywhere,
-        and the ``record_action`` half of the claim it pointed at was false:
-        ``record_action`` is invoked from every bound action.)
+        Tests and recovery flows can call this public method without raising
+        an exception. The unhandled fatal path records a report, then delegates
+        to Textual's fatal handler; it does not open this modal.
         """
         ctx = self._app_ctx
         crash_vm = CrashVM(report, hub=ctx.hub, dispatcher=ctx.dispatcher)

@@ -428,7 +428,7 @@ def test_athena_sql_grammar_matches_policy_tests() -> None:
             policy.validate(sql)
 
 
-def test_athena_release_framing_and_smoke_are_minor_unreleased_work() -> None:
+def test_athena_release_framing_and_smoke_match_prepared_minor_release() -> None:
     readme = _read("README.md")
     pypi = _read("PYPI.md")
     changelog = _read("CHANGELOG.md")
@@ -441,8 +441,13 @@ def test_athena_release_framing_and_smoke_are_minor_unreleased_work() -> None:
     for entry in (readme, pypi):
         assert "no aws-tui package is published on PyPI" in _squash(entry)
     assert "published v0.8.0 package" not in _squash(pypi)
-    assert "Glue, Athena, and Iceberg integration target v0.9.0" in _squash(changelog)
-    assert "not a v0.8.0 headline or a v0.8.1 patch candidate" in _squash(changelog)
+    assert "Glue, Athena, and Iceberg integration are minor-version feature work in 0.9.0" in (
+        _squash(changelog)
+    )
+    assert len(re.findall(r"^## \[0\.9\.0\] - \d{4}-\d{2}-\d{2}$", changelog, re.MULTILINE)) == 1
+    assert "## [0.8.0] - Pending" not in changelog
+    assert "[0.9.0]: https://github.com/thekaveh/aws-tui/compare/v0.7.0...v0.9.0" in changelog
+    assert "package publication remains pending" in _squash(changelog)
     assert "will either ship as v0.8.1" not in changelog
     assert "Glue, Athena, and Iceberg integration are minor-version feature work" in (
         normalized_releasing
@@ -477,7 +482,10 @@ def test_athena_release_framing_and_smoke_are_minor_unreleased_work() -> None:
         "editor, typed clipboard, and active profile are unchanged",
     ):
         assert step.casefold() in normalized_releasing.casefold()
-    assert '__version__ = "0.8.0"' in version
+    from aws_tui.version import __version__
+
+    assert __version__ == "0.9.0"
+    assert '__version__ = "0.9.0"' in version
 
 
 def test_release_docs_describe_the_mandatory_publish_gates() -> None:
@@ -491,7 +499,7 @@ def test_release_docs_describe_the_mandatory_publish_gates() -> None:
     assert "Textual/app construction" in releasing
     assert "tomli-w configuration round trips" in releasing
     assert "release candidate is staged" not in homebrew
-    assert "v0.9.0 development work" in homebrew
+    assert "v0.9.0 source is prepared" in homebrew
 
 
 def test_athena_canonical_surfaces_and_diagram_match_current_tree() -> None:
@@ -716,15 +724,14 @@ def test_glue_operation_ledger_matches_domain_adapter_exactly() -> None:
 
 def test_unreleased_changelog_allows_develop_before_main_promotion() -> None:
     changelog = _read("CHANGELOG.md")
-    # Bound the intro at the first subsection so the assertions below cannot
-    # pass by matching text from a later release section.
-    unreleased_intro = changelog.split("\n## [Unreleased]", maxsplit=1)[1].split(
-        "\n### ", maxsplit=1
+    # Stop at a subsection or release, including an Unreleased with no subsection.
+    unreleased_intro = re.split(
+        r"\n(?:### |## \[)", changelog.split("\n## [Unreleased]", maxsplit=1)[1], maxsplit=1
     )[0]
     assert "may reside on ``develop`` before promotion to ``main``" in unreleased_intro
     assert "does not by itself claim that every entry has landed on ``main``" in unreleased_intro
     assert "These changes have landed on ``main``" not in unreleased_intro
-    assert "historical v0.8.0 staging commit" in _squash(unreleased_intro)
+    assert "unpublished 0.8" not in unreleased_intro
 
 
 def test_every_test_directory_holding_modules_is_an_importable_package() -> None:
