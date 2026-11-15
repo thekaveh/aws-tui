@@ -8,6 +8,12 @@ def _text(path: str) -> str:
     return " ".join(source.split())
 
 
+def _current_release_notes() -> str:
+    source = (ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
+    section = source.split("\n## [0.9.0] - ", maxsplit=1)[1].split("\n## [", maxsplit=1)[0]
+    return " ".join(section.splitlines()[1:]).strip()
+
+
 def test_current_entry_does_not_describe_shipped_controls_as_deferred() -> None:
     # Runtime details belong in the keybinding guide, not the entry overview.
     text = _text("README.md")
@@ -35,13 +41,8 @@ def test_current_docs_describe_in_session_credential_recovery() -> None:
 
 def test_cookbook_describes_live_keybinding_overrides() -> None:
     text = _text("docs/cookbook.md")
-    # Scope to [Unreleased] by splitting at the next release heading. The
-    # previous token, "## 1.2.", occurs nowhere in CHANGELOG.md, so the split
-    # was a no-op and all three guards below silently asserted against the
-    # whole 131k-character file: the positive assertions could be satisfied
-    # by any historical section, and the negative ones over-constrained
-    # released history.
-    changelog = _text("CHANGELOG.md").split("## [0.8.0]", maxsplit=1)[0]
+    # Check current release prose without including earlier historical claims.
+    changelog = _current_release_notes()
     active_docs = f"{text}\n{changelog}"
 
     assert "Runtime dispatch still uses `AwsTuiApp.BINDINGS`" not in text
@@ -83,15 +84,15 @@ def test_keybindings_describes_new_spark_submission_without_a_source_run() -> No
     assert "including applications with no runs" in text
 
 
-def test_unreleased_changelog_does_not_contradict_shipped_handlers_or_demo() -> None:
-    unreleased = _text("CHANGELOG.md").split("## [0.8.0]", maxsplit=1)[0]
+def test_current_release_notes_do_not_contradict_shipped_handlers_or_demo() -> None:
+    release_notes = _current_release_notes()
 
-    assert "(Quick Look, command palette) still need their own handlers" not in unreleased
-    assert "seeded in-memory S3 + EMR fakes" not in unreleased
+    assert "(Quick Look, command palette) still need their own handlers" not in release_notes
+    assert "seeded in-memory S3 + EMR fakes" not in release_notes
     # Protect the current capability statements, not an old wiring progress log.
-    assert "**Structured Quick Look.**" in unreleased
-    assert "service actions and dynamic connection/service entries" in unreleased
-    assert "Seeded in-memory S3, EMR, Glue and Athena providers" in unreleased
+    assert "**Structured Quick Look.**" in release_notes
+    assert "service actions and dynamic connection/service entries" in release_notes
+    assert "Seeded in-memory S3, EMR, Glue and Athena providers" in release_notes
 
 
 def test_current_docs_do_not_claim_deleted_first_run_or_resume_modals() -> None:
@@ -104,7 +105,7 @@ def test_current_docs_do_not_claim_deleted_first_run_or_resume_modals() -> None:
             "docs/recording-todo.md",
         )
     )
-    unreleased = _text("CHANGELOG.md").split("## [0.8.0]", maxsplit=1)[0]
+    release_notes = _current_release_notes()
 
     assert "welcome modal exists" not in current.lower()
     assert "resume modal pops up" not in current.lower()
@@ -117,8 +118,8 @@ def test_current_docs_do_not_claim_deleted_first_run_or_resume_modals() -> None:
         assert "**Retry discovery**" in text
         assert "No first-run" not in text
         assert "local-only placeholder" not in text
-    assert "In-session connection setup (#243)" in unreleased
-    assert "Setup leaves AWS config and credentials files unchanged" in unreleased
+    assert "In-session connection setup (#243)" in release_notes
+    assert "Setup leaves AWS config and credentials files unchanged" in release_notes
 
 
 def test_contributing_documents_gitflow_base_branches() -> None:

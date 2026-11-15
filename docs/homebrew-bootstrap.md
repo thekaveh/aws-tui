@@ -2,7 +2,7 @@
 
 This maintainer procedure prepares the first Homebrew formula after a PyPI release.
 It is not an installation method available today.
-The v0.9.0 development work is present in the repository; package publication remains pending.
+The v0.9.0 source is prepared in the repository; package publication remains pending.
 Do not run the recipe until the intended wheel and source distribution (sdist) are available on PyPI.
 
 The first complete recipe execution is **gated** on that publication prerequisite under [#267](https://github.com/thekaveh/aws-tui/issues/267).

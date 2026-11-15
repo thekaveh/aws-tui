@@ -67,12 +67,15 @@ make docs-check
 uv run --group docs pytest tests/docs
 ```
 
-Publish the generated wiki through its Git remote after reviewing the page and
-asset diff. Copy generated files into a fresh wiki checkout. Remove stale files
-only after confirming generator ownership; preserve other files and Git history.
-The existing `scripts.docs.push_wiki` helper replaces the whole wiki tree, so
-do not use it unchanged when handwritten files exist. Record the source and
-wiki commit IDs with the publication result.
+After publication is authorized, publish the generated wiki through its Git remote.
+Review the page and asset diff in a fresh wiki checkout first.
+
+The `scripts.docs.push_wiki` helper records generated paths and SHA-256 hashes in
+`.aws-tui-wiki-owned.json`. It preserves unowned files and Git history.
+It removes retired generated files only when their bytes match the recorded hashes.
+Edited retired files stop synchronization before writes; reconcile them before retrying.
+Current generated paths are overwritten. Keep handwritten content at separate paths.
+Record the reviewed source and wiki commit IDs with the publication result.
 
 GitHub Pages requires a GitHub-managed deployment workflow, even when the site
 was built locally. An Actions-based publishing source cannot accept a local
