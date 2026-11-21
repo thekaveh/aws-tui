@@ -140,28 +140,6 @@ class DualPaneVM:
         self._switch_focus_command: RelayCommand = (
             RelayCommand.builder().task(self._switch_focus).build()
         )
-        # copy/move/delete are async operations; the relay command bridges
-        # to a hub signal so the caller (UI/keymap router) can schedule the
-        # awaited work. Direct programmatic access goes via the async
-        # methods below.
-        self._copy_across_command: RelayCommand = (
-            RelayCommand.builder()
-            .predicate(lambda: bool(self._focused_pane().marked_entries))
-            .task(self._signal_copy_requested)
-            .build()
-        )
-        self._move_across_command: RelayCommand = (
-            RelayCommand.builder()
-            .predicate(lambda: bool(self._focused_pane().marked_entries))
-            .task(self._signal_move_requested)
-            .build()
-        )
-        self._delete_in_focused_command: RelayCommand = (
-            RelayCommand.builder()
-            .predicate(lambda: bool(self._focused_pane().marked_entries))
-            .task(self._signal_delete_requested)
-            .build()
-        )
 
     # ── Children accessors ──────────────────────────────────────────────────
 
@@ -198,18 +176,6 @@ class DualPaneVM:
     @property
     def switch_focus_command(self) -> RelayCommand:
         return self._switch_focus_command
-
-    @property
-    def copy_across_command(self) -> RelayCommand:
-        return self._copy_across_command
-
-    @property
-    def move_across_command(self) -> RelayCommand:
-        return self._move_across_command
-
-    @property
-    def delete_in_focused_command(self) -> RelayCommand:
-        return self._delete_in_focused_command
 
     @property
     def status(self) -> ConstructionStatus:
@@ -263,9 +229,6 @@ class DualPaneVM:
         if self._owns_runtime:
             self.transfer_runtime.dispose()
         self._switch_focus_command.dispose()
-        self._copy_across_command.dispose()
-        self._move_across_command.dispose()
-        self._delete_in_focused_command.dispose()
         self._right.dispose()
         self._left.dispose()
         # Complete and tear the subject down BEFORE the inner VM, matching
@@ -749,25 +712,13 @@ class DualPaneVM:
         target = FocusedPane.RIGHT if self._focused is FocusedPane.LEFT else FocusedPane.LEFT
         self.set_focused(target)
 
-    def _signal_copy_requested(self) -> None:
-        self._notify("copy_requested")
-
-    def _signal_move_requested(self) -> None:
-        self._notify("move_requested")
-
-    def _signal_delete_requested(self) -> None:
-        self._notify("delete_requested")
-
     def _notify(self, prop: str) -> None:
         """Emit on BOTH the shared hub and this facade's own Observable.
 
-        Never either/or: the hub send is the published contract
-        (``tests/unit/vm/file_manager/test_dual_pane_vm.py`` asserts the
-        ``"focused"`` message, and the three ``*_requested`` signals are a
-        hub-only surface), while the subject is what the bound
-        :class:`~aws_tui.ui.widgets.dual_pane.DualPane` listens to. The guard
-        stops a late caller from publishing a property change for a disposed
-        view model, matching ``PaneVM._notify`` and ``EntryVM._notify``.
+        The hub publishes the ``"focused"`` message and the bound
+        :class:`~aws_tui.ui.widgets.dual_pane.DualPane` listens to the subject.
+        The guard stops a late caller from publishing a property change for
+        a disposed view model, matching ``PaneVM._notify`` and ``EntryVM._notify``.
         """
         if self._disposed:
             return

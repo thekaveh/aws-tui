@@ -357,21 +357,6 @@ class PaneVM:
         )
 
         # ── Commands ────────────────────────────────────────────────────────
-        self._open_command: RelayCommand = (
-            RelayCommand.builder()
-            .predicate(lambda: self._cursor_target() is not None)
-            .task(self._open_cursor_sync)
-            .build()
-        )
-        self._ascend_command: RelayCommand = (
-            RelayCommand.builder()
-            .predicate(lambda: not self._path.is_root)
-            .task(self._ascend_sync)
-            .build()
-        )
-        self._refresh_command: RelayCommand = (
-            RelayCommand.builder().task(self._refresh_sync).build()
-        )
         self._move_cursor_command: RelayCommandOf[int] = (
             RelayCommandOf[int]
             .builder()
@@ -746,18 +731,6 @@ class PaneVM:
     # ── Commands ────────────────────────────────────────────────────────────
 
     @property
-    def open_command(self) -> RelayCommand:
-        return self._open_command
-
-    @property
-    def ascend_command(self) -> RelayCommand:
-        return self._ascend_command
-
-    @property
-    def refresh_command(self) -> RelayCommand:
-        return self._refresh_command
-
-    @property
     def move_cursor_command(self) -> RelayCommandOf[int]:
         return self._move_cursor_command
 
@@ -812,9 +785,6 @@ class PaneVM:
             return
         self._disposed = True
         self._reload_generation += 1
-        self._open_command.dispose()
-        self._ascend_command.dispose()
-        self._refresh_command.dispose()
         self._move_cursor_command.dispose()
         self._toggle_select_command.dispose()
         self._enter_multiselect_command.dispose()
@@ -1018,7 +988,7 @@ class PaneVM:
 
         - ``..`` (synthetic parent link) — ascend if not already at root.
         - Directory — navigate into ``self.path.join(name)``.
-        - File — emit ``preview_requested`` for a higher-level VM to handle.
+        - File — no-op.
 
         ``target_index`` out of range is silently ignored.
         """
@@ -1032,8 +1002,6 @@ class PaneVM:
             return
         if entry.kind is EntryKind.DIRECTORY:
             await self.navigate_to(self._path.join(entry.name))
-            return
-        self._notify("preview_requested")
 
     def toggle_mark_at(self, target_index: int) -> None:
         """Toggle the marked flag on the entry at ``target_index`` and
@@ -1482,12 +1450,9 @@ class PaneVM:
         The subject is what the bound :class:`~aws_tui.ui.widgets.pane.Pane`
         listens to.
 
-        Also the single seam for the 24 notify sites in this file (which
-        would otherwise each be
-        ``self._hub.send(PropertyChangedMessage.create(self, self._inner.name, "prop"))``)
-        and for future coalescing / instrumentation. The guard stops a late
-        caller from publishing a property change for a disposed view model,
-        matching ``EntryVM._notify`` and ``JobRunDetailVM._notify``.
+        The guard stops a late caller from publishing a property change for
+        a disposed view model, matching ``EntryVM._notify`` and
+        ``JobRunDetailVM._notify``.
         """
         if self._disposed:
             return
@@ -1626,36 +1591,6 @@ class PaneVM:
                 real = known + unknown
             indices = parents + real
         self._filtered = tuple(indices)
-
-    # ── Command bridges (sync triggers that delegate to async work) ────────
-
-    def _open_cursor_sync(self) -> None:
-        """Synchronous bridge for the open_command.
-
-        For directories we cannot await here (RelayCommand task is sync).
-        Callers needing the navigation result must invoke ``navigate_to``
-        from an async context. The command is convenient for the cases
-        where the caller is already inside an async runtime (CommandPalette,
-        keymap router) and wraps the call accordingly.
-        """
-        target = self._cursor_target()
-        if target is None:
-            return
-        if target.kind == EntryKind.DIRECTORY:
-            # Defer: the async navigation must be driven externally.
-            # We publish a PropertyChangedMessage so a higher-level VM can
-            # schedule navigate_to(...).
-            self._notify("open_requested")
-        else:
-            self._notify("preview_requested")
-
-    def _ascend_sync(self) -> None:
-        if self._path.is_root:
-            return
-        self._notify("ascend_requested")
-
-    def _refresh_sync(self) -> None:
-        self._notify("refresh_requested")
 
     # ── Composite children factory ─────────────────────────────────────────
 

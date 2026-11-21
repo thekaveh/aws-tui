@@ -786,16 +786,6 @@ async def test_dual_focused_pane_property(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_dual_copy_command_requires_marks(tmp_path: Path) -> None:
-    dp, _ = await _make_dual(tmp_path)
-    assert not dp.copy_across_command.can_execute()
-    dp.left.enter_multiselect_command.execute()
-    dp.left.select_all_command.execute()
-    assert dp.copy_across_command.can_execute()
-    dp.dispose()
-
-
-@pytest.mark.asyncio
 async def test_failed_background_refresh_is_logged_not_swallowed(
     caplog: pytest.LogCaptureFixture,
 ) -> None:

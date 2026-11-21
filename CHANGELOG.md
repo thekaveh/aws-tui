@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 The Unreleased section is the promotion queue for the next package release. Entries may reside on ``develop`` before promotion to ``main``; inclusion here does not by itself claim that every entry has landed on ``main``.
 
+### Changed
+
+- Remove unused file-manager request commands and orphan signals. Navigation, copy, move and delete retain their existing behavior.
+
 ## [0.9.0] - 2026-11-12
 
 As of local source preparation on 2026-11-12, package publication remains pending and Git installation is supported until a published channel is confirmed.
