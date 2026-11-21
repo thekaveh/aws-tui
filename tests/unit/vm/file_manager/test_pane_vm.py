@@ -8,7 +8,7 @@ from collections.abc import AsyncIterator, Callable
 from typing import cast
 
 import pytest
-from vmx import NULL_DISPATCHER, MessageHub
+from vmx import NULL_DISPATCHER, MessageHub, PropertyChangedMessage
 from vmx.lifecycle.status import ConstructionStatus
 from vmx.messages.protocols import Message
 
@@ -106,6 +106,37 @@ async def test_pane_setup_lists_root() -> None:
     assert pane.state == PaneState.IDLE
     pane.dispose()
     assert pane.status == ConstructionStatus.DISPOSED
+
+
+@pytest.mark.asyncio
+async def test_activate_file_row_publishes_no_property_change() -> None:
+    hub = _hub()
+    pane = await _make_pane(await _seed_fs(), hub=hub)
+    path = pane.path
+    names = [entry.name for entry in pane.filtered_entries]
+    index = names.index("a.txt")
+    pane.move_cursor_to(index)
+    selected = pane.selected_entry
+    hub_changes: list[str] = []
+    pane_changes: list[str] = []
+
+    def record(message: Message) -> None:
+        if isinstance(message, PropertyChangedMessage):
+            hub_changes.append(message.property_name)
+
+    hub_sub = hub.messages.subscribe(record)
+    pane_sub = pane.on_property_changed.subscribe(pane_changes.append)
+    try:
+        await pane.activate(index)
+
+        assert pane.path == path
+        assert [entry.name for entry in pane.filtered_entries] == names
+        assert pane.selected_entry is selected
+        assert (hub_changes, pane_changes) == ([], [])
+    finally:
+        pane_sub.dispose()
+        hub_sub.dispose()
+        pane.dispose()
 
 
 @pytest.mark.asyncio
