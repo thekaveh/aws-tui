@@ -6,7 +6,7 @@ from collections.abc import Awaitable, Callable
 from typing import cast
 
 import pytest
-from vmx import NULL_DISPATCHER, MessageHub
+from vmx import NULL_DISPATCHER, MessageHub, PropertyChangedMessage
 from vmx.messages.protocols import Message
 
 from aws_tui.vm.chrome.command_palette_vm import CommandPaletteVM, PaletteEntry
@@ -96,6 +96,136 @@ def test_move_selection_clamps_within_filtered_entries() -> None:
     vm.move_selection_command.execute(-10)
     assert vm.selected_index == 0  # clamped at 0
     vm.dispose()
+
+
+def test_selection_is_the_scored_view_current() -> None:
+    vm = _build()
+    try:
+        assert vm._scored_filter.current is None
+        assert vm.selected_index == 0
+        for i, label in enumerate(("alpha", "beta", "gamma")):
+            vm.register_entry(_entry(f"e{i}", label), lambda: None)
+        vm.open_command.execute()
+        for delta, expected in ((1, 1), (10**9, 2), (-(10**9), 0)):
+            vm.move_selection_command.execute(delta)
+            assert vm.selected_index == expected
+            current = vm._scored_filter.current
+            assert current is not None
+            assert current.model is vm.filtered_entries[vm.selected_index]
+        vm.move_selection_command.execute(1)
+        vm.register_entry(_entry("e3", "delta"), lambda: None)
+        assert vm.selected_index == 0
+        assert vm._scored_filter.current is vm._scored_filter.visible[0]
+        vm.move_selection_command.execute(1)
+        vm.close_command.execute()
+        vm.open_command.execute()
+        assert vm.selected_index == 0
+        assert vm._scored_filter.current is vm._scored_filter.visible[0]
+        vm.filter_text = "no match"
+        assert vm.filtered_entries == ()
+        assert vm._scored_filter.current is None
+        assert vm.selected_index == 0
+    finally:
+        vm.dispose()
+
+
+def test_query_change_selects_top_match_while_selection_still_matches() -> None:
+    vm = _build()
+    try:
+        vm.register_entry(_entry("e1", "alpha"), lambda: None)
+        vm.register_entry(_entry("e2", "alphabet"), lambda: None)
+        vm.open_command.execute()
+        vm.move_selection_command.execute(1)
+        assert vm._scored_filter.current is vm._scored_filter.visible[1]
+        vm.filter_text = "alph"
+        assert vm.selected_index == 0
+        assert vm._scored_filter.current is vm._scored_filter.visible[0]
+        assert [entry.id for entry in vm.filtered_entries] == ["e1", "e2"]
+    finally:
+        vm.dispose()
+
+
+def test_context_change_selects_top_match_while_selection_stays_visible() -> None:
+    vm = _build()
+    try:
+        vm.register_entry(_entry("global", "Help"), lambda: None)
+        vm.register_entry(
+            _entry("shared", "Shared", service_ids=frozenset({"glue", "athena"})),
+            lambda: None,
+        )
+        vm.set_active_service("glue")
+        vm.open_command.execute()
+        vm.move_selection_command.execute(1)
+        assert vm._scored_filter.current is vm._scored_filter.visible[1]
+        vm.set_active_service("athena")
+        assert vm.selected_index == 0
+        assert vm._scored_filter.current is vm._scored_filter.visible[0]
+        assert [entry.id for entry in vm.filtered_entries] == ["global", "shared"]
+    finally:
+        vm.dispose()
+
+
+def test_property_notifications_match_each_operation() -> None:
+    vm = _build()
+    names: list[str] = []
+    subscription = vm._hub.messages.subscribe(
+        on_next=lambda message: (
+            names.append(message.property_name)
+            if isinstance(message, PropertyChangedMessage) and message.sender_object is vm
+            else None
+        )
+    )
+    try:
+        for i, label in enumerate(("alpha", "alphabet", "beta")):
+            vm.register_entry(_entry(f"e{i}", label), lambda: None)
+        vm.open_command.execute()
+        names.clear()
+        vm.move_selection_command.execute(1)
+        assert names == ["selected_index"]
+        names.clear()
+        vm.move_selection_command.execute(100)
+        assert names == ["selected_index"]
+        names.clear()
+        vm.move_selection_command.execute(100)
+        assert names == []
+        vm.filter_text = "alph"
+        assert names == ["filter_text", "filtered_entries", "selected_index"]
+        names.clear()
+        vm.filter_text = "alph"
+        vm.set_active_service(None)
+        vm.unregister_entry("missing")
+        vm.move_selection_command.execute(0)
+        vm.move_selection_command.execute(None)
+        vm.move_selection_command.execute(-100)
+        assert names == []
+    finally:
+        subscription.dispose()
+        vm.dispose()
+
+
+def test_registration_scores_each_entry_once(monkeypatch: pytest.MonkeyPatch) -> None:
+    import aws_tui.vm.chrome.command_palette_vm as palette
+
+    score = palette._score
+    calls = 0
+
+    def counting(entry: PaletteEntry, query: str) -> int | None:
+        nonlocal calls
+        calls += 1
+        return score(entry, query)
+
+    monkeypatch.setattr(palette, "_score", counting)
+    vm = _build()
+    try:
+        total = 0
+        for i in range(20):
+            calls = 0
+            vm.register_entry(_entry(f"e{i}", f"entry {i}"), lambda: None)
+            assert calls == i + 1
+            total += calls
+        assert total == 210
+    finally:
+        vm.dispose()
 
 
 def test_execute_selected_invokes_callable() -> None:
@@ -420,19 +550,72 @@ def test_dispose_releases_commands() -> None:
 def test_equal_registration_preserves_child_and_refreshes_callback():
     vm = _build()
     calls = []
+    names: list[str] = []
+    subscription = vm._hub.messages.subscribe(
+        on_next=lambda message: (
+            names.append(message.property_name)
+            if isinstance(message, PropertyChangedMessage) and message.sender_object is vm
+            else None
+        )
+    )
     try:
+        vm.register_entry(_entry("first", "First"), lambda: calls.append("first"))
         entry = _entry("same", "Same")
         vm.register_entry(entry, lambda: calls.append("old"))
+        vm.register_entry(_entry("third", "Third"), lambda: calls.append("third"))
+        vm.open_command.execute()
+        vm.move_selection_command.execute(1)
         child = vm._items["same"]
+        current = vm._scored_filter.current
+        names.clear()
         vm.register_entry(entry, lambda: calls.append("fresh"))
         assert vm._items["same"] is child
         assert child.is_constructed
-        vm.open_command.execute()
+        assert vm._scored_filter.current is current
+        assert vm.selected_index == 1
+        assert names == []
         vm.execute_selected_command.execute()
         assert calls == ["fresh"]
-        vm.register_entry(_entry("same", "Changed"), lambda: None)
+        vm.open_command.execute()
+        vm.move_selection_command.execute(2)
+        names.clear()
+        vm.register_entry(_entry("same", "Changed"), lambda: calls.append("changed"))
         assert vm._items["same"] is not child
         assert not child.is_constructed
+        assert vm.selected_index == 0
+        assert vm._scored_filter.current is vm._scored_filter.visible[0]
+        assert names == ["filtered_entries", "selected_index"]
+        vm.move_selection_command.execute(2)
+        vm.execute_selected_command.execute()
+        assert calls == ["fresh", "changed"]
+    finally:
+        subscription.dispose()
+        vm.dispose()
+
+
+def test_removal_resets_current_and_discards_removed_action() -> None:
+    vm = _build()
+    calls: list[str] = []
+    try:
+        for id_ in ("first", "second", "third"):
+            vm.register_entry(_entry(id_, id_), lambda id_=id_: calls.append(id_))
+        vm.open_command.execute()
+        vm.move_selection_command.execute(2)
+        vm.unregister_entry("first")
+        assert vm.selected_index == 0
+        assert vm._scored_filter.current is vm._scored_filter.visible[0]
+        assert vm._scored_filter.current.model.id == "second"
+        vm.unregister_entry("second")
+        assert vm.selected_index == 0
+        assert vm._scored_filter.current is vm._scored_filter.visible[0]
+        vm.execute_selected_command.execute()
+        assert calls == ["third"]
+        vm.unregister_entry("third")
+        assert vm._scored_filter.current is None
+        assert vm.selected_index == 0
+        vm.open_command.execute()
+        vm.execute_selected_command.execute()
+        assert calls == ["third"]
     finally:
         vm.dispose()
 
