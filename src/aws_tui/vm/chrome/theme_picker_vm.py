@@ -2,7 +2,7 @@
 
 Each available theme is exposed as a child :class:`ThemeOptionVM` with an
 observable ``is_active`` flag (mirrors the row-level reactivity the
-file-manager panes use for :class:`EntryVM.is_selected`). The picker
+file-manager panes use for ``EntryVM.is_current``). The picker
 owns a :class:`RelayCommandOf[str]` ``pick_theme_command`` that delegates
 to a caller-injected callback — the View never touches the App service
 directly.

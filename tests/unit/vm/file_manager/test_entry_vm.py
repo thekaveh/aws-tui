@@ -3,10 +3,13 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from inspect import getattr_static
 from typing import cast
 
 import pytest
-from vmx import NULL_DISPATCHER, MessageHub
+from reactivex import Observable
+from reactivex import operators as ops
+from vmx import NULL_DISPATCHER, ComponentVMOf, CompositeVM, MessageHub
 from vmx.lifecycle.status import ConstructionStatus
 from vmx.messages.protocols import Message
 
@@ -27,6 +30,18 @@ def _file_entry(name: str = "a.txt", kind: EntryKind = EntryKind.FILE) -> FileEn
     )
 
 
+def _parent_composite(hub: MessageHub[Message], *entries: EntryVM) -> CompositeVM:
+    parent = (
+        CompositeVM.builder()
+        .name("entries")
+        .services(hub, NULL_DISPATCHER)
+        .children(lambda: tuple(entry.inner for entry in entries))
+        .build()
+    )
+    parent.construct()
+    return parent
+
+
 def test_entry_vm_construct_dispose() -> None:
     hub = _hub()
     vm = EntryVM(entry=_file_entry(), hub=hub, dispatcher=NULL_DISPATCHER)
@@ -40,26 +55,54 @@ def test_entry_vm_initial_state() -> None:
     vm = EntryVM(entry=_file_entry("readme.md"), hub=_hub(), dispatcher=NULL_DISPATCHER)
     assert vm.name == "readme.md"
     assert vm.kind == EntryKind.FILE
-    assert vm.state == EntryState(entry=vm.entry, is_selected=False, is_marked=False)
-    assert not vm.is_selected
+    assert vm.state == EntryState(entry=vm.entry, is_marked=False)
+    assert not vm.is_current
     assert not vm.is_marked
     vm.dispose()
 
 
-def test_toggle_select_flips_and_publishes() -> None:
+def test_is_current_follows_the_parent_composite() -> None:
     hub = _hub()
-    received: list[str] = []
-    hub.messages.subscribe(
-        on_next=lambda m: received.append(getattr(m, "property_name", "")) if m else None
+    a = EntryVM(entry=_file_entry("a"), hub=hub, dispatcher=NULL_DISPATCHER)
+    b = EntryVM(entry=_file_entry("b"), hub=hub, dispatcher=NULL_DISPATCHER)
+    parent = _parent_composite(hub, a, b)
+    changes: list[tuple[str, str, bool, bool]] = []
+    a_sub = a.on_property_changed.subscribe(
+        lambda prop: changes.append(("a", prop, a.inner.is_current, b.inner.is_current))
     )
-    vm = EntryVM(entry=_file_entry(), hub=hub, dispatcher=NULL_DISPATCHER)
-    vm.construct()
-    vm.toggle_select_command.execute()
-    assert vm.is_selected
-    assert "is_selected" in received
-    vm.toggle_select_command.execute()
-    assert not vm.is_selected
-    vm.dispose()
+    b_sub = b.on_property_changed.subscribe(
+        lambda prop: changes.append(("b", prop, a.inner.is_current, b.inner.is_current))
+    )
+    try:
+        parent.current = a.inner
+        assert (a.cursor_glyph, b.cursor_glyph) == ("▌", " ")
+        assert (a.is_current, b.is_current) == (True, False)
+        assert changes == [("a", "is_current", True, False)]
+        changes.clear()
+
+        parent.current = b.inner
+        assert (a.cursor_glyph, b.cursor_glyph) == (" ", "▌")
+        assert (a.is_current, b.is_current) == (False, True)
+        assert changes == [
+            ("a", "is_current", False, True),
+            ("b", "is_current", False, True),
+        ]
+        changes.clear()
+
+        parent.current = b.inner
+        assert changes == []
+
+        parent.current = None
+        assert (a.cursor_glyph, b.cursor_glyph) == (" ", " ")
+        assert (a.is_current, b.is_current) == (False, False)
+        assert changes == [("b", "is_current", False, False)]
+    finally:
+        a_sub.dispose()
+        b_sub.dispose()
+        a.dispose()
+        b.dispose()
+        parent.dispose()
+        hub.dispose()
 
 
 def test_toggle_mark_flips_and_publishes() -> None:
@@ -75,23 +118,6 @@ def test_toggle_mark_flips_and_publishes() -> None:
     assert "is_marked" in received
     vm.toggle_mark_command.execute()
     assert not vm.is_marked
-    vm.dispose()
-
-
-def test_set_selected_idempotent() -> None:
-    hub = _hub()
-    fires: list[str] = []
-    hub.messages.subscribe(
-        on_next=lambda m: fires.append(getattr(m, "property_name", "")) if m else None
-    )
-    vm = EntryVM(entry=_file_entry(), hub=hub, dispatcher=NULL_DISPATCHER)
-    vm.construct()
-    vm.set_selected(False)
-    assert "is_selected" not in fires
-    vm.set_selected(True)
-    assert fires.count("is_selected") == 1
-    vm.set_selected(True)
-    assert fires.count("is_selected") == 1
     vm.dispose()
 
 
@@ -118,27 +144,50 @@ def test_set_marked_notifies_both_the_hub_and_the_per_vm_observable() -> None:
         assert bound == ["is_marked"]
         assert "is_marked" in hub_props
 
-        # The early return governs BOTH channels. It is what keeps a cursor
-        # move O(1): ``PaneVM._sync_cursor_selection`` writes every entry, so
-        # a subject that fired unconditionally would wake every bound row.
+        # Reapplying the same mark must not repaint the bound row.
         vm.set_marked(True)
         assert bound == ["is_marked"]
     finally:
         vm.dispose()
 
 
-def test_set_selected_reaches_the_bound_observer() -> None:
-    """The other half of the row binding — the cursor bar."""
-    vm = EntryVM(entry=_file_entry(), hub=_hub(), dispatcher=NULL_DISPATCHER)
-    vm.construct()
-    bound: list[str] = []
-    vm.on_property_changed.subscribe(on_next=bound.append)
+def test_is_current_is_not_forwarded_after_dispose(monkeypatch: pytest.MonkeyPatch) -> None:
+    inner_property_changed: property = getattr_static(ComponentVMOf, "property_changed")
+    lifecycle: list[tuple[str, bool]] = []
+
+    def track_subscription(inner: ComponentVMOf[EntryState]) -> Observable[str]:
+        changes: Observable[str] = inner_property_changed.__get__(inner)
+        if inner.name != "entry.a":
+            return changes
+        return changes.pipe(
+            ops.finally_action(lambda: lifecycle.append(("unsubscribed", inner.is_constructed)))
+        )
+
+    monkeypatch.setattr(ComponentVMOf, "property_changed", property(track_subscription))
+    hub = _hub()
+    a = EntryVM(entry=_file_entry("a"), hub=hub, dispatcher=NULL_DISPATCHER)
+    b = EntryVM(entry=_file_entry("b"), hub=hub, dispatcher=NULL_DISPATCHER)
+    parent = _parent_composite(hub, a, b)
+    changes: list[str] = []
+    sub = a.on_property_changed.subscribe(
+        changes.append,
+        on_completed=lambda: lifecycle.append(("completed", a.inner.is_constructed)),
+    )
     try:
-        vm.set_selected(True)
-        vm.set_selected(False)
-        assert bound == ["is_selected", "is_selected"]
+        parent.current = a.inner
+        a.dispose()
+        a.dispose()
+        parent.current = b.inner
+
+        assert lifecycle == [("unsubscribed", True), ("completed", True)]
+        assert changes == ["is_current"]
+        assert b.inner.is_current
     finally:
-        vm.dispose()
+        sub.dispose()
+        a.dispose()
+        b.dispose()
+        parent.dispose()
+        hub.dispose()
 
 
 def test_dispose_completes_the_per_vm_observable_and_is_idempotent() -> None:

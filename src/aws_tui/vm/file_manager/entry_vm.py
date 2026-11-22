@@ -1,9 +1,8 @@
 """EntryVM — single file/directory entry facade in a file-manager pane.
 
 An entry wraps a :class:`aws_tui.domain.filesystem.FileEntry` (immutable
-domain DTO) and two reactive flags: ``is_selected`` (whether the cursor row
-is the focused entry) and ``is_marked`` (whether the entry is part of the
-multi-select bag the pane will operate on next).
+domain DTO). Its cursor state follows the VMx child's ``is_current``.
+The ``is_marked`` flag tracks membership in the pane's multi-select set.
 
 The facade follows the M3 pattern: a VMx ``ComponentVMOf[EntryState]`` is
 held as ``self._inner``; the facade exposes typed properties and
@@ -17,6 +16,7 @@ from dataclasses import dataclass, replace
 from datetime import datetime
 
 import reactivex as rx
+from reactivex.abc import DisposableBase
 from vmx import ComponentVMOf, Message, MessageHub, PropertyChangedMessage, RelayCommand
 from vmx.lifecycle.status import ConstructionStatus
 from vmx.services.dispatcher import Dispatcher
@@ -61,16 +61,12 @@ class EntryState:
     ----------
     entry:
         The underlying domain :class:`FileEntry`.
-    is_selected:
-        True when the pane cursor is on this entry. Exactly one entry in a
-        pane is selected at any time (or zero when the pane is empty).
     is_marked:
         True when the entry is part of the multi-select bag — independent of
         cursor position. Used by batch operations (copy/move/delete).
     """
 
     entry: FileEntry
-    is_selected: bool = False
     is_marked: bool = False
 
 
@@ -88,7 +84,7 @@ class EntryVM:
         self._hub: MessageHub[Message] = hub
         self._disposed: bool = False
 
-        initial_state = EntryState(entry=entry, is_selected=False, is_marked=False)
+        initial_state = EntryState(entry=entry)
         # Name is unique-enough within a pane (entries within a directory
         # have distinct names). Pane-level uniqueness is the caller's job.
         self._inner: ComponentVMOf[EntryState] = (
@@ -100,9 +96,6 @@ class EntryVM:
             .build()
         )
 
-        self._toggle_select_command: RelayCommand = (
-            RelayCommand.builder().task(self.toggle_select).build()
-        )
         self._toggle_mark_command: RelayCommand = (
             RelayCommand.builder().task(self.toggle_mark).build()
         )
@@ -115,6 +108,9 @@ class EntryVM:
         # stream carrying every message in the app, which is what made a
         # large listing quadratic.
         self._on_property_changed: ObserverSafeSubject[str] = ObserverSafeSubject[str]()
+        self._inner_property_sub: DisposableBase = self._inner.property_changed.subscribe(
+            on_next=self._forward_inner_change
+        )
 
     # ── Properties ──────────────────────────────────────────────────────────
 
@@ -135,8 +131,8 @@ class EntryVM:
         return self._inner.model.entry.kind
 
     @property
-    def is_selected(self) -> bool:
-        return self._inner.model.is_selected
+    def is_current(self) -> bool:
+        return self._inner.is_current
 
     @property
     def is_marked(self) -> bool:
@@ -179,8 +175,8 @@ class EntryVM:
 
     @property
     def cursor_glyph(self) -> str:
-        """Heavy left bar on the selected row; blank otherwise."""
-        return "▌" if self._inner.model.is_selected else " "
+        """Heavy left bar on the current row; blank otherwise."""
+        return "▌" if self.is_current else " "
 
     @property
     def is_parent_link(self) -> bool:
@@ -190,10 +186,6 @@ class EntryVM:
     @property
     def is_directory(self) -> bool:
         return self._inner.model.entry.kind is EntryKind.DIRECTORY
-
-    @property
-    def toggle_select_command(self) -> RelayCommand:
-        return self._toggle_select_command
 
     @property
     def toggle_mark_command(self) -> RelayCommand:
@@ -224,7 +216,7 @@ class EntryVM:
         if self._disposed:
             return
         self._disposed = True
-        self._toggle_select_command.dispose()
+        self._inner_property_sub.dispose()
         self._toggle_mark_command.dispose()
         # Complete and tear the subject down BEFORE the inner VM: a bound row
         # that is still mounted (Textual removes children asynchronously) must
@@ -236,20 +228,6 @@ class EntryVM:
 
     # ── State mutators ─────────────────────────────────────────────────────
 
-    def set_selected(self, value: bool) -> None:
-        """Imperative setter used by ``PaneVM`` when the cursor moves.
-
-        The early return is what keeps a cursor move O(1) in notifications:
-        ``PaneVM._sync_cursor_selection`` calls this on EVERY entry, so
-        without it a keystroke would wake every bound row in the listing.
-        With it exactly two entries notify -- the one the cursor left and
-        the one it reached.
-        """
-        if self._inner.model.is_selected == value:
-            return
-        self._inner.model = replace(self._inner.model, is_selected=value)
-        self._notify("is_selected")
-
     def set_marked(self, value: bool) -> None:
         """Imperative setter used by ``PaneVM`` for select-all / clear-marks."""
         if self._inner.model.is_marked == value:
@@ -257,13 +235,15 @@ class EntryVM:
         self._inner.model = replace(self._inner.model, is_marked=value)
         self._notify("is_marked")
 
-    def toggle_select(self) -> None:
-        self.set_selected(not self._inner.model.is_selected)
-
     def toggle_mark(self) -> None:
         self.set_marked(not self._inner.model.is_marked)
 
     # ── Internal ────────────────────────────────────────────────────────────
+
+    def _forward_inner_change(self, prop: str) -> None:
+        if prop == "is_current" and not self._disposed:
+            # VMx has already published this change on the hub.
+            self._on_property_changed.on_next(prop)
 
     def _notify(self, prop: str) -> None:
         """Emit on BOTH the shared hub and this entry's own Observable.

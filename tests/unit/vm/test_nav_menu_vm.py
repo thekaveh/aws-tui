@@ -201,13 +201,14 @@ def test_service_item_vm_construct_dispose() -> None:
     item.dispose()
 
 
-def test_service_item_default_flags() -> None:
+def test_service_item_is_current_defaults_false() -> None:
     item = ServiceItemVM(
         descriptor=ServiceDescriptor(id="s3", label="S3", icon="s"),
         hub=_hub(),
         dispatcher=NULL_DISPATCHER,
     )
-    assert item.is_selected is False
+    assert item.inner.is_current is False
+    item.dispose()
 
 
 # -------------------- Service protocol (structural) --------------------
@@ -292,23 +293,26 @@ def test_switch_service_promotes_to_composite_current_slot() -> None:
     menu.dispose()
 
 
-def test_per_item_is_selected_is_projected_from_composite_current() -> None:
-    """Every ``NavItemVM.is_selected`` is updated when the composite's
-    current cursor moves — there is exactly one True flag at a time."""
+def test_per_item_is_current_follows_composite_current() -> None:
     reg = ServiceRegistry()
     reg.register(FakeService("s3", "S3", accepts_aws=True, accepts_s3_compat=True))
     reg.register(FakeService("ec2", "EC2", accepts_aws=True, accepts_s3_compat=False))
     menu = _menu(reg)
-    menu.update_connection(_aws_conn())
-    menu.switch_service_command.execute("s3")
-    selected = [item for item in menu.items if item.is_selected]
-    assert len(selected) == 1
-    assert selected[0].descriptor.id == "s3"
-    menu.switch_service_command.execute("settings")
-    selected = [item for item in menu.items if item.is_selected]
-    assert len(selected) == 1
-    assert selected[0].descriptor.id == "settings"
-    menu.dispose()
+    try:
+        menu.update_connection(_aws_conn())
+        assert not any(item.inner.is_current for item in menu.items)
+
+        menu.switch_service_command.execute("s3")
+        assert [item.descriptor.id for item in menu.items if item.inner.is_current] == ["s3"]
+
+        menu.switch_service_command.execute("settings")
+        assert [item.descriptor.id for item in menu.items if item.inner.is_current] == ["settings"]
+
+        menu.clear_selection()
+        assert menu.selected_id is None
+        assert not any(item.inner.is_current for item in menu.items)
+    finally:
+        menu.dispose()
 
 
 def test_switching_to_already_selected_service_is_idempotent() -> None:
