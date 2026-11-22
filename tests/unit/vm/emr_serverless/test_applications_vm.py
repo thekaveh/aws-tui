@@ -6,7 +6,7 @@ import asyncio
 from datetime import UTC, datetime
 
 import pytest
-from vmx import NULL_DISPATCHER, MessageHub
+from vmx import NULL_DISPATCHER, ConstructionStatus, MessageHub
 from vmx.messages.protocols import Message
 
 from aws_tui.demo.in_memory_emr import InMemoryEmr as _InMemoryEmr
@@ -275,21 +275,146 @@ async def test_refresh_drops_selection_when_selected_app_vanishes() -> None:
     fake._apps.pop("a2", None)  # type: ignore[attr-defined]
     fake._runs.pop("a2", None)  # type: ignore[attr-defined]
     notified: list[str] = []
-    sub = vm._hub.messages.subscribe(  # type: ignore[attr-defined]
-        on_next=lambda m: notified.append(getattr(m, "property_name", ""))
-    )
+    sub = vm.on_property_changed.subscribe(notified.append)
     try:
         await vm.refresh()
         assert vm.selected_id is None
-        assert "selected_id" in notified
+        assert vm._inner.current is None
+        assert [name for name in notified if name in {"applications", "selected_id"}] == [
+            "applications",
+            "selected_id",
+        ]
     finally:
         sub.dispose()
+        vm.dispose()
+
+
+@pytest.mark.asyncio
+async def test_refresh_keeps_rows_and_current() -> None:
+    vm, fake = _make()
+    for app_id, name in (("a1", "alpha"), ("a2", "bravo"), ("a3", "charlie")):
+        fake.add_application(app_id=app_id, name=name)
+    await vm.refresh()
+    vm.select("a2")
+    before = {row.model.id: row for row in vm._inner}
+    events: list[str] = []
+    sub = vm._inner.on_collection_changed.subscribe(lambda event: events.append(event.action))
+    try:
+        updated = fake.add_application(app_id="a2", name="bravo", app_type="HIVE")
+        await vm.refresh()
+
+        assert vm.applications[1] == updated
+        assert vm._inner.current is before["a2"]
+        assert all(row is before[row.model.id] for row in vm._inner)
+        assert events == []
+    finally:
+        sub.dispose()
+        vm.dispose()
+
+
+@pytest.mark.asyncio
+async def test_refresh_keeps_rows_for_first_sorted_duplicate(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    vm, fake = _make()
+    stopped = fake.add_application(app_id="a1", name="alpha", state=ApplicationState.STOPPED)
+    started = fake.add_application(app_id="a1", name="alpha", state=ApplicationState.STARTED)
+
+    async def list_with_duplicate() -> list[ApplicationSummary]:
+        return [stopped, started]
+
+    monkeypatch.setattr(fake, "list_applications", list_with_duplicate)
+    try:
+        await vm.refresh()
+
+        assert vm.applications == (started,)
+        (first,) = vm._inner
+        vm.select("a1")
+
+        notified: list[str] = []
+        events: list[str] = []
+        properties = vm.on_property_changed.subscribe(notified.append)
+        collection = vm._inner.on_collection_changed.subscribe(
+            lambda event: events.append(event.action)
+        )
+        try:
+            await vm.refresh()
+        finally:
+            collection.dispose()
+            properties.dispose()
+
+        assert vm.applications == (started,)
+        (retained,) = vm._inner
+        assert retained is first
+        assert vm._inner.current is first
+        assert [name for name in notified if name != "state"] == ["applications"]
+        assert events == []
+    finally:
+        vm.dispose()
+
+
+@pytest.mark.asyncio
+async def test_application_state_change_reorders_rows() -> None:
+    vm, fake = _make()
+    started = fake.add_application(app_id="a1", name="alpha")
+    stopped = fake.add_application(app_id="a2", name="bravo", state=ApplicationState.STOPPED)
+    await vm.refresh()
+    vm.select(started.id)
+    first, second = vm._inner
+    events: list[str] = []
+    sub = vm._inner.on_collection_changed.subscribe(lambda event: events.append(event.action))
+    try:
+        terminated = fake.add_application(
+            app_id=started.id, name=started.name, state=ApplicationState.TERMINATED
+        )
+        await vm.refresh()
+
+        assert vm.applications == vm.sorted_applications == (stopped, terminated)
+        assert [row.model.id for row in vm._inner] == ["a2", "a1"]
+        assert vm._inner[0] is second
+        assert vm._inner[1] is first
+        assert vm._inner.current is first
+        assert events == ["reset"]
+    finally:
+        sub.dispose()
+        vm.dispose()
+
+
+@pytest.mark.asyncio
+async def test_refresh_add_remove_emits_one_reset() -> None:
+    vm, fake = _make()
+    kept = fake.add_application(app_id="a1", name="alpha")
+    fake.add_application(app_id="a2", name="bravo")
+    await vm.refresh()
+    vm.select(kept.id)
+    survivor, removed = vm._inner
+    events: list[str] = []
+    sub = vm._inner.on_collection_changed.subscribe(lambda event: events.append(event.action))
+    try:
+        fake._apps.pop("a2")
+        added = fake.add_application(app_id="a3", name="charlie")
+        await vm.refresh()
+
+        assert vm.applications == (kept, added)
+        assert removed.status is ConstructionStatus.DISPOSED
+        assert events == ["reset"]
+        assert vm._inner[0] is survivor
+        assert vm._inner.current is survivor
+        assert vm._inner[1].model == added
+        assert vm._inner[1].status is ConstructionStatus.CONSTRUCTED
+
+        events.clear()
+        await vm.refresh()
+        assert events == []
+    finally:
+        sub.dispose()
+        vm.dispose()
 
 
 @pytest.mark.asyncio
 async def test_composite_on_collection_changed_fires_on_real_change() -> None:
     """Composite must emit on_collection_changed when refresh actually
-    rebuilds (complement of dedup-on-set: no-change → no event)."""
+    adds a row (complement of dedup-on-set: no-change → no event)."""
     vm, fake = _make()
     fake.add_application(app_id="a1", name="etl")
     await vm.refresh()
@@ -307,11 +432,22 @@ async def test_composite_on_collection_changed_fires_on_real_change() -> None:
 async def test_dispose_cleans_up_items() -> None:
     vm, fake = _make()
     fake.add_application(app_id="a1", name="etl")
+    fake.add_application(app_id="a2", name="adhoc")
     await vm.refresh()
-    assert len(vm._items) == 1  # type: ignore[attr-defined]
+    vm.select("a1")
+    rows = tuple(vm._inner)
+    selected = vm._inner.current
+    assert len(rows) == 2
+    assert selected is not None
+
     vm.dispose()
-    # After dispose, items list cleared and composite disposed.
-    assert vm._items == []  # type: ignore[attr-defined]
+
+    assert all(row.status is ConstructionStatus.DISPOSED for row in rows)
+    assert vm.applications == vm.sorted_applications == ()
+    assert vm._inner.current is selected
+    assert vm.selected_id == "a1"
+    vm.select("a2")
+    assert vm._inner.current is selected
 
 
 @pytest.mark.asyncio

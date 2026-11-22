@@ -105,9 +105,8 @@ class PaletteEntryVM:
     """Facade wrapping a :class:`ComponentVMOf` so the inner can be
     parented into the palette's :class:`CompositeVM`.
 
-    Same pattern as ``NavItemVM`` / ``ApplicationItemVM`` /
-    ``JobRunItemVM``: the public payload is the :class:`PaletteEntry`
-    value; ``inner`` is the composite's child handle.
+    Same pattern as ``NavItemVM``. The public payload is the
+    :class:`PaletteEntry` value. ``inner`` is the composite's child handle.
     """
 
     def __init__(

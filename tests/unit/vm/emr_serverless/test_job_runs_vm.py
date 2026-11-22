@@ -3,13 +3,15 @@
 from __future__ import annotations
 
 import asyncio
+from datetime import timedelta
 
 import pytest
-from vmx import NULL_DISPATCHER, MessageHub
+from vmx import NULL_DISPATCHER, ComponentVMOf, ConstructionStatus, MessageHub
 from vmx.messages.protocols import Message
 
+from aws_tui.demo.in_memory_emr import DEMO_NOW
 from aws_tui.demo.in_memory_emr import InMemoryEmr as _InMemoryEmr
-from aws_tui.domain.emr_serverless import JobRunState
+from aws_tui.domain.emr_serverless import JobRunState, JobRunSummary
 from aws_tui.domain.filesystem import ProviderError
 from aws_tui.vm.emr_serverless.job_runs_vm import _ACTIVE_STATES, JobRunsVM
 from aws_tui.vm.file_manager.pane_vm import PaneState
@@ -93,37 +95,106 @@ async def test_select_routes_change_notification() -> None:
 
 
 @pytest.mark.asyncio
-async def test_selection_survives_a_refresh_that_rebuilds_every_item() -> None:
-    """The user's chosen run must outlive the 60-second poll.
-
-    ``_sync_inner_to_pager`` rebuilds the composite on every refresh, and each
-    ``JobRunItemVM`` gets a fresh ``inner``, so ``current`` cannot survive on its
-    own — the restore loop is what carries it. Dropping
-    ``self._inner.current = item.inner`` left the whole repo suite green, while
-    ``selected_id`` fell to ``None`` and ``EmrServerlessPageVM.refresh_job_runs``
-    then re-selected ``runs[0]``. The user's run — and the detail and logs panes
-    following it — jumped to the newest run on every poll. Unlike the
-    applications path there is no selection-store fallback to hide it.
-    """
+async def test_selection_survives_a_refresh_that_changes_the_list() -> None:
+    """Polling with a new run keeps the user's row, detail and logs selection."""
     vm, fake = _make()
     _seed_runs(fake, "a1")
     vm.set_application("a1")
     await vm.refresh()
 
-    vm.select("r1")
-    assert vm.selected_id == "r1"
-    first_inner = vm._inner.current  # type: ignore[attr-defined]
+    try:
+        vm.select("r1")
+        first_inner = vm._inner.current
+        assert first_inner is not None
+        fake.add_job_run(
+            application_id="a1", job_run_id="r5", state=JobRunState.RUNNING, created_at=DEMO_NOW
+        )
+        await vm.refresh()
 
-    # A poll that actually changes the list is what forces the rebuild. An
-    # identical-data refresh reuses the existing items, so the restore loop is
-    # never reached and the test would pass without it.
-    fake.add_job_run(application_id="a1", job_run_id="r5", state=JobRunState.RUNNING)
+        assert vm.runs[0].job_run_id == "r5"
+        assert vm._inner.current is first_inner
+        assert vm.selected_id == "r1", "poll silently moved the user's selection"
+    finally:
+        vm.dispose()
+
+
+@pytest.mark.asyncio
+async def test_refresh_add_remove_emits_one_reset() -> None:
+    vm, fake = _make()
+    _seed_runs(fake, "a1")
+    vm.set_application("a1")
     await vm.refresh()
+    vm.select("r1")
+    survivor, removed, *_ = vm._inner
+    events: list[str] = []
+    sub = vm._inner.on_collection_changed.subscribe(lambda event: events.append(event.action))
+    try:
+        fake._runs["a1"].pop("r2")
+        added = fake.add_job_run(application_id="a1", job_run_id="r5")
+        await vm.refresh()
 
-    assert vm._inner.current is not first_inner, (  # type: ignore[attr-defined]
-        "items were not rebuilt, so this test cannot exercise the restore"
-    )
-    assert vm.selected_id == "r1", "poll silently moved the user's selection"
+        assert [run.job_run_id for run in vm.runs] == ["r1", "r3", "r4", "r5"]
+        assert removed.status is ConstructionStatus.DISPOSED
+        assert events == ["reset"]
+        assert vm._inner[0] is survivor
+        assert vm._inner.current is survivor
+        assert vm._inner[3].model == added
+        assert vm._inner[3].status is ConstructionStatus.CONSTRUCTED
+
+        events.clear()
+        await vm.refresh()
+        assert events == []
+    finally:
+        sub.dispose()
+        vm.dispose()
+
+
+@pytest.mark.asyncio
+async def test_run_model_change_emits_no_collection_event() -> None:
+    vm, fake = _make()
+    _seed_runs(fake, "a1")
+    vm.set_application("a1")
+    await vm.refresh()
+    vm.select("r2")
+    selected = vm._inner.current
+    assert selected is not None
+    events: list[str] = []
+    sub = vm._inner.on_collection_changed.subscribe(lambda event: events.append(event.action))
+    try:
+        fake._set_run_state("a1", "r2", JobRunState.SUCCESS, advance_seconds=1)
+        await vm.refresh()
+
+        assert vm.runs[1].state is JobRunState.SUCCESS
+        assert vm.selected_summary == vm.runs[1]
+        assert vm._inner.current is selected
+        assert events == []
+    finally:
+        sub.dispose()
+        vm.dispose()
+
+
+@pytest.mark.asyncio
+async def test_unchanged_poll_builds_no_row(monkeypatch: pytest.MonkeyPatch) -> None:
+    vm, fake = _make()
+    _seed_runs(fake, "a1")
+    vm.set_application("a1")
+    await vm.refresh()
+    assert len(vm._inner) == len(vm.runs) == 4
+    calls = 0
+    original = vm._new_row
+
+    def count_creation(summary: JobRunSummary) -> ComponentVMOf[JobRunSummary]:
+        nonlocal calls
+        calls += 1
+        return original(summary)
+
+    monkeypatch.setattr(vm, "_new_row", count_creation)
+    try:
+        await vm.refresh()
+
+        assert calls == 0
+    finally:
+        vm.dispose()
 
 
 @pytest.mark.asyncio
@@ -244,6 +315,58 @@ async def test_load_more_appends_next_page_then_clears_has_more() -> None:
     assert {r.job_run_id for r in vm.runs} == {"r1", "r2", "r3"}
     # Third call drains the token to None.
     assert vm.has_more is False
+
+
+@pytest.mark.asyncio
+async def test_load_more_keeps_current_and_emits_one_reset() -> None:
+    vm, fake = _make()
+    _seed_runs(fake, "a1")
+    fake.page_size = 2
+    vm.set_application("a1")
+    await vm.refresh()
+    vm.select("r2")
+    first, second = vm._inner
+    events: list[str] = []
+    sub = vm._inner.on_collection_changed.subscribe(lambda event: events.append(event.action))
+    try:
+        await vm.load_more()
+
+        assert [run.job_run_id for run in vm.runs] == ["r1", "r2", "r3", "r4"]
+        assert vm._inner[0] is first
+        assert vm._inner[1] is second
+        assert vm._inner.current is second
+        assert events == ["reset"]
+    finally:
+        sub.dispose()
+        vm.dispose()
+
+
+@pytest.mark.asyncio
+async def test_load_more_keeps_first_row_for_duplicate_run_id() -> None:
+    vm, fake = _make()
+    _seed_runs(fake, "a1")
+    fake.page_size = 2
+    vm.set_application("a1")
+    await vm.refresh()
+    vm.select("r2")
+    boundary_row = vm._inner[1]
+    first_model = boundary_row.model
+    try:
+        fake.add_job_run(
+            application_id="a1", job_run_id="r5", created_at=DEMO_NOW + timedelta(seconds=1)
+        )
+        fake._set_run_state("a1", "r2", JobRunState.SUCCESS, advance_seconds=1)
+        await vm.load_more()
+
+        assert [run.job_run_id for run in vm.runs] == ["r1", "r2", "r2", "r3"]
+        assert vm.runs[1] == first_model
+        assert vm.runs[2].state is JobRunState.SUCCESS
+        assert [row.model.job_run_id for row in vm._inner] == ["r1", "r2", "r3"]
+        assert vm._inner[1] is boundary_row
+        assert vm._inner.current is boundary_row
+        assert boundary_row.model is first_model
+    finally:
+        vm.dispose()
 
 
 @pytest.mark.asyncio
@@ -493,21 +616,23 @@ async def test_refresh_clears_selection_when_run_id_vanished() -> None:
     # Remove r1 from the fake (the fake's _runs is dict[app_id, dict[run_id, ...]]).
     fake._runs["a1"].pop("r1", None)  # type: ignore[attr-defined]
     notified: list[str] = []
-    sub = vm._hub.messages.subscribe(  # type: ignore[attr-defined]
-        on_next=lambda m: notified.append(getattr(m, "property_name", ""))
-    )
+    sub = vm.on_property_changed.subscribe(notified.append)
     try:
         await vm.refresh()
         assert vm.selected_id is None
-        assert "selected_id" in notified
+        assert vm._inner.current is None
+        assert [name for name in notified if name in {"runs", "selected_id"}] == [
+            "selected_id",
+            "runs",
+        ]
     finally:
         sub.dispose()
+        vm.dispose()
 
 
 @pytest.mark.asyncio
 async def test_composite_on_collection_changed_fires_on_refresh() -> None:
-    """Composite emits on_collection_changed events when refresh
-    appends new items."""
+    """First refresh emits a collection event as it populates the composite."""
     vm, fake = _make()
     _seed_runs(fake, "a1")
     vm.set_application("a1")
@@ -515,17 +640,15 @@ async def test_composite_on_collection_changed_fires_on_refresh() -> None:
     sub = vm._inner.on_collection_changed.subscribe(on_next=events.append)
     try:
         await vm.refresh()
-        # First refresh populates the composite — expect at least
-        # one "add" event per added run.
+        # Initial population publishes a single batched reset.
         assert len(events) > 0
     finally:
         sub.dispose()
 
 
 @pytest.mark.asyncio
-async def test_has_active_runs_uses_composite_items() -> None:
-    """has_active_runs traverses composite items, not the old
-    _runs_cache tuple."""
+async def test_has_active_runs_tracks_refreshed_pages() -> None:
+    """Active-run detection reflects the refreshed summaries in the pager."""
     vm, fake = _make()
     fake.add_application(app_id="a1", name="etl")
     fake.add_job_run(application_id="a1", job_run_id="r1", state=JobRunState.RUNNING)
