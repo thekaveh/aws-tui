@@ -24,6 +24,7 @@ from aws_tui.domain.filesystem import (
     ProviderUnreachableError,
     ThrottledError,
 )
+from aws_tui.vm.file_manager.entry_vm import EntryVM
 from aws_tui.vm.file_manager.pane_vm import PaneSortField, PaneState, PaneVM
 
 
@@ -106,6 +107,91 @@ async def test_pane_setup_lists_root() -> None:
     assert pane.state == PaneState.IDLE
     pane.dispose()
     assert pane.status == ConstructionStatus.DISPOSED
+
+
+@pytest.mark.asyncio
+async def test_the_current_entry_is_the_selected_entry(monkeypatch: pytest.MonkeyPatch) -> None:
+    fs = await _seed_fs()
+    pane = await _make_pane(fs)
+    old_list = fs.list
+    started = asyncio.Event()
+    release = asyncio.Event()
+    destination = PathRef(("b",))
+
+    async def gated_list(path: PathRef) -> list[FileEntry]:
+        if path == destination:
+            started.set()
+            await release.wait()
+        return await old_list(path)
+
+    monkeypatch.setattr(fs, "list", gated_list)
+
+    def assert_current(expected_name: str | None) -> None:
+        selected = pane.selected_entry
+        assert (selected.name if selected is not None else None) == expected_name
+        expected = [selected] if selected is not None else []
+        assert [entry for entry in pane.entries if entry.inner.is_current] == expected
+        assert [entry for entry in pane.entries if entry.cursor_glyph == "▌"] == expected
+
+    try:
+        assert_current("b")
+        pane.move_cursor_command.execute(1)
+        assert_current("a.txt")
+        pane.move_cursor_to(2)
+        assert_current("c.json")
+
+        pane.set_filter_command.execute("no matches")
+        assert not pane.filtered_entries
+        assert_current(None)
+        pane.set_filter_command.execute(".")
+        assert_current("a.txt")
+        pane.set_sort(PaneSortField.NAME, descending=True)
+        assert_current("a.txt")
+        await pane.refresh()
+        assert_current("c.json")
+
+        pane.set_filter_command.execute("")
+        pane.move_cursor_to(2)
+        assert_current("a.txt")
+        navigate = asyncio.create_task(pane.navigate_to(destination))
+        try:
+            await asyncio.wait_for(started.wait(), timeout=1)
+            assert pane.state is PaneState.LOADING
+            assert not navigate.done()
+            assert_current("c.json")
+        finally:
+            release.set()
+            await navigate
+        assert_current("..")
+    finally:
+        pane.dispose()
+
+
+@pytest.mark.asyncio
+async def test_cursor_move_publishes_no_entry_hub_message() -> None:
+    hub = _hub()
+    pane = await _make_pane(await _seed_fs(), hub=hub)
+    previous, target, *_ = pane.filtered_entries
+    changes: list[tuple[object, str]] = []
+
+    def record(message: Message) -> None:
+        if isinstance(message, PropertyChangedMessage):
+            changes.append((message.sender_object, message.property_name))
+
+    sub = hub.messages.subscribe(record)
+    try:
+        pane.move_cursor_command.execute(1)
+
+        assert pane.selected_entry is target
+        assert all(not isinstance(sender, EntryVM) for sender, _ in changes), changes
+        assert all(prop != "model" for _, prop in changes), changes
+        assert (previous.inner, "is_current") in changes
+        assert (target.inner, "is_current") in changes
+        assert (pane, "cursor_index") in changes
+    finally:
+        sub.dispose()
+        pane.dispose()
+        hub.dispose()
 
 
 @pytest.mark.asyncio

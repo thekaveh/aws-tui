@@ -645,7 +645,6 @@ class PaneVM:
         self._sort_field = field
         self._sort_descending = descending
         self._sync_filtered_from_composite()
-        self._sync_cursor_selection()
         self._notify("filtered_entries")
         self._notify("viewmodel")
 
@@ -1085,7 +1084,6 @@ class PaneVM:
         if clamped == self._cursor_index:
             return
         self._cursor_index = clamped
-        self._sync_cursor_selection()
         self._notify("cursor_index")
         self._notify("viewmodel")
 
@@ -1425,7 +1423,6 @@ class PaneVM:
         # ``_set_filter_text`` already has this ordering.
         self._recompute_filtered()
         self._cursor_index = 0
-        self._sync_cursor_selection()
         self._notify("entries")
         self._notify("viewmodel")
 
@@ -1475,14 +1472,8 @@ class PaneVM:
         if new_index == self._cursor_index:
             return
         self._cursor_index = new_index
-        self._sync_cursor_selection()
         self._notify("cursor_index")
         self._notify("viewmodel")
-
-    def _sync_cursor_selection(self) -> None:
-        target = self._cursor_target()
-        for entry in self._entries:
-            entry.set_selected(entry is target)
 
     def _toggle_select_cursor(self) -> None:
         target = self._cursor_target()
@@ -1527,7 +1518,6 @@ class PaneVM:
         self._filter_text = new
         self._recompute_filtered()
         self._cursor_index = 0
-        self._sync_cursor_selection()
         self._notify("filter_text")
         self._notify("filtered_entries")
         self._notify("viewmodel")

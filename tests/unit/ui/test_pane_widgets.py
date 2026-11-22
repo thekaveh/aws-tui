@@ -13,6 +13,7 @@ from textual.app import App, ComposeResult
 from textual.color import Color
 from textual.containers import VerticalScroll
 from textual.content import Content
+from textual.pilot import Pilot
 from textual.screen import Screen
 from textual.widgets import Static, Tooltip
 from vmx import Message, MessageHub, RxDispatcher
@@ -794,6 +795,68 @@ def _single_pane_app(vm: PaneVM, hub: MessageHub[Message]) -> App[None]:
     return _App()
 
 
+@pytest.fixture
+async def pane_row_click(
+    monkeypatch: pytest.MonkeyPatch,
+) -> AsyncIterator[tuple[PaneVM, Pilot[None], EntryRow, list[int]]]:
+    hub: MessageHub[Message] = MessageHub()
+    vm = PaneVM(
+        provider=await _seed(), hub=hub, dispatcher=RxDispatcher.immediate(), id_prefix="pane.test"
+    )
+    vm.construct()
+    activations: list[int] = []
+
+    async def record_activation(index: int) -> None:
+        activations.append(index)
+
+    monkeypatch.setattr(vm, "activate", record_activation)
+    try:
+        await vm.setup()
+        app = _single_pane_app(vm, hub)
+        async with app.run_test(size=(120, 30)) as pilot:
+            await wait_until(
+                lambda: (
+                    len(app.query(EntryRow)) == len(vm.filtered_entries)
+                    and all(row.is_mounted and row.size.width > 0 for row in app.query(EntryRow))
+                ),
+                what="initial pane entry rows mounted and laid out",
+            )
+            yield vm, pilot, app.query(EntryRow)[1], activations
+    finally:
+        vm.dispose()
+        hub.dispose()
+
+
+@pytest.mark.asyncio
+async def test_click_on_another_row_only_moves_the_cursor(
+    pane_row_click: tuple[PaneVM, Pilot[None], EntryRow, list[int]],
+) -> None:
+    vm, pilot, row, activations = pane_row_click
+    assert vm.selected_entry is not row.entry_vm
+
+    assert await pilot.click(row)
+    await pilot.pause()
+
+    assert vm.selected_entry is row.entry_vm
+    assert activations == []
+
+
+@pytest.mark.asyncio
+async def test_click_on_the_cursor_row_activates_it_once(
+    pane_row_click: tuple[PaneVM, Pilot[None], EntryRow, list[int]],
+) -> None:
+    vm, pilot, row, activations = pane_row_click
+    vm.move_cursor_to(1)
+    await pilot.pause()
+    assert vm.selected_entry is row.entry_vm
+
+    assert await pilot.click(row)
+    await pilot.pause()
+
+    assert vm.selected_entry is row.entry_vm
+    assert activations == [1]
+
+
 @pytest.mark.asyncio
 async def test_the_view_layer_binds_per_view_model_and_never_to_the_hub() -> None:
     """The pane's hub fan-out must not scale with the number of rows — and,
@@ -1275,14 +1338,10 @@ async def test_cursor_move_repaints_only_the_two_affected_rows(
     binding to ``EntryVM.on_property_changed``. Sixty rows are mounted so that
     a full-body repaint would be unmistakable (60, not 2).
 
-    Nothing walks the body any more, so the count is attributable to exactly
-    one mechanism: ``PaneVM._sync_cursor_selection`` writes ``is_selected`` on
-    all sixty entries, ``EntryVM.set_selected`` early-returns on the
-    fifty-eight that did not change, and only the remaining two reach a
-    subscriber. Delete that early return and this test reports 60. The
-    ``"viewmodel"`` notify that follows every cursor move touches the chrome
-    only — the behaviour exclusive to ``Pane._apply_cursor`` is pinned by the
-    scroll test below.
+    The composite publishes ``is_current`` for the two affected children,
+    and each ``EntryVM`` forwards that change to its bound row. The
+    ``"viewmodel"`` notification updates the chrome, and
+    ``Pane._apply_cursor`` handles the scrolling pinned by the test below.
     """
     hub: MessageHub[Message] = MessageHub()
     dispatcher = RxDispatcher.immediate()

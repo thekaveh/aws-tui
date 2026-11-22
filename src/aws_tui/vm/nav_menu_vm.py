@@ -49,8 +49,6 @@ class NavItemVM:
         dispatcher: Dispatcher,
     ) -> None:
         self._descriptor: ServiceDescriptor = descriptor
-        self._hub: MessageHub[Message] = hub
-        self._is_selected: bool = False
 
         self._inner: ComponentVMOf[ServiceDescriptor] = (
             ComponentVMOf[ServiceDescriptor]
@@ -66,10 +64,6 @@ class NavItemVM:
     @property
     def descriptor(self) -> ServiceDescriptor:
         return self._descriptor
-
-    @property
-    def is_selected(self) -> bool:
-        return self._is_selected
 
     @property
     def status(self) -> ConstructionStatus:
@@ -102,14 +96,6 @@ class NavItemVM:
 
     def dispose(self) -> None:
         self._inner.dispose()
-
-    # ── Mutation ────────────────────────────────────────────────────────────
-
-    def set_selected(self, value: bool) -> None:
-        if self._is_selected == value:
-            return
-        self._is_selected = value
-        send_value_free(self._hub, PropertyChangedMessage.create(self, self.name, "is_selected"))
 
 
 class NavMenuVM:
@@ -228,8 +214,6 @@ class NavMenuVM:
         if self._inner.current is None:
             return
         self._inner.current = None
-        for item in self._items:
-            item.set_selected(False)
         send_value_free(self._hub, selection_changed(self, self.name, self.selected_id))
 
     # ── Internal ────────────────────────────────────────────────────────────
@@ -265,12 +249,9 @@ class NavMenuVM:
                 break
         if match is None:
             return
-        # Promote to the composite's canonical `current` slot, then project
-        # per-item `is_selected` for consumers (NavItemVM unit tests) and
-        # emit the `selected_id` PropertyChangedMessage the View watches.
+        # Commit the composite's current child before publishing selected_id
+        # so the view reads the new selection when it handles the message.
         self._inner.current = match.inner
-        for item in self._items:
-            item.set_selected(item is match)
         send_value_free(self._hub, selection_changed(self, self.name, self.selected_id))
 
     def _rebuild_items(self, *, notify: bool = True) -> None:
