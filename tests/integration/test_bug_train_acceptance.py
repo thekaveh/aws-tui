@@ -205,10 +205,7 @@ def test_pr_98_3_modal_open_preserves_prior_slot() -> None:
 
 
 def test_pr_105_nav_menu_selection_is_singular() -> None:
-    """Acceptance: at any moment exactly ONE NavItemVM has
-    `is_selected = True` (or zero before any selection). The
-    composite's `current` slot drives this — there's no separate
-    per-item bool to drift."""
+    """After a nav switch, only the composite's current child has `is_current`."""
     from aws_tui.infra.connection_resolver import Connection
     from aws_tui.vm.nav_menu_vm import NavMenuVM
     from aws_tui.vm.services_protocol import ServiceDescriptor, ServiceRegistry
@@ -229,11 +226,11 @@ def test_pr_105_nav_menu_selection_is_singular() -> None:
     try:
         menu.update_connection(Connection(name="aws", kind="aws", region="us-east-1", source="env"))
         menu.switch_service_command.execute("s3")
-        selected = [it for it in menu.items if it.is_selected]
+        selected = [it for it in menu.items if it.inner.is_current]
         assert len(selected) == 1
         assert selected[0].descriptor.id == "s3"
         menu.switch_service_command.execute("ec2")
-        selected = [it for it in menu.items if it.is_selected]
+        selected = [it for it in menu.items if it.inner.is_current]
         assert len(selected) == 1
         assert selected[0].descriptor.id == "ec2"
     finally:

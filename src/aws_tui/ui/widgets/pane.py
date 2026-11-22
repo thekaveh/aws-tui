@@ -187,10 +187,8 @@ class EntryRow(Widget):
 
     def on_mount(self) -> None:
         self._apply_state_classes()
-        # Round-3 §9.bis.11 / PR #103 retirement: bind to this entry's own
-        # Observable rather than filtering the shared hub. ``EntryVM``'s
-        # setters early-return on no change, so a cursor move reaches exactly
-        # the row it left and the row it arrived at.
+        # Bind to this entry's own observable. Only the old and new cursor
+        # rows receive child is_current changes.
         self._sub = self._entry_vm.on_property_changed.subscribe(
             on_next=self._on_vm_property_changed
         )
@@ -206,13 +204,12 @@ class EntryRow(Widget):
         The ``refresh()`` is NOT optional. :meth:`render` draws the VM's
         ``cursor_glyph`` and ``mark_glyph``, and Textual does not repaint
         content when a class changes — so a class flip alone would leave the
-        cursor bar and the ``*`` painted on the wrong row. This is the same
-        contract ``NavRow.set_selected`` documents.
+        cursor bar and the ``*`` painted on the wrong row.
 
         Never touches ``-alt``: the zebra stripe is assigned once, by
         :meth:`Pane._render_body`, from the row's position in the listing.
         """
-        if prop in ("is_selected", "is_marked"):
+        if prop in ("is_current", "is_marked"):
             self._apply_state_classes()
             self.refresh()
 
@@ -223,7 +220,7 @@ class EntryRow(Widget):
           Cursor is also moved to the row so subsequent shift+clicks
           extend from a known anchor.
         - First click without shift: switch pane focus + move cursor.
-        - Click on the already-selected row: delegates to
+        - Click on the current row: delegates to
           :meth:`PaneVM.activate`.
         """
         host = self._find_pane()
@@ -253,20 +250,20 @@ class EntryRow(Widget):
             host.vm.toggle_mark_at(target_index)
             return
 
-        if not self._entry_vm.is_selected:
+        if not self._entry_vm.is_current:
             host.vm.move_cursor_to(target_index)
             return
 
         await host.vm.activate(target_index)
 
     def _apply_state_classes(self) -> None:
-        """Sync CSS classes to mirror VM flags (purely cosmetic).
+        """Sync CSS classes with the entry's cursor and mark state.
 
         The initial paint runs it from :meth:`on_mount`; every later change
         arrives through the binding in :meth:`_on_vm_property_changed`. It
         must never touch ``-alt``.
         """
-        if self._entry_vm.is_selected:
+        if self._entry_vm.is_current:
             self.add_class("-selected")
         else:
             self.remove_class("-selected")
@@ -613,11 +610,8 @@ class Pane(Widget):
     def _apply_cursor(self) -> None:
         """Scroll the cursor row into view. The ONE genuine view concern here.
 
-        No repaint and no previous-position bookkeeping: the two rows whose
-        appearance changed have already repainted themselves off their own
-        ``EntryVM`` Observables. ``PaneVM._sync_cursor_selection`` writes
-        ``is_selected`` on every entry, but ``EntryVM.set_selected``
-        early-returns on no change, so exactly two of them notify.
+        The two affected rows repaint from the ``is_current`` notifications
+        forwarded by their own ``EntryVM`` instances.
 
         Scrolling is not something a row can do for itself — it is a property
         of the container — which is why it stays the Pane's job. The
