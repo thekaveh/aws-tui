@@ -4,16 +4,9 @@ Holds the live application list, the currently-selected application
 id, and a coarse :class:`PaneState` so the dropdown can render a
 loading spinner / error placeholder.
 
-Phase 1 of the toolkit-adoption refactor (see
-``docs/superpowers/specs/2026-06-28-vmx-toolkit-adoption-design.md``
-§4.2.3, §9.bis.11, §9.bis.9 / Q-A): the VM composes a
-:class:`CompositeVM` internally — each :class:`ApplicationSummary` is
-lifted into a small :class:`ApplicationItemVM` facade, and the
-selected-id state is projected from ``CompositeVM.current``. The
-composite is NOT exposed in the public surface (per the round-3
-"compose, don't reject" directive). ``refresh()`` does a dedup-on-set
-check so a no-change poll emits zero events — the View-side
-fingerprint guard added in PR #100(b) becomes redundant.
+The private :class:`CompositeVM` owns one :class:`ComponentVMOf` row per
+application id. Refresh updates surviving rows in place and projects the
+selected id from ``CompositeVM.current``.
 """
 
 from __future__ import annotations
@@ -33,6 +26,7 @@ from aws_tui.domain.emr_serverless import (
 from aws_tui.domain.filesystem import ProviderError
 from aws_tui.infra.redaction import redact_text
 from aws_tui.vm._observable import ObserverSafeSubject, send_value_free
+from aws_tui.vm._reconcile import reconcile_rows
 from aws_tui.vm.emr_serverless._errors import map_provider_error
 from aws_tui.vm.file_manager.pane_vm import PaneState
 from aws_tui.vm.service_diagnostics import report_unexpected_service_error
@@ -63,51 +57,6 @@ def _application_sort_key(application: ApplicationSummary) -> tuple[int, str, st
     )
 
 
-class ApplicationItemVM:
-    """A single application row backed by a VMx ``ComponentVMOf``.
-
-    The facade lets ``ApplicationsVM`` parent the application
-    summaries into its inner ``CompositeVM`` (CompositeVM's children
-    must be ``_ComponentVMBase`` instances). The summary is the
-    public payload; ``inner`` is the composite's child handle.
-    """
-
-    def __init__(
-        self,
-        *,
-        summary: ApplicationSummary,
-        hub: MessageHub[Message],
-        dispatcher: Dispatcher,
-    ) -> None:
-        self._summary: ApplicationSummary = summary
-        self._inner: ComponentVMOf[ApplicationSummary] = (
-            ComponentVMOf[ApplicationSummary]
-            .builder()
-            .name(f"emr.application.{summary.id}")
-            .model(summary)
-            .services(hub, dispatcher)
-            .build()
-        )
-
-    @property
-    def summary(self) -> ApplicationSummary:
-        return self._summary
-
-    @property
-    def inner(self) -> ComponentVMOf[ApplicationSummary]:
-        return self._inner
-
-    @property
-    def is_constructed(self) -> bool:
-        return self._inner.is_constructed
-
-    def construct(self) -> None:
-        self._inner.construct()
-
-    def dispose(self) -> None:
-        self._inner.dispose()
-
-
 class ApplicationsVM:
     """Live application list + selection state."""
 
@@ -121,7 +70,6 @@ class ApplicationsVM:
         self._client = client
         self._hub: MessageHub[Message] = hub
         self._dispatcher: Dispatcher = dispatcher
-        self._items: list[ApplicationItemVM] = []
         self._state: PaneState = PaneState.LOADING
         self._error_text: str | None = None
         self._disposed: bool = False
@@ -131,16 +79,12 @@ class ApplicationsVM:
         # VM instance. Views can subscribe here instead of filtering
         # ``MessageHub`` events by ``sender_object``.
         self._on_property_changed = ObserverSafeSubject[str]()
-        # CompositeVM holds the per-row inners; auto_construct_on_add lets
-        # the composite construct each new row when added post-construct().
-        # Selection lives in the composite's ``current`` slot — exposed
-        # publicly only as ``selected_id`` (derived).
         self._inner: CompositeVM[ComponentVMOf[ApplicationSummary]] = (
             CompositeVM[ComponentVMOf[ApplicationSummary]]
             .builder()
             .name("emr.applications")
             .services(hub, dispatcher)
-            .children(self._initial_children)
+            .children(lambda: ())
             .auto_construct_on_add(True)
             .build()
         )
@@ -149,7 +93,10 @@ class ApplicationsVM:
 
     @property
     def applications(self) -> tuple[ApplicationSummary, ...]:
-        return tuple(item.summary for item in self._items)
+        # The composite retains its children after cascading disposal.
+        if self._disposed:
+            return ()
+        return tuple(row.model for row in self._inner)
 
     @property
     def sorted_applications(self) -> tuple[ApplicationSummary, ...]:
@@ -161,7 +108,7 @@ class ApplicationsVM:
         Shift+A cycle both consume this property — listing and
         cycling stay in lockstep.
         """
-        return tuple(sorted(self.applications, key=_application_sort_key))
+        return self.applications
 
     @property
     def selected_id(self) -> str | None:
@@ -197,18 +144,13 @@ class ApplicationsVM:
 
     def select(self, app_id: str) -> None:
         """Mark ``app_id`` as the active application. No-op if already selected."""
-        if self.selected_id == app_id:
+        if self._disposed or self.selected_id == app_id:
             return
-        match: ApplicationItemVM | None = None
-        for item in self._items:
-            if item.summary.id == app_id:
-                match = item
-                break
-        if match is None:
-            # Unknown id — silent no-op (matches pre-Phase-1 behaviour).
-            return
-        self._inner.current = match.inner
-        self._notify("selected_id")
+        for row in self._inner:
+            if row.model.id == app_id:
+                self._inner.current = row
+                self._notify("selected_id")
+                return
 
     async def refresh(self) -> None:
         """Re-fetch applications without allowing stale responses to win."""
@@ -220,13 +162,8 @@ class ApplicationsVM:
         ``applications``, and (if the prior selection went missing)
         ``selected_id``.
 
-        Dedup-on-set: if the freshly-fetched list of (id, state, name)
-        triples matches the current items, the composite is NOT
-        mutated and no PropertyChanged / on_collection_changed events
-        fire. This relocates the View-side fingerprint guard added in
-        PR #100(b) into the VM layer (round-3 directive §9.bis.11 +
-        Q-A in §9.bis.9 / round 2): the View no longer needs its own
-        no-change guard.
+        An equal sequence of summaries leaves the composite unchanged
+        and skips the ``applications`` notification.
         """
         self._set_state(PaneState.LOADING)
         try:
@@ -256,29 +193,10 @@ class ApplicationsVM:
         new_apps = tuple(sorted(apps, key=_application_sort_key))
         prior_selected_id = self.selected_id
 
-        if not self._items_equal(new_apps):
-            # Real change — rebuild the composite. Drop the current
-            # children first; CompositeVM._remove_at clears
-            # ``current`` automatically when its referenced child
-            # leaves (composite_vm.py:264-272). After repopulate the
-            # composite's identity-based ``current`` does NOT survive
-            # (each new ApplicationItemVM has a fresh inner), so we
-            # restore the prior selection by id — mirrors JobRunsVM's
-            # restore loop. Without this every poll silently
-            # unselects the user's chosen app.
-            self._clear_items()
-            for summary in new_apps:
-                self._add_item(summary)
-            if prior_selected_id is not None:
-                for item in self._items:
-                    if item.summary.id == prior_selected_id:
-                        self._inner.current = item.inner
-                        break
+        if self.applications != new_apps:
+            reconcile_rows(self._inner, new_apps, key=lambda app: app.id, create=self._new_row)
             self._notify("applications")
 
-        # Emit the selected_id event only when the post-rebuild
-        # selection differs from prior — covers both the
-        # "selection vanished" and "selection survived" cases.
         if self.selected_id != prior_selected_id:
             self._notify("selected_id")
 
@@ -299,23 +217,21 @@ class ApplicationsVM:
         if self._disposed:
             return
         self._disposed = True
-        # Clear our shadow list so disposal cascades cleanly. Composite
-        # owns its inner children's lifecycle; the facades dispose
-        # alongside.
-        for item in self._items:
-            item.dispose()
-        self._items.clear()
         self._on_property_changed.on_completed()
         self._on_property_changed.dispose()
         self._inner.dispose()
 
     # ── Internal ────────────────────────────────────────────────────────────
 
-    def _initial_children(self) -> tuple[ComponentVMOf[ApplicationSummary], ...]:
-        # CompositeVM builder requires a children factory even when the
-        # initial population is empty. We populate at construct() time
-        # via _add_item; this seed runs once.
-        return tuple(item.inner for item in self._items)
+    def _new_row(self, summary: ApplicationSummary) -> ComponentVMOf[ApplicationSummary]:
+        return (
+            ComponentVMOf[ApplicationSummary]
+            .builder()
+            .name(f"emr.application.{summary.id}")
+            .model(summary)
+            .services(self._hub, self._dispatcher)
+            .build()
+        )
 
     def _notify(self, prop: str) -> None:
         """Emit a PropertyChanged event on BOTH the shared hub AND
@@ -335,33 +251,5 @@ class ApplicationsVM:
         self._state = state
         self._notify("state")
 
-    def _items_equal(self, new_apps: tuple[ApplicationSummary, ...]) -> bool:
-        """Identity check for the dedup-on-set guard."""
-        if len(self._items) != len(new_apps):
-            return False
-        for item, summary in zip(self._items, new_apps, strict=True):
-            if item.summary != summary:
-                return False
-        return True
 
-    def _clear_items(self) -> None:
-        """Detach + dispose every current ``ApplicationItemVM``."""
-        for item in list(self._items):
-            if item.inner in self._inner:
-                self._inner.remove(item.inner)
-            item.dispose()
-        self._items.clear()
-
-    def _add_item(self, summary: ApplicationSummary) -> None:
-        item = ApplicationItemVM(
-            summary=summary,
-            hub=self._hub,
-            dispatcher=self._dispatcher,
-        )
-        self._items.append(item)
-        if self._inner.is_constructed:
-            item.construct()
-        self._inner.append(item.inner)
-
-
-__all__ = ["ApplicationItemVM", "ApplicationsVM"]
+__all__ = ["ApplicationsVM"]

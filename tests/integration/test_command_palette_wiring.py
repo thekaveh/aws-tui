@@ -1649,6 +1649,7 @@ async def test_s3_directory_and_parent_activation_still_dispatch_after_modal_dis
     from aws_tui.domain.filesystem import PathRef
     from aws_tui.ui.widgets.pane import Pane
     from aws_tui.vm.chrome.focus_coordinator_vm import FocusSlot
+    from aws_tui.vm.file_manager.pane_vm import PaneState
 
     fs = InMemoryFS()
     await fs.mkdir(PathRef(("folder",)))
@@ -1672,7 +1673,9 @@ async def test_s3_directory_and_parent_activation_still_dispatch_after_modal_dis
             assert app.screen.query_one(".palette-item").action_id == "pane.descend"
             await pilot.press("enter")
             await wait_until(
-                lambda destination=destination: pane.path == destination,
+                lambda destination=destination: (
+                    pane.path == destination and pane.state is PaneState.IDLE
+                ),
                 what="S3 palette navigation",
             )
             assert not isinstance(app.screen, CommandPalette)

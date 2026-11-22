@@ -2,22 +2,12 @@
 
 Scoped to one application at a time. State-filter chips are
 multi-select with all-on default; toggling a chip re-applies the
-filter against the cached list — no API call. ``refresh()`` is the
-only thing that re-fetches.
+filter against the cached list — no API call.
 
-Phase 2 of the toolkit-adoption refactor (spec §4.2.1, §9.bis.2,
-§9.bis.11): the VM composes a :class:`CompositeVM` internally over a
-:class:`JobRunItemVM` facade per run. Selection lives in the
-composite's ``current`` slot — exposed publicly only as
-``selected_id`` (derived). Forward-only AWS ``nextToken`` pagination
-is delegated to VMx ``TokenPagedComposition`` while this facade keeps
-target-staleness guards, filtering, selection restoration, and
-PropertyChanged notifications. Neither the pager nor the composite is
-exposed in the public surface (round-3 directive §9.bis.11).
-
-Closes the §9.bis.9 acceptance criteria for PR #99(b)
-(no ``selected_id`` PropertyChanged for a hub-watch to mis-route)
-and PR #100(a) (single ``on_current_changed`` on selection move).
+The token pager stores summaries in provider order. A private
+:class:`CompositeVM` owns one :class:`ComponentVMOf` row per run id
+and retains surviving rows on refresh and load more. Selection is
+projected from the composite's ``current`` row.
 """
 
 from __future__ import annotations
@@ -44,6 +34,7 @@ from aws_tui.domain.emr_serverless import (
 from aws_tui.domain.filesystem import ProviderError
 from aws_tui.infra.redaction import redact_text
 from aws_tui.vm._observable import ObserverSafeSubject, send_value_free
+from aws_tui.vm._reconcile import reconcile_rows
 from aws_tui.vm._token_paging import reject_token_cycles
 from aws_tui.vm.emr_serverless._errors import map_provider_error
 from aws_tui.vm.file_manager.pane_vm import PaneState
@@ -69,51 +60,6 @@ _ACTIVE_STATES: frozenset[JobRunState] = frozenset(
 )
 
 
-class JobRunItemVM:
-    """A single job-run row backed by a VMx ``ComponentVMOf``.
-
-    The facade lets ``JobRunsVM`` parent the job-run summaries into
-    its inner ``CompositeVM`` (CompositeVM's children must be
-    ``_ComponentVMBase`` instances). The summary is the public
-    payload; ``inner`` is the composite's child handle.
-    """
-
-    def __init__(
-        self,
-        *,
-        summary: JobRunSummary,
-        hub: MessageHub[Message],
-        dispatcher: Dispatcher,
-    ) -> None:
-        self._summary: JobRunSummary = summary
-        self._inner: ComponentVMOf[JobRunSummary] = (
-            ComponentVMOf[JobRunSummary]
-            .builder()
-            .name(f"emr.job_run.{summary.job_run_id}")
-            .model(summary)
-            .services(hub, dispatcher)
-            .build()
-        )
-
-    @property
-    def summary(self) -> JobRunSummary:
-        return self._summary
-
-    @property
-    def inner(self) -> ComponentVMOf[JobRunSummary]:
-        return self._inner
-
-    @property
-    def is_constructed(self) -> bool:
-        return self._inner.is_constructed
-
-    def construct(self) -> None:
-        self._inner.construct()
-
-    def dispose(self) -> None:
-        self._inner.dispose()
-
-
 class JobRunsVM:
     def __init__(
         self,
@@ -128,7 +74,7 @@ class JobRunsVM:
         self._application_id: str | None = None
         self._pager_refresh_existing_count: int = 0
         self._paging_identity: tuple[str | None, str | None] | None = None
-        self._pager: BoundedTokenPagedComposition[JobRunItemVM, str] = self._new_pager()
+        self._pager: BoundedTokenPagedComposition[JobRunSummary, str] = self._new_pager()
         self._has_more_suppressed: bool = False
         self._state: PaneState = PaneState.EMPTY
         self._error_text: str | None = None
@@ -148,7 +94,7 @@ class JobRunsVM:
             .builder()
             .name("emr.job_runs")
             .services(hub, dispatcher)
-            .children(self._initial_children)
+            .children(lambda: ())
             .auto_construct_on_add(True)
             .build()
         )
@@ -157,12 +103,10 @@ class JobRunsVM:
 
     @property
     def runs(self) -> tuple[JobRunSummary, ...]:
-        return tuple(
-            item.summary for item in self._items if item.summary.state in self._state_filter
-        )
+        return tuple(run for run in self._items if run.state in self._state_filter)
 
     @property
-    def _items(self) -> list[JobRunItemVM]:
+    def _items(self) -> list[JobRunSummary]:
         return self._pager.items
 
     @property
@@ -238,9 +182,7 @@ class JobRunsVM:
         # the equivalent seam.
         self._error_text = None
         if prior_selected_id is not None:
-            # Composite.clear() already drops current to None; the
-            # public ``selected_id`` event mirrors that for View
-            # consumers.
+            # Removing the current row already cleared the composite selection.
             self._notify("selected_id")
         self._notify("runs")
         self._set_state(PaneState.LOADING if app_id is not None else PaneState.EMPTY)
@@ -248,16 +190,11 @@ class JobRunsVM:
     def select(self, run_id: str) -> None:
         if self.selected_id == run_id:
             return
-        match: JobRunItemVM | None = None
-        for item in self._items:
-            if item.summary.job_run_id == run_id:
-                match = item
-                break
-        if match is None:
-            # Unknown id — silent no-op.
-            return
-        self._inner.current = match.inner
-        self._notify("selected_id")
+        for row in self._inner:
+            if row.model.job_run_id == run_id:
+                self._inner.current = row
+                self._notify("selected_id")
+                return
 
     def set_state_filter(self, states: frozenset[JobRunState]) -> None:
         if states == self._state_filter:
@@ -337,13 +274,9 @@ class JobRunsVM:
         if self._application_id != target_app_id:
             return  # target changed mid-flight; drop the stale response
 
-        # Dedup-on-set parity with ApplicationsVM (§9.bis.9 Q-A): if the
-        # pager kept the same item objects, the composite is NOT mutated and
-        # no `runs` / `selected_id` events fire. The token may still differ;
-        # TokenPagedComposition persists it internally.
-        unchanged = self._items == prior_items
-        if not unchanged:
-            self._sync_inner_to_pager(prior_items, prior_selected_id=self.selected_id)
+        # An equal page may still carry a new token, which the pager retains.
+        if self._items != prior_items:
+            self._reconcile_rows()
             self._notify("runs")
         # Success path — drop any error text carried forward from a
         # prior failed poll (sibling parity with PaneVM._reload).
@@ -421,7 +354,7 @@ class JobRunsVM:
             # sentinel if the token changed.
             self._notify("runs")
             return
-        self._sync_inner_to_pager(prior_items, prior_selected_id=self.selected_id)
+        self._reconcile_rows()
         self._notify("runs")
 
     def has_active_runs(self) -> bool:
@@ -433,7 +366,7 @@ class JobRunsVM:
         churn) and ``CANCELLING`` (the user just hit cancel; the
         state landing on ``CANCELLED`` is the signal they're
         waiting for)."""
-        return any(item.summary.state in _ACTIVE_STATES for item in self._items)
+        return any(run.state in _ACTIVE_STATES for run in self._items)
 
     # ── Lifecycle ───────────────────────────────────────────────────────────
 
@@ -452,7 +385,7 @@ class JobRunsVM:
 
     # ── Internal ────────────────────────────────────────────────────────────
 
-    def _new_pager(self) -> BoundedTokenPagedComposition[JobRunItemVM, str]:
+    def _new_pager(self) -> BoundedTokenPagedComposition[JobRunSummary, str]:
         return BoundedTokenPagedComposition(
             reject_token_cycles(
                 self._fetch_page,
@@ -464,14 +397,14 @@ class JobRunsVM:
 
     def _pages_equal(
         self,
-        fresh: Sequence[JobRunItemVM],
-        current_prefix: Sequence[JobRunItemVM],
+        fresh: Sequence[JobRunSummary],
+        current_prefix: Sequence[JobRunSummary],
     ) -> bool:
         if self._pager_refresh_existing_count != len(fresh):
             return False
-        return [item.summary for item in fresh] == [item.summary for item in current_prefix]
+        return list(fresh) == list(current_prefix)
 
-    async def _fetch_page(self, token: str | None) -> tuple[tuple[JobRunItemVM, ...], str | None]:
+    async def _fetch_page(self, token: str | None) -> tuple[tuple[JobRunSummary, ...], str | None]:
         target_app_id = self._application_id
         if target_app_id is None:
             return (), None
@@ -489,52 +422,29 @@ class JobRunsVM:
                 expected_token,
             ):
                 return (), self._pager.current_token
-        items = tuple(
-            JobRunItemVM(summary=summary, hub=self._hub, dispatcher=self._dispatcher)
-            for summary in runs
-        )
-        return items, next_token
+        return tuple(runs), next_token
 
-    def _initial_children(self) -> tuple[ComponentVMOf[JobRunSummary], ...]:
-        return tuple(item.inner for item in self._items)
+    def _new_row(self, summary: JobRunSummary) -> ComponentVMOf[JobRunSummary]:
+        return (
+            ComponentVMOf[JobRunSummary]
+            .builder()
+            .name(f"emr.job_run.{summary.job_run_id}")
+            .model(summary)
+            .services(self._hub, self._dispatcher)
+            .build()
+        )
 
     def _clear_items(self) -> None:
-        for item in list(self._items):
-            if item.inner in self._inner:
-                self._inner.remove(item.inner)
-            item.dispose()
+        reconcile_rows(self._inner, (), key=lambda run: run.job_run_id, create=self._new_row)
         self._pager.dispose()
         self._pager = self._new_pager()
 
-    def _sync_inner_to_pager(
-        self,
-        prior_items: Sequence[JobRunItemVM],
-        *,
-        prior_selected_id: str | None,
-    ) -> None:
-        current_items = self._items
-        current_set = set(current_items)
-        for item in prior_items:
-            if item in current_set:
-                continue
-            if item.inner in self._inner:
-                self._inner.remove(item.inner)
-            item.dispose()
-        for item in current_items:
-            if item.inner in self._inner:
-                continue
-            if self._inner.is_constructed:
-                item.construct()
-            self._inner.append(item.inner)
-        if prior_selected_id is None:
-            return
-        restored = False
-        for item in current_items:
-            if item.summary.job_run_id == prior_selected_id:
-                self._inner.current = item.inner
-                restored = True
-                break
-        if not restored:
+    def _reconcile_rows(self) -> None:
+        prior_selected_id = self.selected_id
+        reconcile_rows(
+            self._inner, self._items, key=lambda run: run.job_run_id, create=self._new_row
+        )
+        if prior_selected_id is not None and self.selected_id != prior_selected_id:
             self._notify("selected_id")
 
     def _notify(self, prop: str) -> None:
@@ -556,4 +466,4 @@ class JobRunsVM:
         self._notify("state")
 
 
-__all__ = ["JobRunItemVM", "JobRunsVM"]
+__all__ = ["JobRunsVM"]
