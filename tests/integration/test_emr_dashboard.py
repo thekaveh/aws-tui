@@ -83,7 +83,7 @@ async def test_dashboard_clipboard_does_not_retain_textual_clipboard_cache(tmp_p
         assert app.clipboard != url
         assert url not in repr(ctx.clipboard_vm.last_write)
     finally:
-        ctx.root_vm.dispose()
+        ctx.close_unstarted()
         fake.dispose()
 
 

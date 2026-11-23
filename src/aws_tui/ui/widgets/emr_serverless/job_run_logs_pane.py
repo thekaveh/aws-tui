@@ -26,6 +26,7 @@ from reactivex.abc import DisposableBase
 from textual.app import ComposeResult
 from textual.binding import Binding, BindingType
 from textual.containers import Horizontal, VerticalScroll
+from textual.css.query import NoMatches
 from textual.events import Click
 from textual.geometry import Size
 from textual.message import Message as TextualMessage
@@ -557,8 +558,12 @@ class JobRunLogsPane(Widget, can_focus=True):
         self, body: VerticalScroll, text: str | Iterable[str], *, classes: str
     ) -> None:
         """Keep placeholders and virtualized lines mounted across state changes."""
-        placeholder = body.query_one("#logs-placeholder", Static)
-        content = body.query_one("#logs-content", _LogContent)
+        try:
+            placeholder = body.query_one("#logs-placeholder", Static)
+            content = body.query_one("#logs-content", _LogContent)
+        except NoMatches:
+            # A queued refresh can run after a body child detaches during teardown.
+            return
         showing_lines = "-match" in classes.split()
         placeholder.display = not showing_lines
         content.display = showing_lines

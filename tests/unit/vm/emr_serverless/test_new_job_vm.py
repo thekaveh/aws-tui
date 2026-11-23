@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from dataclasses import replace
 
 import pytest
 from vmx import NULL_DISPATCHER, MessageHub
@@ -49,8 +50,8 @@ def make(*, current=lambda: True, application_id="application001"):
 
 
 def fill(vm):
-    vm.apply_field("execution_role_arn", "arn:aws:iam::123456789012:role/Synthetic")
-    vm.apply_field("entry_point", "s3://synthetic/job.py")
+    vm.set_model(replace(vm.model, execution_role_arn="arn:aws:iam::123456789012:role/Synthetic"))
+    vm.set_model(replace(vm.model, entry_point="s3://synthetic/job.py"))
 
 
 def test_blank_mode_has_no_source_run_or_inherited_request_fields():
@@ -72,11 +73,28 @@ def test_blank_mode_has_no_source_run_or_inherited_request_fields():
         vm.dispose()
 
 
+def test_blank_new_job_reports_both_required_errors():
+    vm, client = make()
+    try:
+        expected = {
+            "execution_role_arn": "execution role ARN is required",
+            "entry_point": "entry point is required",
+        }
+        errors = vm.errors
+        assert errors == expected
+        errors.clear()
+        assert vm.errors == expected
+        assert vm.is_valid() == (False, "execution role ARN is required")
+        assert client.calls == []
+    finally:
+        vm.dispose()
+
+
 @pytest.mark.parametrize("field", ["execution_role_arn", "entry_point"])
 async def test_empty_required_field_prevents_submit(field):
     vm, client = make()
     fill(vm)
-    vm.apply_field(field, "   ")
+    vm.set_model(replace(vm.model, **{field: "   "}))
     try:
         with pytest.raises(ValidationError):
             await vm.submit()
@@ -89,9 +107,11 @@ async def test_blank_request_and_review_preserve_literal_arguments_and_settings(
     vm, client = make()
     fill(vm)
     arguments = ("", "a b", '"quoted"', "日本語\nline\r\nnext")
-    vm.apply_field("name", "日本語 job")
-    vm.apply_field("entry_point_arguments", arguments)
-    vm.apply_field("spark_submit_parameters", '--conf spark.synthetic="literal value"\n')
+    vm.set_model(replace(vm.model, name="日本語 job"))
+    vm.set_model(replace(vm.model, entry_point_arguments=arguments))
+    vm.set_model(
+        replace(vm.model, spark_submit_parameters='--conf spark.synthetic="literal value"\n')
+    )
     configuration = {
         "monitoringConfiguration": {"s3MonitoringConfiguration": {"logUri": "s3://synthetic/logs"}}
     }
@@ -162,11 +182,11 @@ async def test_ambiguous_retry_reuses_token_and_edits_create_new_intent():
         with pytest.raises(ProviderUnreachableError):
             await vm.submit()
         first = client.calls[-1][1]["client_token"]
-        vm.apply_field("entry_point", vm.entry_point)
+        vm.set_model(replace(vm.model, entry_point=vm.entry_point))
         with pytest.raises(ProviderUnreachableError):
             await vm.submit()
         assert client.calls[-1][1]["client_token"] == first
-        vm.apply_field("entry_point_arguments", ("new argument",))
+        vm.set_model(replace(vm.model, entry_point_arguments=("new argument",)))
         assert vm.client_token != first
         client.failure = None
         await vm.submit()
@@ -185,7 +205,7 @@ async def test_concurrent_submit_is_refused_and_old_completion_keeps_newer_token
         with pytest.raises(ValidationError):
             await vm.submit()
         assert len(client.calls) == 1
-        vm.apply_field("entry_point_arguments", ("new intent",))
+        vm.set_model(replace(vm.model, entry_point_arguments=("new intent",)))
         edited_token = vm.client_token
         client.release.set()
         await first
@@ -222,7 +242,7 @@ async def test_late_completion_does_not_publish_into_inactive_form(invalidate, e
     await client.entered.wait()
     try:
         if edit:
-            vm.apply_field("entry_point_arguments", ("new intent",))
+            vm.set_model(replace(vm.model, entry_point_arguments=("new intent",)))
             token = vm.client_token
         if invalidate == "source":
             current = False
@@ -253,9 +273,9 @@ async def test_blank_mode_without_application_cannot_submit(application_id):
 async def test_submit_snapshots_every_field_and_settings_before_await():
     vm, client = make()
     fill(vm)
-    vm.apply_field("name", "original")
-    vm.apply_field("entry_point_arguments", ("original argument",))
-    vm.apply_field("spark_submit_parameters", "--conf original=value")
+    vm.set_model(replace(vm.model, name="original"))
+    vm.set_model(replace(vm.model, entry_point_arguments=("original argument",)))
+    vm.set_model(replace(vm.model, spark_submit_parameters="--conf original=value"))
     vm.apply_settings({"tags": {"intent": "original"}, "executionTimeoutMinutes": 10})
     client.release = asyncio.Event()
     token = vm.client_token
@@ -269,7 +289,7 @@ async def test_submit_snapshots_every_field_and_settings_before_await():
             ("entry_point_arguments", ("edited argument",)),
             ("spark_submit_parameters", "--conf edited=value"),
         ):
-            vm.apply_field(field, value)
+            vm.set_model(replace(vm.model, **{field: value}))
         vm.apply_settings({"tags": {"intent": "edited"}})
         assert client.calls == [
             (

@@ -4,21 +4,22 @@ Pre-populates from a :class:`JobRunDetail` or starts blank for a captured
 application ID, lets the view bind the five Spark fields plus advanced request
 settings, and (via :meth:`submit`) calls ``client.start_job_run``. On failure a
 :class:`ProviderError` is re-raised so the modal can surface a
-typed inline error without dismissing.
+typed inline error without dismissing. Edits use :meth:`set_model`.
 
 Lifecycle mirrors the other EMR VMs: a :class:`ComponentVM` inner
-gives the construct/dispose plumbing; the public surface is
-plain Python attributes + ``apply_field`` / ``submit`` / ``cancel``."""
+gives the construct/dispose plumbing; a private :class:`FormVM` holds
+the editable request and its validation state."""
 
 from __future__ import annotations
 
 import json
 from collections.abc import Callable
 from copy import deepcopy
+from dataclasses import dataclass, replace
 from typing import Any
 from uuid import uuid4
 
-from vmx import ComponentVM, Message, MessageHub, PropertyChangedMessage
+from vmx import ComponentVM, FormVM, FormVMBuilder, Message, MessageHub, PropertyChangedMessage
 from vmx.lifecycle.status import ConstructionStatus
 from vmx.services.dispatcher import Dispatcher
 
@@ -32,16 +33,81 @@ from aws_tui.domain.filesystem import ValidationError
 from aws_tui.vm._observable import send_value_free
 from aws_tui.vm.service_source_vm import ServiceSourceContext
 
-# The five editable fields on the modal — kept as a tuple so
-# ``apply_field`` rejects typos up front and the view can iterate
-# them without re-stating the names.
-_FIELDS: tuple[str, ...] = (
-    "name",
-    "execution_role_arn",
-    "entry_point",
-    "entry_point_arguments",
-    "spark_submit_parameters",
-)
+_ERROR_ORDER = ("settings", "execution_role_arn", "entry_point")
+
+
+@dataclass(frozen=True, slots=True, repr=False)
+class JobRunCloneInput:
+    """Editable Spark request fields for a new job or clone."""
+
+    name: str | None
+    execution_role_arn: str
+    entry_point: str
+    entry_point_arguments: tuple[str, ...] | None
+    spark_submit_parameters: str | None
+    settings: dict[str, Any]
+
+    def __post_init__(self) -> None:
+        if self.name is not None and not isinstance(self.name, str):
+            raise TypeError("name must be a str or None")
+        if not isinstance(self.execution_role_arn, str):
+            raise TypeError("execution_role_arn must be a str")
+        if not isinstance(self.entry_point, str):
+            raise TypeError("entry_point must be a str")
+        args = self.entry_point_arguments
+        if args is not None and (
+            not isinstance(args, tuple) or not all(isinstance(arg, str) for arg in args)
+        ):
+            raise TypeError("entry_point_arguments must be a tuple[str, ...] or None")
+        if self.spark_submit_parameters is not None and not isinstance(
+            self.spark_submit_parameters, str
+        ):
+            raise TypeError("spark_submit_parameters must be a str or None")
+        if not isinstance(self.settings, dict):
+            raise TypeError("settings must be a dict")
+
+    def __repr__(self) -> str:
+        return "JobRunCloneInput(<redacted>)"
+
+
+def _initial_input(detail: JobRunDetail | None) -> JobRunCloneInput:
+    if detail is None:
+        return JobRunCloneInput(
+            name=None,
+            execution_role_arn="",
+            entry_point="",
+            entry_point_arguments=None,
+            spark_submit_parameters=None,
+            settings={},
+        )
+    settings = {
+        "configurationOverrides": detail.configuration_overrides,
+        "executionTimeoutMinutes": detail.execution_timeout_minutes,
+        "retryPolicy": detail.retry_policy,
+        "mode": detail.mode,
+        "executionIamPolicy": detail.execution_iam_policy,
+        "tags": detail.tags,
+    }
+    return JobRunCloneInput(
+        name=detail.name,
+        execution_role_arn=detail.execution_role_arn,
+        entry_point=detail.entry_point or "",
+        entry_point_arguments=detail.entry_point_arguments,
+        spark_submit_parameters=detail.spark_submit_parameters,
+        settings={key: deepcopy(value) for key, value in settings.items() if value is not None},
+    )
+
+
+def _settings_error(form: JobRunCloneInput) -> str | None:
+    try:
+        validate_clone_settings(deepcopy(form.settings))
+    except ValidationError as exc:
+        return str(exc)
+    return None
+
+
+async def _no_persist(_: JobRunCloneInput) -> None:
+    """Submit sends StartJobRun directly so the controller owns the run ID and token."""
 
 
 class JobRunCloneVM:
@@ -71,36 +137,26 @@ class JobRunCloneVM:
         self._source_detail = deepcopy(detail)
         self._source = source
         self._source_is_current = source_is_current
-        self._settings: dict[str, Any] = (
-            {
-                key: deepcopy(value)
-                for key, value in {
-                    "configurationOverrides": detail.configuration_overrides,
-                    "executionTimeoutMinutes": detail.execution_timeout_minutes,
-                    "retryPolicy": detail.retry_policy,
-                    "mode": detail.mode,
-                    "executionIamPolicy": detail.execution_iam_policy,
-                    "tags": detail.tags,
-                }.items()
-                if value is not None
-            }
-            if detail is not None
-            else {}
-        )
         self._application_id: str = (
             detail.application_id if detail is not None else application_id or ""
         )
-        # Pre-populated form state. Tuple for arguments (immutable
-        # snapshot the view can render row-per-line); str / None for
-        # the rest.
-        self._name: str | None = detail.name if detail is not None else None
-        self._execution_role_arn: str = detail.execution_role_arn if detail is not None else ""
-        self._entry_point: str = (detail.entry_point or "") if detail is not None else ""
-        self._entry_point_arguments: tuple[str, ...] | None = (
-            detail.entry_point_arguments if detail is not None else None
-        )
-        self._spark_submit_parameters: str | None = (
-            detail.spark_submit_parameters if detail is not None else None
+        # Keep the form on its default null hub. Only the facade sends edits to the page hub.
+        builder: FormVMBuilder[JobRunCloneInput] = FormVM.builder()
+        self._form: FormVM[JobRunCloneInput] = (
+            builder.initial(_initial_input(self._source_detail))
+            .persister(_no_persist)
+            .validator("settings", _settings_error)
+            .validator(
+                "execution_role_arn",
+                lambda form: (
+                    None if form.execution_role_arn.strip() else "execution role ARN is required"
+                ),
+            )
+            .validator(
+                "entry_point",
+                lambda form: None if form.entry_point.strip() else "entry point is required",
+            )
+            .build()
         )
         # One idempotency token per form intent. Reused verbatim when a
         # submit attempt raises (the ambiguous-retry case AWS's clientToken
@@ -139,23 +195,23 @@ class JobRunCloneVM:
 
     @property
     def name(self) -> str | None:
-        return self._name
+        return self._form.model.name
 
     @property
     def execution_role_arn(self) -> str:
-        return self._execution_role_arn
+        return self._form.model.execution_role_arn
 
     @property
     def entry_point(self) -> str:
-        return self._entry_point
+        return self._form.model.entry_point
 
     @property
     def entry_point_arguments(self) -> tuple[str, ...] | None:
-        return self._entry_point_arguments
+        return self._form.model.entry_point_arguments
 
     @property
     def spark_submit_parameters(self) -> str | None:
-        return self._spark_submit_parameters
+        return self._form.model.spark_submit_parameters
 
     @property
     def status(self) -> ConstructionStatus:
@@ -170,8 +226,17 @@ class JobRunCloneVM:
         return deepcopy(self._source_detail)
 
     @property
+    def model(self) -> JobRunCloneInput:
+        model = self._form.model
+        return replace(model, settings=deepcopy(model.settings))
+
+    @property
     def settings(self) -> dict[str, Any]:
-        return deepcopy(self._settings)
+        return deepcopy(self._form.model.settings)
+
+    @property
+    def errors(self) -> dict[str, str]:
+        return self._form.errors
 
     @property
     def unsupported_driver_reason(self) -> str | None:
@@ -184,17 +249,13 @@ class JobRunCloneVM:
         return None
 
     def apply_settings(self, settings: dict[str, Any]) -> None:
-        candidate = deepcopy(settings)
-        validate_clone_settings(candidate)
-        if candidate != self._settings:
-            self._settings = candidate
-            self._client_token = uuid4().hex
-        send_value_free(self._hub, PropertyChangedMessage.create(self, self.vm_name, "settings"))
+        self.set_model(replace(self._form.model, settings=settings))
 
     @property
     def review_text(self) -> str:
         """Complete request or source comparison; never sent through diagnostics."""
         detail = self._source_detail
+        model = self._form.model
         source = self._source
         identity = (
             f"Connection: {source.connection_name}\n"
@@ -206,13 +267,13 @@ class JobRunCloneVM:
         if detail is None:
             request = build_start_job_run_request(
                 self._application_id,
-                **self._request_fields(client_token="<app-owned; redacted>"),
+                **self._request_fields(model, client_token="<app-owned; redacted>"),
             )
             return "\n".join(
                 [
                     identity,
                     f"Application: {self._application_id}",
-                    f"Execution role: {self._execution_role_arn}",
+                    f"Execution role: {model.execution_role_arn}",
                     "",
                     "Application defaults: Inherited from current application; effective values unknown.",
                     "Omitted request settings: unknown; application or service defaults may apply.",
@@ -230,26 +291,26 @@ class JobRunCloneVM:
             "",
         ]
         pairs = {
-            "Name": (detail.name, self._name),
-            "Execution role": (detail.execution_role_arn, self._execution_role_arn),
-            "Entry point": (detail.entry_point, self._entry_point),
-            "Arguments": (detail.entry_point_arguments, self._entry_point_arguments),
-            "Spark parameters": (detail.spark_submit_parameters, self._spark_submit_parameters),
+            "Name": (detail.name, model.name),
+            "Execution role": (detail.execution_role_arn, model.execution_role_arn),
+            "Entry point": (detail.entry_point, model.entry_point),
+            "Arguments": (detail.entry_point_arguments, model.entry_point_arguments),
+            "Spark parameters": (detail.spark_submit_parameters, model.spark_submit_parameters),
             "configurationOverrides": (
                 detail.configuration_overrides,
-                self._settings.get("configurationOverrides"),
+                model.settings.get("configurationOverrides"),
             ),
             "executionTimeoutMinutes": (
                 detail.execution_timeout_minutes,
-                self._settings.get("executionTimeoutMinutes"),
+                model.settings.get("executionTimeoutMinutes"),
             ),
-            "retryPolicy": (detail.retry_policy, self._settings.get("retryPolicy")),
-            "mode": (detail.mode, self._settings.get("mode")),
+            "retryPolicy": (detail.retry_policy, model.settings.get("retryPolicy")),
+            "mode": (detail.mode, model.settings.get("mode")),
             "executionIamPolicy": (
                 detail.execution_iam_policy,
-                self._settings.get("executionIamPolicy"),
+                model.settings.get("executionIamPolicy"),
             ),
-            "tags": (detail.tags, self._settings.get("tags")),
+            "tags": (detail.tags, model.settings.get("tags")),
         }
         for label, (before, after) in pairs.items():
             if before is None and after is None:
@@ -299,43 +360,21 @@ class JobRunCloneVM:
 
     # ── Form API ────────────────────────────────────────────────────────────
 
-    def apply_field(self, field_name: str, value: str | tuple[str, ...] | None) -> None:
-        """Update ``field_name`` to ``value``.
-
-        ``entry_point_arguments`` accepts ``tuple[str, ...]`` or ``None`` for omission;
-        Spark parameters also accept ``None``; the other fields accept ``str``. ``name`` and
-        ``spark_submit_parameters`` are optional — an empty string
-        normalises to ``None`` so the boto3 call omits them.
-
-        Raises ``KeyError`` for an unknown field name. Type
-        mismatches raise ``TypeError`` — the caller is the view,
-        which is type-checked.
-        """
-        if field_name not in _FIELDS:
-            raise KeyError(f"unknown field {field_name!r}; valid: {_FIELDS}")
-        before = self._intent()
-        if field_name == "entry_point_arguments":
-            if value is not None and (
-                not isinstance(value, tuple) or not all(isinstance(arg, str) for arg in value)
-            ):
-                raise TypeError("entry_point_arguments must be a tuple[str, ...] or None")
-            self._entry_point_arguments = value
-        elif field_name == "spark_submit_parameters" and value is None:
-            self._spark_submit_parameters = None
-        else:
-            if not isinstance(value, str):
-                raise TypeError(f"{field_name} must be a str")
-            if field_name == "name":
-                self._name = value or None
-            elif field_name == "execution_role_arn":
-                self._execution_role_arn = value
-            elif field_name == "entry_point":
-                self._entry_point = value
-            else:  # spark_submit_parameters
-                self._spark_submit_parameters = value or None
-        if self._intent() != before:
+    def set_model(self, model: JobRunCloneInput) -> None:
+        """Apply an edit atomically, retaining the token for the same request."""
+        settings = deepcopy(model.settings)
+        validate_clone_settings(settings)
+        candidate = replace(
+            model,
+            name=model.name or None,
+            spark_submit_parameters=model.spark_submit_parameters or None,
+            settings=settings,
+        )
+        before = self._form.model
+        self._form.set_model(candidate)
+        if self._form.model != before:
             self._client_token = uuid4().hex
-        send_value_free(self._hub, PropertyChangedMessage.create(self, self.vm_name, field_name))
+        send_value_free(self._hub, PropertyChangedMessage.create(self, self.vm_name, "model"))
 
     def is_valid(self) -> tuple[bool, str | None]:
         """Cheap inline validation used by the modal before
@@ -347,24 +386,20 @@ class JobRunCloneVM:
         an execution role and an entry point. AWS performs authorization
         and remaining service-side validation.
         """
+        reason = self._guard_reason()
+        if reason is None:
+            errors = self._form.errors
+            reason = next((errors[key] for key in _ERROR_ORDER if key in errors), None)
+        return reason is None, reason
+
+    def _guard_reason(self) -> str | None:
         if self._disposed or self._cancelled:
-            return False, "job form is no longer active"
+            return "job form is no longer active"
         if self._source_is_current is not None and not self._source_is_current():
-            return False, "The source changed. Reopen the job form from the current source"
+            return "The source changed. Reopen the job form from the current source"
         if not self._application_id.strip():
-            return False, "application ID is required"
-        unsupported = self.unsupported_driver_reason
-        if unsupported is not None:
-            return False, unsupported
-        try:
-            validate_clone_settings(self._settings)
-        except ValidationError as exc:
-            return False, str(exc)
-        if not self._execution_role_arn.strip():
-            return False, "execution role ARN is required"
-        if not self._entry_point.strip():
-            return False, "entry point is required"
-        return True, None
+            return "application ID is required"
+        return self.unsupported_driver_reason
 
     # ── Async API ──────────────────────────────────────────────────────────
 
@@ -380,8 +415,9 @@ class JobRunCloneVM:
         if not valid:
             raise ValidationError(reason or "job form is invalid")
         application_id = self._application_id
+        model = self.model
         token = self._client_token
-        fields = self._request_fields(client_token=token)
+        fields = self._request_fields(model, client_token=token)
         self._submitting = True
         try:
             new_id: str = await self._client.start_job_run(application_id, **fields)
@@ -399,16 +435,16 @@ class JobRunCloneVM:
                 self._client_token = uuid4().hex
         return new_id
 
-    def _request_fields(self, *, client_token: str) -> dict[str, Any]:
-        """Capture every request field, including nested settings, before awaiting."""
-        settings = self.settings
+    @staticmethod
+    def _request_fields(model: JobRunCloneInput, *, client_token: str) -> dict[str, Any]:
+        settings = model.settings
         return {
-            "execution_role_arn": self._execution_role_arn,
-            "entry_point": self._entry_point,
-            "entry_point_arguments": self._entry_point_arguments,
-            "spark_submit_parameters": self._spark_submit_parameters,
+            "execution_role_arn": model.execution_role_arn,
+            "entry_point": model.entry_point,
+            "entry_point_arguments": model.entry_point_arguments,
+            "spark_submit_parameters": model.spark_submit_parameters,
             "client_token": client_token,
-            "name": self._name,
+            "name": model.name,
             "configuration_overrides": settings.get("configurationOverrides"),
             "execution_timeout_minutes": settings.get("executionTimeoutMinutes"),
             "retry_policy": settings.get("retryPolicy"),
@@ -437,16 +473,6 @@ class JobRunCloneVM:
     def client_token(self) -> str:
         return self._client_token
 
-    def _intent(self) -> tuple[object, ...]:
-        return (
-            self._name,
-            self._execution_role_arn,
-            self._entry_point,
-            self._entry_point_arguments,
-            self._spark_submit_parameters,
-            deepcopy(self._settings),
-        )
-
     # ── Lifecycle ───────────────────────────────────────────────────────────
 
     def construct(self) -> None:
@@ -456,7 +482,8 @@ class JobRunCloneVM:
         if self._disposed:
             return
         self._disposed = True
+        self._form.dispose()
         self._inner.dispose()
 
 
-__all__ = ["JobRunCloneVM"]
+__all__ = ["JobRunCloneInput", "JobRunCloneVM"]
