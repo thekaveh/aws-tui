@@ -501,8 +501,23 @@ async def test_owned_log_filter_result_is_bound_to_monotonic_target(transition):
         logs.set_target("00abc", "r-001", "s3://bucket-a/logs")
         pane = app.query_one(JobRunLogsPane)
         await focus_and_settle(pane)
+
+        def form_ready() -> bool:
+            modal = app.screen
+            return (
+                isinstance(modal, LogFilterModal)
+                and any(
+                    editor.id == "log-patterns" and editor.is_mounted
+                    for editor in modal.query(TextArea)
+                )
+                and any(
+                    button.button_id == "apply" and button.is_mounted and button.region.area > 0
+                    for button in modal.query(ModalButton)
+                )
+            )
+
         pane.action_open_filter()
-        await wait_until(lambda: isinstance(app.screen, LogFilterModal), what="owned log form")
+        await wait_until(form_ready, what="mounted and laid-out owned log form controls")
         modal = app.screen
         modal.query_one("#log-patterns", TextArea).load_text("FATAL")
         if transition == "aba":
@@ -518,7 +533,10 @@ async def test_owned_log_filter_result_is_bound_to_monotonic_target(transition):
             )
             assert logs.filter == DEFAULT_LOG_FILTER
             return
-        await pilot.click(next(b for b in modal.query(ModalButton) if b.button_id == "apply"))
+        apply_button = next(
+            button for button in modal.query(ModalButton) if button.button_id == "apply"
+        )
+        assert await pilot.click(apply_button)
         await wait_until(
             lambda: not isinstance(app.screen, LogFilterModal), what="apply returns owned form"
         )

@@ -20,7 +20,7 @@ import pytest
 from textual.app import App, ComposeResult
 from textual.containers import Container
 from textual.widgets import Input, Static, TextArea
-from vmx import NULL_DISPATCHER, MessageHub
+from vmx import NULL_DISPATCHER, MessageHub, PropertyChangedMessage
 from vmx.messages.protocols import Message
 
 from aws_tui.demo.in_memory_emr import InMemoryEmr as _InMemoryEmr
@@ -291,34 +291,106 @@ async def test_review_preserves_empty_newline_arguments_and_spark_whitespace() -
         fake.dispose()
 
 
+async def test_review_uses_one_model_update() -> None:
+    fake = _InMemoryEmr()
+    hub: MessageHub[Message] = MessageHub()
+    vm = JobRunCloneVM(_detail(), client=fake, hub=hub, dispatcher=NULL_DISPATCHER)
+    changes: list[str] = []
+
+    def observe(message: Message) -> None:
+        if isinstance(message, PropertyChangedMessage) and message.sender_object is vm:
+            changes.append(message.property_name)
+
+    try:
+        async with _CloneModalHostApp(vm, hub).run_test() as pilot:
+            modal = pilot.app.screen
+            assert isinstance(modal, JobRunCloneModal)
+            await pilot.pause()
+            subscription = hub.messages.subscribe(observe)
+            try:
+                modal.query_one("#clone-name", Input).value = "review-job"
+                modal.query_one("#clone-role", Input).value = "review-role"
+                modal.query_one("#clone-entry", Input).value = "s3://synthetic/review.py"
+                modal.query_one("#clone-args", TextArea).load_text('["review-arg"]')
+                modal.query_one("#clone-spark", TextArea).load_text('"--conf review=true"')
+                modal.query_one("#clone-settings", TextArea).load_text('{"mode":"STREAMING"}')
+                modal.action_review()
+                await pilot.pause()
+                assert changes == ["model"]
+                assert modal.reviewing
+                assert vm.name == "review-job"
+                assert vm.execution_role_arn == "review-role"
+                assert vm.entry_point == "s3://synthetic/review.py"
+                assert vm.entry_point_arguments == ("review-arg",)
+                assert vm.spark_submit_parameters == "--conf review=true"
+                assert vm.settings == {"mode": "STREAMING"}
+                assert str(modal.query_one("#clone-review", Static).content) == vm.review_text
+                assert not fake.calls
+            finally:
+                subscription.dispose()
+    finally:
+        vm.dispose()
+        fake.dispose()
+
+
 @pytest.mark.parametrize(
-    ("selector", "text"),
+    ("selector", "text", "expected_error"),
     [
-        ("#clone-args", "[secret-argument"),
-        ("#clone-spark", "secret-unquoted-parameter"),
-        ("#clone-spark", '["secret-wrong-shape"]'),
-        ("#clone-spark", '""'),
-        ("#clone-args", '["valid", 123]'),
-        ("#clone-settings", '{"mode":"secret-mode"}'),
-        ("#clone-settings", '["secret-setting"]'),
+        (
+            "#clone-args",
+            "[secret-argument",
+            "Arguments must be a valid JSON array of strings or null",
+        ),
+        (
+            "#clone-spark",
+            "secret-unquoted-parameter",
+            "Spark parameters must be a valid JSON string or null",
+        ),
+        (
+            "#clone-spark",
+            '["secret-wrong-shape"]',
+            "Spark parameters must be a nonempty JSON string or null",
+        ),
+        ("#clone-spark", '""', "Spark parameters must be a nonempty JSON string or null"),
+        (
+            "#clone-args",
+            '["valid", 123]',
+            "Arguments must be a JSON array containing only strings or null",
+        ),
+        (
+            "#clone-settings",
+            '{"mode":"secret-mode"}',
+            "Unsupported job mode; only BATCH and STREAMING can be cloned",
+        ),
+        ("#clone-settings", '["secret-setting"]', "Advanced settings must be a JSON object"),
     ],
 )
-async def test_invalid_form_never_reviews_or_leaks_values(selector: str, text: str) -> None:
+async def test_invalid_form_never_reviews_or_leaks_values(
+    selector: str, text: str, expected_error: str
+) -> None:
     vm = _make_vm()
     vm.submit = AsyncMock(return_value="r-new")
     hub = MessageHub()
     try:
         async with _CloneModalHostApp(vm, hub).run_test() as pilot:
             modal = pilot.app.screen
+            detail = _detail()
             token = vm.client_token
+            modal.query_one("#clone-name", Input).value = "pending-valid-edit"
             modal.query_one(selector, TextArea).load_text(text)
             modal.action_review()
             await pilot.pause()
             assert not modal.reviewing
             vm.submit.assert_not_awaited()
             assert vm.client_token == token
+            assert vm.name == detail.name
+            assert vm.execution_role_arn == detail.execution_role_arn
+            assert vm.entry_point == detail.entry_point
+            assert vm.entry_point_arguments == detail.entry_point_arguments
+            assert vm.spark_submit_parameters == detail.spark_submit_parameters
+            assert vm.settings == {}
             error = str(modal.query_one("#clone-error", Static).content)
-            assert error
+            assert error == expected_error
             assert "secret-" not in error
     finally:
         vm.dispose()

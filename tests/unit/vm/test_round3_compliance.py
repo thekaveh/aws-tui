@@ -115,6 +115,35 @@ def test_s3_connection_form_vm_composes_vmx_form_vm_internally() -> None:
     vm.dispose()
 
 
+# -------------------- EMR Serverless VMs --------------------
+
+
+def test_job_run_clone_composes_formvm_internally() -> None:
+    from vmx import NULL_MESSAGE_HUB, FormVM
+
+    from aws_tui.demo.in_memory_emr import InMemoryEmr
+    from aws_tui.vm.emr_serverless.clone_vm import JobRunCloneVM
+
+    client = InMemoryEmr()
+    vm = JobRunCloneVM(
+        None, application_id="application001", client=client, hub=_hub(), dispatcher=NULL_DISPATCHER
+    )
+    try:
+        assert hasattr(vm, "_form")
+        from aws_tui.vm.emr_serverless.clone_vm import JobRunCloneInput
+
+        assert isinstance(vm._form, FormVM)
+        assert isinstance(vm._form.model, JobRunCloneInput)
+        assert isinstance(vm.model, JobRunCloneInput)
+        assert vm._form._hub is NULL_MESSAGE_HUB
+        assert not any(
+            isinstance(getattr(vm, name), FormVM) for name in dir(vm) if not name.startswith("_")
+        )
+    finally:
+        vm.dispose()
+        client.dispose()
+
+
 # -------------------- File manager VMs --------------------
 
 

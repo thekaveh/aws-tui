@@ -7,9 +7,13 @@ file selector chips follow the current file.
 
 from __future__ import annotations
 
+from collections.abc import Callable
+from functools import partial
+
 import pytest
 from textual.app import App, ComposeResult
 from textual.containers import VerticalScroll
+from textual.message_pump import MessagePump
 from textual.widgets import Log
 from vmx import NULL_DISPATCHER, MessageHub
 from vmx.messages.protocols import Message
@@ -144,6 +148,55 @@ async def test_ready_logs_render_with_a_bounded_widget_count() -> None:
         rendered = "\n".join(body.query_one(Log).lines)
         assert "line-0" in rendered
         assert "line-49" in rendered
+
+
+@pytest.mark.parametrize(
+    ("missing_child", "remaining_child"),
+    [("logs-placeholder", "logs-content"), ("logs-content", "logs-placeholder")],
+)
+async def test_queued_body_refresh_tolerates_child_teardown(
+    monkeypatch: pytest.MonkeyPatch, missing_child: str, remaining_child: str
+) -> None:
+    vm, hub, fake = _make_vm()
+    try:
+        async with _PaneApp(vm, hub).run_test() as pilot:
+            pane = pilot.app.query_one(JobRunLogsPane)
+            vm.set_target("app-123", "run-456", "s3://bucket/logs/")
+            vm._lines = ("line to keep",)
+            vm._set_state(LogsState.READY)
+            await pilot.pause()
+            body = pane.query_one("#logs-body", VerticalScroll)
+            assert "line to keep" in body.query_one(Log).lines
+
+            queued: list[Callable[[], object]] = []
+            screen = pilot.app.screen
+            invoke_later = screen._invoke_later
+
+            def hold_body_refresh(callback: Callable[..., object], sender: MessagePump) -> None:
+                if isinstance(callback, partial) and callback.func == pane._flush_body_refresh:
+                    queued.append(callback)
+                else:
+                    invoke_later(callback, sender)
+
+            monkeypatch.setattr(screen, "_invoke_later", hold_body_refresh)
+            vm.set_target(None, None, None)
+            await wait_until(lambda: bool(queued), what="queued logs body refresh")
+            assert len(queued) == 1
+            assert pane._body_refresh_pending
+
+            remaining = body.get_child_by_id(remaining_child)
+            visible = remaining.display
+            await body.get_child_by_id(missing_child).remove()
+            assert pane.query_one("#logs-body", VerticalScroll) is body
+            assert tuple(body.children) == (remaining,)
+
+            queued.pop()()
+            assert not pane._body_refresh_pending
+            assert remaining.display == visible
+    finally:
+        await vm.shutdown()
+        vm.dispose()
+        fake.dispose()
 
 
 async def test_log_scrollbars_appear_only_when_content_overflows() -> None:

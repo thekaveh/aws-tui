@@ -13,7 +13,6 @@ from textual.screen import ModalScreen
 from textual.widgets import Input, Static, TextArea
 from vmx import Message, MessageHub
 
-from aws_tui.domain.emr_job_request import validate_clone_settings
 from aws_tui.domain.filesystem import (
     AuthRequiredError,
     PermissionDeniedError,
@@ -25,7 +24,7 @@ from aws_tui.domain.filesystem import (
 from aws_tui.domain.mutation_guard import PROTECTED_MESSAGE, ConnectionProtectedError
 from aws_tui.ui.widgets._worker import DeferredWorkerMixin
 from aws_tui.ui.widgets.modal_button import ModalButton as _ModalButton
-from aws_tui.vm.emr_serverless.clone_vm import JobRunCloneVM
+from aws_tui.vm.emr_serverless.clone_vm import JobRunCloneInput, JobRunCloneVM
 
 
 def _submission_error(exc: Exception) -> str:
@@ -187,13 +186,16 @@ class JobRunCloneModal(DeferredWorkerMixin, ModalScreen[str | None]):
             raise ValidationError("Advanced settings must be a valid JSON object") from None
         if not isinstance(settings, dict):
             raise ValidationError("Advanced settings must be a JSON object")
-        validate_clone_settings(settings)
-        self._vm.apply_field("name", self.query_one("#clone-name", Input).value)
-        self._vm.apply_field("execution_role_arn", self.query_one("#clone-role", Input).value)
-        self._vm.apply_field("entry_point", self.query_one("#clone-entry", Input).value)
-        self._vm.apply_field("entry_point_arguments", None if args is None else tuple(args))
-        self._vm.apply_field("spark_submit_parameters", spark)
-        self._vm.apply_settings(settings)
+        self._vm.set_model(
+            JobRunCloneInput(
+                name=self.query_one("#clone-name", Input).value,
+                execution_role_arn=self.query_one("#clone-role", Input).value,
+                entry_point=self.query_one("#clone-entry", Input).value,
+                entry_point_arguments=None if args is None else tuple(args),
+                spark_submit_parameters=spark,
+                settings=settings,
+            )
+        )
 
     def _set_stage(self, review: bool) -> None:
         self.query_one("#clone-edit").display = not review
