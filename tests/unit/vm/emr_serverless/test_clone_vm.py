@@ -1,4 +1,4 @@
-"""JobRunCloneVM tests — pin form pre-population, apply_field,
+"""JobRunCloneVM tests — pin form pre-population, typed edits,
 submit success, and the typed-error fallthrough.
 
 The submit-failure path matters because the modal relies on it to
@@ -8,8 +8,11 @@ silently dismiss and the user would assume the run was submitted."""
 
 from __future__ import annotations
 
+import asyncio
+from copy import deepcopy
 from dataclasses import replace
 from datetime import UTC, datetime
+from typing import Any
 
 import pytest
 from vmx import NULL_DISPATCHER, MessageHub
@@ -65,54 +68,100 @@ def test_construct_prepopulates_form_from_detail() -> None:
     vm.dispose()
 
 
-def test_apply_field_updates_str_fields_and_clears_optional() -> None:
+def test_set_model_updates_str_fields_and_clears_optional() -> None:
     vm, _ = _make()
-    vm.apply_field("name", "")
+    vm.set_model(replace(vm.model, name=""))
     assert vm.name is None
-    vm.apply_field("name", "renamed")
+    vm.set_model(replace(vm.model, name="renamed"))
     assert vm.name == "renamed"
-    vm.apply_field("execution_role_arn", "arn:aws:iam::999::role/Other")
+    vm.set_model(replace(vm.model, execution_role_arn="arn:aws:iam::999::role/Other"))
     assert vm.execution_role_arn == "arn:aws:iam::999::role/Other"
-    vm.apply_field("entry_point", "s3://b/new.py")
+    vm.set_model(replace(vm.model, entry_point="s3://b/new.py"))
     assert vm.entry_point == "s3://b/new.py"
-    vm.apply_field("spark_submit_parameters", "")
+    vm.set_model(replace(vm.model, spark_submit_parameters=""))
     assert vm.spark_submit_parameters is None
     vm.dispose()
 
 
-def test_apply_field_accepts_tuple_for_arguments() -> None:
+def test_set_model_accepts_tuple_for_arguments() -> None:
     vm, _ = _make()
-    vm.apply_field("entry_point_arguments", ("--in", "s3://b/in", "--out", "s3://b/out"))
+    vm.set_model(
+        replace(vm.model, entry_point_arguments=("--in", "s3://b/in", "--out", "s3://b/out"))
+    )
     assert vm.entry_point_arguments == ("--in", "s3://b/in", "--out", "s3://b/out")
     vm.dispose()
 
 
-def test_apply_field_rejects_unknown_field() -> None:
+@pytest.mark.parametrize(
+    ("field", "value", "expected_error"),
+    [
+        ("name", ("secret-value",), "name must be a str or None"),
+        ("execution_role_arn", ("secret-value",), "execution_role_arn must be a str"),
+        ("entry_point", None, "entry_point must be a str"),
+        (
+            "entry_point_arguments",
+            "secret-value",
+            "entry_point_arguments must be a tuple[str, ...] or None",
+        ),
+        (
+            "entry_point_arguments",
+            ("secret-value", 123),
+            "entry_point_arguments must be a tuple[str, ...] or None",
+        ),
+        (
+            "spark_submit_parameters",
+            ["secret-value"],
+            "spark_submit_parameters must be a str or None",
+        ),
+        ("settings", ["secret-value"], "settings must be a dict"),
+    ],
+)
+def test_typed_input_rejects_wrong_field_types(
+    field: str, value: object, expected_error: str
+) -> None:
     vm, _ = _make()
-    with pytest.raises(KeyError):
-        vm.apply_field("does_not_exist", "value")
-    vm.dispose()
+    model = vm.model
+    token = vm.client_token
+    try:
+        with pytest.raises(TypeError) as exc:
+            vm.set_model(replace(model, **{field: value}))
+        assert str(exc.value) == expected_error
+        assert vm.model == model
+        assert vm.client_token == token
+    finally:
+        vm.dispose()
 
 
-def test_apply_field_rejects_type_mismatch() -> None:
-    vm, _ = _make()
-    with pytest.raises(TypeError):
-        vm.apply_field("entry_point_arguments", "not-a-tuple")  # type: ignore[arg-type]
-    with pytest.raises(TypeError):
-        vm.apply_field("execution_role_arn", ("not", "a", "str"))  # type: ignore[arg-type]
-    vm.dispose()
+def test_typed_input_rejects_unknown_keyword() -> None:
+    vm, fake = _make()
+    model = vm.model
+    token = vm.client_token
+    entry = "s3://synthetic/unknown-keyword.py"
+    secret = "synthetic-unknown-keyword-value"
+    try:
+        with pytest.raises(TypeError, match="unexpected keyword argument 'unknown_field'") as exc:
+            vm.set_model(replace(model, entry_point=entry, **{"unknown_field": secret}))
+        message = str(exc.value)
+        assert "JobRunCloneInput" in message
+        assert secret not in message
+        assert entry not in message
+        assert vm.model == model
+        assert vm.client_token == token
+    finally:
+        vm.dispose()
+        fake.dispose()
 
 
 def test_is_valid_blocks_when_required_fields_blank() -> None:
     vm, _ = _make()
-    vm.apply_field("execution_role_arn", "")
+    vm.set_model(replace(vm.model, execution_role_arn=""))
     ok, reason = vm.is_valid()
     assert ok is False
     assert reason is not None
     assert "execution role" in reason.lower()
     # Restore role, blank the entry point.
-    vm.apply_field("execution_role_arn", "arn:aws:iam::123456789012:role/EmrJobRole")
-    vm.apply_field("entry_point", "")
+    vm.set_model(replace(vm.model, execution_role_arn="arn:aws:iam::123456789012:role/EmrJobRole"))
+    vm.set_model(replace(vm.model, entry_point=""))
     ok, reason = vm.is_valid()
     assert ok is False
     assert reason is not None
@@ -170,6 +219,63 @@ async def test_submit_records_submitted_id_property() -> None:
     vm.dispose()
 
 
+async def test_submit_settings_are_isolated_from_provider_mutation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    vm, fake = _make()
+    provider_mutated = asyncio.Event()
+    release = asyncio.Event()
+    expected = {
+        "configurationOverrides": {
+            "applicationConfiguration": [
+                {"classification": "spark-defaults", "properties": {"spark.synthetic": "original"}}
+            ]
+        },
+        "tags": {"team": "original"},
+    }
+    incoming = replace(vm.model, settings=deepcopy(expected))
+    vm.set_model(incoming)
+    model_snapshot = vm.model
+    settings_snapshot = vm.settings
+    token = vm.client_token
+    new_id = "r-provider-success"
+
+    async def start_job_run(application_id: str, **request: Any) -> str:
+        assert application_id == vm.application_id
+        assert request["client_token"] == token
+        assert request["tags"] == expected["tags"]
+        assert request["configuration_overrides"] == expected["configurationOverrides"]
+        request["tags"]["team"] = "provider-edit"
+        config = request["configuration_overrides"]["applicationConfiguration"][0]
+        config["properties"]["spark.synthetic"] = "provider-edit"
+        provider_mutated.set()
+        await release.wait()
+        return new_id
+
+    monkeypatch.setattr(fake, "start_job_run", start_job_run)
+    pending = asyncio.create_task(vm.submit())
+    try:
+        await asyncio.wait_for(provider_mutated.wait(), timeout=5)
+        assert not pending.done()
+        assert vm.model == model_snapshot
+        assert vm.settings == settings_snapshot == model_snapshot.settings == expected
+        assert incoming.settings == expected
+        assert vm.client_token == token
+
+        release.set()
+        assert await pending == new_id
+        assert vm.submitted_id == new_id
+        assert vm.model == model_snapshot
+        assert vm.client_token != token
+    finally:
+        release.set()
+        try:
+            await pending
+        finally:
+            vm.dispose()
+            fake.dispose()
+
+
 def test_cancel_sets_cancelled_flag() -> None:
     """The page widget reads the modal's dismiss value; the
     :attr:`cancelled` flag exists for unit tests + symmetry with
@@ -220,9 +326,9 @@ async def test_retry_after_an_ambiguous_failure_reuses_the_same_client_token() -
 def test_editing_a_field_rotates_the_client_token() -> None:
     vm, _fake = _make()
     before = vm.client_token
-    vm.apply_field("name", "nightly")  # unchanged value: same intent
+    vm.set_model(replace(vm.model, name="nightly"))  # unchanged value: same intent
     assert vm.client_token == before
-    vm.apply_field("name", "nightly-rerun")
+    vm.set_model(replace(vm.model, name="nightly-rerun"))
     assert vm.client_token != before
     vm.dispose()
 
@@ -313,12 +419,15 @@ def test_settings_and_source_are_defensive_snapshots() -> None:
         exposed_source.tags["team"] = "also mutated"
         assert vm.source_detail.tags == {"team": "source"}
         settings = {"tags": {"team": "new"}}
-        vm.apply_settings(settings)
+        vm.set_model(replace(vm.model, settings=settings))
         token = vm.client_token
         settings["tags"]["team"] = "caller mutation"
         exposed = vm.settings
         exposed["tags"]["team"] = "getter mutation"
+        exposed_model = vm.model
+        exposed_model.settings["tags"]["team"] = "model getter mutation"
         assert vm.settings == {"tags": {"team": "new"}}
+        assert vm.model.settings == {"tags": {"team": "new"}}
         assert vm.client_token == token
     finally:
         vm.dispose()
@@ -346,7 +455,7 @@ async def test_unsupported_driver_cannot_submit_even_after_spark_field_edits(
         dispatcher=NULL_DISPATCHER,
     )
     try:
-        vm.apply_field("entry_point", "s3://b/new.py")
+        vm.set_model(replace(vm.model, entry_point="s3://b/new.py"))
         valid, reason = vm.is_valid()
         assert not valid
         assert "driver" in reason.lower()
@@ -369,14 +478,29 @@ async def test_inactive_clone_cannot_submit(action: str) -> None:
 
 
 def test_invalid_settings_do_not_change_current_intent() -> None:
-    vm, _ = _make()
+    hub: MessageHub[Message] = MessageHub()
+    vm = JobRunCloneVM(_detail(), client=_InMemoryEmr(), hub=hub, dispatcher=NULL_DISPATCHER)
+    changes: list[Message] = []
+    subscription = hub.messages.subscribe(changes.append)
+    model = vm.model
     token = vm.client_token
     try:
-        with pytest.raises(ValidationError):
+        with pytest.raises(ValidationError, match="Unsupported job mode"):
             vm.apply_settings({"mode": "secret-future-mode"})
+        with pytest.raises(ValidationError, match="Unsupported job mode"):
+            vm.set_model(
+                replace(
+                    vm.model,
+                    entry_point="s3://synthetic/new.py",
+                    settings={"mode": "secret-future-mode"},
+                )
+            )
         assert vm.settings == {}
+        assert vm.model == model
         assert vm.client_token == token
+        assert changes == []
     finally:
+        subscription.dispose()
         vm.dispose()
 
 
@@ -398,7 +522,7 @@ def test_review_names_identity_differences_and_unknown_inheritance() -> None:
         source=ServiceSourceContext("analytics", "production", "us-east-1"),
     )
     try:
-        vm.apply_field("name", "edited-job")
+        vm.set_model(replace(vm.model, name="edited-job"))
         vm.apply_settings({"mode": "STREAMING", "executionTimeoutMinutes": 0})
         review = vm.review_text
         for value in [
@@ -455,21 +579,36 @@ def test_clone_change_notifications_do_not_log_sensitive_values(caplog) -> None:
 
     argument = "PRIVATE_SPARK_ARGUMENT_238"
     credential = "PRIVATE_CREDENTIAL_238"
+    name = "PRIVATE_JOB_NAME_238"
+    role = "PRIVATE_JOB_ROLE_238"
+    entry = "PRIVATE_ENTRY_POINT_238"
+    spark = "PRIVATE_SPARK_PARAMETER_238"
+    secrets = (argument, credential, name, role, entry, spark)
     hub = MessageHub()
     vm = JobRunCloneVM(_detail(), client=_InMemoryEmr(), hub=hub, dispatcher=NULL_DISPATCHER)
 
     def failing_observer(message: object) -> None:
-        raise RuntimeError(f"{argument} {credential}")
+        raise RuntimeError(" ".join(secrets))
 
     subscription = hub.messages.subscribe(failing_observer)
     try:
         with caplog.at_level(logging.ERROR):
-            vm.apply_field("entry_point_arguments", (argument,))
-            vm.apply_field("spark_submit_parameters", credential)
-            vm.apply_settings({"executionIamPolicy": {"policy": credential}})
-        assert caplog.records
+            vm.set_model(
+                replace(
+                    vm.model,
+                    entry_point_arguments=(argument,),
+                    name=name,
+                    execution_role_arn=role,
+                    entry_point=entry,
+                    spark_submit_parameters=spark,
+                    settings={"executionIamPolicy": {"policy": credential}},
+                )
+            )
+        assert [record.name for record in caplog.records] == ["vmx.services.message_hub"]
         diagnostics = "\n".join(_JsonLineFormatter().format(record) for record in caplog.records)
-        for secret in (argument, credential):
+        model_repr = repr(vm.model)
+        for secret in secrets:
+            assert secret not in model_repr
             assert secret not in diagnostics
             assert secret not in caplog.text
     finally:
