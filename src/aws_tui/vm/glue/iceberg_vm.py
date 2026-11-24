@@ -5,12 +5,26 @@ from __future__ import annotations
 import asyncio
 import contextlib
 from collections.abc import Awaitable, Callable
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
+from functools import partial
 from typing import Any, Literal, Protocol, TypeAlias, cast
 
 import reactivex as rx
-from vmx import ComponentVMOf, Message, MessageHub, PropertyChangedMessage
+from vmx import (
+    NULL_MESSAGE_HUB,
+    AsyncResourceError,
+    AsyncResourceErrorWithValue,
+    AsyncResourceLoadingWithValue,
+    AsyncResourceReady,
+    AsyncResourceRetention,
+    AsyncResourceStatus,
+    AsyncResourceVM,
+    ComponentVMOf,
+    Message,
+    MessageHub,
+    PropertyChangedMessage,
+)
 from vmx.lifecycle.status import ConstructionStatus
 from vmx.services.dispatcher import Dispatcher
 
@@ -77,13 +91,6 @@ _VIEWS: tuple[IcebergView, ...] = (
     "refs",
 )
 _VIEW_SET = frozenset(_VIEWS)
-
-
-class _PlanNotPresented(Exception):
-    """A retired/unavailable presentation must not admit an Athena read."""
-
-
-_PLAN_NOT_PRESENTED = object()
 
 
 _ROW_TYPES: dict[IcebergView, type[IcebergRow]] = {
@@ -174,24 +181,88 @@ class UnavailableIcebergInspector:
         return cast(tuple[IcebergReference, ...], await self._unavailable())
 
 
-@dataclass(slots=True)
+@dataclass(frozen=True, slots=True)
+class _MetadataPage:
+    """The settled value of one metadata view. Its resource owns it."""
+
+    rows: tuple[IcebergRow, ...]
+    coverage: IcebergCoverage
+    observed_at: datetime
+
+
+@dataclass(slots=True, eq=False)
+class _MetadataRequest:
+    """One accepted read: the facts it was admitted under, and its page."""
+
+    table_ref: TableRef
+    binding_generation: int
+    presenter: Callable[[IcebergQueryPlan], Awaitable[bool]] | None
+    plan_lease: object | None
+    plan_required: bool
+    retired: bool = False
+    page: _MetadataPage | None = None
+    task: asyncio.Task[Any] | None = None
+
+
 class _MetadataPane:
-    rows: tuple[IcebergRow, ...] = field(default_factory=tuple)
-    coverage: IcebergCoverage | None = None
-    observed_at: datetime | None = None
-    visible_count: int = 0
-    state: PaneState = PaneState.EMPTY
-    error_text: str | None = None
-    loaded: bool = False
-    generation: int = 0
-    stable_rows: tuple[IcebergRow, ...] = field(default_factory=tuple)
-    stable_coverage: IcebergCoverage | None = None
-    stable_observed_at: datetime | None = None
-    stable_visible_count: int = 0
-    stable_state: PaneState = PaneState.EMPTY
-    stable_error_text: str | None = None
-    stable_loaded: bool = False
-    stable_selected_snapshot_id: int | None = None
+    """One view: an AsyncResourceVM that owns its page, plus the paging count.
+
+    Every state field is read from the resource, so a cancelled or refused
+    read restores the previous state without a copy of it kept here.
+    ``visible_count`` is the only value the resource does not own: it is the
+    local paging position, set when a new page arrives and moved by
+    ``load_more``.
+    """
+
+    def __init__(self, resource: AsyncResourceVM[_MetadataPage], subscription: Any) -> None:
+        self.resource = resource
+        self.subscription = subscription
+        self.visible_count = 0
+        self.applied: _MetadataPage | None = None
+
+    @property
+    def page(self) -> _MetadataPage | None:
+        return _resource_value(self.resource.state)
+
+    @property
+    def rows(self) -> tuple[IcebergRow, ...]:
+        page = self.page
+        return page.rows if page is not None else ()
+
+    @property
+    def coverage(self) -> IcebergCoverage | None:
+        page = self.page
+        return page.coverage if page is not None else None
+
+    @property
+    def observed_at(self) -> datetime | None:
+        page = self.page
+        return page.observed_at if page is not None else None
+
+    @property
+    def state(self) -> PaneState:
+        status = self.resource.state.status
+        if status is AsyncResourceStatus.IDLE:
+            return PaneState.EMPTY
+        if status is AsyncResourceStatus.LOADING:
+            return PaneState.LOADING
+        if status is AsyncResourceStatus.READY:
+            return PaneState.IDLE if self.rows else PaneState.EMPTY
+        error = _resource_error(self.resource.state)
+        return _map_iceberg_provider_error(error)[0] if error is not None else PaneState.ERROR
+
+    @property
+    def error_text(self) -> str | None:
+        if self.resource.state.status is not AsyncResourceStatus.ERROR:
+            return None
+        error = _resource_error(self.resource.state)
+        if error is None:
+            return "Iceberg metadata request failed"
+        return _map_iceberg_provider_error(error)[1]
+
+    @property
+    def loaded(self) -> bool:
+        return self.resource.state.status is AsyncResourceStatus.READY
 
     @property
     def visible_rows(self) -> tuple[IcebergRow, ...]:
@@ -219,14 +290,17 @@ class GlueIcebergVM:
             raise ValueError("Iceberg metadata page size must be positive")
         self._inspector = inspector
         self._hub = hub
+        self._dispatcher = dispatcher
         self._page_size = page_size
         self._aws_profile = aws_profile
         self._disposed = False
+        self._constructed = False
         self._shutdown_started = False
         self._shutdown_complete = False
         self._lifecycle_lock = asyncio.Lock()
         self._metadata_tasks: set[asyncio.Task[Any]] = set()
         self._metadata_load_drain_count = 0
+        self._silent_depth = 0
         self._binding_mutation_epoch = 0
         self._binding_generation = 0
         self._table_ref: TableRef | None = None
@@ -236,7 +310,10 @@ class GlueIcebergVM:
         self._plan_presenter: Callable[[IcebergQueryPlan], Awaitable[bool]] | None = None
         self._plan_lease: object | None = None
         self._plan_required = False
-        self._panes = {view: _MetadataPane() for view in _VIEWS}
+        self._requests: dict[IcebergView, _MetadataRequest] = {}
+        self._panes: dict[IcebergView, _MetadataPane] = {
+            view: self._new_pane(view) for view in _VIEWS
+        }
         self._on_property_changed = ObserverSafeSubject[str]()
         self._inner: ComponentVMOf[None] = (
             ComponentVMOf[None]
@@ -275,8 +352,14 @@ class GlueIcebergVM:
     @property
     def owns_active_work(self) -> bool:
         """Track accepted reads independently of current table/presentation state."""
-        return self._preview.owns_active_work or any(
-            not task.done() for task in self._metadata_tasks
+        return (
+            self._preview.owns_active_work
+            or any(not task.done() for task in self._metadata_tasks)
+            # A resource can be Loading before its operation task has started.
+            or any(
+                pane.resource.state.status is AsyncResourceStatus.LOADING
+                for pane in self._panes.values()
+            )
         )
 
     @property
@@ -447,8 +530,11 @@ class GlueIcebergVM:
 
     def construct(self) -> None:
         if not self._disposed:
+            self._constructed = True
             self._inner.construct()
             self._preview.construct()
+            for pane in self._panes.values():
+                pane.resource.construct()
 
     def dispose(self) -> None:
         if self._disposed:
@@ -604,28 +690,20 @@ class GlueIcebergVM:
         self._table_ref = None
         self._selected_snapshot_id = None
         self._comparison_snapshot_id = None
-        for view, pane in self._panes.items():
-            pane.generation += 1
-            pane.rows = ()
-            pane.coverage = None
-            pane.observed_at = None
-            pane.visible_count = 0
-            pane.state = PaneState.EMPTY
-            pane.error_text = None
-            pane.loaded = False
-            self._remember_stable(view, pane)
+        self._reset_panes()
         if notify:
             self._notify_all()
         return binding_generation
 
     def _invalidate_metadata_loads_silently(self) -> None:
-        selected_snapshot_id = self._selected_snapshot_id
-        for view, pane in self._panes.items():
-            pane.generation += 1
-            if pane.state is PaneState.LOADING:
-                self._restore_stable(view, pane)
-        self._selected_snapshot_id = selected_snapshot_id
-        self._panes["snapshots"].stable_selected_snapshot_id = selected_snapshot_id
+        """Settle every loading pane at its baseline, publishing nothing."""
+        self._silent_depth += 1
+        try:
+            for pane in self._panes.values():
+                if pane.resource.state.status is AsyncResourceStatus.LOADING:
+                    pane.resource.cancel()
+        finally:
+            self._silent_depth -= 1
 
     def _cancel_metadata_tasks(self) -> tuple[asyncio.Task[Any], ...]:
         tasks = tuple(self._metadata_tasks)
@@ -668,7 +746,6 @@ class GlueIcebergVM:
         if changed:
             if view != "snapshots" and self._selected_snapshot_id is not None:
                 self._selected_snapshot_id = None
-                self._remember_stable("snapshots", self._panes["snapshots"])
                 self._notify("selected_snapshot_id")
             self._notify("active_view")
             self._notify_active()
@@ -688,7 +765,6 @@ class GlueIcebergVM:
         if not pane.has_more or pane.state not in {PaneState.IDLE, PaneState.EMPTY}:
             return False
         pane.visible_count = min(len(pane.rows), pane.visible_count + self._page_size)
-        self._remember_stable(self._active_view, pane)
         self._notify_view(self._active_view)
         return True
 
@@ -705,7 +781,6 @@ class GlueIcebergVM:
             return False
         if self._selected_snapshot_id != snapshot_id:
             self._selected_snapshot_id = snapshot_id
-            self._remember_stable("snapshots", pane)
             self._notify("selected_snapshot_id")
         return True
 
@@ -724,151 +799,117 @@ class GlueIcebergVM:
         table_ref = self._table_ref
         if not self._metadata_load_is_admitted() or table_ref is None:
             return False
-        # Capture admission before notifying observers. Once a UI renderer has
+        # Capture admission before the resource starts. Once a UI renderer has
         # owned this VM, losing it can never restore the headless fallback.
         presenter, plan_lease = self._plan_presenter, self._plan_lease
         plan_required = self._plan_required
         if plan_required and presenter is None:
             return False
-        pane = self._panes[view]
-        pane.generation += 1
-        request_generation = pane.generation
-        binding_generation = self._binding_generation
-        caller_task = asyncio.current_task()
-        request_retired = False
-
-        def plan_owner_is_current() -> bool:
-            return (
-                self._plan_lease is plan_lease
-                and self._plan_presenter is presenter
-                and self._plan_required == plan_required
-            )
-
+        if not self._metadata_load_is_admitted():
+            return False
+        resource = self._panes[view].resource
+        request = _MetadataRequest(
+            table_ref=table_ref,
+            binding_generation=self._binding_generation,
+            presenter=presenter,
+            plan_lease=plan_lease,
+            plan_required=plan_required,
+        )
+        self._requests[view] = request
         try:
-            if not self._metadata_load_is_admitted():
-                return False
-            pane.state = PaneState.LOADING
-            pane.error_text = None
-            self._notify_view(view)
-            if not self._metadata_load_is_admitted() or not self._is_current(
-                view,
-                request_generation,
-                binding_generation,
-                table_ref,
-            ):
-                return False
-
-            async def inspect_after_plan() -> object:
-                if request_retired or not plan_owner_is_current():
-                    return _PLAN_NOT_PRESENTED
-                if presenter is not None:
-                    presented = await presenter(metadata_query_plan(table_ref, view))
-                    if presented is not True or not plan_owner_is_current():
-                        return _PLAN_NOT_PRESENTED
-                current = asyncio.current_task()
-                if (
-                    request_retired
-                    or (caller_task is not None and caller_task.cancelling())
-                    or (current is not None and current.cancelling())
-                    or not plan_owner_is_current()
-                    or not self._metadata_load_is_admitted()
-                    or not self._is_current(view, request_generation, binding_generation, table_ref)
-                ):
-                    return _PLAN_NOT_PRESENTED
-                return await self._loader(view)(table_ref)
-
-            metadata_task = asyncio.create_task(inspect_after_plan())
-            self._metadata_tasks.add(metadata_task)
-            metadata_task.add_done_callback(self._metadata_task_done)
-            try:
-                rows = await asyncio.shield(metadata_task)
-            except asyncio.CancelledError:
-                # Retire before forwarding cancellation: a renderer that
-                # suppresses/uncancels its own task cannot revive this read.
-                request_retired = True
-                metadata_task.cancel()
-                while not metadata_task.done():
-                    with contextlib.suppress(asyncio.CancelledError, Exception):
-                        await asyncio.shield(metadata_task)
-                raise
-            if caller_task is not None and caller_task.cancelling():
-                raise asyncio.CancelledError from None
-            if rows is _PLAN_NOT_PRESENTED:
-                raise _PlanNotPresented
-            normalized, coverage = self._normalize_inspection(view, table_ref, rows)
-        except _PlanNotPresented:
-            if self._is_current(view, request_generation, binding_generation, table_ref):
-                selection_changed = self._restore_stable(view, pane)
-                if selection_changed:
-                    self._notify("selected_snapshot_id")
-                self._notify_view(view)
-            if caller_task is not None and caller_task.cancelling():
-                raise asyncio.CancelledError from None
-            return False
+            if resource.state.status is AsyncResourceStatus.IDLE:
+                await resource.load()
+            else:
+                await resource.reload()
         except asyncio.CancelledError:
-            if self._is_current(view, request_generation, binding_generation, table_ref):
-                selection_changed = self._restore_stable(view, pane)
-                if selection_changed:
-                    self._notify("selected_snapshot_id")
-                self._notify_view(view)
-            if caller_task is not None and caller_task.cancelling():
-                raise
-            return False
-        except ProviderError as exc:
-            if not self._is_current(view, request_generation, binding_generation, table_ref):
-                return False
-            pane.state, pane.error_text = _map_iceberg_provider_error(exc)
-            pane.loaded = False
-            self._remember_stable(view, pane)
-            self._notify_view(view)
-            return False
+            # Retire before forwarding cancellation: a renderer that suppresses
+            # its own cancellation cannot revive this read.
+            request.retired = True
+            await _settle_provider(request)
+            raise
+        # VMx returns as soon as an operation is cancelled. A provider that
+        # ignores cancellation is still running, and this caller owns it until
+        # it drains, so wait for it here.
+        await _settle_provider(request)
+        state = resource.state
+        return isinstance(state, AsyncResourceReady) and state.value is request.page
+
+    async def _inspect(self, view: IcebergView) -> _MetadataPage:
+        """The resource loader: present the plan, then run one bounded read.
+
+        VMx runs this inside the resource's operation task. A refused or
+        superseded read ends by cancellation, which drains expect. VMx settles
+        the resource on that path, so nothing is published.
+        """
+        request = self._requests.get(view)
+        if request is None:
+            raise asyncio.CancelledError
+        task = asyncio.current_task()
+        request.task = task
+        if task is not None:
+            self._metadata_tasks.add(task)
+            task.add_done_callback(self._metadata_task_done)
+        table_ref = request.table_ref
+        try:
+            # VMx publishes Loading after it creates this task. An eager task
+            # factory (Textual sets one) would run this body first, so yield
+            # once: the Loading state publishes before any presenter runs.
+            await asyncio.sleep(0)
+            if not self._request_is_current(view, request):
+                raise asyncio.CancelledError
+            presented: object = True
+            if not self._plan_owner_is_current(request):
+                presented = False
+            elif request.presenter is not None:
+                presented = await request.presenter(metadata_query_plan(table_ref, view))
+                if not self._request_is_current(view, request):
+                    raise asyncio.CancelledError
+            if presented is not True or not self._plan_owner_is_current(request):
+                # Refused before any provider call: settle at the baseline.
+                self._panes[view].resource.cancel()
+                raise asyncio.CancelledError
+            rows = await self._loader(view)(table_ref)
+            if not self._request_is_current(view, request):
+                raise asyncio.CancelledError
+            normalized, coverage = self._normalize_inspection(view, table_ref, rows)
+        except asyncio.CancelledError:
+            if self._request_is_current(view, request):
+                # The provider cancelled itself. VMx 3.23.0 would leave the
+                # resource Loading, so settle it at its baseline here.
+                self._panes[view].resource.cancel()
+            raise
         except Exception as exc:
-            if not self._is_current(view, request_generation, binding_generation, table_ref):
-                return False
-            report_unexpected_service_error(
-                self._hub,
-                service="glue",
-                operation=f"inspect_iceberg_{view}",
-                error=exc,
-                source=table_ref.connection_name,
-                region=table_ref.region,
-            )
-            pane.state = PaneState.ERROR
-            pane.error_text = "Iceberg metadata request failed"
-            pane.loaded = False
-            self._remember_stable(view, pane)
-            self._notify_view(view)
+            if self._request_is_current(view, request) and not isinstance(exc, ProviderError):
+                report_unexpected_service_error(
+                    self._hub,
+                    service="glue",
+                    operation=f"inspect_iceberg_{view}",
+                    error=exc,
+                    source=table_ref.connection_name,
+                    region=table_ref.region,
+                )
+            raise
+        page = _MetadataPage(normalized, coverage, _now())
+        request.page = page
+        return page
+
+    def _request_is_current(self, view: IcebergView, request: _MetadataRequest) -> bool:
+        task = asyncio.current_task()
+        if request.retired or (task is not None and task.cancelling()):
             return False
-        if not self._is_current(view, request_generation, binding_generation, table_ref):
-            return False
-        pane.rows = normalized
-        pane.coverage = coverage
-        pane.observed_at = datetime.now(UTC)
-        pane.visible_count = min(len(normalized), self._page_size)
-        pane.state = PaneState.IDLE if normalized else PaneState.EMPTY
-        pane.error_text = None
-        pane.loaded = True
-        snapshots = cast(tuple[IcebergSnapshot, ...], pane.visible_rows)
-        selection_changed = False
-        if view == "snapshots" and not any(
-            row.snapshot_id == self._selected_snapshot_id for row in snapshots
-        ):
-            selection_changed = self._selected_snapshot_id is not None
-            self._selected_snapshot_id = None
-        comparison_changed = False
-        if view == "snapshots" and not any(
-            cast(IcebergSnapshot, row).snapshot_id == self._comparison_snapshot_id
-            for row in normalized
-        ):
-            comparison_changed = self._comparison_snapshot_id is not None
-            self._comparison_snapshot_id = None
-        self._remember_stable(view, pane)
-        if comparison_changed:
-            self._notify("comparison_snapshot_id")
-        if selection_changed:
-            self._notify("selected_snapshot_id")
-        self._notify_view(view)
-        return True
+        return (
+            self._requests.get(view) is request
+            and self._metadata_load_is_admitted()
+            and self._binding_generation == request.binding_generation
+            and self._table_ref == request.table_ref
+        )
+
+    def _plan_owner_is_current(self, request: _MetadataRequest) -> bool:
+        return (
+            self._plan_lease is request.plan_lease
+            and self._plan_presenter is request.presenter
+            and self._plan_required == request.plan_required
+        )
 
     def _metadata_task_done(self, task: asyncio.Task[Any]) -> None:
         self._metadata_tasks.discard(task)
@@ -877,32 +918,83 @@ class GlueIcebergVM:
         with contextlib.suppress(Exception):
             task.exception()
 
-    def _remember_stable(self, view: IcebergView, pane: _MetadataPane) -> None:
-        if pane.state is PaneState.LOADING:
-            return
-        pane.stable_rows = pane.rows
-        pane.stable_coverage = pane.coverage
-        pane.stable_observed_at = pane.observed_at
-        pane.stable_visible_count = pane.visible_count
-        pane.stable_state = pane.state
-        pane.stable_error_text = pane.error_text
-        pane.stable_loaded = pane.loaded
-        if view == "snapshots":
-            pane.stable_selected_snapshot_id = self._selected_snapshot_id
+    def _new_pane(self, view: IcebergView) -> _MetadataPane:
+        resource: AsyncResourceVM[_MetadataPage] = AsyncResourceVM[_MetadataPage](
+            name=f"glue.iceberg.{view}",
+            loader=partial(self._inspect, view),
+            # The resource never reaches the shared hub. The VM publishes the
+            # pane property names itself, from one place.
+            hub=NULL_MESSAGE_HUB,
+            dispatcher=self._dispatcher,
+            retention=AsyncResourceRetention.RETAIN_PREVIOUS,
+        )
+        subscription = resource.property_changed.subscribe(
+            on_next=lambda name: self._on_pane_property(view, resource, name)
+        )
+        return _MetadataPane(resource, subscription)
 
-    def _restore_stable(self, view: IcebergView, pane: _MetadataPane) -> bool:
-        pane.rows = pane.stable_rows
-        pane.coverage = pane.stable_coverage
-        pane.observed_at = pane.stable_observed_at
-        pane.visible_count = pane.stable_visible_count
-        pane.state = pane.stable_state
-        pane.error_text = pane.stable_error_text
-        pane.loaded = pane.stable_loaded
-        if view != "snapshots":
-            return False
-        changed = self._selected_snapshot_id != pane.stable_selected_snapshot_id
-        self._selected_snapshot_id = pane.stable_selected_snapshot_id
-        return changed
+    @staticmethod
+    def _retire_pane(pane: _MetadataPane) -> None:
+        pane.subscription.dispose()
+        pane.resource.dispose()
+
+    def _reset_panes(self) -> None:
+        """Clear every pane for a new binding.
+
+        An idle resource holds no value and runs no operation, so it is kept.
+        A pane that holds a value or a running read is replaced, because
+        AsyncResourceVM has no reset: cancel would restore the old table's
+        rows. Retirement disposes the old resource, which cancels its read.
+        """
+        for view, pane in list(self._panes.items()):
+            if not self._disposed and pane.resource.state.status is AsyncResourceStatus.IDLE:
+                pane.visible_count = 0
+                pane.applied = None
+                continue
+            self._retire_pane(pane)
+            fresh = self._new_pane(view)
+            if self._disposed:
+                self._retire_pane(fresh)
+            elif self._constructed:
+                fresh.resource.construct()
+            self._panes[view] = fresh
+
+    def _on_pane_property(
+        self,
+        view: IcebergView,
+        resource: AsyncResourceVM[_MetadataPage],
+        property_name: str,
+    ) -> None:
+        """Fan the resource's one "state" change out to the pane property names."""
+        if property_name != "state" or self._silent_depth:
+            return
+        pane = self._panes[view]
+        if pane.resource is not resource:
+            return
+        selection_changed = False
+        comparison_changed = False
+        page = pane.page
+        if page is not None and page is not pane.applied:
+            # A new page: reset the paging position and the snapshot selection.
+            # A rollback to the same page leaves both alone.
+            pane.applied = page
+            pane.visible_count = min(len(page.rows), self._page_size)
+            if view == "snapshots":
+                snapshots = cast(tuple[IcebergSnapshot, ...], pane.visible_rows)
+                if not any(row.snapshot_id == self._selected_snapshot_id for row in snapshots):
+                    selection_changed = self._selected_snapshot_id is not None
+                    self._selected_snapshot_id = None
+                if not any(
+                    cast(IcebergSnapshot, row).snapshot_id == self._comparison_snapshot_id
+                    for row in page.rows
+                ):
+                    comparison_changed = self._comparison_snapshot_id is not None
+                    self._comparison_snapshot_id = None
+        if comparison_changed:
+            self._notify("comparison_snapshot_id")
+        if selection_changed:
+            self._notify("selected_snapshot_id")
+        self._notify_view(view)
 
     def _loader(self, view: IcebergView) -> Any:
         return getattr(self._inspector, f"list_{view}")
@@ -969,21 +1061,6 @@ class GlueIcebergVM:
             )
         return typed
 
-    def _is_current(
-        self,
-        view: IcebergView,
-        request_generation: int,
-        binding_generation: int,
-        table_ref: TableRef,
-    ) -> bool:
-        return (
-            not self._disposed
-            and not self._shutdown_started
-            and self._binding_generation == binding_generation
-            and self._table_ref == table_ref
-            and self._panes[view].generation == request_generation
-        )
-
     def _metadata_load_is_admitted(self) -> bool:
         return (
             not self._disposed
@@ -1037,7 +1114,34 @@ class GlueIcebergVM:
         self._on_property_changed.on_next(property_name)
 
 
-def _map_iceberg_provider_error(exc: ProviderError) -> tuple[PaneState, str]:
+def _now() -> datetime:
+    """Observation clock. A module-level seam so a rendering fixture can pin it."""
+    return datetime.now(UTC)
+
+
+async def _settle_provider(request: _MetadataRequest) -> None:
+    """Wait until the request's loader task has finished, whatever it did."""
+    task = request.task
+    while task is not None and not task.done():
+        with contextlib.suppress(asyncio.CancelledError, Exception):
+            await asyncio.shield(task)
+
+
+def _resource_value(state: object) -> _MetadataPage | None:
+    if isinstance(
+        state, AsyncResourceReady | AsyncResourceLoadingWithValue | AsyncResourceErrorWithValue
+    ):
+        return cast(_MetadataPage, state.value)
+    return None
+
+
+def _resource_error(state: object) -> BaseException | None:
+    if isinstance(state, AsyncResourceError | AsyncResourceErrorWithValue):
+        return state.error
+    return None
+
+
+def _map_iceberg_provider_error(exc: BaseException) -> tuple[PaneState, str]:
     if isinstance(exc, ConnectionProtectedError):
         return PaneState.FORBIDDEN, PROTECTED_MESSAGE
     if isinstance(exc, AuthRequiredError):
