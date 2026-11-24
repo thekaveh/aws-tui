@@ -246,3 +246,13 @@ def test_toast_model_is_frozen() -> None:
     m = _model()
     with pytest.raises(AttributeError):
         m.text = "nope"  # type: ignore[misc]
+
+
+def test_raised_toast_is_constructed_by_the_constructed_stack() -> None:
+    stack = _stack()
+    stack.construct()
+    stack.raise_toast(_model())
+    rows = list(stack._inner)
+    assert rows
+    assert all(row.is_constructed for row in rows)
+    stack.dispose()

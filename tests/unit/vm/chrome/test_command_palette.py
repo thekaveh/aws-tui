@@ -681,3 +681,14 @@ def test_dispose_publishes_no_projection_names() -> None:
         assert "selected_index" not in names
     finally:
         subscription.dispose()
+
+
+def test_registered_entry_is_constructed_by_the_constructed_palette() -> None:
+    vm = _build()
+    try:
+        vm.register_entry(_entry("a", "Alpha"), lambda: None)
+        rows = list(vm._inner_registry)
+        assert rows
+        assert all(row.is_constructed for row in rows)
+    finally:
+        vm.dispose()
