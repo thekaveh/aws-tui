@@ -2,7 +2,8 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from contextvars import ContextVar
 from typing import Generic, ParamSpec, TypeVar
 
@@ -124,13 +125,46 @@ class ObserverSafeSubject(rx.Observable[T], Generic[T]):
         self._subject.dispose()
 
 
-def send_value_free(hub: MessageHub[Message], message: Message) -> None:
-    """Publish while redacting VMx subscriber tracebacks from this synchronous send."""
+@contextmanager
+def value_free_hub_sends() -> Iterator[None]:
+    """Arm the redaction filter for every hub send made inside this block."""
     token = _is_value_free_hub_send.set(True)
     try:
-        hub.send(message)
+        yield
     finally:
         _is_value_free_hub_send.reset(token)
 
 
-__all__ = ["ObserverSafeSubject", "send_value_free"]
+def send_value_free(hub: MessageHub[Message], message: Message) -> None:
+    """Publish while redacting VMx subscriber tracebacks from this synchronous send."""
+    with value_free_hub_sends():
+        hub.send(message)
+
+
+def isolated(observable: rx.Observable[T], channel: str) -> rx.Observable[T]:
+    """Observe ``observable`` so that each subscriber's failure stays its own.
+
+    The wrapper gives a VMx ``property_changed`` stream the same isolation that
+    :class:`ObserverSafeSubject` gives its own subject.
+    """
+
+    def _subscribe_isolated(
+        observer: abc.ObserverBase[T],
+        scheduler: abc.SchedulerBase | None = None,
+    ) -> abc.DisposableBase:
+        return observable.subscribe(
+            on_next=_isolated(observer.on_next, channel),
+            on_error=_isolated(observer.on_error, channel),
+            on_completed=_isolated(observer.on_completed, channel),
+            scheduler=scheduler,
+        )
+
+    return rx.Observable(_subscribe_isolated)
+
+
+__all__ = [
+    "ObserverSafeSubject",
+    "isolated",
+    "send_value_free",
+    "value_free_hub_sends",
+]

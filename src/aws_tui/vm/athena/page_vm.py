@@ -279,34 +279,32 @@ class AthenaPageVM:
         self.authoring = AthenaAuthoringVM(
             query=self.query,
             client=client,
+            hub=hub,
+            dispatcher=dispatcher,
             files=sql_files,
             snippets=sql_snippets,
             context_revision=lambda: self._context_choice_revision,
-            is_current=self._is_alive,
-            notify=lambda: self._notify("authoring"),
         )
         self.completion = AthenaCompletionVM(
             client=client,
             query=self.query,
+            hub=hub,
+            dispatcher=dispatcher,
             context_revision=lambda: (
                 self._context_choice_revision
                 + self._context_generation
                 + self._query_refresh_generation
                 + self.tables.metadata_revision
             ),
-            is_current=self._is_alive,
-            notify=lambda: self._notify("completion"),
         )
         self.exports = AthenaExportVM(
             client=client,
             results=self.results,
             context=lambda: self._context,
+            hub=hub,
+            dispatcher=dispatcher,
             context_revision=lambda: self._context_choice_revision,
-            is_current=lambda: self._is_alive() and self._active_view == "results",
-            notify=lambda: self._notify("exports"),
-        )
-        self._exports_subscription = self.results.on_property_changed.subscribe(
-            lambda _name: self.exports.invalidate(), on_completed=self.exports.cancel
+            results_view_active=lambda: self._active_view == "results",
         )
 
     @property
@@ -664,6 +662,9 @@ class AthenaPageVM:
         self.query.construct()
         self.history.construct()
         self.saved.construct()
+        self.authoring.construct()
+        self.completion.construct()
+        self.exports.construct()
 
     def activate_drafts(self) -> None:
         if self._draft_session is not None:
@@ -2274,7 +2275,7 @@ class AthenaPageVM:
         self.query.close_input_admission()
         self.authoring.close_input_admission()
         self.completion.close_input_admission()
-        self.exports.cancel()
+        self.exports.close_input_admission()
 
     async def shutdown(self) -> None:
         async with self._shutdown_lock:
@@ -2325,8 +2326,10 @@ class AthenaPageVM:
         if not self._input_admission_closed:
             self.close_input_admission()
         self._disposed = True
-        self.exports.cancel()
-        self._exports_subscription.dispose()
+        # Newest collaborator first: each one is retired before the page members it reads.
+        self.exports.dispose()
+        self.completion.dispose()
+        self.authoring.dispose()
         self._lifecycle_generation += 1
         self._context_generation += 1
         self._workgroup_pager.dispose()

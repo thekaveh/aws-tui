@@ -176,6 +176,7 @@ class AthenaQueryView(DeferredWorkerMixin, Widget):
         self._sub: DisposableBase | None = None
         self._drafts_sub: DisposableBase | None = None
         self._page_sub: DisposableBase | None = None
+        self._collaborator_subs: list[DisposableBase] = []
         self._replacement_revision = -1
         self._editor_vm_revision = -1
         self._authoring_pending = False
@@ -260,6 +261,11 @@ class AthenaQueryView(DeferredWorkerMixin, Widget):
         self._refresh()
         self._sub = self._vm.on_property_changed.subscribe(on_next=self._on_vm_changed)
         self._page_sub = self._page_vm.on_property_changed.subscribe(self._on_page_changed)
+        # SQL documents and completion publish on their own streams, not the page's.
+        self._collaborator_subs = [
+            self._page_vm.authoring.on_property_changed.subscribe(self._on_page_changed),
+            self._page_vm.completion.on_property_changed.subscribe(self._on_page_changed),
+        ]
         if self._page_vm.drafts is not None:
             self._drafts_sub = self._page_vm.drafts.on_property_changed.subscribe(
                 self._on_vm_changed
@@ -279,6 +285,9 @@ class AthenaQueryView(DeferredWorkerMixin, Widget):
         if self._drafts_sub is not None:
             self._drafts_sub.dispose()
             self._drafts_sub = None
+        for subscription in self._collaborator_subs:
+            subscription.dispose()
+        self._collaborator_subs = []
 
     def on_text_area_changed(self, event: TextArea.Changed) -> None:
         if event.text_area.id != "athena-editor" or self._syncing_editor:
@@ -425,7 +434,7 @@ class AthenaQueryView(DeferredWorkerMixin, Widget):
                 )
                 if (
                     not self._owns_capture(capture)
-                    or not self._page_vm.completion.is_current(batch)
+                    or not self._page_vm.completion.is_batch_current(batch)
                     or batch is None
                 ):
                     return
@@ -442,7 +451,7 @@ class AthenaQueryView(DeferredWorkerMixin, Widget):
                 if (
                     selected is not None
                     and self._owns_capture(capture)
-                    and self._page_vm.completion.is_current(batch)
+                    and self._page_vm.completion.is_batch_current(batch)
                 ):
                     start, end = capture.selection.start, capture.selection.end
                     if start == end:
@@ -655,7 +664,7 @@ class AthenaQueryView(DeferredWorkerMixin, Widget):
         cancel.disabled = not self._vm.cancel_command.can_execute()
         authoring = self._page_vm.authoring
         document = authoring.path.name if authoring.path else "Untitled"
-        message = authoring.status or self._status_text()
+        message = authoring.status_message or self._status_text()
         if self._page_vm.completion.state != "idle":
             message = self._page_vm.completion.message
         if (
@@ -710,8 +719,8 @@ class AthenaQueryView(DeferredWorkerMixin, Widget):
         rows: list[str] = []
         if self._page_vm.authoring.path is not None:
             rows.append(f"SQL file        {self._page_vm.authoring.path}")
-        if self._page_vm.authoring.status:
-            rows.append(f"SQL authoring   {self._page_vm.authoring.status}")
+        if self._page_vm.authoring.status_message:
+            rows.append(f"SQL authoring   {self._page_vm.authoring.status_message}")
         for label, error_text in (
             ("Workgroup", self._page_vm.workgroup_detail_error_text),
             ("Workgroups", self._page_vm.workgroups_error_text),

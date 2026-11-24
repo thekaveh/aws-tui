@@ -9,6 +9,9 @@ from dataclasses import dataclass
 from threading import Lock
 from typing import Literal
 
+from vmx import Message, MessageHub
+from vmx.services.dispatcher import Dispatcher
+
 from aws_tui.domain.emr_dashboard import DashboardLink, validate_dashboard_url
 from aws_tui.domain.emr_serverless import EmrServerlessClientProtocol
 from aws_tui.domain.filesystem import (
@@ -20,6 +23,7 @@ from aws_tui.domain.filesystem import (
     ValidationError,
 )
 from aws_tui.infra.browser import BrowserPort
+from aws_tui.vm._component import IsolatedComponentVM
 from aws_tui.vm.service_source_vm import ServiceSourceContext
 
 
@@ -95,19 +99,24 @@ class _DispatchPermit:
             return not self._cancelled
 
 
-class DashboardVM:
+class DashboardVM(IsolatedComponentVM):
+    """Single-flight dashboard delivery for one reviewed job run.
+
+    Publishes ``busy``, ``delivery_status`` and ``outcome`` as they change. The
+    page closes it with :meth:`close_input_admission` before asynchronous cleanup.
+    """
+
     def __init__(
         self,
         *,
         client: EmrServerlessClientProtocol,
         target: Callable[[], DashboardTarget | None],
-        is_current: Callable[[], bool] = lambda: True,
-        notify: Callable[[], None] = lambda: None,
+        hub: MessageHub[Message],
+        dispatcher: Dispatcher,
     ) -> None:
+        super().__init__(name="emr.dashboard", hub=hub, dispatcher=dispatcher)
         self._client = client
         self._target = target
-        self._is_current = is_current
-        self._notify = notify
         self._closed = False
         self._task: asyncio.Task[DashboardOutcome] | None = None
         self._provider: asyncio.Task[DashboardLink] | None = None
@@ -119,7 +128,7 @@ class DashboardVM:
         return self._task is not None
 
     @property
-    def status(self) -> str:
+    def delivery_status(self) -> str:
         if self.busy:
             return "busy"
         return self._outcome.status if self._outcome else "idle"
@@ -131,7 +140,6 @@ class DashboardVM:
     def available(self, target: DashboardTarget) -> bool:
         return (
             not self._closed
-            and self._is_current()
             and self._target() == target
             and target.application_type in {"SPARK", "HIVE"}
             and bool(target.application_id)
@@ -168,7 +176,7 @@ class DashboardVM:
         )
         self._task = task
         self._outcome = None
-        self._notify()
+        self._publish("busy", "delivery_status", "outcome")
         return await self._drain(task)
 
     def cancel(self) -> None:
@@ -182,11 +190,18 @@ class DashboardVM:
     def invalidate(self) -> None:
         self.cancel()
 
-    async def aclose(self) -> None:
+    def close_input_admission(self) -> None:
+        """Refuse new deliveries and cancel the running one, without waiting."""
         self._closed = True
         self.cancel()
+
+    async def aclose(self) -> None:
+        self.close_input_admission()
         if self._task is not None:
             await self._drain(self._task)
+
+    def _on_dispose(self) -> None:
+        self.close_input_admission()
 
     async def _drain(self, task: asyncio.Task[DashboardOutcome]) -> DashboardOutcome:
         while True:
@@ -271,7 +286,7 @@ class DashboardVM:
             self._outcome = result
             # Clear owners before publishing idle: a subscriber may cancel or
             # close reentrantly, and must not clobber the completed outcome.
-            self._notify()
+            self._publish("busy", "delivery_status", "outcome")
 
     def _dispatch(
         self,

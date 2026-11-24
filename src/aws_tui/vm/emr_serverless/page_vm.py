@@ -138,7 +138,8 @@ class EmrServerlessPageVM:
         self.dashboards = DashboardVM(
             client=client,
             target=self.dashboard_target,
-            is_current=lambda: not self._disposed and not self._shutdown_started,
+            hub=hub,
+            dispatcher=dispatcher,
         )
         self._dashboard_subscriptions = (
             self.applications.on_property_changed.subscribe(self._dashboard_selection_changed),
@@ -191,7 +192,7 @@ class EmrServerlessPageVM:
     def close_dashboard_intake(self) -> None:
         """Fence external delivery before asynchronous page cleanup begins."""
         self._dashboard_accepting = False
-        self.dashboards.invalidate()
+        self.dashboards.close_input_admission()
 
     @property
     def connection(self) -> Connection:
@@ -432,6 +433,7 @@ class EmrServerlessPageVM:
         self.job_runs.construct()
         self.job_run_detail.construct()
         self.job_run_logs.construct()
+        self.dashboards.construct()
 
     def dispose(self) -> None:
         if self._disposed:
@@ -441,6 +443,7 @@ class EmrServerlessPageVM:
         self.close_dashboard_intake()
         for subscription in self._dashboard_subscriptions:
             subscription.dispose()
+        self.dashboards.dispose()
         self.job_run_logs.dispose()
         self.job_run_detail.dispose()
         self.job_runs.dispose()

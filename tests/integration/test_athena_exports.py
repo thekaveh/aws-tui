@@ -61,6 +61,8 @@ async def test_loaded_results_export_requires_review_and_preserves_projection(tm
         await focus_and_settle(modal.query_one("#athena-export-write"))
         await pilot.press("enter")
         await wait_until(lambda: page.exports.receipt is not None, what="published export")
+        await pilot.pause()
+        assert "Export saved" in str(modal.query_one("#athena-export-status", Static).render())
         if format == "json":
             assert json.loads(path.read_text())["rows"] == [list(row) for row in expected]
         else:
