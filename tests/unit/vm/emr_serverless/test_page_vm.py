@@ -7,6 +7,7 @@ from dataclasses import replace
 
 import pytest
 from vmx import NULL_DISPATCHER, MessageHub
+from vmx.lifecycle.status import ConstructionStatus
 from vmx.messages.protocols import Message
 
 from aws_tui.demo.in_memory_emr import InMemoryEmr as _InMemoryEmr
@@ -887,3 +888,19 @@ async def test_shutdown_waits_for_the_detail_read_cleanup(
         await asyncio.wait_for(finished.wait(), timeout=1)
         page.dispose()
         fake.dispose()
+
+
+def test_page_disposal_throwing_terminal_leaves_dashboard_disposed(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    page, _fake = _make()
+    marker = "HOSTILE_EMR_DASHBOARD_DISPOSAL_MARKER"
+
+    def fail() -> None:
+        raise RuntimeError(marker)
+
+    page.dashboards.on_property_changed.subscribe(on_completed=fail)
+    page.dispose()
+
+    assert page.dashboards.status is ConstructionStatus.DISPOSED
+    assert marker not in caplog.text

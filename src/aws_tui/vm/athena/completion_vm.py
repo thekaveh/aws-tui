@@ -8,6 +8,9 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any, Literal, TypeVar
 
+from vmx import Message, MessageHub
+from vmx.services.dispatcher import Dispatcher
+
 from aws_tui.domain.data_catalog import Column, TableRef, TableSummary
 from aws_tui.domain.query import QueryContext
 from aws_tui.domain.sql_authoring import (
@@ -18,6 +21,7 @@ from aws_tui.domain.sql_authoring import (
     completion_target,
 )
 from aws_tui.domain.sql_policy import ReadOnlySqlPolicy
+from aws_tui.vm._component import IsolatedComponentVM
 from aws_tui.vm.athena.query_vm import AthenaQueryVM
 
 CompletionState = Literal["ready", "partial", "unavailable"]
@@ -67,24 +71,25 @@ def _required_tables(
     )
 
 
-class AthenaCompletionVM:
+class AthenaCompletionVM(IsolatedComponentVM):
+    """Bounded schema completion. Publishes ``busy``, ``state`` and ``message``."""
+
     def __init__(
         self,
         *,
         client: Any,
         query: AthenaQueryVM,
+        hub: MessageHub[Message],
+        dispatcher: Dispatcher,
         context_revision: Callable[[], int] = lambda: 0,
-        is_current: Callable[[], bool] = lambda: True,
-        notify: Callable[[], None] = lambda: None,
         metadata_timeout: float = 10.0,
     ) -> None:
         if not math.isfinite(metadata_timeout) or metadata_timeout <= 0:
             raise ValueError("Completion deadline must be finite and positive")
+        super().__init__(name="athena.completion", hub=hub, dispatcher=dispatcher)
         self._client = client
         self._query = query
         self._context_revision = context_revision
-        self._is_current = is_current
-        self._notify = notify
         self._timeout = metadata_timeout
         self._provider = object()
         self._generation = 0
@@ -115,7 +120,7 @@ class AthenaCompletionVM:
         return self._message
 
     def _alive(self) -> bool:
-        return not self._closed and self._is_current()
+        return not self._closed
 
     def invalidate(self, *, notify: bool = True) -> None:
         self._generation += 1
@@ -126,9 +131,9 @@ class AthenaCompletionVM:
         self._state = "idle"
         self._message = "Completion schema was refreshed or its context changed"
         if notify and not self._closed:
-            self._notify()
+            self._publish("state", "message")
 
-    def is_current(self, batch: CompletionBatch | None) -> bool:
+    def is_batch_current(self, batch: CompletionBatch | None) -> bool:
         return type(batch) is CompletionBatch and (
             self._alive()
             and batch.provider is self._provider
@@ -323,7 +328,7 @@ class AthenaCompletionVM:
         self._active = task
         self._state = "loading"
         self._message = "Loading bounded schema completion"
-        self._notify()
+        self._publish("busy", "state", "message")
         work: list[CompletionTable] = []
         metadata: asyncio.Task[tuple[bool, bool]] | None = None
         try:
@@ -397,14 +402,14 @@ class AthenaCompletionVM:
                 self._state = "idle"
                 self._message = "Completion canceled or its editor context changed"
             if not self._closed:
-                self._notify()
+                self._publish("busy", "state", "message")
 
     def _metadata_finished(self, task: asyncio.Task[tuple[bool, bool]]) -> None:
         self._metadata_tasks.discard(task)
         if not task.cancelled():
             task.exception()
         if not self._closed:
-            self._notify()
+            self._publish("busy")
 
     def close_input_admission(self) -> None:
         self._closed = True
@@ -418,6 +423,9 @@ class AthenaCompletionVM:
         for task in self._metadata_tasks:
             if not task.done() and not task.cancelling():
                 task.cancel()
+
+    def _on_dispose(self) -> None:
+        self.close_input_admission()
 
     async def shutdown(self) -> None:
         self.close_input_admission()

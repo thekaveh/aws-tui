@@ -46,11 +46,16 @@ from vmx.notifications import (
 `vmx.AggregateVM3Builder` is the exported builder name in VMx 3.1.0. The older
 `AggregateVMBuilderN` aliases were removed in VMx 3.0.0.
 
-## 2. The builder pattern (no direct VM subclassing)
+## 2. The builder pattern (page VMs wrap, collaborators derive)
 
-VMx VMs are **not** subclassed — they are constructed via immutable fluent
-builders. To make a custom VM with extra commands/properties, you wrap a
-`ComponentVM` (or `CompositeVM` etc.) instance inside your own facade class.
+Page VMs are facades: they are constructed via immutable fluent builders, and
+they wrap a `ComponentVM` (or `CompositeVM` etc.) instance in `self._inner`.
+
+Page-owned collaborators derive from `aws_tui.vm._component.IsolatedComponentVM`,
+a `ComponentVM` subclass (#557). It sets the hint, makes the `on_property_changed`
+observers isolated, and publishes named properties through `_publish(...)` with
+the value-free redaction armed. Do not reuse a base member name in a subclass:
+`status` and `is_current` belong to `ComponentVM` (see §11).
 
 ### 2.1. ComponentVM
 
@@ -368,7 +373,9 @@ print('VMx smoke OK')
 
 ## 11. Implementation pattern for aws-tui custom VMs
 
-Since VMx VMs aren't subclassable, our facade pattern is:
+Page VMs use the facade pattern. Collaborators derive from `IsolatedComponentVM`
+instead, so a name such as `status` or `is_current` must not clash with the base.
+The facade pattern is:
 
 ```python
 class ToastStackVM:

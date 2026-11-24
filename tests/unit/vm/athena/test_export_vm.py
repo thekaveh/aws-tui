@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import math
 import threading
 import tracemalloc
@@ -9,6 +10,8 @@ from dataclasses import replace
 from types import SimpleNamespace
 
 import pytest
+from reactivex import never
+from vmx import NULL_DISPATCHER, MessageHub
 
 from aws_tui.domain.athena import ResultArtifactAccessError
 from aws_tui.domain.athena_export import ExportLimits, ResultEncoder
@@ -86,7 +89,9 @@ class Client:
 
 
 def make_vm(client=None, **kwargs):
+    hub = kwargs.pop("hub", None) or MessageHub()
     results = SimpleNamespace(
+        on_property_changed=never(),
         execution_id="private-execution",
         projection_generation=1,
         columns=COLUMNS,
@@ -102,7 +107,9 @@ def make_vm(client=None, **kwargs):
         results=results,
         context=lambda: context[0],
         context_revision=lambda: context[1],
-        is_current=lambda: context[2],
+        results_view_active=lambda: context[2],
+        hub=hub,
+        dispatcher=NULL_DISPATCHER,
         **kwargs,
     )
     return vm, results, context
@@ -229,7 +236,7 @@ async def test_invalid_pages_preserve_existing_destination(tmp_path, page):
     assert await vm.run(review, overwrite=True) is None
     assert path.read_bytes() == b"prior"
     assert list(tmp_path.iterdir()) == [path]
-    assert "private" not in vm.status
+    assert "private" not in vm.status_message
 
 
 @pytest.mark.parametrize(
@@ -265,7 +272,7 @@ async def test_metadata_change_between_review_and_dispatch_fails(tmp_path, mutat
     review = await vm.prepare(scope="complete", format="csv", path=tmp_path / "result")
     client.detail = replace(DETAIL, **mutation)
     assert await vm.run(review) is None
-    assert vm.status == "Export data or execution changed; reload results and review again"
+    assert vm.status_message == "Export data or execution changed; reload results and review again"
     assert [call[0] for call in client.calls] == ["metadata", "metadata"]
     assert not list(tmp_path.iterdir())
 
@@ -284,7 +291,7 @@ async def test_original_loaded_scope_guides_complete_or_normalized_before_any_pr
     files = RefuseStageStore()
     vm, _, _ = make_vm(client, files=files)
     assert await vm.prepare(scope="loaded", format="original", path=tmp_path / "result") is None
-    assert vm.status == (
+    assert vm.status_message == (
         "Original AWS CSV requires Complete execution; select Complete execution or normalized CSV/JSON"
     )
     assert client.calls == []
@@ -343,12 +350,12 @@ async def test_unavailable_original_guides_normalized_without_staging_or_retriev
     files = RefuseStageStore()
     vm, _, _ = make_vm(client, files=files)
     assert await vm.prepare(scope="complete", format="original", path=tmp_path / "result") is None
-    assert vm.status == (
+    assert vm.status_message == (
         "Original AWS CSV is unavailable for this execution; choose normalized CSV/JSON"
     )
-    assert "private" not in vm.status
-    assert "s3:" not in vm.status
-    assert "https:" not in vm.status
+    assert "private" not in vm.status_message
+    assert "s3:" not in vm.status_message
+    assert "https:" not in vm.status_message
     assert [call[0] for call in client.calls] == ["metadata"]
     assert files.begin_calls == 0
     assert vm.review is None
@@ -474,9 +481,9 @@ async def test_provider_errors_never_echo_sensitive_details(tmp_path):
 
     vm, _, _ = make_vm(BrokenClient())
     assert await vm.prepare(scope="complete", format="csv", path=tmp_path / "result") is None
-    assert vm.status
-    assert "private" not in vm.status
-    assert "s3:" not in vm.status
+    assert vm.status_message
+    assert "private" not in vm.status_message
+    assert "s3:" not in vm.status_message
     assert not list(tmp_path.iterdir())
 
 
@@ -540,7 +547,7 @@ async def test_failure_after_publication_cannot_hide_success(tmp_path):
     assert receipt is not None
     assert receipt.rows == 2
     assert receipt.bytes_written == receipt.path.stat().st_size
-    assert vm.status == "Export saved"
+    assert vm.status_message == "Export saved"
 
 
 async def test_loaded_snapshot_survives_later_local_projection_changes(tmp_path):
@@ -564,7 +571,7 @@ async def test_publication_receipt_survives_observer_error(tmp_path):
         if vm.receipt is not None:
             raise RuntimeError("private observer failure")
 
-    vm._notify = broken_observer
+    vm.property_changed.subscribe(lambda _name: broken_observer())
     review = await vm.prepare(scope="loaded", format="csv", path=tmp_path / "result")
     receipt = await vm.run(review)
     assert receipt is not None
@@ -581,7 +588,7 @@ async def test_idle_invalidation_notifies_once_without_recursive_cancellation(tm
         notices += 1
         vm.invalidate()
 
-    vm._notify = observer
+    vm.on_property_changed.subscribe(lambda _name: observer())
     context[1] += 1
     vm.invalidate()
     assert notices == 1
@@ -597,7 +604,7 @@ async def test_modal_dismissal_preserves_completed_receipt_and_status(tmp_path):
     vm.cancel()
     vm.cancel()
     assert vm.receipt is receipt
-    assert vm.status == "Export saved"
+    assert vm.status_message == "Export saved"
 
 
 @pytest.mark.parametrize("scope", ["loaded", "complete"])
@@ -740,7 +747,64 @@ async def test_artifact_access_guidance_is_specific_and_value_free(tmp_path, ser
     review = await vm.prepare(scope="complete", format="original", path=tmp_path / "result")
     assert review is not None
     assert await vm.run(review) is None
-    assert vm.status == expected
-    assert "private" not in vm.status
-    assert "s3:" not in vm.status
+    assert vm.status_message == expected
+    assert "private" not in vm.status_message
+    assert "s3:" not in vm.status_message
     assert not list(tmp_path.iterdir())
+
+
+@pytest.mark.asyncio
+async def test_closed_admission_still_reports_a_cancelled_export(tmp_path) -> None:
+    vm, _results, _context = make_vm()
+    local: list[str] = []
+    subscription = vm.on_property_changed.subscribe(local.append)
+    try:
+        task = asyncio.create_task(vm.prepare(scope="loaded", format="csv", path=tmp_path / "r"))
+        await asyncio.sleep(0)
+        vm.close_input_admission()
+        assert await task is None
+        assert vm.status_message == "Export cancelled before publication"
+        assert "status_message" in local
+        assert await vm.prepare(scope="loaded", format="csv", path=tmp_path / "r") is None
+    finally:
+        subscription.dispose()
+
+
+@pytest.mark.asyncio
+async def test_raising_subscriber_export_stops_neither_later_subscribers_nor_the_action(
+    tmp_path,
+) -> None:
+    vm, _results, _context = make_vm()
+
+    def failing(_name: str) -> None:
+        raise RuntimeError("subscriber failure")
+
+    recorded: list[str] = []
+    vm.on_property_changed.subscribe(failing)
+    vm.on_property_changed.subscribe(recorded.append)
+
+    review = await vm.prepare(scope="loaded", format="csv", path=tmp_path / "result")
+
+    assert review is not None
+    assert "review" in recorded
+
+
+@pytest.mark.asyncio
+async def test_hostile_hub_export_text_reaches_no_log_record(
+    tmp_path, caplog: pytest.LogCaptureFixture
+) -> None:
+    caplog.set_level(logging.DEBUG)
+    marker = "HOSTILE_HUB_EXPORT_COLLABORATOR_MARKER"
+    hub = MessageHub()
+
+    def hostile(_message: object) -> None:
+        raise RuntimeError(marker)
+
+    hub_subscription = hub.messages.subscribe(on_next=hostile)
+    vm, _results, _context = make_vm(hub=hub)
+    try:
+        review = await vm.prepare(scope="loaded", format="csv", path=tmp_path / "result")
+        assert review is not None
+    finally:
+        hub_subscription.dispose()
+    assert marker not in caplog.text

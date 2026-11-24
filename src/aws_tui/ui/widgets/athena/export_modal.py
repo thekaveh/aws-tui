@@ -44,6 +44,7 @@ class AthenaExportModal(DeferredWorkerMixin, _SqlPrompt):
         self._review: ExportReview | None = None
         self._working = False
         self._sub: DisposableBase | None = None
+        self._export_sub: DisposableBase | None = None
 
     def compose(self) -> ComposeResult:
         with Vertical(classes="modal-frame"):
@@ -95,6 +96,7 @@ class AthenaExportModal(DeferredWorkerMixin, _SqlPrompt):
 
     def on_mount(self) -> None:
         self._sub = self._page.on_property_changed.subscribe(self._on_page_changed)
+        self._export_sub = self._vm.on_property_changed.subscribe(self._on_page_changed)
         self._refresh()
         self.query_one("#athena-export-path", Input).focus()
 
@@ -103,6 +105,9 @@ class AthenaExportModal(DeferredWorkerMixin, _SqlPrompt):
 
     def on_unmount(self) -> None:
         self._vm.cancel()
+        if self._export_sub is not None:
+            self._export_sub.dispose()
+            self._export_sub = None
         if self._sub is not None:
             self._sub.dispose()
             self._sub = None
@@ -125,7 +130,7 @@ class AthenaExportModal(DeferredWorkerMixin, _SqlPrompt):
         review_button.update("Edit" if reviewed else "Review")
         write = self.query_one("#athena-export-write", ModalButton)
         write.disabled = busy or not reviewed or (existing and not replacement.value)
-        self.query_one("#athena-export-status", Static).update(self._vm.status)
+        self.query_one("#athena-export-status", Static).update(self._vm.status_message)
 
     def on_switch_changed(self, event: Switch.Changed) -> None:
         if event.switch.id == "athena-export-replace":

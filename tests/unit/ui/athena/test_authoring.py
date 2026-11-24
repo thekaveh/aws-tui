@@ -118,7 +118,7 @@ async def test_format_menu_preserves_native_undo_and_incomplete_text(tmp_path):
         await command(app, pilot, "format")
         await drain_workers(app)
         assert editor.text == "SELECT FROM"
-        assert vm.authoring.status
+        assert vm.authoring.status_message
         no_starts(fake)
 
 
@@ -316,8 +316,8 @@ async def test_invalid_home_path_is_recoverable(tmp_path):
         await drain_workers(app)
         assert editor.text == "SELECT 1"
         assert vm.authoring.path is None
-        assert "path" in vm.authoring.status.lower()
-        assert "aws_tui_nonexistent" not in vm.authoring.status
+        assert "path" in vm.authoring.status_message.lower()
+        assert "aws_tui_nonexistent" not in vm.authoring.status_message
         assert len(app.screen_stack) == 1
         no_starts(fake)
 
