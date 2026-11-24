@@ -15,10 +15,10 @@ from textual.widgets.option_list import Option
 from vmx import Message, MessageHub
 
 from aws_tui.ui.widgets._worker import DeferredWorkerMixin
-from aws_tui.ui.widgets.confirm_modal import TextualDialogService
+from aws_tui.ui.widgets.confirm_modal import ask_with_scratch_confirmation
 from aws_tui.vm.athena.drafts_vm import AthenaDraftsVM
 from aws_tui.vm.athena.page_vm import AthenaPageVM
-from aws_tui.vm.chrome.confirm_vm import ConfirmationVM, ConfirmRequest
+from aws_tui.vm.chrome.confirm_vm import ConfirmRequest
 from aws_tui.vm.chrome.focus_coordinator_vm import FocusCoordinatorVM
 
 DraftModalResult = Literal["restored", "closed"]
@@ -31,15 +31,9 @@ async def ask_draft_confirmation(
     hub: MessageHub[Message],
     request: ConfirmRequest,
 ) -> bool:
-    confirmation = ConfirmationVM(hub=hub, dispatcher=drafts.dispatcher)
-    confirmation.construct()
-    try:
-        return await confirmation.ask(
-            request,
-            dialog_service=TextualDialogService(host.app, confirmation, hub=hub),
-        )
-    finally:
-        confirmation.dispose()
+    return await ask_with_scratch_confirmation(
+        host.app, request, hub=hub, dispatcher=drafts.dispatcher
+    )
 
 
 class AthenaDraftsModal(DeferredWorkerMixin, ModalScreen[DraftModalResult]):

@@ -20,7 +20,7 @@ from vmx import Message, MessageHub
 
 from aws_tui.domain.navigation_workspace import Bookmark, Workspace, WorkspaceError
 from aws_tui.ui.widgets._worker import DeferredWorkerMixin
-from aws_tui.ui.widgets.confirm_modal import TextualDialogService
+from aws_tui.ui.widgets.confirm_modal import ask_confirmation
 from aws_tui.ui.widgets.modal_button import ModalButton
 from aws_tui.vm.chrome.confirm_vm import ConfirmationVM, ConfirmRequest
 from aws_tui.vm.workspace_library_vm import WorkspaceLibraryVM
@@ -232,11 +232,8 @@ class WorkspaceLibraryModal(DeferredWorkerMixin, ModalScreen[WorkspaceOpenReques
                         confirm_label="Delete",
                         danger=True,
                     )
-                    if not await self._confirmation.ask(
-                        request,
-                        dialog_service=TextualDialogService(
-                            self.app, self._confirmation, hub=self._hub
-                        ),
+                    if not await ask_confirmation(
+                        self.app, self._confirmation, request, hub=self._hub
                     ):
                         return
                     if self.app.screen is not self or not self.is_attached:

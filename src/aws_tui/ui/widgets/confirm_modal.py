@@ -15,6 +15,7 @@ from ``AwsTuiApp`` (see ``_forward_to_modal``).
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Coroutine
 from typing import Any, Literal, TypeVar
 
 from textual.app import App, ComposeResult
@@ -22,7 +23,15 @@ from textual.containers import Container, Horizontal
 from textual.events import Click
 from textual.screen import ModalScreen
 from textual.widgets import Static
-from vmx import DialogService, FileFilter, Message, MessageHub, ModalVM, NotificationSeverity
+from vmx import (
+    DialogService,
+    Dispatcher,
+    FileFilter,
+    Message,
+    MessageHub,
+    ModalVM,
+    NotificationSeverity,
+)
 
 from aws_tui.ui.widgets.modal_button import ModalButton as _ModalButton
 from aws_tui.vm.chrome.confirm_vm import ConfirmationVM, ConfirmRequest
@@ -262,4 +271,45 @@ class TextualDialogService(DialogService):
             raise
 
 
-__all__ = ["ConfirmModal", "TextualDialogService"]
+def ask_confirmation(
+    app: App[Any],
+    vm: ConfirmationVM,
+    request: ConfirmRequest,
+    *,
+    hub: MessageHub[Message],
+) -> Coroutine[Any, Any, bool]:
+    """Ask ``vm`` to show ``request`` through a Textual dialog service.
+
+    Returns the ``ConfirmationVM.ask`` coroutine itself. This is a plain
+    function on purpose: an ``async def`` wrapper would add a frame to the
+    awaiting chain that ``test_emr_cancellation`` inspects.
+    """
+    return vm.ask(request, dialog_service=TextualDialogService(app, vm, hub=hub))
+
+
+async def ask_with_scratch_confirmation(
+    app: App[Any],
+    request: ConfirmRequest,
+    *,
+    hub: MessageHub[Message],
+    dispatcher: Dispatcher,
+) -> bool:
+    """Ask through a one-shot ``ConfirmationVM``.
+
+    ``ConfirmationVM.ask`` refuses a second open ask, so a caller that may run
+    while the app-wide confirmation is open builds its own.
+    """
+    confirmation = ConfirmationVM(hub=hub, dispatcher=dispatcher)
+    confirmation.construct()
+    try:
+        return await ask_confirmation(app, confirmation, request, hub=hub)
+    finally:
+        confirmation.dispose()
+
+
+__all__ = [
+    "ConfirmModal",
+    "TextualDialogService",
+    "ask_confirmation",
+    "ask_with_scratch_confirmation",
+]

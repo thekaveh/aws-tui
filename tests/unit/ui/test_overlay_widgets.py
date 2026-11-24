@@ -14,7 +14,12 @@ from vmx import MessageHub, RxDispatcher
 from aws_tui.infra.keymap_store import KeymapStore
 from aws_tui.infra.theme_store import ThemeStore
 from aws_tui.ui.widgets.command_palette import CommandPalette, CommandPaletteItem
-from aws_tui.ui.widgets.confirm_modal import ConfirmModal, TextualDialogService
+from aws_tui.ui.widgets.confirm_modal import (
+    ConfirmModal,
+    TextualDialogService,
+    ask_confirmation,
+    ask_with_scratch_confirmation,
+)
 from aws_tui.ui.widgets.help_modal import HelpModal
 from aws_tui.ui.widgets.quick_look import QuickLook
 from aws_tui.vm.chrome.action_catalog import ActionSpec, project_actions
@@ -206,6 +211,59 @@ async def test_dialog_mount_cancellation_preserves_caller_cancelled_error(
 
 
 @pytest.mark.asyncio
+async def test_ask_confirmation_returns_the_ask_coroutine_itself() -> None:
+    hub: MessageHub = MessageHub()
+    vm = ConfirmationVM(hub=hub, dispatcher=RxDispatcher.immediate())
+    vm.construct()
+    try:
+        coroutine = ask_confirmation(App(), vm, ConfirmRequest("Confirm"), hub=hub)
+        assert coroutine.cr_code is ConfirmationVM.ask.__code__
+        coroutine.close()
+    finally:
+        vm.dispose()
+        hub.dispose()
+
+
+async def test_scratch_confirmation_uses_a_one_shot_vm_and_disposes_it(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    hub: MessageHub = MessageHub()
+    app_wide = ConfirmationVM(hub=hub, dispatcher=RxDispatcher.immediate())
+    app_wide.construct()
+    disposed: list[ConfirmationVM] = []
+    original_dispose = ConfirmationVM.dispose
+
+    def spy_dispose(self: ConfirmationVM) -> None:
+        disposed.append(self)
+        original_dispose(self)
+
+    monkeypatch.setattr(ConfirmationVM, "dispose", spy_dispose)
+    try:
+        app: App[None] = App()
+        async with app.run_test(size=(80, 24)) as pilot:
+            task = asyncio.create_task(
+                ask_with_scratch_confirmation(
+                    app,
+                    ConfirmRequest("Confirm"),
+                    hub=hub,
+                    dispatcher=RxDispatcher.immediate(),
+                )
+            )
+            await wait_until(
+                lambda: isinstance(app.screen, ConfirmModal), what="scratch confirmation opens"
+            )
+            assert not app_wide.is_open
+            app.screen.action_cancel()  # type: ignore[attr-defined]
+            assert await task is False
+            await pilot.pause()
+            assert len(disposed) == 1
+            assert disposed[0] is not app_wide
+    finally:
+        monkeypatch.undo()
+        app_wide.dispose()
+        hub.dispose()
+
+
 async def test_help_modal_renders_active_keymap() -> None:
     # f9/f10 rather than single letters: "h" and "p" occur incidentally in
     # "this", "open" and "pane", so the old needles were satisfied by the
