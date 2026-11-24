@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import asyncio
-from typing import Any
+from typing import Any, cast
 
 import reactivex as rx
 from vmx import (
@@ -15,10 +15,10 @@ from vmx import (
 
 from aws_tui.domain.glue import GlueJobRunSummary, GlueJobSummary
 from aws_tui.vm._observable import ObserverSafeSubject, send_value_free
-from aws_tui.vm._token_paging import reject_token_cycles
 from aws_tui.vm.file_manager.pane_vm import PaneState
 from aws_tui.vm.glue._guarded import guarded
 from aws_tui.vm.glue._lifecycle import GlueOperationOwner
+from aws_tui.vm.glue._pager import bounded_glue_pager
 from aws_tui.vm.paging import BoundedTokenPagedComposition
 
 _MAX_JOB_ITEMS = 1_000
@@ -288,19 +288,17 @@ class GlueJobsVM:
     def _make_job_pager(self) -> BoundedTokenPagedComposition[GlueJobSummary, str]:
         generation = self._job_generation
 
-        async def fetch(token: str | None) -> tuple[list[GlueJobSummary], str | None]:
-            rows, next_token = await self._operations.run(
-                lambda: self._client.list_jobs_page(start_token=token)
+        async def list_page(token: str | None) -> tuple[list[GlueJobSummary], str | None]:
+            return cast(
+                tuple[list[GlueJobSummary], str | None],
+                await self._client.list_jobs_page(start_token=token),
             )
-            if generation != self._job_generation:
-                return [], None
-            return rows, next_token
 
-        return BoundedTokenPagedComposition(
-            reject_token_cycles(
-                fetch,
-                message="Glue repeated a job continuation token",
-            ),
+        return bounded_glue_pager(
+            self._operations,
+            list_page,
+            is_current=lambda: generation == self._job_generation,
+            cycle_message="Glue repeated a job continuation token",
             max_items=_MAX_JOB_ITEMS,
         )
 
@@ -325,26 +323,24 @@ class GlueJobsVM:
         generation = self._run_generation
         states = tuple(sorted(self._run_state_filter))
 
-        async def fetch(token: str | None) -> tuple[list[GlueJobRunSummary], str | None]:
-            if job_name is None:
-                return [], None
-            rows, next_token = await self._operations.run(
-                lambda: self._client.list_job_runs_page(
+        async def list_page(token: str | None) -> tuple[list[GlueJobRunSummary], str | None]:
+            assert job_name is not None  # an unbound pager never reaches the provider
+            return cast(
+                tuple[list[GlueJobRunSummary], str | None],
+                await self._client.list_job_runs_page(
                     job_name,
                     start_token=token,
                     states=states,
-                )
+                ),
             )
-            if generation != self._run_generation:
-                return [], None
-            return rows, next_token
 
-        return BoundedTokenPagedComposition(
-            reject_token_cycles(
-                fetch,
-                message="Glue repeated a job-run continuation token",
-            ),
+        return bounded_glue_pager(
+            self._operations,
+            list_page,
+            is_current=lambda: generation == self._run_generation,
+            cycle_message="Glue repeated a job-run continuation token",
             max_items=_MAX_JOB_RUN_ITEMS,
+            unbound=job_name is None,
         )
 
     def _fail_jobs(self, state: PaneState, text: str | None) -> None:
