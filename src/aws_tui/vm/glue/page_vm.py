@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 from typing import Any, Literal, TypeAlias
 
-from vmx import ComponentVMOf, Dispatcher, Message, MessageHub, PropertyChangedMessage
+from vmx import ComponentVM, Dispatcher, Message, MessageHub, PropertyChangedMessage
 
 from aws_tui.domain.data_catalog import TableRef
 from aws_tui.infra.connection_resolver import Connection
@@ -63,13 +63,8 @@ class GluePageVM:
         self._catalog_selection_revision = 0
         self._operations = GlueOperationOwner()
         self._provider_tasks = self._operations.tasks
-        self._inner: ComponentVMOf[None] = (
-            ComponentVMOf[None]
-            .builder()
-            .name("glue.page")
-            .model(None)
-            .services(hub, dispatcher)
-            .build()
+        self._inner: ComponentVM = (
+            ComponentVM.builder().name("glue.page").services(hub, dispatcher).build()
         )
         self.catalog = GlueCatalogVM(
             client=client,

@@ -9,7 +9,7 @@ from typing import Any, Generic, Literal, TypeAlias, TypeVar, cast
 import anyio
 import reactivex as rx
 from vmx import (
-    ComponentVMOf,
+    ComponentVM,
     ConstructionStatus,
     Dispatcher,
     Message,
@@ -234,13 +234,8 @@ class AthenaPageVM:
             _PageWorker[Any] | None,
         ] = {"workgroups": None, "catalogs": None, "databases": None}
         self._on_property_changed = ObserverSafeSubject[str]()
-        self._inner: ComponentVMOf[None] = (
-            ComponentVMOf[None]
-            .builder()
-            .name("athena.page")
-            .model(None)
-            .services(hub, dispatcher)
-            .build()
+        self._inner: ComponentVM = (
+            ComponentVM.builder().name("athena.page").services(hub, dispatcher).build()
         )
         self._workgroup_worker = self._make_workgroup_worker()
         self._catalog_worker = self._make_catalog_worker("")

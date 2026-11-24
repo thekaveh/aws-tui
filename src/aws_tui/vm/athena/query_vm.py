@@ -13,7 +13,7 @@ import anyio
 import reactivex as rx
 from vmx import (
     AsyncRelayCommand,
-    ComponentVMOf,
+    ComponentVM,
     ConstructionStatus,
     Dispatcher,
     Message,
@@ -158,13 +158,8 @@ class AthenaQueryVM:
         self._lifecycle_transition = False
         self._lifecycle_lock = asyncio.Lock()
         self._on_property_changed = ObserverSafeSubject[str]()
-        self._inner: ComponentVMOf[None] = (
-            ComponentVMOf[None]
-            .builder()
-            .name("athena.query")
-            .model(None)
-            .services(hub, dispatcher)
-            .build()
+        self._inner: ComponentVM = (
+            ComponentVM.builder().name("athena.query").services(hub, dispatcher).build()
         )
         self._results = AthenaResultsVM(
             client=client,

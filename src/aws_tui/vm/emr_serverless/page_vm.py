@@ -12,7 +12,7 @@ from collections.abc import Awaitable, Callable, Coroutine
 from dataclasses import dataclass
 from typing import Any, Literal
 
-from vmx import ComponentVMOf, Dispatcher, Message, MessageHub, PropertyChangedMessage
+from vmx import ComponentVM, Dispatcher, Message, MessageHub, PropertyChangedMessage
 
 from aws_tui.domain.emr_cloudwatch_logs import cloudwatch_location
 from aws_tui.domain.emr_logs import EmrServerlessLogsClientProtocol, LogFilter
@@ -111,13 +111,8 @@ class EmrServerlessPageVM:
         self._shutdown_started: bool = False
         self._operations = OperationOwner()
         self._cancel_busy = False
-        self._inner: ComponentVMOf[None] = (
-            ComponentVMOf[None]
-            .builder()
-            .name("emr.page")
-            .model(None)
-            .services(hub, dispatcher)
-            .build()
+        self._inner: ComponentVM = (
+            ComponentVM.builder().name("emr.page").services(hub, dispatcher).build()
         )
         self.applications: ApplicationsVM = ApplicationsVM(
             client=client, hub=hub, dispatcher=dispatcher
