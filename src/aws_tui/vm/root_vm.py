@@ -20,7 +20,7 @@ import asyncio
 from collections.abc import Awaitable, Callable
 
 from reactivex.abc import DisposableBase
-from vmx import ComponentVM, ConstructionStatus, Dispatcher, Message, MessageHub, RxDispatcher
+from vmx import ComponentVM, Dispatcher, Message, MessageHub, RxDispatcher
 
 from aws_tui.infra.aws_session import TokenState
 from aws_tui.infra.connection_resolver import Connection
@@ -38,7 +38,7 @@ from aws_tui.vm.nav_menu_vm import NavMenuVM
 from aws_tui.vm.services_protocol import RecoveryServiceVM, ServiceRegistry
 
 
-class RootVM:
+class RootVM(ComponentVM):
     """Top of the VM tree."""
 
     def __init__(
@@ -56,10 +56,12 @@ class RootVM:
         self._theme: ThemeStore = theme
         self._log: LogSink = log
 
-        self._hub: MessageHub[Message] = hub if hub is not None else MessageHub()
-        self._dispatcher: Dispatcher = (
+        shared_hub: MessageHub[Message] = hub if hub is not None else MessageHub()
+        shared_dispatcher: Dispatcher = (
             dispatcher if dispatcher is not None else RxDispatcher.immediate()
         )
+        super().__init__(name="root", hint="", hub=shared_hub, dispatcher=shared_dispatcher)
+        self._hub: MessageHub[Message] = shared_hub
 
         self._connection: Connection | None = None
         self._auth_state: TokenState | None = None
@@ -76,9 +78,13 @@ class RootVM:
         )
         self._chrome: ChromeVM = ChromeVM(hub=self._hub, dispatcher=self._dispatcher, keymap=keymap)
 
-        self._inner: ComponentVM = (
-            ComponentVM.builder().name("root").services(self._hub, self._dispatcher).build()
-        )
+        # Registered newest-last: VMx releases newest first, so the subscription
+        # goes first, then the children, then the hub.
+        self._own(shared_hub.dispose)
+        self._own(self._chrome)
+        self._own(self._services_menu)
+        self._own(self._content_host)
+        self._own(self._dispose_operation_failure_subscription)
         self._operation_failure_sub: DisposableBase | None = None
 
     def _report_content_setup_error(self, error: BaseException) -> None:
@@ -153,18 +159,6 @@ class RootVM:
     def active_auth_state(self) -> TokenState | None:
         return self._auth_state
 
-    @property
-    def status(self) -> ConstructionStatus:
-        return self._inner.status
-
-    @property
-    def is_constructed(self) -> bool:
-        return self._inner.is_constructed
-
-    @property
-    def name(self) -> str:
-        return self._inner.name
-
     # ── Lifecycle ───────────────────────────────────────────────────────────
 
     def construct(self) -> None:
@@ -172,7 +166,7 @@ class RootVM:
             self._operation_failure_sub = self._hub.messages.subscribe(
                 on_next=self._report_service_operation_failure
             )
-        self._inner.construct()
+        super().construct()
         # Depth-first child construction so the chrome can listen to messages
         # the menu / content publish during their own construct.
         self._chrome.construct()
@@ -184,15 +178,7 @@ class RootVM:
         self._content_host.destruct()
         self._services_menu.destruct()
         self._chrome.destruct()
-        self._inner.destruct()
-
-    def dispose(self) -> None:
-        self._dispose_operation_failure_subscription()
-        self._content_host.dispose()
-        self._services_menu.dispose()
-        self._chrome.dispose()
-        self._inner.dispose()
-        self._hub.dispose()
+        super().destruct()
 
     def _dispose_operation_failure_subscription(self) -> None:
         subscription = self._operation_failure_sub
