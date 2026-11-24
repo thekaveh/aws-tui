@@ -24,7 +24,6 @@ from textual.containers import Container, Horizontal
 from textual.events import Click
 from textual.screen import ModalScreen
 from textual.widgets import Static
-from vmx import Message, MessageHub
 
 from aws_tui.ui.widgets.modal_button import ModalButton
 from aws_tui.vm.chrome.crash_vm import CrashChoice, CrashVM
@@ -44,12 +43,9 @@ class CrashModal(ModalScreen[CrashChoice]):
     def __init__(
         self,
         vm: CrashVM,
-        *,
-        hub: MessageHub[Message],
     ) -> None:
         super().__init__()
         self._vm: CrashVM = vm
-        self._hub: MessageHub[Message] = hub
         self.add_class("-danger")
 
     @property

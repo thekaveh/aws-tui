@@ -13,7 +13,6 @@ from textual.events import Click, Key
 from textual.message import Message as TextualMessage
 from textual.widget import Widget
 from textual.widgets import Input, Static
-from vmx import Message, MessageHub
 
 from aws_tui.ui.widgets.modal_button import ModalButton
 from aws_tui.ui.widgets.settings.connection_form import (
@@ -146,12 +145,9 @@ class FirstRunView(VerticalScroll):
     class RetryRequested(TextualMessage):
         """Refresh local metadata without opening any source."""
 
-    def __init__(
-        self, config_path: Path, hub: MessageHub[Message], id: str = "content-first-run"
-    ) -> None:
+    def __init__(self, config_path: Path, id: str = "content-first-run") -> None:
         super().__init__(id=id)
         self._config_path = config_path
-        self._hub = hub
         self._status = NO_CONNECTIONS
         self._busy = False
 
@@ -175,7 +171,7 @@ class FirstRunView(VerticalScroll):
             id="first-run-save-guidance",
             markup=False,
         )
-        yield ConnectionFormInline(hub=self._hub, submit_label="Save and open")
+        yield ConnectionFormInline(submit_label="Save and open")
 
     def on_mount(self) -> None:
         self.query_one("#first-run-aws-guidance").display = False

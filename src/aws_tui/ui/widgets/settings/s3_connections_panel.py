@@ -100,7 +100,7 @@ class S3ConnectionsPanel(Widget):
         status = Static("", id="connection-read-status", markup=False)
         status.display = False
         yield status
-        yield ConnectionFormInline(hub=self._hub)
+        yield ConnectionFormInline()
 
     def on_hide(self) -> None:
         self._edit_generation += 1

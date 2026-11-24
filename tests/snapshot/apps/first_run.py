@@ -37,7 +37,7 @@ class FirstRunApp(App[None]):
         with Horizontal(id="main-area"):
             yield NavMenu(vm=self.menu, hub=self.hub, id="nav-menu")
             with Container(id="content-host"):
-                yield FirstRunView(Path("/fixture/config.toml"), self.hub)
+                yield FirstRunView(Path("/fixture/config.toml"))
         yield HintLegend(self.hints, hub=self.hub, id="hint-legend")
 
     async def on_mount(self) -> None:

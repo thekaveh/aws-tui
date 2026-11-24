@@ -65,7 +65,7 @@ class _CloneModalHostApp(App[None]):
         yield Container(id="content-host")
 
     async def on_mount(self) -> None:
-        await self.push_screen(JobRunCloneModal(self._vm, hub=self._hub))
+        await self.push_screen(JobRunCloneModal(self._vm))
 
 
 def _make_vm() -> JobRunCloneVM:

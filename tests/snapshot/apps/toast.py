@@ -52,7 +52,7 @@ class ToastSnapshotApp(App[None]):
 
     def compose(self) -> ComposeResult:
         yield Static("aws-tui (behind toasts)", id="placeholder")
-        yield ToastStack(self._stack, hub=self._hub)
+        yield ToastStack(self._stack)
 
 
 __all__ = ["ToastSnapshotApp"]
