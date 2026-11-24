@@ -28,10 +28,10 @@ from aws_tui.domain.filesystem import ProviderError
 from aws_tui.domain.s3_uri import parse_s3_uri
 from aws_tui.infra.duckdb import DuckDbPort
 from aws_tui.vm._observable import ObserverSafeSubject, send_value_free
-from aws_tui.vm._token_paging import reject_token_cycles
 from aws_tui.vm.file_manager.pane_vm import PaneState
 from aws_tui.vm.glue._guarded import guarded
 from aws_tui.vm.glue._lifecycle import GlueOperationOwner, GlueOperationSuperseded
+from aws_tui.vm.glue._pager import bounded_glue_pager
 from aws_tui.vm.glue.iceberg_vm import (
     GlueIcebergVM,
     IcebergInspectorProtocol,
@@ -714,25 +714,17 @@ class GlueCatalogVM:
     ) -> BoundedTokenPagedComposition[DatabaseSummary, str]:
         generation = self._database_generation
 
-        async def fetch(token: str | None) -> tuple[list[DatabaseSummary], str | None]:
-            async def list_page() -> tuple[list[DatabaseSummary], str | None]:
-                if not self._is_database_identity_current(generation):
-                    raise GlueOperationSuperseded
-                return cast(
-                    tuple[list[DatabaseSummary], str | None],
-                    await self._client.list_databases_page(start_token=token),
-                )
+        async def list_page(token: str | None) -> tuple[list[DatabaseSummary], str | None]:
+            return cast(
+                tuple[list[DatabaseSummary], str | None],
+                await self._client.list_databases_page(start_token=token),
+            )
 
-            rows, next_token = await self._operations.run(list_page)
-            if generation != self._database_generation:
-                return [], None
-            return rows, next_token
-
-        return BoundedTokenPagedComposition(
-            reject_token_cycles(
-                fetch,
-                message="Glue repeated a database continuation token",
-            ),
+        return bounded_glue_pager(
+            self._operations,
+            list_page,
+            is_current=lambda: self._is_database_identity_current(generation),
+            cycle_message="Glue repeated a database continuation token",
             max_items=_MAX_DATABASE_ITEMS,
         )
 
@@ -742,32 +734,20 @@ class GlueCatalogVM:
     ) -> BoundedTokenPagedComposition[TableSummary, str]:
         generation = self._table_generation
 
-        async def fetch(token: str | None) -> tuple[list[TableSummary], str | None]:
-            if database_name is None:
-                return [], None
+        async def list_page(token: str | None) -> tuple[list[TableSummary], str | None]:
+            assert database_name is not None  # an unbound pager never reaches the provider
+            return cast(
+                tuple[list[TableSummary], str | None],
+                await self._client.list_tables_page(database_name, start_token=token),
+            )
 
-            async def list_page() -> tuple[list[TableSummary], str | None]:
-                if not self._is_table_identity_current(generation):
-                    raise GlueOperationSuperseded
-                return cast(
-                    tuple[list[TableSummary], str | None],
-                    await self._client.list_tables_page(
-                        database_name,
-                        start_token=token,
-                    ),
-                )
-
-            rows, next_token = await self._operations.run(list_page)
-            if not self._is_table_identity_current(generation):
-                return [], None
-            return rows, next_token
-
-        return BoundedTokenPagedComposition(
-            reject_token_cycles(
-                fetch,
-                message="Glue repeated a table continuation token",
-            ),
+        return bounded_glue_pager(
+            self._operations,
+            list_page,
+            is_current=lambda: self._is_table_identity_current(generation),
+            cycle_message="Glue repeated a table continuation token",
             max_items=_MAX_TABLE_ITEMS,
+            unbound=database_name is None,
         )
 
     def _make_partition_pager(
@@ -776,32 +756,20 @@ class GlueCatalogVM:
     ) -> BoundedTokenPagedComposition[PartitionSummary, str]:
         generation = self._partition_generation
 
-        async def fetch(token: str | None) -> tuple[list[PartitionSummary], str | None]:
-            if ref is None:
-                return [], None
+        async def list_page(token: str | None) -> tuple[list[PartitionSummary], str | None]:
+            assert ref is not None  # an unbound pager never reaches the provider
+            return cast(
+                tuple[list[PartitionSummary], str | None],
+                await self._client.list_partitions_page(ref, start_token=token),
+            )
 
-            async def list_page() -> tuple[list[PartitionSummary], str | None]:
-                if not self._is_partition_identity_current(generation):
-                    raise GlueOperationSuperseded
-                return cast(
-                    tuple[list[PartitionSummary], str | None],
-                    await self._client.list_partitions_page(
-                        ref,
-                        start_token=token,
-                    ),
-                )
-
-            rows, next_token = await self._operations.run(list_page)
-            if not self._is_partition_identity_current(generation):
-                return [], None
-            return rows, next_token
-
-        return BoundedTokenPagedComposition(
-            reject_token_cycles(
-                fetch,
-                message="Glue repeated a partition continuation token",
-            ),
+        return bounded_glue_pager(
+            self._operations,
+            list_page,
+            is_current=lambda: self._is_partition_identity_current(generation),
+            cycle_message="Glue repeated a partition continuation token",
             max_items=_MAX_PARTITION_ITEMS,
+            unbound=ref is None,
         )
 
     def _replace_table_pager(self, database_name: str | None) -> None:

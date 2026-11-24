@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import asyncio
-from typing import Any
+from typing import Any, cast
 
 import reactivex as rx
 from vmx import (
@@ -15,10 +15,10 @@ from vmx import (
 
 from aws_tui.domain.glue import GlueCrawlerDetail, GlueCrawlerSummary
 from aws_tui.vm._observable import ObserverSafeSubject, send_value_free
-from aws_tui.vm._token_paging import reject_token_cycles
 from aws_tui.vm.file_manager.pane_vm import PaneState
 from aws_tui.vm.glue._guarded import guarded
 from aws_tui.vm.glue._lifecycle import GlueOperationOwner
+from aws_tui.vm.glue._pager import bounded_glue_pager
 from aws_tui.vm.paging import BoundedTokenPagedComposition
 
 _MAX_CRAWLER_ITEMS = 1_000
@@ -217,22 +217,17 @@ class GlueCrawlersVM:
         generation = self._crawler_generation
         state_filter = self._state_filter
 
-        async def fetch(token: str | None) -> tuple[list[GlueCrawlerSummary], str | None]:
-            rows, next_token = await self._operations.run(
-                lambda: self._client.list_crawlers_page(
-                    start_token=token,
-                    state=state_filter,
-                )
+        async def list_page(token: str | None) -> tuple[list[GlueCrawlerSummary], str | None]:
+            return cast(
+                tuple[list[GlueCrawlerSummary], str | None],
+                await self._client.list_crawlers_page(start_token=token, state=state_filter),
             )
-            if generation != self._crawler_generation:
-                return [], None
-            return rows, next_token
 
-        return BoundedTokenPagedComposition(
-            reject_token_cycles(
-                fetch,
-                message="Glue repeated a crawler continuation token",
-            ),
+        return bounded_glue_pager(
+            self._operations,
+            list_page,
+            is_current=lambda: generation == self._crawler_generation,
+            cycle_message="Glue repeated a crawler continuation token",
             max_items=_MAX_CRAWLER_ITEMS,
         )
 
