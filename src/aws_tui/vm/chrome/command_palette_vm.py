@@ -8,9 +8,9 @@ to keep the dependency footprint tiny. The view layer reads
 ``PropertyChangedMessage`` on the hub.
 
 Round-3 directive (spec §9.bis.11): the registry composes
-:class:`vmx.CompositeVM` over per-entry :class:`PaletteEntryVM`
-facades. VMx ``ScoredFilteredCompositeVM`` owns the hidden/ranked visible
-projection; the facade still exposes the app-specific
+:class:`vmx.CompositeVM` over per-entry :class:`vmx.ComponentVMOf` rows whose
+model is the :class:`PaletteEntry`. VMx ``ScoredFilteredCompositeVM`` owns the
+hidden/ranked visible projection; the view model still exposes the app-specific
 ``filter_text`` / ``filtered_entries`` / ``selected_index`` surface.
 """
 
@@ -100,50 +100,6 @@ def _score(entry: PaletteEntry, query: str) -> int | None:
     return None
 
 
-class PaletteEntryVM:
-    """Facade wrapping a :class:`ComponentVMOf` so the inner can be
-    parented into the palette's :class:`CompositeVM`.
-
-    Same pattern as ``NavItemVM``. The public payload is the
-    :class:`PaletteEntry` value. ``inner`` is the composite's child handle.
-    """
-
-    def __init__(
-        self,
-        *,
-        entry: PaletteEntry,
-        hub: MessageHub[Message],
-        dispatcher: Dispatcher,
-    ) -> None:
-        self._entry: PaletteEntry = entry
-        self._inner: ComponentVMOf[PaletteEntry] = (
-            ComponentVMOf[PaletteEntry]
-            .builder()
-            .name(f"palette_entry.{entry.id}")
-            .model(entry)
-            .services(hub, dispatcher)
-            .build()
-        )
-
-    @property
-    def entry(self) -> PaletteEntry:
-        return self._entry
-
-    @property
-    def inner(self) -> ComponentVMOf[PaletteEntry]:
-        return self._inner
-
-    @property
-    def is_constructed(self) -> bool:
-        return self._inner.is_constructed
-
-    def construct(self) -> None:
-        self._inner.construct()
-
-    def dispose(self) -> None:
-        self._inner.dispose()
-
-
 class CommandPaletteVM:
     """Reactive command-palette viewmodel."""
 
@@ -156,11 +112,11 @@ class CommandPaletteVM:
         self._hub: MessageHub[Message] = hub
         self._dispatcher: Dispatcher = dispatcher
 
-        # Registry: composite of PaletteEntryVM inners (lifecycle +
+        # Registry: composite of ComponentVMOf[PaletteEntry] rows (lifecycle +
         # on_collection_changed), plus a parallel dict for action lookup
         # by entry id. The composite is internal — consumers bind to the
         # filter_text / filtered_entries / selected_index surface.
-        self._items: dict[str, PaletteEntryVM] = {}
+        self._items: dict[str, ComponentVMOf[PaletteEntry]] = {}
         self._actions: dict[str, PaletteAction] = {}
         self._inner_registry: CompositeVM[ComponentVMOf[PaletteEntry]] = (
             CompositeVM[ComponentVMOf[PaletteEntry]]
@@ -325,20 +281,25 @@ class CommandPaletteVM:
 
     def register_entry(self, entry: PaletteEntry, action: PaletteAction) -> None:
         """Register or replace ``entry``; rebuilds the filtered list."""
-        # Replace path: drop the old inner from the composite first so
-        # auto_construct + composite ordering stays sane.
         existing = self._items.get(entry.id)
-        if existing is not None and existing.entry == entry:
+        if existing is not None and existing.model == entry:
             self._actions[entry.id] = action
             return
         if existing is not None:
-            if existing.inner in self._inner_registry:
-                self._inner_registry.remove(existing.inner)
+            if existing in self._inner_registry:
+                self._inner_registry.remove(existing)
             existing.dispose()
-        item = PaletteEntryVM(entry=entry, hub=self._hub, dispatcher=self._dispatcher)
+        item = (
+            ComponentVMOf[PaletteEntry]
+            .builder()
+            .name(f"palette_entry.{entry.id}")
+            .model(entry)
+            .services(self._hub, self._dispatcher)
+            .build()
+        )
         self._items[entry.id] = item
         self._actions[entry.id] = action
-        self._inner_registry.append(item.inner)
+        self._inner_registry.append(item)
         self._select_first()
 
     def unregister_entry(self, entry_id: str) -> None:
@@ -346,8 +307,8 @@ class CommandPaletteVM:
         if item is None:
             return
         self._actions.pop(entry_id, None)
-        if item.inner in self._inner_registry:
-            self._inner_registry.remove(item.inner)
+        if item in self._inner_registry:
+            self._inner_registry.remove(item)
         item.dispose()
         self._select_first()
 
@@ -438,7 +399,7 @@ class CommandPaletteVM:
     # ── Filter machinery ───────────────────────────────────────────────────
 
     def _initial_children(self) -> tuple[ComponentVMOf[PaletteEntry], ...]:
-        return tuple(item.inner for item in self._items.values())
+        return tuple(self._items.values())
 
     def _score_for_vmx(self, item_inner: ComponentVMOf[PaletteEntry]) -> int | None:
         entry = item_inner.model
@@ -468,4 +429,4 @@ class CommandPaletteVM:
             self._notify("selected_index")
 
 
-__all__ = ["CommandPaletteVM", "PaletteAction", "PaletteEntry", "PaletteEntryVM"]
+__all__ = ["CommandPaletteVM", "PaletteAction", "PaletteEntry"]
