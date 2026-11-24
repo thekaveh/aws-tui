@@ -10,9 +10,14 @@ from urllib.parse import quote, urlencode
 
 from reactivex import Observable
 from reactivex.abc import DisposableBase
-from vmx import ComponentVMOf, Message, MessageHub, PropertyChangedMessage
-from vmx.lifecycle.status import ConstructionStatus
-from vmx.services.dispatcher import Dispatcher
+from vmx import (
+    ComponentVMOf,
+    ConstructionStatus,
+    Dispatcher,
+    Message,
+    MessageHub,
+    PropertyChangedMessage,
+)
 
 from aws_tui.domain.filesystem import (
     ConflictError,

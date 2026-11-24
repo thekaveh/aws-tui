@@ -3,8 +3,7 @@ from __future__ import annotations
 import asyncio
 from typing import Any, Literal, TypeAlias
 
-from vmx import ComponentVMOf, Message, MessageHub, PropertyChangedMessage
-from vmx.services.dispatcher import Dispatcher
+from vmx import ComponentVMOf, Dispatcher, Message, MessageHub, PropertyChangedMessage
 
 from aws_tui.domain.data_catalog import TableRef
 from aws_tui.infra.connection_resolver import Connection

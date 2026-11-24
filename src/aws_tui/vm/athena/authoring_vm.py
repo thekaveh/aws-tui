@@ -14,8 +14,7 @@ from functools import wraps
 from pathlib import Path
 from typing import Any, Concatenate, ParamSpec, TypeVar
 
-from vmx import Message, MessageHub
-from vmx.services.dispatcher import Dispatcher
+from vmx import Dispatcher, Message, MessageHub
 
 from aws_tui.domain.query import QueryContext
 from aws_tui.domain.sql_authoring import FormatResult, format_sql

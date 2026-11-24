@@ -6,9 +6,7 @@ from dataclasses import replace
 from functools import partial
 
 import anyio
-from vmx import ComponentVM, Message, MessageHub
-from vmx.lifecycle.status import ConstructionStatus
-from vmx.services.dispatcher import Dispatcher
+from vmx import ComponentVM, ConstructionStatus, Dispatcher, Message, MessageHub
 
 from aws_tui.infra.config_store import ConfigError, ConfigStore, ConnectionEntry
 from aws_tui.infra.connection_resolver import Connection, ConnectionNotFound, ConnectionResolver

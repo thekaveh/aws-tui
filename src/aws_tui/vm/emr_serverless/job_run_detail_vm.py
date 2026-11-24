@@ -19,11 +19,11 @@ from vmx import (
     AsyncResourceVM,
     ComponentVMOf,
     ConstructionStatus,
+    Dispatcher,
     Message,
     MessageHub,
     PropertyChangedMessage,
 )
-from vmx.services.dispatcher import Dispatcher
 
 from aws_tui.domain.emr_serverless import (
     EmrServerlessClientProtocol,

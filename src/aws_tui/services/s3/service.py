@@ -20,8 +20,7 @@ from pathlib import Path
 from typing import ClassVar
 
 import aioboto3
-from vmx import Message, MessageHub
-from vmx.services.dispatcher import Dispatcher
+from vmx import Dispatcher, Message, MessageHub
 
 from aws_tui.domain.filesystem import AuthRequiredError, FileSystemProvider, PathRef, ProviderError
 from aws_tui.domain.local_fs import LocalFS

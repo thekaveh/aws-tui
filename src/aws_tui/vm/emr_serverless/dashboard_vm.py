@@ -9,8 +9,7 @@ from dataclasses import dataclass
 from threading import Lock
 from typing import Literal
 
-from vmx import Message, MessageHub
-from vmx.services.dispatcher import Dispatcher
+from vmx import Dispatcher, Message, MessageHub
 
 from aws_tui.domain.emr_dashboard import DashboardLink, validate_dashboard_url
 from aws_tui.domain.emr_serverless import EmrServerlessClientProtocol

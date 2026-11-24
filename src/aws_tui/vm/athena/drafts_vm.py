@@ -12,8 +12,7 @@ from pathlib import Path
 from typing import Literal
 
 import reactivex as rx
-from vmx import Message, MessageHub, PropertyChangedMessage
-from vmx.services.dispatcher import Dispatcher
+from vmx import Dispatcher, Message, MessageHub, PropertyChangedMessage
 
 from aws_tui.domain.query import QueryContext
 from aws_tui.infra.athena_draft_store import (

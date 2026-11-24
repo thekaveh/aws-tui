@@ -13,13 +13,13 @@ from typing import TYPE_CHECKING
 from vmx import (
     ComponentVMOf,
     CompositeVM,
+    ConstructionStatus,
+    Dispatcher,
     Message,
     MessageHub,
     PropertyChangedMessage,
     RelayCommand,
 )
-from vmx.lifecycle.status import ConstructionStatus
-from vmx.services.dispatcher import Dispatcher
 
 from aws_tui.vm._observable import send_value_free
 from aws_tui.vm.file_manager.transfer_vm import (

@@ -9,8 +9,7 @@ from datetime import UTC, datetime
 from typing import Literal, TypeVar, cast
 
 import reactivex as rx
-from vmx import Message, MessageHub, PropertyChangedMessage
-from vmx.services.dispatcher import Dispatcher
+from vmx import Dispatcher, Message, MessageHub, PropertyChangedMessage
 
 from aws_tui.domain.data_catalog import (
     DatabaseRef,

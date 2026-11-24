@@ -20,9 +20,7 @@ import asyncio
 from collections.abc import Awaitable, Callable
 
 from reactivex.abc import DisposableBase
-from vmx import ComponentVM, Message, MessageHub, RxDispatcher
-from vmx.lifecycle.status import ConstructionStatus
-from vmx.services.dispatcher import Dispatcher
+from vmx import ComponentVM, ConstructionStatus, Dispatcher, Message, MessageHub, RxDispatcher
 
 from aws_tui.infra.aws_session import TokenState
 from aws_tui.infra.connection_resolver import Connection

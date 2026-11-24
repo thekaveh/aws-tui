@@ -8,9 +8,7 @@ AggregateVMs require real VMx VMs).
 
 from __future__ import annotations
 
-from vmx import ComponentVM, Message, MessageHub
-from vmx.lifecycle.status import ConstructionStatus
-from vmx.services.dispatcher import Dispatcher
+from vmx import ComponentVM, ConstructionStatus, Dispatcher, Message, MessageHub
 
 from aws_tui.infra.keymap_store import KeymapStore
 from aws_tui.vm.chrome.hint_legend_vm import HintLegendVM

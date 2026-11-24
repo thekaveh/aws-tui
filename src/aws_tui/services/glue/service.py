@@ -7,8 +7,7 @@ from collections.abc import Callable, Sequence
 from datetime import datetime
 from typing import Any, ClassVar, Protocol, cast
 
-from vmx import Message, MessageHub
-from vmx.services.dispatcher import Dispatcher
+from vmx import Dispatcher, Message, MessageHub
 
 from aws_tui.domain.athena import AthenaClient, AthenaWorkgroupSummary
 from aws_tui.domain.athena_runner import AthenaQueryRunner

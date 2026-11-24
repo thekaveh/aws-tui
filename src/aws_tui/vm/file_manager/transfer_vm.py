@@ -14,9 +14,15 @@ from collections.abc import Callable
 from dataclasses import dataclass, replace
 from typing import Literal
 
-from vmx import ComponentVMOf, Message, MessageHub, PropertyChangedMessage, RelayCommand
-from vmx.lifecycle.status import ConstructionStatus
-from vmx.services.dispatcher import Dispatcher
+from vmx import (
+    ComponentVMOf,
+    ConstructionStatus,
+    Dispatcher,
+    Message,
+    MessageHub,
+    PropertyChangedMessage,
+    RelayCommand,
+)
 
 from aws_tui.vm._observable import send_value_free
 from aws_tui.vm.messages import (

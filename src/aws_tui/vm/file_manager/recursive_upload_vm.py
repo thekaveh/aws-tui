@@ -8,8 +8,7 @@ from typing import cast
 
 from reactivex import Observable
 from reactivex.abc import DisposableBase
-from vmx import Message, MessageHub, PropertyChangedMessage
-from vmx.lifecycle.status import ConstructionStatus
+from vmx import ConstructionStatus, Message, MessageHub, PropertyChangedMessage
 
 from aws_tui.domain.cross_fs import ConflictResolution
 from aws_tui.domain.filesystem import ConflictError, EntryKind, PathRef

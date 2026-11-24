@@ -8,9 +8,7 @@ ContentHost lifecycle calls it without an attribute error).
 
 from __future__ import annotations
 
-from vmx import ComponentVM, Message, MessageHub
-from vmx.lifecycle.status import ConstructionStatus
-from vmx.services.dispatcher import Dispatcher
+from vmx import ComponentVM, ConstructionStatus, Dispatcher, Message, MessageHub
 
 from aws_tui.vm.athena.drafts_vm import AthenaDraftsVM
 from aws_tui.vm.settings.connection_protection_vm import ConnectionProtectionVM

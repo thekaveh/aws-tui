@@ -3,8 +3,7 @@
 import asyncio
 from collections.abc import Awaitable, Callable
 
-from vmx import Message, MessageHub
-from vmx.services.dispatcher import Dispatcher
+from vmx import Dispatcher, Message, MessageHub
 
 from aws_tui.domain.local_fs import LocalFS
 from aws_tui.domain.navigation_workspace import FileLocation, NavigationTarget, WorkspaceError

@@ -13,9 +13,7 @@ import logging
 from collections.abc import Iterable
 
 import reactivex as rx
-from vmx import ComponentVMOf, CompositeVM, Message, MessageHub
-from vmx.lifecycle.status import ConstructionStatus
-from vmx.services.dispatcher import Dispatcher
+from vmx import ComponentVMOf, CompositeVM, ConstructionStatus, Dispatcher, Message, MessageHub
 
 from aws_tui.vm.chrome.toast_vm import ToastModel, ToastVM
 

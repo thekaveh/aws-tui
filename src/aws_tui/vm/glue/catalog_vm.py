@@ -6,9 +6,14 @@ from dataclasses import dataclass
 from typing import Any, Literal, cast
 
 import reactivex as rx
-from vmx import ComponentVMOf, Message, MessageHub, PropertyChangedMessage
-from vmx.lifecycle.status import ConstructionStatus
-from vmx.services.dispatcher import Dispatcher
+from vmx import (
+    ComponentVMOf,
+    ConstructionStatus,
+    Dispatcher,
+    Message,
+    MessageHub,
+    PropertyChangedMessage,
+)
 
 from aws_tui.domain.data_catalog import (
     ColumnStatistics,

@@ -9,9 +9,14 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from vmx import ComponentVM, Message, MessageHub, PropertyChangedMessage
-from vmx.lifecycle.status import ConstructionStatus
-from vmx.services.dispatcher import Dispatcher
+from vmx import (
+    ComponentVM,
+    ConstructionStatus,
+    Dispatcher,
+    Message,
+    MessageHub,
+    PropertyChangedMessage,
+)
 
 from aws_tui.infra.keymap_store import KeymapStore, UnknownAction
 from aws_tui.vm._observable import send_value_free

@@ -13,15 +13,15 @@ from dataclasses import dataclass
 
 from vmx import (
     ComponentVM,
+    ConstructionStatus,
     DialogService,
+    Dispatcher,
     Message,
     MessageHub,
     ModalVM,
     PropertyChangedMessage,
     RelayCommand,
 )
-from vmx.lifecycle.status import ConstructionStatus
-from vmx.services.dispatcher import Dispatcher
 
 from aws_tui.vm._observable import send_value_free
 

@@ -3,9 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 import reactivex as rx
-from vmx import ComponentVMOf, Message, MessageHub, RelayCommandOf
-from vmx.lifecycle.status import ConstructionStatus
-from vmx.services.dispatcher import Dispatcher
+from vmx import ComponentVMOf, ConstructionStatus, Dispatcher, Message, MessageHub, RelayCommandOf
 
 from aws_tui.domain.data_catalog import TableRef
 from aws_tui.domain.sql_policy import quote_athena_table_ref
