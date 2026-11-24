@@ -6,7 +6,12 @@ from importlib.metadata import version
 import pytest
 
 from aws_tui.domain.filesystem import ProviderError
-from aws_tui.vm.athena._pager_compat import SnapshotTokenPager, seed_token_pager
+from aws_tui.vm.athena._pager_compat import (
+    PagerWorker,
+    SnapshotTokenPager,
+    drain_worker_tasks,
+    seed_token_pager,
+)
 
 
 @pytest.mark.asyncio
@@ -376,3 +381,65 @@ async def test_refresh_retires_an_in_flight_continuation_page() -> None:
 
     assert pager.items == ["fresh-page"]
     assert pager.current_token == "fresh-next"
+
+
+def test_pager_worker_retire_is_idempotent_and_disposes_the_pager() -> None:
+    async def fetch(token: str | None) -> tuple[list[str], str | None]:
+        return [], None
+
+    worker: PagerWorker[str] = PagerWorker(1)
+    worker.pager = SnapshotTokenPager(fetch)
+    assert worker.retire() is True
+    assert worker.retire() is False
+    assert worker.retired
+    with pytest.raises(RuntimeError):
+        worker.pager.restore([], None)
+
+
+@pytest.mark.asyncio
+async def test_pager_worker_tracks_and_untracks_the_current_task() -> None:
+    worker: PagerWorker[str] = PagerWorker(1)
+
+    async def body() -> None:
+        task = worker.track_current_task()
+        assert task is asyncio.current_task()
+        assert worker.tasks == {task}
+        worker.untrack(task)
+        assert worker.tasks == set()
+
+    await asyncio.create_task(body())
+
+
+@pytest.mark.asyncio
+async def test_drain_worker_tasks_waits_for_tracked_and_extra_tasks() -> None:
+    worker: PagerWorker[str] = PagerWorker(1)
+    release = asyncio.Event()
+
+    async def tracked() -> None:
+        worker.track_current_task()
+        await release.wait()
+
+    async def extra() -> None:
+        await release.wait()
+
+    tracked_task = asyncio.create_task(tracked())
+    extra_task = asyncio.create_task(extra())
+    await asyncio.sleep(0)
+    drain = asyncio.create_task(drain_worker_tasks([worker], {extra_task}))
+    await asyncio.sleep(0)
+    assert not drain.done()
+    release.set()
+    await asyncio.wait_for(drain, 1)
+    assert tracked_task.done()
+    assert extra_task.done()
+
+
+@pytest.mark.asyncio
+async def test_drain_worker_tasks_skips_the_calling_task() -> None:
+    worker: PagerWorker[str] = PagerWorker(1)
+
+    async def drain_from_tracked_task() -> None:
+        worker.track_current_task()
+        await drain_worker_tasks([worker])
+
+    await asyncio.wait_for(asyncio.create_task(drain_from_tracked_task()), 1)
