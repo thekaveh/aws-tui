@@ -50,9 +50,11 @@ from aws_tui.vm.nav_menu_vm import SETTINGS_NAV_ID
 
 if TYPE_CHECKING:
     from reactivex.abc import DisposableBase
+    from vmx import ComponentVMOf
 
     from aws_tui.vm.chrome.focus_coordinator_vm import FocusCoordinatorVM
-    from aws_tui.vm.nav_menu_vm import NavItemVM, NavMenuVM
+    from aws_tui.vm.nav_menu_vm import NavMenuVM
+    from aws_tui.vm.services_protocol import ServiceDescriptor
 
 
 #: Fixed outer width for the always-visible service rail. Twelve cells
@@ -123,7 +125,7 @@ class NavMenu(HubSubscriberMixin, Widget, can_focus=True):
         # Settings). Cursor moves across this whole list — there
         # is NO separation between services and Settings at the
         # navigation level. ``_cursor_index`` indexes into it.
-        self._items: list[NavItemVM] = []
+        self._items: list[ComponentVMOf[ServiceDescriptor]] = []
         # Round-3 directive (spec §9.bis.11, §3.2.bis row 1): the
         # cursor index is NO LONGER a stored field. It's derived on
         # demand from ``vm.selected_id`` (the VM-owned canonical
@@ -252,7 +254,7 @@ class NavMenu(HubSubscriberMixin, Widget, can_focus=True):
         cur = self._cursor_index()
         if cur <= 0:
             return
-        target_id = self._items[cur - 1].descriptor.id
+        target_id = self._items[cur - 1].model.id
         self._after_cursor_move(target_id)
 
     def action_cursor_down(self) -> None:
@@ -265,7 +267,7 @@ class NavMenu(HubSubscriberMixin, Widget, can_focus=True):
         cur = self._cursor_index()
         if cur + 1 >= len(self._items):
             return
-        target_id = self._items[cur + 1].descriptor.id
+        target_id = self._items[cur + 1].model.id
         self._after_cursor_move(target_id)
 
     def _after_cursor_move(self, target_id: str) -> None:
@@ -323,7 +325,7 @@ class NavMenu(HubSubscriberMixin, Widget, can_focus=True):
             return
         if not self._items:
             return
-        target_id = self._items[self._cursor_index()].descriptor.id
+        target_id = self._items[self._cursor_index()].model.id
         needs_switch = target_id != self._vm.selected_id
         app = self.app
         with contextlib.suppress(Exception):
@@ -355,7 +357,7 @@ class NavMenu(HubSubscriberMixin, Widget, can_focus=True):
             if isinstance(target, NavRow):
                 target_id = target.descriptor_id
                 for idx, item in enumerate(self._items):
-                    if item.descriptor.id == target_id:
+                    if item.model.id == target_id:
                         if idx != self._cursor_index():
                             self._after_cursor_move(target_id)
                         elif target_id != self._vm.selected_id:
@@ -401,12 +403,12 @@ class NavMenu(HubSubscriberMixin, Widget, can_focus=True):
         # User feedback (post-PR-#97): "Let's switch back the Settings
         # to the gear emoji and then make the menu pane narrower."
         for item in self._items:
-            is_settings = item.descriptor.id == SETTINGS_NAV_ID
-            display = item.descriptor.icon if is_settings else item.descriptor.label
+            is_settings = item.model.id == SETTINGS_NAV_ID
+            display = item.model.icon if is_settings else item.model.label
             row = NavRow(
-                descriptor_id=item.descriptor.id,
+                descriptor_id=item.model.id,
                 label=display,
-                is_selected=(item.descriptor.id == self._vm.selected_id),
+                is_selected=(item.model.id == self._vm.selected_id),
                 is_settings=is_settings,
             )
             if is_settings:
@@ -418,7 +420,7 @@ class NavMenu(HubSubscriberMixin, Widget, can_focus=True):
         if descriptor_id is None:
             return default
         for idx, item in enumerate(self._items):
-            if item.descriptor.id == descriptor_id:
+            if item.model.id == descriptor_id:
                 return idx
         return default
 

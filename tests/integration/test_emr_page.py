@@ -146,7 +146,7 @@ async def test_emr_nav_row_hidden_on_s3_compatible_connection(tmp_path: Path) ->
             await pilot.pause()
             # The nav menu's items must NOT include "emr-serverless" when
             # the active connection is s3-compatible.
-            ids = [item.descriptor.id for item in ctx.root_vm.services_menu.items]
+            ids = [item.model.id for item in ctx.root_vm.services_menu.items]
             assert "emr-serverless" not in ids, (
                 f"EMR must be filtered out on s3-compatible connections, got {ids}"
             )
