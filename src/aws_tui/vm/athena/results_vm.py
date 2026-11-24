@@ -33,7 +33,9 @@ from aws_tui.vm.athena._domain_validation import (
 from aws_tui.vm.athena._errors import map_provider_error, map_unexpected_error
 from aws_tui.vm.athena._pager_compat import (
     PagerCollectionLimitError,
+    PagerWorker,
     SnapshotTokenPager,
+    drain_worker_tasks,
     seed_token_pager,
 )
 from aws_tui.vm.athena.result_projection import ResultRow, SortDirection, project_row_indices
@@ -86,14 +88,14 @@ class _ResultColumnsChangedError(Exception):
 
 
 @dataclass(eq=False)
-class _PagerGeneration:
-    generation: int
+class _PagerGeneration(PagerWorker[ResultRow]):
     execution_id: str | None = field(repr=False)
     columns: tuple[ResultColumn, ...] = field(default=(), repr=False)
-    tasks: set[asyncio.Task[Any]] = field(default_factory=set, repr=False)
-    retired: bool = False
-    pager: SnapshotTokenPager[ResultRow, str] = field(init=False, repr=False)
     load_more_command: AsyncRelayCommand = field(init=False, repr=False)
+
+    def _dispose_resources(self) -> None:
+        self.load_more_command.dispose()
+        super()._dispose_resources()
 
 
 class AthenaResultsVM:
@@ -315,7 +317,7 @@ class AthenaResultsVM:
         worker = self._replace_worker(execution_id, generation)
         self._set_state(PaneState.LOADING)
         self._notify_all()
-        task = self._track_current_task(worker)
+        task = worker.track_current_task()
         try:
             await worker.pager.refresh_command.execute_async()
         except _ResultColumnsChangedError:
@@ -595,7 +597,7 @@ class AthenaResultsVM:
         if not self._can_load_more(worker):
             return
         self._begin_loading_more(worker)
-        task = self._track_current_task(worker)
+        task = worker.track_current_task()
         try:
             await worker.pager.load_more_command.execute_async()
         except _ResultColumnsChangedError:
@@ -681,7 +683,7 @@ class AthenaResultsVM:
 
         async def fetch(token: str | None) -> tuple[list[ResultRow], str | None]:
             nonlocal restored_page
-            task = self._track_current_task(worker)
+            task = worker.track_current_task()
             try:
                 if token is None and restored_page is not None:
                     page = restored_page
@@ -739,45 +741,20 @@ class AthenaResultsVM:
         return worker
 
     def _retire_worker(self, worker: _PagerGeneration) -> None:
-        if worker.retired:
-            return
-        worker.retired = True
-        worker.load_more_command.dispose()
-        worker.pager.dispose()
-        if not worker.tasks and worker is not self._worker:
+        if worker.retire() and not worker.tasks and worker is not self._worker:
             self._workers.discard(worker)
-
-    def _track_current_task(
-        self,
-        worker: _PagerGeneration,
-    ) -> asyncio.Task[Any] | None:
-        task = asyncio.current_task()
-        if task is not None:
-            worker.tasks.add(task)
-        return task
 
     def _untrack_task(
         self,
         worker: _PagerGeneration,
         task: asyncio.Task[Any] | None,
     ) -> None:
-        if task is not None:
-            worker.tasks.discard(task)
+        worker.untrack(task)
         if worker.retired and not worker.tasks and worker is not self._worker:
             self._workers.discard(worker)
 
     async def _drain_workers(self) -> None:
-        current = asyncio.current_task()
-        while True:
-            tasks = {
-                task
-                for worker in self._workers
-                for task in worker.tasks
-                if task is not current and not task.done()
-            }
-            if not tasks:
-                return
-            await asyncio.gather(*tasks, return_exceptions=True)
+        await drain_worker_tasks(self._workers)
 
     def _is_current(self, worker: _PagerGeneration) -> bool:
         return (

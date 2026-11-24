@@ -1,7 +1,9 @@
 from __future__ import annotations
 
-from collections.abc import Awaitable, Callable, Sequence
-from typing import Generic, TypeVar
+import asyncio
+from collections.abc import Awaitable, Callable, Collection, Sequence
+from dataclasses import dataclass, field
+from typing import Any, Generic, TypeVar
 
 import reactivex as rx
 from reactivex import operators as ops
@@ -246,4 +248,56 @@ def seed_token_pager(
     pager.restore(items, next_token, limit_reached=limit_reached)
 
 
-__all__ = ["PagerCollectionLimitError", "SnapshotTokenPager", "seed_token_pager"]
+@dataclass(eq=False)
+class PagerWorker(Generic[T]):
+    """One generation of a paged list: its pager, running tasks and retired flag."""
+
+    generation: int
+    tasks: set[asyncio.Task[Any]] = field(default_factory=set, repr=False, kw_only=True)
+    retired: bool = field(default=False, kw_only=True)
+    pager: SnapshotTokenPager[T, str] = field(init=False, repr=False)
+
+    def track_current_task(self) -> asyncio.Task[Any] | None:
+        task = asyncio.current_task()
+        if task is not None:
+            self.tasks.add(task)
+        return task
+
+    def untrack(self, task: asyncio.Task[Any] | None) -> None:
+        if task is not None:
+            self.tasks.discard(task)
+
+    def retire(self) -> bool:
+        """Retire once. Return True only for the call that retired the worker."""
+        if self.retired:
+            return False
+        self.retired = True
+        self._dispose_resources()
+        return True
+
+    def _dispose_resources(self) -> None:
+        self.pager.dispose()
+
+
+async def drain_worker_tasks(
+    workers: Collection[PagerWorker[Any]],
+    extra: Collection[asyncio.Task[Any]] = (),
+) -> None:
+    """Wait until every worker task, and every extra task, is done. Skip the caller's task."""
+    current = asyncio.current_task()
+    while True:
+        tasks = {task for worker in workers for task in worker.tasks}
+        tasks.update(extra)
+        tasks = {task for task in tasks if task is not current and not task.done()}
+        if not tasks:
+            return
+        await asyncio.gather(*tasks, return_exceptions=True)
+
+
+__all__ = [
+    "PagerCollectionLimitError",
+    "PagerWorker",
+    "SnapshotTokenPager",
+    "drain_worker_tasks",
+    "seed_token_pager",
+]
