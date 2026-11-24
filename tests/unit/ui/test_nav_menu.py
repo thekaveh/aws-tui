@@ -227,7 +227,7 @@ async def test_nav_menu_rebuilds_rows_when_vm_items_change(tmp_path: Path) -> No
 
             before = len(rebuild_calls)
             previous_rows = set(nav.query(NavRow))
-            expected_ids = {item.descriptor.id for item in vm.items}
+            expected_ids = {item.model.id for item in vm.items}
             hub.send(PropertyChangedMessage.create(vm, vm.name, "items"))
             await wait_until(
                 lambda: (
@@ -322,7 +322,7 @@ async def test_cursor_can_reach_settings_row_via_arrow_keys() -> None:
             items = nav._items  # type: ignore[attr-defined]
             assert items, "items must be populated after rebuild"
             settings_idx = next(
-                (i for i, it in enumerate(items) if it.descriptor.id == "settings"),
+                (i for i, it in enumerate(items) if it.model.id == "settings"),
                 None,
             )
             assert settings_idx is not None, (
@@ -423,7 +423,7 @@ async def test_optional_discovery_section_restores_normal_rail_navigation() -> N
             assert [row.descriptor_id for row in nav.query(NavRow)] == normal_ids
             nav.focus()
             await pilot.press("down")
-            assert vm.selected_id == vm.items[1].descriptor.id
+            assert vm.selected_id == vm.items[1].model.id
             selected = vm.selected_id
             await nav.show_first_run_connections(None)
             await pilot.pause()
