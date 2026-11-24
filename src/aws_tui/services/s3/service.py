@@ -130,7 +130,7 @@ class S3Service:
         self,
         *,
         transfer_journal: TransferJournal,
-        hub: MessageHub[Message] | None = None,
+        hub: MessageHub[Message],
         dispatcher: Dispatcher,
         local_root: Path | None = None,
         s3_fs_factory: S3FsFactory | None = None,
@@ -143,22 +143,14 @@ class S3Service:
         self._initial_left_path = initial_left_path
         self._initial_right_path = initial_right_path
         self._journal: TransferJournal = transfer_journal
-        self._hub: MessageHub[Message] | None = hub
+        self._hub: MessageHub[Message] = hub
         self._dispatcher: Dispatcher = dispatcher
         self._local_root: Path | None = local_root
         self._mutation_check_factory = mutation_check_factory
         self._s3_fs_factory: S3FsFactory | None = s3_fs_factory
         self._last_navigation: tuple[NavigationTarget, NavigationTarget] | None = None
         self._navigation_capture_failed = False
-        self._transfer_runtime = TransferRuntime(transfer_journal, hub) if hub is not None else None
-
-    def bind_hub(self, hub: MessageHub[Message]) -> None:
-        """Late-wire the hub (used when the service is registered before
-        :class:`RootVM` has constructed its hub).
-        """
-        self._hub = hub
-        if self._transfer_runtime is None:
-            self._transfer_runtime = TransferRuntime(self._journal, hub)
+        self._transfer_runtime = TransferRuntime(transfer_journal, hub)
 
     # ── Service protocol ────────────────────────────────────────────────────
 
@@ -173,19 +165,7 @@ class S3Service:
         Returned VM is *not* constructed — :class:`ContentHostVM` calls
         ``construct()`` after the swap; callers needing to populate
         listings must subsequently ``await dual.setup()``.
-
-        Precondition: ``bind_hub`` has been called. Composition wires it
-        immediately after :class:`RootVM` construction, so by the time
-        any service-switch command can fire (the only path to
-        ``build_vm``), the hub is always present. The runtime check
-        below is a wiring-bug assertion for the test surface, not a
-        user-reachable error path — hence ``RuntimeError`` rather than
-        a typed :class:`ConfigError` / :class:`ConnectionNotFound`,
-        which the user-facing flows already raise when *they* are the
-        broken precondition.
         """
-        if self._hub is None:
-            raise RuntimeError("S3Service.build_vm called before bind_hub — composition wiring bug")
         hub = self._hub
         s3_provider = self.build_remote_provider(connection)
         local_identity = (
@@ -250,8 +230,6 @@ class S3Service:
     ) -> RecoveryServiceVM:
         """Compose exactly two saved panes, without consuming launch inputs or live state."""
         validate_pane_targets(targets)
-        if self._hub is None:
-            raise RuntimeError("S3Service workspace requested before bind_hub")
         resolved: list[Connection | None] = []
         # Validate every source before constructing any provider (including a
         # potentially credential-bearing SDK session for the other pane).
@@ -328,7 +306,6 @@ class S3Service:
         companion_loader: Callable[[PaneVM], Awaitable[None]] | None = None,
     ) -> RecoveryServiceVM:
         """Enter file browsing at one target without requiring the companion to be available."""
-        assert self._hub is not None
         left = self.build_navigation_pane(target, connections)
         right = None
         try:
@@ -355,7 +332,6 @@ class S3Service:
                     if location.s3 is not None
                     else PathRef.from_posix(location.local or "/"),
                 )
-            assert self._hub is not None
             dual = BookmarkPaneVM(
                 left=left,
                 right=right,
@@ -385,8 +361,6 @@ class S3Service:
     def _build_navigation_pane(
         self, target: NavigationTarget, connection: Connection | None, identity: str
     ) -> PaneVM:
-        if self._hub is None:
-            raise RuntimeError("S3Service navigation requested before bind_hub")
         location = target.location
         assert location is not None
         if connection is None:
@@ -422,8 +396,6 @@ class S3Service:
 
     @property
     def transfer_runtime(self) -> TransferRuntime:
-        if self._transfer_runtime is None:
-            raise RuntimeError("S3Service runtime requested before bind_hub")
         return self._transfer_runtime
 
     @property

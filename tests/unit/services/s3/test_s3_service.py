@@ -218,3 +218,11 @@ def test_missing_aws_profile_raises_a_typed_error_not_a_raw_botocore_one() -> No
     message = str(excinfo.value)
     assert "broken" in message
     assert "definitely-not-a-real-profile-xyz" in message
+
+
+def test_s3_service_requires_hub(tmp_path: Path) -> None:
+    with pytest.raises(TypeError):
+        S3Service(
+            transfer_journal=TransferJournal(base_dir=tmp_path / "journal"),
+            dispatcher=NULL_DISPATCHER,
+        )

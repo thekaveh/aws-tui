@@ -17,7 +17,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from vmx import NULL_DISPATCHER, ComponentVM
+from vmx import NULL_DISPATCHER, ComponentVM, MessageHub
 from vmx.lifecycle.status import ConstructionStatus
 
 from aws_tui.demo.in_memory_fs import InMemoryFS
@@ -122,12 +122,10 @@ async def test_m4_switch_to_s3_hosts_dual_pane_vm(tmp_path: Path) -> None:
     def _s3_factory(_conn: Connection) -> Any:
         return seeded[-1]
 
+    hub: MessageHub[Any] = MessageHub()
     s3_service = S3Service(
         transfer_journal=TransferJournal(base_dir=tmp_path / "journal"),
-        # Hub is set later by RootVM — we use RootVM's hub via the service.
-        # S3Service is constructed before RootVM here so we pull the hub
-        # off it once we have it.
-        hub=None,
+        hub=hub,
         dispatcher=NULL_DISPATCHER,
         local_root=tmp_path / "local",
         s3_fs_factory=_s3_factory,
@@ -138,13 +136,12 @@ async def test_m4_switch_to_s3_hosts_dual_pane_vm(tmp_path: Path) -> None:
     log_dir = tempfile.mkdtemp(prefix="awsTuiTest-m4-")
     root = RootVM(
         registry=registry,
+        hub=hub,
         keymap=KeymapStore(),
         theme=ThemeStore(),
         log=LogSink(base_dir=Path(log_dir)),
         dispatcher=NULL_DISPATCHER,
     )
-    # Wire the service to the RootVM's hub now that it exists.
-    s3_service.bind_hub(root.message_hub)
     root.construct()
 
     await root.switch_connection_with(_aws_conn(), TokenState.CONNECTED)
@@ -178,9 +175,10 @@ async def test_m4_switch_connection_clears_dual_pane(tmp_path: Path) -> None:
     (tmp_path / "local").mkdir()
     fs = await _seed_fs()
 
+    hub: MessageHub[Any] = MessageHub()
     s3_service = S3Service(
         transfer_journal=TransferJournal(base_dir=tmp_path / "journal"),
-        hub=None,
+        hub=hub,
         dispatcher=NULL_DISPATCHER,
         local_root=tmp_path / "local",
         s3_fs_factory=lambda _c: fs,
@@ -191,12 +189,12 @@ async def test_m4_switch_connection_clears_dual_pane(tmp_path: Path) -> None:
     log_dir = tempfile.mkdtemp(prefix="awsTuiTest-m4-")
     root = RootVM(
         registry=registry,
+        hub=hub,
         keymap=KeymapStore(),
         theme=ThemeStore(),
         log=LogSink(base_dir=Path(log_dir)),
         dispatcher=NULL_DISPATCHER,
     )
-    s3_service.bind_hub(root.message_hub)
     root.construct()
 
     await root.switch_connection_with(_aws_conn(), TokenState.CONNECTED)
@@ -223,9 +221,10 @@ async def test_m4_switching_to_other_service_disposes_dual_pane(tmp_path: Path) 
     (tmp_path / "local").mkdir()
     fs = await _seed_fs()
 
+    hub: MessageHub[Any] = MessageHub()
     s3_service = S3Service(
         transfer_journal=TransferJournal(base_dir=tmp_path / "journal"),
-        hub=None,
+        hub=hub,
         dispatcher=NULL_DISPATCHER,
         local_root=tmp_path / "local",
         s3_fs_factory=lambda _c: fs,
@@ -238,12 +237,12 @@ async def test_m4_switching_to_other_service_disposes_dual_pane(tmp_path: Path) 
     log_dir = tempfile.mkdtemp(prefix="awsTuiTest-m4-")
     root = RootVM(
         registry=registry,
+        hub=hub,
         keymap=KeymapStore(),
         theme=ThemeStore(),
         log=LogSink(base_dir=Path(log_dir)),
         dispatcher=NULL_DISPATCHER,
     )
-    s3_service.bind_hub(root.message_hub)
     root.construct()
 
     await root.switch_connection_with(_aws_conn(), TokenState.CONNECTED)

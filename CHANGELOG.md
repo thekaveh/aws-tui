@@ -12,6 +12,7 @@ The Unreleased section is the promotion queue for the next package release. Entr
 ### Changed
 
 - Remove unused file-manager request commands and orphan signals. Navigation, copy, move and delete retain their existing behavior.
+- `S3Service` requires `hub`; its late-binding method is removed. Composition already passed the hub.
 
 ## [0.9.0] - 2026-11-12
 
