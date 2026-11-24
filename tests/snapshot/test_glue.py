@@ -299,10 +299,13 @@ def test_glue_iceberg_coverage_footer_content_guards() -> None:
 
 
 @pytest.mark.parametrize("terminal_size", [(80, 24), (120, 40)])
-def test_iceberg_current_files_with_historical_snapshot_pinned(terminal_size, snap_compare):
+def test_iceberg_current_files_with_historical_snapshot_pinned(
+    terminal_size, snap_compare, monkeypatch
+):
     from textual.widgets import TextArea
 
     from aws_tui.vm.file_manager.pane_vm import PaneState
+    from aws_tui.vm.glue import iceberg_vm
     from tests.helpers import wait_until
     from tests.unit.vm.glue.test_iceberg_vm import NOW
 
@@ -320,13 +323,13 @@ def test_iceberg_current_files_with_historical_snapshot_pinned(terminal_size, sn
         await pilot.click("#glue-iceberg-info")
         await pilot.press("down", "enter", "escape")
         assert app._vm.catalog.iceberg.comparison_snapshot_id == 41
+        # A fixed synthetic fetch time makes this rendering fixture deterministic.
+        # Live observation-time ownership is covered in the VM cancellation tests.
+        monkeypatch.setattr(iceberg_vm, "_now", lambda: NOW)
         await pilot.click("#glue-iceberg-tab-files")
         await wait_until(
             lambda: app._vm.catalog.iceberg.state is PaneState.IDLE, what="current files loaded"
         )
-        # Fixed synthetic fetch time makes this rendering fixture deterministic;
-        # live observation-time ownership is covered in VM cancellation tests.
-        app._vm.catalog.iceberg._panes["files"].observed_at = NOW
         await pilot.pause()
         await pilot.click("#glue-iceberg-info")
         text = app.screen.query_one(TextArea).text
