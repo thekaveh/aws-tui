@@ -6,7 +6,7 @@ from collections.abc import Awaitable, Callable
 from typing import cast
 
 import pytest
-from vmx import NULL_DISPATCHER, MessageHub, PropertyChangedMessage
+from vmx import NULL_DISPATCHER, ComponentVMOf, MessageHub, PropertyChangedMessage
 from vmx.messages.protocols import Message
 
 from aws_tui.vm.chrome.command_palette_vm import CommandPaletteVM, PaletteEntry
@@ -690,5 +690,18 @@ def test_registered_entry_is_constructed_by_the_constructed_palette() -> None:
         rows = list(vm._inner_registry)
         assert rows
         assert all(row.is_constructed for row in rows)
+    finally:
+        vm.dispose()
+
+
+def test_registry_rows_hold_the_entry_as_model() -> None:
+    vm = _build()
+    try:
+        entry = _entry("a", "Alpha")
+        vm.register_entry(entry, lambda: None)
+        row = vm._items["a"]
+        assert isinstance(row, ComponentVMOf)
+        assert row.model == entry
+        assert row in vm._inner_registry
     finally:
         vm.dispose()
