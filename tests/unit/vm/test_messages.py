@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+import dataclasses
+
 import pytest
 from vmx.messages.protocols import Message
 
 from aws_tui.domain.data_catalog import TableRef
 from aws_tui.infra.aws_session import TokenState
 from aws_tui.infra.connection_resolver import Connection
+from aws_tui.vm import messages
 from aws_tui.vm.messages import (
     ConnectionChangedMessage,
     CopyTableReferenceRequest,
@@ -331,3 +334,18 @@ def test_connection_list_changed_message_is_frozen():
     msg = ConnectionListChangedMessage(names=("x",), change="added")
     with pytest.raises(dataclasses.FrozenInstanceError):
         msg.change = "deleted"  # type: ignore[misc]
+
+
+def test_every_message_envelope_inherits_one_sender_object_and_has_no_instance_dict() -> None:
+    envelopes = [
+        value
+        for value in vars(messages).values()
+        if isinstance(value, type)
+        and dataclasses.is_dataclass(value)
+        and value.__module__ == messages.__name__
+    ]
+    assert len(envelopes) == 12
+    for envelope in envelopes:
+        assert "sender_object" not in vars(envelope), envelope.__name__
+        assert envelope.sender_object is messages._SelfSender.sender_object
+        assert not any("__dict__" in vars(klass) for klass in envelope.__mro__), envelope.__name__
