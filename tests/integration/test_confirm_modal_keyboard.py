@@ -290,7 +290,7 @@ async def test_enter_on_crash_modal_uses_safe_default(
     try:
         async with app.run_test(size=(120, 40)) as pilot:
             await pilot.pause()
-            await app.push_screen(CrashModal(vm, hub=ctx.hub), callback=choices.append)
+            await app.push_screen(CrashModal(vm), callback=choices.append)
             await pilot.pause()
 
             await pilot.press("enter")

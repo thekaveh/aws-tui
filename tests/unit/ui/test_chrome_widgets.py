@@ -956,7 +956,7 @@ async def test_toast_stack_renders_three_toasts_with_levels() -> None:
 
         class _App(App[None]):
             def compose(self) -> ComposeResult:
-                yield ToastStack(vm, hub=hub)
+                yield ToastStack(vm)
 
         app = _App()
         async with app.run_test() as pilot:

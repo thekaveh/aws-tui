@@ -11,7 +11,6 @@ from textual.containers import Container, Horizontal, VerticalScroll
 from textual.events import Click
 from textual.screen import ModalScreen
 from textual.widgets import Input, Static, TextArea
-from vmx import Message, MessageHub
 
 from aws_tui.domain.filesystem import (
     AuthRequiredError,
@@ -80,10 +79,9 @@ class JobRunCloneModal(DeferredWorkerMixin, ModalScreen[str | None]):
 
     BINDINGS = [("escape", "cancel", "Cancel")]  # noqa: RUF012
 
-    def __init__(self, vm: JobRunCloneVM, *, hub: MessageHub[Message]) -> None:
+    def __init__(self, vm: JobRunCloneVM) -> None:
         super().__init__()
         self._vm = vm
-        self._hub = hub
         self._error: Static | None = None
         self._submitting = False
         self._reviewed_token: str | None = None

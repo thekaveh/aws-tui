@@ -212,7 +212,7 @@ class CrashModalApp(App[None]):
 
     async def on_mount(self) -> None:
         self._vm.construct()
-        await self.push_screen(CrashModal(self._vm, hub=self._hub))
+        await self.push_screen(CrashModal(self._vm))
 
 
 __all__ = [
