@@ -3052,3 +3052,44 @@ async def test_query_refresh_blocks_workgroup_newly_reported_disabled() -> None:
     finally:
         await page.shutdown()
         page.dispose()
+
+
+@pytest.mark.asyncio
+async def test_notify_context_lists_with_kind_publishes_only_that_list() -> None:
+    page = make_page_vm(PageClient())
+    try:
+        await page.setup()
+        names: list[str] = []
+        subscription = page.on_property_changed.subscribe(names.append)
+        page._notify_context_lists("catalogs")
+        subscription.dispose()
+        assert names == ["catalogs", "has_more_catalogs", "catalogs_state", "catalogs_error_text"]
+    finally:
+        page.dispose()
+
+
+@pytest.mark.asyncio
+async def test_notify_context_lists_without_kind_publishes_all_names_in_order() -> None:
+    page = make_page_vm(PageClient())
+    try:
+        await page.setup()
+        names: list[str] = []
+        subscription = page.on_property_changed.subscribe(names.append)
+        page._notify_context_lists()
+        subscription.dispose()
+        assert names == [
+            "workgroups",
+            "catalogs",
+            "databases",
+            "has_more_workgroups",
+            "has_more_catalogs",
+            "has_more_databases",
+            "workgroups_state",
+            "catalogs_state",
+            "databases_state",
+            "workgroups_error_text",
+            "catalogs_error_text",
+            "databases_error_text",
+        ]
+    finally:
+        page.dispose()

@@ -67,6 +67,11 @@ Sleep = Callable[[float], Awaitable[None]]
 T = TypeVar("T")
 
 _VIEWS = frozenset({"query", "history", "results", "saved"})
+_CONTEXT_LIST_KINDS: tuple[Literal["workgroups", "catalogs", "databases"], ...] = (
+    "workgroups",
+    "catalogs",
+    "databases",
+)
 _CONTEXT_ERROR = "Athena context request failed"
 _WORKGROUP_DETAIL_ERROR = "Athena workgroup request failed"
 _SOURCE_CONTEXT_ERROR = (
@@ -1839,7 +1844,7 @@ class AthenaPageVM:
         worker = self._replace_workgroup_worker()
         self._workgroups_error_text = None
         self._workgroups_state = PaneState.LOADING
-        self._notify_context_lists()
+        self._notify_context_lists("workgroups")
         await self._run_page_command(
             worker.pager.refresh_command.execute_async,
             worker,
@@ -2076,7 +2081,7 @@ class AthenaPageVM:
             setattr(self, f"_{worker_name}_pager", worker.pager)
             old_worker.pager.dispose()
             self._set_list_state(kind, PaneState.IDLE if pager.items else PaneState.EMPTY)
-            self._notify_context_lists()
+            self._notify_context_lists(kind)
             return _RefreshedChoices(tuple(pager.items), present)
         except Exception as exc:
             if not current():
@@ -2623,7 +2628,7 @@ class AthenaPageVM:
         worker = self._catalog_worker
         self._catalogs_error_text = None
         self._catalogs_state = PaneState.LOADING
-        self._notify_context_lists()
+        self._notify_context_lists("catalogs")
         await self._run_page_command(
             worker.pager.refresh_command.execute_async,
             worker,
@@ -2636,7 +2641,7 @@ class AthenaPageVM:
         worker = self._database_worker
         self._databases_error_text = None
         self._databases_state = PaneState.LOADING
-        self._notify_context_lists()
+        self._notify_context_lists("databases")
         await self._run_page_command(
             worker.pager.refresh_command.execute_async,
             worker,
@@ -2734,7 +2739,7 @@ class AthenaPageVM:
                     "databases": self.databases,
                 }[kind]
                 self._set_list_state(kind, PaneState.IDLE if items else PaneState.EMPTY)
-                self._notify_context_lists()
+                self._notify_context_lists(kind)
             return
         except ProviderError as exc:
             if self._is_current_worker(worker, kind):
@@ -2770,7 +2775,7 @@ class AthenaPageVM:
             "databases": self.databases,
         }[kind]
         self._set_list_state(kind, PaneState.IDLE if items else PaneState.EMPTY)
-        self._notify_context_lists()
+        self._notify_context_lists(kind)
 
     def _make_workgroup_worker(
         self,
@@ -3018,7 +3023,7 @@ class AthenaPageVM:
         else:
             self._databases_state = state
             self._databases_error_text = error_text
-        self._notify_context_lists()
+        self._notify_context_lists(kind)
 
     def _set_list_state(
         self,
@@ -3062,23 +3067,15 @@ class AthenaPageVM:
             setattr(self, attribute, False)
             self._notify(f"is_loading_more_{kind}")
 
-    def _notify_context_lists(self) -> None:
+    def _notify_context_lists(self, *kinds: Literal["workgroups", "catalogs", "databases"]) -> None:
+        """Publish the named context lists' four names, or all twelve with no kind.
+
+        With no kind, the names go out in the order the page has always used.
+        """
         self.query.refresh_execution_availability()
-        for property_name in (
-            "workgroups",
-            "catalogs",
-            "databases",
-            "has_more_workgroups",
-            "has_more_catalogs",
-            "has_more_databases",
-            "workgroups_state",
-            "catalogs_state",
-            "databases_state",
-            "workgroups_error_text",
-            "catalogs_error_text",
-            "databases_error_text",
-        ):
-            self._notify(property_name)
+        for pattern in ("{kind}", "has_more_{kind}", "{kind}_state", "{kind}_error_text"):
+            for kind in kinds or _CONTEXT_LIST_KINDS:
+                self._notify(pattern.format(kind=kind))
 
     def _workgroup_allows_execution(self) -> bool:
         return (
