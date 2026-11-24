@@ -39,8 +39,9 @@ from textual.containers import Vertical
 from textual.events import Click
 from textual.widget import Widget
 from textual.widgets import Static
-from vmx import Message, MessageHub, PropertyChangedMessage
+from vmx import Message, MessageHub
 
+from aws_tui.ui.widgets._subscriber import HubSubscriberMixin
 from aws_tui.ui.widgets.first_run import FirstRunConnectionList
 from aws_tui.ui.widgets.nav_row import NavRow
 from aws_tui.vm.chrome.focus_coordinator_vm import FocusSlot
@@ -73,7 +74,7 @@ _SERVICE_DEFAULT_SLOT: dict[str, FocusSlot] = {
 }
 
 
-class NavMenu(Widget, can_focus=True):
+class NavMenu(HubSubscriberMixin, Widget, can_focus=True):
     """Always-visible left rail of :class:`NavRow` widgets."""
 
     DEFAULT_CSS: ClassVar[str] = f"""
@@ -118,7 +119,6 @@ class NavMenu(Widget, can_focus=True):
         self._hub: MessageHub[Message] = hub
         self._focus_coordinator: FocusCoordinatorVM | None = focus_coordinator
         self._coord_sub: DisposableBase | None = None
-        self._sub: DisposableBase | None = None
         # Flat ordered list of every visible item (services then
         # Settings). Cursor moves across this whole list — there
         # is NO separation between services and Settings at the
@@ -148,7 +148,12 @@ class NavMenu(Widget, can_focus=True):
     def on_mount(self) -> None:
         self.border_title = "menu"
         self._rebuild_rows()
-        self._sub = self._hub.messages.subscribe(on_next=self._on_hub_message)
+        self.subscribe_to_vm(
+            hub=self._hub,
+            vm=self._vm,
+            property_names=("items", "selected_id"),
+            on_property_changed=self._on_vm_property_changed,
+        )
         # Subscribe to the focus coordinator (round-3 / §4.3 / Phase
         # 7) so the screen's ``-rail-active`` class follows the VM-
         # owned slot, not direct Screen-class mutation on this
@@ -161,9 +166,7 @@ class NavMenu(Widget, can_focus=True):
             self._apply_focus_slot_class(self._focus_coordinator.focused_slot)
 
     def on_unmount(self) -> None:
-        if self._sub is not None:
-            self._sub.dispose()
-            self._sub = None
+        self.unsubscribe_from_vm()
         if self._coord_sub is not None:
             self._coord_sub.dispose()
             self._coord_sub = None
@@ -363,19 +366,15 @@ class NavMenu(Widget, can_focus=True):
 
     # ── Internal ─────────────────────────────────────────────────────────────
 
-    def _on_hub_message(self, msg: object) -> None:
-        if not isinstance(msg, PropertyChangedMessage):
-            return
-        if msg.sender_object is not self._vm:
-            return
+    def _on_vm_property_changed(self, name: str) -> None:
         # ``items`` changes require re-mounting the row widgets;
         # ``selected_id`` only flips the ``-selected`` class on the
         # already-mounted rows. Routing the lighter path through
         # ``_repaint_rows`` honours the per-arrow-keypress
         # responsiveness target the method's docstring records.
-        if msg.property_name == "items":
+        if name == "items":
             self._rebuild_rows()
-        elif msg.property_name == "selected_id":
+        else:
             self._repaint_rows()
 
     def _rebuild_rows(self) -> None:
