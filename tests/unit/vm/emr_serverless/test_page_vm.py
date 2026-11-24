@@ -820,3 +820,70 @@ async def test_application_poll_never_repeats_a_completed_user_selection(monkeyp
     await page.shutdown()
     page.dispose()
     fake.dispose()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("retarget", [False, True])
+@pytest.mark.parametrize("provider_cancels", [False, True], ids=["external", "self"])
+async def test_shutdown_waits_for_the_detail_read_cleanup(
+    monkeypatch: pytest.MonkeyPatch, retarget: bool, provider_cancels: bool
+) -> None:
+    from aws_tui.domain.emr_serverless import JobRunDetail
+
+    page, fake = _make()
+    started = asyncio.Event()
+    cleanup_entered = asyncio.Event()
+    allow_cleanup = asyncio.Event()
+    done = asyncio.Event()
+    finished = asyncio.Event()
+    blocked = asyncio.Event()
+    page.job_run_detail.set_target("a1", "r1")
+
+    async def blocked_get(_app_id: str, _run_id: str) -> JobRunDetail:
+        started.set()
+        try:
+            if provider_cancels:
+                task = asyncio.current_task()
+                assert task is not None
+                task.cancel("provider stopped")
+            await blocked.wait()
+            raise AssertionError("read should be cancelled")
+        finally:
+            cleanup_entered.set()
+            try:
+                await allow_cleanup.wait()
+                done.set()
+            finally:
+                finished.set()
+
+    monkeypatch.setattr(fake, "get_job_run", blocked_get)
+    refresh = asyncio.create_task(page.refresh_job_run_detail())
+    shutdown = None
+    try:
+        await asyncio.wait_for(started.wait(), timeout=1)
+        if provider_cancels:
+            await asyncio.wait_for(cleanup_entered.wait(), timeout=1)
+        if retarget:
+            page.job_run_detail.set_target("a1", "r2")
+            await asyncio.wait_for(cleanup_entered.wait(), timeout=1)
+            await asyncio.wait_for(asyncio.shield(refresh), timeout=1)
+            assert not done.is_set()
+
+        shutdown = asyncio.create_task(page.shutdown())
+        await asyncio.wait_for(cleanup_entered.wait(), timeout=1)
+        completed, _ = await asyncio.wait((shutdown,), timeout=0.05)
+        assert not completed, "shutdown returned before detail read cleanup finished"
+        assert not done.is_set()
+
+        allow_cleanup.set()
+        await asyncio.wait_for(shutdown, timeout=1)
+        assert done.is_set()
+        await asyncio.wait_for(refresh, timeout=1)
+    finally:
+        allow_cleanup.set()
+        if shutdown is None:
+            shutdown = asyncio.create_task(page.shutdown())
+        await asyncio.gather(shutdown, refresh, return_exceptions=True)
+        await asyncio.wait_for(finished.wait(), timeout=1)
+        page.dispose()
+        fake.dispose()
