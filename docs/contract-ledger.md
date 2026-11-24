@@ -908,7 +908,7 @@ Ruff retains its Python 3.11 target and current rule set. Pip supplies local art
 and its bundled trust store; external `certifi==2026.10.19` remains unchanged.
 Hatchling supplies the locked build backend, dynamic version and package contents.
 
-The immutable tool refs are `astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2` (`v10.3.3`),
+The immutable tool refs are `astral-sh/setup-uv@1db35dd8eee11c5894872e0b383ae6c406cf738d` (`v10.4.0`),
 `ruff-pre-commit@9026c9127e153371d7a78dfcb0c45ae2046a3d10` (`v0.17.6`),
 `pre-commit-hooks@3e8a8703264a2f4a69428a0aa4dcb512790b2c8c` (`v6.0.0`),
 and `taplo-pre-commit@ade0f95ddcf661c697d4670d2cfcbe95d0048a0a` (`v0.9.3`).
