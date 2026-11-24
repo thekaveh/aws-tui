@@ -912,7 +912,7 @@ The immutable tool refs are `astral-sh/setup-uv@1db35dd8eee11c5894872e0b383ae6c4
 `ruff-pre-commit@9026c9127e153371d7a78dfcb0c45ae2046a3d10` (`v0.17.6`),
 `pre-commit-hooks@3e8a8703264a2f4a69428a0aa4dcb512790b2c8c` (`v6.0.0`),
 and `taplo-pre-commit@ade0f95ddcf661c697d4670d2cfcbe95d0048a0a` (`v0.9.3`).
-The Homebrew PR action is `peter-evans/create-pull-request@15733dbdfeedb4f7fdb73d13c6f5ac83b710fab8` (`v8.1.2`).
+The Homebrew PR action is `peter-evans/create-pull-request@3ffccacd46053766916f087ce41d627c0b8cf2d1` (`v8.1.3`).
 The reviewed upstream release refs and complete PyPI artifact records inform these pins;
 they do not establish independent cryptographic signature verification.
 Workflows retain explicit `uv==0.13.4` and the
