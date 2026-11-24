@@ -7,7 +7,6 @@ from typing import Any, Generic, TypeVar
 
 import reactivex as rx
 from vmx import (
-    AsyncRelayCommand,
     ComponentVM,
     ConstructionStatus,
     Dispatcher,
@@ -86,7 +85,6 @@ class _SavedWorker(Generic[T]):
     )
     retired: bool = False
     pager: SnapshotTokenPager[T, str] = field(init=False, repr=False)
-    load_more_command: AsyncRelayCommand = field(init=False, repr=False)
 
 
 class AthenaSavedVM:
@@ -213,14 +211,6 @@ class AthenaSavedVM:
     @property
     def is_loading_more_prepared_statements(self) -> bool:
         return self._is_loading_more_prepared_statements
-
-    @property
-    def load_more_named_command(self) -> AsyncRelayCommand:
-        return self._named_worker.load_more_command
-
-    @property
-    def load_more_prepared_command(self) -> AsyncRelayCommand:
-        return self._prepared_worker.load_more_command
 
     @property
     def status(self) -> ConstructionStatus:
@@ -807,13 +797,6 @@ class AthenaSavedVM:
             return [_named_query_summary(by_id[query_id]) for query_id in ids], next_token
 
         worker.pager = SnapshotTokenPager(fetch, max_items=_MAX_SAVED_ITEMS)
-        worker.load_more_command = (
-            AsyncRelayCommand.builder()
-            .predicate(lambda: self._can_load_more_named(worker))
-            .triggers(self._on_property_changed)
-            .task(lambda: self._run_named_pager(worker, refresh=False))
-            .build()
-        )
         self._workers.add(worker)
         return worker
 
@@ -840,13 +823,6 @@ class AthenaSavedVM:
             return rows, next_token
 
         worker.pager = SnapshotTokenPager(fetch, max_items=_MAX_SAVED_ITEMS)
-        worker.load_more_command = (
-            AsyncRelayCommand.builder()
-            .predicate(lambda: self._can_load_more_prepared(worker))
-            .triggers(self._on_property_changed)
-            .task(lambda: self._run_prepared_pager(worker, refresh=False))
-            .build()
-        )
         self._workers.add(worker)
         return worker
 
@@ -872,7 +848,6 @@ class AthenaSavedVM:
         if worker.retired:
             return
         worker.retired = True
-        worker.load_more_command.dispose()
         worker.pager.dispose()
         if (
             not worker.tasks
