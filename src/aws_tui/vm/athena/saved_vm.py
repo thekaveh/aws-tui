@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 from dataclasses import dataclass, field
 from enum import StrEnum
-from typing import Any, Generic, TypeVar
+from typing import Any, TypeVar
 
 import reactivex as rx
 from vmx import (
@@ -34,7 +34,9 @@ from aws_tui.vm.athena._domain_validation import (
 from aws_tui.vm.athena._errors import map_provider_error, map_unexpected_error
 from aws_tui.vm.athena._pager_compat import (
     PagerCollectionLimitError,
+    PagerWorker,
     SnapshotTokenPager,
+    drain_worker_tasks,
     seed_token_pager,
 )
 from aws_tui.vm.file_manager.pane_vm import PaneState
@@ -75,16 +77,12 @@ class AthenaSavedSnapshot:
 
 
 @dataclass(eq=False)
-class _SavedWorker(Generic[T]):
-    generation: int
+class _SavedWorker(PagerWorker[T]):
     workgroup: str
-    tasks: set[asyncio.Task[Any]] = field(default_factory=set, repr=False)
     named_query_details: dict[str, NamedQuery] = field(
         default_factory=dict,
         repr=False,
     )
-    retired: bool = False
-    pager: SnapshotTokenPager[T, str] = field(init=False, repr=False)
 
 
 class AthenaSavedVM:
@@ -667,7 +665,7 @@ class AthenaSavedVM:
         *,
         refresh: bool,
     ) -> None:
-        task = self._track_current_task(worker)
+        task = worker.track_current_task()
         try:
             command = worker.pager.refresh_command if refresh else worker.pager.load_more_command
             await command.execute_async()
@@ -720,7 +718,7 @@ class AthenaSavedVM:
         *,
         refresh: bool,
     ) -> None:
-        task = self._track_current_task(worker)
+        task = worker.track_current_task()
         try:
             command = worker.pager.refresh_command if refresh else worker.pager.load_more_command
             await command.execute_async()
@@ -845,33 +843,20 @@ class AthenaSavedVM:
         return worker
 
     def _retire_worker(self, worker: _SavedWorker[Any]) -> None:
-        if worker.retired:
-            return
-        worker.retired = True
-        worker.pager.dispose()
         if (
-            not worker.tasks
+            worker.retire()
+            and not worker.tasks
             and worker is not self._named_worker
             and worker is not self._prepared_worker
         ):
             self._workers.discard(worker)
-
-    def _track_current_task(
-        self,
-        worker: _SavedWorker[Any],
-    ) -> asyncio.Task[Any] | None:
-        task = asyncio.current_task()
-        if task is not None:
-            worker.tasks.add(task)
-        return task
 
     def _untrack_task(
         self,
         worker: _SavedWorker[Any],
         task: asyncio.Task[Any] | None,
     ) -> None:
-        if task is not None:
-            worker.tasks.discard(task)
+        worker.untrack(task)
         if (
             worker.retired
             and not worker.tasks
@@ -881,16 +866,7 @@ class AthenaSavedVM:
             self._workers.discard(worker)
 
     async def _drain_tasks(self) -> None:
-        current = asyncio.current_task()
-        while True:
-            tasks = {
-                *(task for worker in self._workers for task in worker.tasks),
-                *self._detail_tasks,
-            }
-            tasks = {task for task in tasks if task is not current and not task.done()}
-            if not tasks:
-                return
-            await asyncio.gather(*tasks, return_exceptions=True)
+        await drain_worker_tasks(self._workers, self._detail_tasks)
 
     def _cancel_detail_tasks(self) -> None:
         for task in tuple(self._detail_tasks):
