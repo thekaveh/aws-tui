@@ -437,8 +437,8 @@ async def test_saved_shutdown_drains_blocked_load_and_disables_both_pagers() -> 
     assert vm.prepared_statements == ()
     assert vm.named_state is PaneState.EMPTY
     assert vm.prepared_state is PaneState.EMPTY
-    assert not vm.load_more_named_command.can_execute()
-    assert not vm.load_more_prepared_command.can_execute()
+    assert not vm.has_more_named_queries
+    assert not vm.has_more_prepared_statements
 
 
 @pytest.mark.asyncio
