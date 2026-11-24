@@ -11,7 +11,7 @@ import pytest
 from vmx import NULL_DISPATCHER, MessageHub, PropertyChangedMessage
 
 from aws_tui.demo.in_memory_emr import InMemoryEmr
-from aws_tui.domain.emr_serverless import CANCELLABLE_JOB_RUN_STATES, JobRunState
+from aws_tui.domain.emr_serverless import CANCELLABLE_JOB_RUN_STATES, JobRunDetail, JobRunState
 from aws_tui.domain.filesystem import (
     AuthRequiredError,
     NotFoundError,
@@ -453,7 +453,20 @@ async def test_safe_category_specific_errors_do_not_retry_or_reset_panes(
     fake = RecordingEmr()
     fake.cancel_error = error_type("planted-secret-AKIA-not-for-display")
     page, fake = await page_with_state(JobRunState.RUNNING, fake=fake)
-    page.job_run_detail._error_text = "existing detail context"
+    loaded = page.job_run_detail.detail
+    summary = page.job_run_detail.summary
+    assert loaded is not None
+    assert summary is not None
+
+    async def fail_poll(app_id: str, run_id: str) -> JobRunDetail:
+        assert (app_id, run_id) == ("a1", "r1")
+        raise ProviderUnreachableError("existing detail context")
+
+    with monkeypatch.context() as patch:
+        patch.setattr(fake, "get_job_run", fail_poll)
+        await page.refresh_job_run_detail()
+    assert page.job_run_detail.detail is loaded
+    assert page.job_run_detail.summary is summary
     snapshot = (
         page.job_runs.runs,
         page.job_run_detail.detail,
