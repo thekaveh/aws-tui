@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Callable
 from types import SimpleNamespace
 
 import pytest
@@ -740,3 +741,62 @@ async def test_source_adoption_rechecks_owner_after_outgoing_shutdown(monkeypatc
         await asyncio.gather(swap, return_exceptions=True)
         subscription.dispose()
         root.dispose()
+
+
+def test_root_vm_derives_from_component_vm() -> None:
+    root = _build_root()
+    assert isinstance(root, ComponentVM)
+    assert root.name == "root"
+    assert root.status is ConstructionStatus.CONSTRUCTED
+    assert root.is_constructed
+    root.dispose()
+
+
+def test_dispose_leaves_the_children_and_the_hub_disposed() -> None:
+    root = _build_root()
+    completed: list[bool] = []
+    root.message_hub.messages.subscribe(on_completed=lambda: completed.append(True))
+    root.dispose()
+    assert completed == [True]
+    assert root.status is ConstructionStatus.DISPOSED
+    assert root.chrome.status is ConstructionStatus.DISPOSED
+    assert root.services_menu.status is ConstructionStatus.DISPOSED
+    assert root.content_host.status is ConstructionStatus.DISPOSED
+
+
+def _recording(label: str, original: Callable[[], None], order: list[str]) -> Callable[[], None]:
+    def dispose() -> None:
+        order.append(label)
+        original()
+
+    return dispose
+
+
+def test_dispose_releases_in_the_documented_order(monkeypatch: pytest.MonkeyPatch) -> None:
+    root = _build_root()
+    order: list[str] = []
+    monkeypatch.setattr(
+        root.content_host, "dispose", _recording("content_host", root.content_host.dispose, order)
+    )
+    monkeypatch.setattr(
+        root.services_menu, "dispose", _recording("menu", root.services_menu.dispose, order)
+    )
+    monkeypatch.setattr(root.chrome, "dispose", _recording("chrome", root.chrome.dispose, order))
+    root.message_hub.messages.subscribe(on_completed=lambda: order.append("hub"))
+    root.dispose()
+    assert order == ["content_host", "menu", "chrome", "hub"]
+
+
+def test_dispose_continues_after_a_child_dispose_failure(monkeypatch: pytest.MonkeyPatch) -> None:
+    root = _build_root()
+    completed: list[bool] = []
+    root.message_hub.messages.subscribe(on_completed=lambda: completed.append(True))
+
+    def failing_dispose() -> None:
+        raise RuntimeError("chrome dispose failed")
+
+    monkeypatch.setattr(root.chrome, "dispose", failing_dispose)
+    root.dispose()
+    assert completed == [True]
+    assert root.services_menu.status is ConstructionStatus.DISPOSED
+    assert root.content_host.status is ConstructionStatus.DISPOSED
