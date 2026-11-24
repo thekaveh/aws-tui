@@ -23,7 +23,7 @@ from collections.abc import Awaitable, Callable
 from contextlib import ExitStack, suppress
 from dataclasses import replace
 from pathlib import Path
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING, Any, cast
 
 if TYPE_CHECKING:
     from aws_tui.demo.in_memory_emr import InMemoryEmr
@@ -501,19 +501,7 @@ class AppContext:
         fallback is only for composition or app-constructor failures, before
         workers and AWS clients can exist.
         """
-        for disposable in (
-            self.athena_drafts_vm,
-            self.transfer_history_vm,
-            self.s3_connections_vm,
-            self.command_palette_vm,
-            self.quick_look_vm,
-            self.confirm_vm,
-            self.transfers_vm,
-            self.table_clipboard_vm,
-            self.clipboard_vm,
-            self.root_vm,
-            self.focus_coordinator,
-        ):
+        for _step, disposable in lifecycle_owners(self):
             with suppress(Exception):
                 disposable.dispose()
         for demo_emr in self.demo_emrs.values():
@@ -523,6 +511,27 @@ class AppContext:
             self.log_sink.flush()
         with suppress(Exception):
             self.log_sink.close()
+
+
+def lifecycle_owners(ctx: AppContext) -> tuple[tuple[str, Any], ...]:
+    """Return every VM the context owns, in disposal order.
+
+    ``root_vm.dispose()`` also disposes the shared hub, so every VM that
+    publishes while it is disposed must come before ``root_vm``.
+    """
+    return (
+        ("s3_connections_vm", ctx.s3_connections_vm),
+        ("command_palette_vm", ctx.command_palette_vm),
+        ("quick_look_vm", ctx.quick_look_vm),
+        ("confirm_vm", ctx.confirm_vm),
+        ("transfers_vm", ctx.transfers_vm),
+        ("athena_drafts_vm", ctx.athena_drafts_vm),
+        ("transfer_history_vm", ctx.transfer_history_vm),
+        ("table_clipboard_vm", ctx.table_clipboard_vm),
+        ("clipboard_vm", ctx.clipboard_vm),
+        ("root_vm", ctx.root_vm),
+        ("focus_coordinator", ctx.focus_coordinator),
+    )
 
 
 def build_app_context(
