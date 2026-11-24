@@ -302,7 +302,7 @@ async def test_source_stale_row_refuses_mutated_target_and_reopen_removes_child(
                 ctx.command_palette_vm.filtered_entries[0].label == "Use exact · us-west-2 for S3"
             )
             old = ctx.command_palette_vm.filtered_entries[0].id
-            child = ctx.command_palette_vm._items[old].inner
+            child = ctx.command_palette_vm._items[old]
             if mutation == "remove":
                 sources.clear()
             else:
