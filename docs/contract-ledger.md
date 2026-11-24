@@ -894,7 +894,7 @@ The declared dependency ranges are unchanged, including the DuckDB `<2` cap.
 | --- | --- |
 | Runtime and AWS SDK | `aioboto3==15.5.0`, `aiobotocore==2.25.1`, `botocore==1.40.61`, `textual==8.2.8`, `vmx==3.23.0`, `reactivex==5.1.0`, `rich==15.0.0`, `keyring==25.7.0`, `tomli-w==1.2.0`, `platformdirs==4.14.5`, `sqlglot==30.24.0`, `pyarrow==26.0.0`, `anyio==4.16.0`, `aiofiles==25.1.0`, `regex==2026.9.29` |
 | Optional local preview | `duckdb==1.5.5` |
-| Developer tooling | `pip==26.3`, `pytest==9.2.0`, `pytest-asyncio==1.4.1.post1`, `ruff==0.17.6`, `mypy==2.4.1`, `pre-commit==4.7.0`, `hatchling==1.33.0`, `testcontainers==4.15.0`, `textual-dev==1.8.0` |
+| Developer tooling | `pip==26.3`, `pytest==9.2.0`, `pytest-asyncio==1.5.0`, `ruff==0.17.6`, `mypy==2.4.1`, `pre-commit==4.7.0`, `hatchling==1.33.0`, `testcontainers==4.15.0`, `textual-dev==1.8.0` |
 | Documentation glyph rendering | `fonttools==4.67.0` |
 
 `build-system.requires` constrained to `hatchling>=1.31.0,<2` remains unchanged.
