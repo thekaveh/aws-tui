@@ -1330,3 +1330,29 @@ async def test_history_retry_rechecks_protection_after_confirmation(tmp_path):
         await vm.shutdown()
         await dual.shutdown()
         dual.dispose()
+
+
+async def test_overlapping_loads_keep_the_newer_result(tmp_path, monkeypatch):
+    vm, dual, tid, _, _, _, _ = await history_case(tmp_path)
+    original = dual._journal.load_history
+    gate = threading.Event()
+    calls: list[int] = []
+
+    def slow_then_real():
+        calls.append(1)
+        if len(calls) == 1:
+            gate.wait(5)
+            return ()
+        return original()
+
+    monkeypatch.setattr(dual._journal, "load_history", slow_then_real)
+    first = asyncio.create_task(vm.load())
+    await wait_until(lambda: len(calls) == 1, what="first read started")
+    second = asyncio.create_task(vm.load())
+    await asyncio.sleep(0.05)
+    gate.set()
+    await asyncio.wait_for(asyncio.gather(first, second), 5)
+    assert vm.load_state == "ready"
+    assert [record.id for record in vm.records] == [tid]
+    await vm.shutdown()
+    dual.dispose()
