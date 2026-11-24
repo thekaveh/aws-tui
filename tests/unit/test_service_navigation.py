@@ -6,7 +6,7 @@ import asyncio
 from types import SimpleNamespace
 
 import pytest
-from vmx import NULL_DISPATCHER, MessageHub, PropertyChangedMessage
+from vmx import NULL_DISPATCHER, MessageHub, PropertyChangedMessage, when_property_changed
 
 from aws_tui.infra.aws_session import TokenState
 from aws_tui.infra.connection_resolver import Connection
@@ -432,10 +432,11 @@ async def test_reentrant_eager_handoff_projection_preserves_owner_and_later_user
     def route(message):
         if isinstance(message, OpenAthenaTableRequest):
             tasks.append(asyncio.create_task(handoff()))
-        else:
-            AwsTuiApp._on_nav_selection_changed(app, message)
 
     subscription = hub.messages.subscribe(on_next=route)
+    nav_subscription = when_property_changed(hub, menu, "selected_id").subscribe(
+        on_next=lambda message: AwsTuiApp._on_nav_selection_changed(app, message)
+    )
     loop = asyncio.get_running_loop()
     original_factory = loop.get_task_factory()
     try:
@@ -462,5 +463,6 @@ async def test_reentrant_eager_handoff_projection_preserves_owner_and_later_user
         loop.set_task_factory(original_factory)
         release.set()
         await asyncio.gather(*tasks, return_exceptions=True)
+        nav_subscription.dispose()
         subscription.dispose()
         menu.dispose()

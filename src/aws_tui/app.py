@@ -23,9 +23,10 @@ from functools import cached_property, partial
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, ClassVar, Literal, cast
 
+import reactivex as rx
 from reactivex.abc import DisposableBase
 from textual import events
-from vmx import PropertyChangedMessage
+from vmx import PropertyChangedMessage, when_property_changed
 
 if TYPE_CHECKING:
     from aws_tui.domain.filesystem import FileEntry, FileSystemProvider, PathRef
@@ -1138,7 +1139,11 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
         # Construct the VM tree.
         ctx.root_vm.construct()
         ctx.transfers_vm.construct()
-        self._history_sub = ctx.hub.messages.subscribe(on_next=self._on_history_message)
+        history = ctx.transfer_history_vm
+        self._history_sub = rx.merge(
+            when_property_changed(ctx.hub, history, "error_text"),
+            when_property_changed(ctx.hub, history.runtime, "error_text"),
+        ).subscribe(on_next=self._on_history_error_changed)
         self._run_lifecycle_worker(ctx.transfer_history_vm.load, group="transfer-history-load")
         ctx.confirm_vm.construct()
         ctx.quick_look_vm.construct()
@@ -1168,7 +1173,9 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
             on_next=self._on_connection_list_changed
         )
         self._overview_sub = ctx.hub.messages.subscribe(self._on_overview_source_message)
-        self._nav_selection_sub = ctx.hub.messages.subscribe(on_next=self._on_nav_selection_changed)
+        self._nav_selection_sub = when_property_changed(
+            ctx.hub, ctx.root_vm.services_menu, "selected_id"
+        ).subscribe(on_next=self._on_nav_selection_changed)
         # Subscribe to pane cursor / entries changes so the HintLegend can
         # mark ``pane.copy`` / ``pane.delete`` disabled when the cursor sits
         # on the ``..`` parent row. User feedback: "if the selected item is
@@ -3159,22 +3166,16 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
                 )
             )
 
-    def _on_history_message(self, message: object) -> None:
+    def _on_history_error_changed(self, message: PropertyChangedMessage[Any]) -> None:
         vm = self._app_ctx.transfer_history_vm
-        if not isinstance(message, PropertyChangedMessage) or message.sender_object not in (
-            vm,
-            vm.runtime,
-        ):
-            return
-        if message.property_name == "error_text":
-            text = vm.runtime.error_text if message.sender_object is vm.runtime else vm.error_text
-            if text:
-                notifications.advise(
-                    self._app_ctx.root_vm.chrome.toast_stack,
-                    subject="Transfer",
-                    message=text,
-                    toast_id="transfer-history-warning",
-                )
+        text = vm.runtime.error_text if message.sender is vm.runtime else vm.error_text
+        if text:
+            notifications.advise(
+                self._app_ctx.root_vm.chrome.toast_stack,
+                subject="Transfer",
+                message=text,
+                toast_id="transfer-history-warning",
+            )
 
     def _refresh_transfer_history(self) -> None:
         if self._shutdown_task is None:
@@ -8929,8 +8930,6 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
         ``switch_service`` in ``on_mount`` so the initial UNREACHABLE
         state-change is never missed (Bug 2 fix).
         """
-        from vmx import PropertyChangedMessage
-
         from aws_tui.vm.file_manager.pane_vm import PaneVM
 
         if not isinstance(msg, PropertyChangedMessage):
@@ -8957,8 +8956,6 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
         navigation-only). EMR selection, detail, and busy events also
         update cancellation availability.
         """
-        from vmx import PropertyChangedMessage
-
         from aws_tui.vm.file_manager.pane_vm import PaneVM
 
         if not isinstance(msg, PropertyChangedMessage):
@@ -9099,16 +9096,6 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
         ``settings_vm`` and mounts ``SettingsView`` in the content host.
         For any other service id, rebuilds the DualPane-based S3 view.
         """
-        from vmx import PropertyChangedMessage
-
-        from aws_tui.vm.nav_menu_vm import NavMenuVM
-
-        if not isinstance(msg, PropertyChangedMessage):
-            return
-        if msg.property_name != "selected_id":
-            return
-        if not isinstance(msg.sender_object, NavMenuVM):
-            return
         ctx = self._app_ctx
         selected = ctx.root_vm.services_menu.selected_id
         if selected is None:
