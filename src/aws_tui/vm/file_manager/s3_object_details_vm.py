@@ -10,7 +10,7 @@ from enum import StrEnum
 import reactivex as rx
 from reactivex.abc import DisposableBase
 from vmx import (
-    ComponentVMOf,
+    ComponentVM,
     ConstructionStatus,
     Dispatcher,
     Message,
@@ -107,12 +107,7 @@ class S3ObjectDetailsVM:
         self._pane = pane
         self._hub = hub
         self._inner = (
-            ComponentVMOf[None]
-            .builder()
-            .name("s3.object_details")
-            .model(None)
-            .services(hub, dispatcher)
-            .build()
+            ComponentVM.builder().name("s3.object_details").services(hub, dispatcher).build()
         )
         self._owner = OperationOwner()
         self._on_property_changed = ObserverSafeSubject[str]()

@@ -7,7 +7,7 @@ from typing import Any, Literal, cast
 
 import reactivex as rx
 from vmx import (
-    ComponentVMOf,
+    ComponentVM,
     ConstructionStatus,
     Dispatcher,
     Message,
@@ -103,13 +103,8 @@ class GlueCatalogVM:
         self._operations = _operations or GlueOperationOwner()
         self._owns_operations = _operations is None
         self._on_property_changed = ObserverSafeSubject[str]()
-        self._inner: ComponentVMOf[None] = (
-            ComponentVMOf[None]
-            .builder()
-            .name("glue.catalog")
-            .model(None)
-            .services(hub, dispatcher)
-            .build()
+        self._inner: ComponentVM = (
+            ComponentVM.builder().name("glue.catalog").services(hub, dispatcher).build()
         )
         self.iceberg = GlueIcebergVM(
             inspector=iceberg_inspector or UnavailableIcebergInspector(),

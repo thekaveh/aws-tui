@@ -23,7 +23,7 @@ from time import monotonic
 from typing import Literal, cast
 
 import reactivex as rx
-from vmx import ComponentVMOf, Dispatcher, Message, MessageHub, PropertyChangedMessage
+from vmx import ComponentVM, Dispatcher, Message, MessageHub, PropertyChangedMessage
 
 from aws_tui.domain.emr_cloudwatch_logs import (
     CloudWatchLogEvent,
@@ -156,13 +156,8 @@ class JobRunLogsVM:
     ) -> None:
         self._client: EmrServerlessLogsClientProtocol = client
         self._hub: MessageHub[Message] = hub
-        self._inner: ComponentVMOf[None] = (
-            ComponentVMOf[None]
-            .builder()
-            .name("emr.job_run_logs")
-            .model(None)
-            .services(hub, dispatcher)
-            .build()
+        self._inner: ComponentVM = (
+            ComponentVM.builder().name("emr.job_run_logs").services(hub, dispatcher).build()
         )
         # Target identity
         self._application_id: str | None = None

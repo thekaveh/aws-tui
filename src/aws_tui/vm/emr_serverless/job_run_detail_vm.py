@@ -17,7 +17,7 @@ from vmx import (
     AsyncResourceState,
     AsyncResourceStatus,
     AsyncResourceVM,
-    ComponentVMOf,
+    ComponentVM,
     ConstructionStatus,
     Dispatcher,
     Message,
@@ -78,13 +78,8 @@ class JobRunDetailVM:
         self._reported_failure: (
             AsyncResourceError[JobRunDetail] | AsyncResourceErrorWithValue[JobRunDetail] | None
         ) = None
-        self._inner: ComponentVMOf[None] = (
-            ComponentVMOf[None]
-            .builder()
-            .name("emr.job_run_detail")
-            .model(None)
-            .services(hub, dispatcher)
-            .build()
+        self._inner: ComponentVM = (
+            ComponentVM.builder().name("emr.job_run_detail").services(hub, dispatcher).build()
         )
         # Per-VM Observable (round-3 §9.bis.11 / PR #103 retirement
         # path): fires the name of the property that just changed,

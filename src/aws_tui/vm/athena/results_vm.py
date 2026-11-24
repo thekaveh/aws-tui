@@ -7,7 +7,7 @@ from typing import Any, Literal
 import reactivex as rx
 from vmx import (
     AsyncRelayCommand,
-    ComponentVMOf,
+    ComponentVM,
     ConstructionStatus,
     Dispatcher,
     Message,
@@ -112,13 +112,8 @@ class AthenaResultsVM:
         self._shutdown_started = False
         self._shutdown_complete = False
         self._on_property_changed = ObserverSafeSubject[str]()
-        self._inner: ComponentVMOf[None] = (
-            ComponentVMOf[None]
-            .builder()
-            .name("athena.results")
-            .model(None)
-            .services(hub, dispatcher)
-            .build()
+        self._inner: ComponentVM = (
+            ComponentVM.builder().name("athena.results").services(hub, dispatcher).build()
         )
         self._generation = 0
         self._execution_id: str | None = None
