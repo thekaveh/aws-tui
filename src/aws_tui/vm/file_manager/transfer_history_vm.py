@@ -8,8 +8,7 @@ from collections.abc import AsyncIterator, Awaitable, Callable
 from dataclasses import dataclass
 from typing import Literal
 
-from vmx import Message, MessageHub, PropertyChangedMessage
-from vmx.services.dispatcher import Dispatcher
+from vmx import Dispatcher, Message, MessageHub, PropertyChangedMessage
 
 from aws_tui.domain.cross_fs import ConflictResolution, CrossFsCopy
 from aws_tui.domain.filesystem import (

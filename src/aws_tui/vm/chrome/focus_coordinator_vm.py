@@ -32,9 +32,15 @@ from enum import StrEnum
 
 import reactivex as rx
 from reactivex.abc import DisposableBase
-from vmx import ComponentVM, DiscriminatorVM, Message, MessageHub, PropertyChangedMessage
-from vmx.lifecycle.status import ConstructionStatus
-from vmx.services.dispatcher import Dispatcher
+from vmx import (
+    ComponentVM,
+    ConstructionStatus,
+    DiscriminatorVM,
+    Dispatcher,
+    Message,
+    MessageHub,
+    PropertyChangedMessage,
+)
 
 from aws_tui.vm._observable import send_value_free
 

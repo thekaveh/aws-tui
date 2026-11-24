@@ -23,9 +23,15 @@ from functools import partial
 from typing import TYPE_CHECKING
 
 import reactivex as rx
-from vmx import ComponentVM, Message, MessageHub, PropertyChangedMessage, RelayCommand
-from vmx.lifecycle.status import ConstructionStatus
-from vmx.services.dispatcher import Dispatcher
+from vmx import (
+    ComponentVM,
+    ConstructionStatus,
+    Dispatcher,
+    Message,
+    MessageHub,
+    PropertyChangedMessage,
+    RelayCommand,
+)
 
 from aws_tui.domain.cross_fs import ConflictResolution, CrossFsCopy, CrossFsMove
 from aws_tui.domain.filesystem import EntryKind, FileSystemProvider, PathRef, ProviderError

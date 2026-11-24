@@ -24,6 +24,8 @@ from vmx import (
     ComponentVM,
     ComponentVMOf,
     CompositeVM,
+    ConstructionStatus,
+    Dispatcher,
     Message,
     MessageHub,
     PropertyChangedMessage,
@@ -31,8 +33,6 @@ from vmx import (
     RelayCommandOf,
     ScoredFilteredCompositeVM,
 )
-from vmx.lifecycle.status import ConstructionStatus
-from vmx.services.dispatcher import Dispatcher
 
 from aws_tui.vm._observable import send_value_free
 from aws_tui.vm.chrome.action_catalog import ActionPresentation

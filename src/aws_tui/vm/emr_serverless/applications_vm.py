@@ -14,9 +14,15 @@ from __future__ import annotations
 import asyncio
 
 import reactivex as rx
-from vmx import ComponentVMOf, CompositeVM, Message, MessageHub, PropertyChangedMessage
-from vmx.lifecycle.status import ConstructionStatus
-from vmx.services.dispatcher import Dispatcher
+from vmx import (
+    ComponentVMOf,
+    CompositeVM,
+    ConstructionStatus,
+    Dispatcher,
+    Message,
+    MessageHub,
+    PropertyChangedMessage,
+)
 
 from aws_tui.domain.emr_serverless import (
     ApplicationState,

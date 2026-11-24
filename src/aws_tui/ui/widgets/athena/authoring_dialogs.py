@@ -13,9 +13,8 @@ from textual.message import Message
 from textual.screen import ModalScreen
 from textual.widgets import Input, OptionList, Static
 from textual.widgets.option_list import Option
+from vmx import Dispatcher, MessageHub
 from vmx import Message as HubMessage
-from vmx import MessageHub
-from vmx.services.dispatcher import Dispatcher
 
 from aws_tui.ui.widgets.confirm_modal import ask_with_scratch_confirmation
 from aws_tui.vm.chrome.confirm_vm import ConfirmRequest

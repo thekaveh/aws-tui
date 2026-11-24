@@ -17,8 +17,7 @@ from collections.abc import AsyncGenerator, Callable
 from typing import Any, ClassVar, cast
 
 import aioboto3
-from vmx import Message, MessageHub
-from vmx.services.dispatcher import Dispatcher
+from vmx import Dispatcher, Message, MessageHub
 
 from aws_tui.domain.emr_cloudwatch_logs import (
     CloudWatchLogSnapshot,

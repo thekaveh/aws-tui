@@ -30,6 +30,8 @@ import reactivex as rx
 from vmx import (
     ComponentVMOf,
     CompositeVM,
+    ConstructionStatus,
+    Dispatcher,
     FilteredCompositeVM,
     FilteredCursorPolicy,
     Message,
@@ -38,8 +40,6 @@ from vmx import (
     RelayCommand,
     RelayCommandOf,
 )
-from vmx.lifecycle.status import ConstructionStatus
-from vmx.services.dispatcher import Dispatcher
 
 from aws_tui.domain.filesystem import (
     AuthRequiredError,

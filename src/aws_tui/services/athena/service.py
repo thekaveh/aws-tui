@@ -5,8 +5,7 @@ from __future__ import annotations
 from collections.abc import AsyncIterator, Awaitable, Callable
 from typing import Any, ClassVar, Protocol
 
-from vmx import Message, MessageHub
-from vmx.services.dispatcher import Dispatcher
+from vmx import Dispatcher, Message, MessageHub
 
 from aws_tui.domain.athena import AthenaClient
 from aws_tui.domain.athena_runner import AthenaQueryRunner
