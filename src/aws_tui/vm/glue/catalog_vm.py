@@ -30,7 +30,7 @@ from aws_tui.infra.duckdb import DuckDbPort
 from aws_tui.vm._observable import ObserverSafeSubject, send_value_free
 from aws_tui.vm._token_paging import reject_token_cycles
 from aws_tui.vm.file_manager.pane_vm import PaneState
-from aws_tui.vm.glue._errors import map_provider_error, map_unexpected_error
+from aws_tui.vm.glue._guarded import guarded
 from aws_tui.vm.glue._lifecycle import GlueOperationOwner, GlueOperationSuperseded
 from aws_tui.vm.glue.iceberg_vm import (
     GlueIcebergVM,
@@ -43,7 +43,6 @@ from aws_tui.vm.messages import (
     OpenS3LocationRequest,
 )
 from aws_tui.vm.paging import BoundedTokenPagedComposition
-from aws_tui.vm.service_diagnostics import report_unexpected_service_error
 
 
 class GlueSelectionSuperseded(ValueError):
@@ -294,29 +293,14 @@ class GlueCatalogVM:
         generation = self._database_generation
         self._databases_error_text = None
         self._set_state("_databases_state", PaneState.LOADING, "state")
-        try:
-            await self._database_pager.refresh_command.execute_async()
-        except GlueOperationSuperseded:
-            return
-        except ProviderError as exc:
-            if generation != self._database_generation:
-                return
-            state, self._databases_error_text = map_provider_error(exc)
-            self._set_state("_databases_state", state, "state")
-            return
-        except Exception as exc:
-            if generation != self._database_generation:
-                return
-            state, self._databases_error_text = map_unexpected_error(exc)
-            report_unexpected_service_error(
-                self._hub,
-                service="glue",
-                operation="list_databases",
-                error=exc,
-            )
-            self._set_state("_databases_state", state, "state")
-            return
-        if generation != self._database_generation:
+        ok, _ = await guarded(
+            self._database_pager.refresh_command.execute_async,
+            hub=self._hub,
+            operation="list_databases",
+            is_current=lambda: generation == self._database_generation,
+            on_failure=self._fail_databases,
+        )
+        if not ok:
             return
         self._notify("databases")
         self._notify("has_more_databases")
@@ -334,28 +318,17 @@ class GlueCatalogVM:
         if not self._is_alive() or not self.has_more_databases:
             return
         generation = self._database_generation
-        try:
-            await self._database_pager.load_more_command.execute_async()
-        except GlueOperationSuperseded:
+        ok, _ = await guarded(
+            self._database_pager.load_more_command.execute_async,
+            hub=self._hub,
+            operation="list_databases",
+            is_current=lambda: generation == self._database_generation,
+            on_failure=self._fail_databases,
+        )
+        if not ok:
             return
-        except ProviderError as exc:
-            if generation != self._database_generation:
-                return
-            state, self._databases_error_text = map_provider_error(exc)
-            self._set_state("_databases_state", state, "state")
-            return
-        except Exception as exc:
-            if generation != self._database_generation:
-                return
-            state, self._databases_error_text = map_unexpected_error(exc)
-            report_unexpected_service_error(
-                self._hub, service="glue", operation="list_databases", error=exc
-            )
-            self._set_state("_databases_state", state, "state")
-            return
-        if generation == self._database_generation:
-            self._notify("databases")
-            self._notify("has_more_databases")
+        self._notify("databases")
+        self._notify("has_more_databases")
 
     async def select_database(self, database_name: str) -> None:
         if not self._is_alive() or not any(
@@ -395,26 +368,14 @@ class GlueCatalogVM:
         self._notify("table_detail")
         self._notify("partitions")
         self._notify("column_statistics")
-        try:
-            await self._table_pager.refresh_command.execute_async()
-        except GlueOperationSuperseded:
-            return
-        except ProviderError as exc:
-            if not self._is_catalog_operation_current(operation):
-                return
-            state, self._tables_error_text = map_provider_error(exc)
-            self._set_state("_tables_state", state, "tables_state")
-            return
-        except Exception as exc:
-            if not self._is_catalog_operation_current(operation):
-                return
-            state, self._tables_error_text = map_unexpected_error(exc)
-            report_unexpected_service_error(
-                self._hub, service="glue", operation="list_tables", error=exc
-            )
-            self._set_state("_tables_state", state, "tables_state")
-            return
-        if not self._is_catalog_operation_current(operation):
+        ok, _ = await guarded(
+            self._table_pager.refresh_command.execute_async,
+            hub=self._hub,
+            operation="list_tables",
+            is_current=lambda: self._is_catalog_operation_current(operation),
+            on_failure=self._fail_tables,
+        )
+        if not ok:
             return
         self._notify("tables")
         self._notify("has_more_tables")
@@ -428,28 +389,17 @@ class GlueCatalogVM:
         if not self._is_alive() or not self.has_more_tables:
             return
         generation = self._table_generation
-        try:
-            await self._table_pager.load_more_command.execute_async()
-        except GlueOperationSuperseded:
+        ok, _ = await guarded(
+            self._table_pager.load_more_command.execute_async,
+            hub=self._hub,
+            operation="list_tables",
+            is_current=lambda: self._is_table_identity_current(generation),
+            on_failure=self._fail_tables,
+        )
+        if not ok:
             return
-        except ProviderError as exc:
-            if not self._is_table_identity_current(generation):
-                return
-            state, self._tables_error_text = map_provider_error(exc)
-            self._set_state("_tables_state", state, "tables_state")
-            return
-        except Exception as exc:
-            if not self._is_table_identity_current(generation):
-                return
-            state, self._tables_error_text = map_unexpected_error(exc)
-            report_unexpected_service_error(
-                self._hub, service="glue", operation="list_tables", error=exc
-            )
-            self._set_state("_tables_state", state, "tables_state")
-            return
-        if self._is_table_identity_current(generation):
-            self._notify("tables")
-            self._notify("has_more_tables")
+        self._notify("tables")
+        self._notify("has_more_tables")
 
     async def select_table(self, table_name: str) -> None:
         if not self._is_alive():
@@ -654,28 +604,17 @@ class GlueCatalogVM:
         if not self._is_alive() or not self.has_more_partitions:
             return
         generation = self._partition_generation
-        try:
-            await self._partition_pager.load_more_command.execute_async()
-        except GlueOperationSuperseded:
+        ok, _ = await guarded(
+            self._partition_pager.load_more_command.execute_async,
+            hub=self._hub,
+            operation="list_partitions",
+            is_current=lambda: self._is_partition_identity_current(generation),
+            on_failure=self._fail_partitions,
+        )
+        if not ok:
             return
-        except ProviderError as exc:
-            if not self._is_partition_identity_current(generation):
-                return
-            state, self._partitions_error_text = map_provider_error(exc)
-            self._set_state("_partitions_state", state, "partitions_state")
-            return
-        except Exception as exc:
-            if not self._is_partition_identity_current(generation):
-                return
-            state, self._partitions_error_text = map_unexpected_error(exc)
-            report_unexpected_service_error(
-                self._hub, service="glue", operation="list_partitions", error=exc
-            )
-            self._set_state("_partitions_state", state, "partitions_state")
-            return
-        if self._is_partition_identity_current(generation):
-            self._notify("partitions")
-            self._notify("has_more_partitions")
+        self._notify("partitions")
+        self._notify("has_more_partitions")
 
     def open_s3_location(
         self,
@@ -710,46 +649,24 @@ class GlueCatalogVM:
                 raise GlueOperationSuperseded
             return cast(TableDetail, await self._client.get_table(ref))
 
-        try:
-            return await self._operations.run(get_detail)
-        except GlueOperationSuperseded:
-            return None
-        except ProviderError as exc:
-            if not self._is_catalog_operation_current(operation):
-                return None
-            state, self._detail_error_text = map_provider_error(exc)
-            self._set_state("_detail_state", state, "detail_state")
-        except Exception as exc:
-            if not self._is_catalog_operation_current(operation):
-                return None
-            state, self._detail_error_text = map_unexpected_error(exc)
-            report_unexpected_service_error(
-                self._hub, service="glue", operation="get_table", error=exc
-            )
-            self._set_state("_detail_state", state, "detail_state")
-        return None
+        ok, detail = await guarded(
+            lambda: self._operations.run(get_detail),
+            hub=self._hub,
+            operation="get_table",
+            is_current=lambda: self._is_catalog_operation_current(operation),
+            on_failure=self._fail_detail,
+        )
+        return detail if ok else None
 
     async def _load_partitions(self, operation: _CatalogOperationToken) -> None:
-        try:
-            await self._partition_pager.refresh_command.execute_async()
-        except GlueOperationSuperseded:
-            return
-        except ProviderError as exc:
-            if not self._is_catalog_operation_current(operation):
-                return
-            state, self._partitions_error_text = map_provider_error(exc)
-            self._set_state("_partitions_state", state, "partitions_state")
-            return
-        except Exception as exc:
-            if not self._is_catalog_operation_current(operation):
-                return
-            state, self._partitions_error_text = map_unexpected_error(exc)
-            report_unexpected_service_error(
-                self._hub, service="glue", operation="list_partitions", error=exc
-            )
-            self._set_state("_partitions_state", state, "partitions_state")
-            return
-        if not self._is_catalog_operation_current(operation):
+        ok, _ = await guarded(
+            self._partition_pager.refresh_command.execute_async,
+            hub=self._hub,
+            operation="list_partitions",
+            is_current=lambda: self._is_catalog_operation_current(operation),
+            on_failure=self._fail_partitions,
+        )
+        if not ok:
             return
         self._notify("partitions")
         self._notify("has_more_partitions")
@@ -775,29 +692,14 @@ class GlueCatalogVM:
                 ),
             )
 
-        try:
-            rows = await self._operations.run(get_statistics)
-        except GlueOperationSuperseded:
-            return
-        except ProviderError as exc:
-            if not self._is_catalog_operation_current(operation):
-                return
-            state, self._statistics_error_text = map_provider_error(exc)
-            self._set_state("_statistics_state", state, "statistics_state")
-            return
-        except Exception as exc:
-            if not self._is_catalog_operation_current(operation):
-                return
-            state, self._statistics_error_text = map_unexpected_error(exc)
-            report_unexpected_service_error(
-                self._hub,
-                service="glue",
-                operation="get_column_statistics",
-                error=exc,
-            )
-            self._set_state("_statistics_state", state, "statistics_state")
-            return
-        if not self._is_catalog_operation_current(operation):
+        ok, rows = await guarded(
+            lambda: self._operations.run(get_statistics),
+            hub=self._hub,
+            operation="get_column_statistics",
+            is_current=lambda: self._is_catalog_operation_current(operation),
+            on_failure=self._fail_statistics,
+        )
+        if not ok or rows is None:
             return
         self._column_statistics = tuple(rows)
         self._notify("column_statistics")
@@ -971,6 +873,26 @@ class GlueCatalogVM:
     def _notify_each(self, property_names: tuple[str, ...]) -> None:
         for property_name in property_names:
             self._notify(property_name)
+
+    def _fail_databases(self, state: PaneState, text: str | None) -> None:
+        self._databases_error_text = text
+        self._set_state("_databases_state", state, "state")
+
+    def _fail_tables(self, state: PaneState, text: str | None) -> None:
+        self._tables_error_text = text
+        self._set_state("_tables_state", state, "tables_state")
+
+    def _fail_detail(self, state: PaneState, text: str | None) -> None:
+        self._detail_error_text = text
+        self._set_state("_detail_state", state, "detail_state")
+
+    def _fail_partitions(self, state: PaneState, text: str | None) -> None:
+        self._partitions_error_text = text
+        self._set_state("_partitions_state", state, "partitions_state")
+
+    def _fail_statistics(self, state: PaneState, text: str | None) -> None:
+        self._statistics_error_text = text
+        self._set_state("_statistics_state", state, "statistics_state")
 
     def _set_state(self, field: str, state: PaneState, property_name: str) -> None:
         if getattr(self, field) == state:
