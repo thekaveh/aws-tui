@@ -339,10 +339,10 @@ async def test_reentrant_edit_during_generated_document_clear_is_not_implicitly_
         original = page.context
 
         def edit(property_name):
-            if property_name == "authoring" and page.query.sql == "":
+            if property_name == "replacement_revision" and page.query.sql == "":
                 page.query.set_sql("SELECT 99 -- reentrant edit")
 
-        subscription = page.on_property_changed.subscribe(edit)
+        subscription = page.authoring.on_property_changed.subscribe(edit)
         await page.select_database('other"db')
         assert page.query.sql == "SELECT 99 -- reentrant edit"
         assert page.context == original

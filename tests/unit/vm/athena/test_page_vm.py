@@ -2038,18 +2038,48 @@ def test_page_disposal_completes_with_throwing_terminal_observers(
         ("results", page.results),
         ("history", page.history),
         ("saved", page.saved),
+        ("exports", page.exports),
+        ("completion", page.completion),
+        ("authoring", page.authoring),
     ):
         vm.on_property_changed.subscribe(on_completed=fail)
         vm.on_property_changed.subscribe(on_completed=lambda owner=name: completed.append(owner))
 
     page.dispose()
 
-    assert completed == ["saved", "history", "results", "query", "page"]
+    # Collaborators go first, newest first, before the page members they read.
+    assert completed[:3] == ["exports", "completion", "authoring"]
+    assert completed[3:] == ["saved", "history", "results", "query", "page"]
     assert all(
         vm.status is ConstructionStatus.DISPOSED
-        for vm in (page, page.query, page.results, page.history, page.saved)
+        for vm in (
+            page,
+            page.query,
+            page.results,
+            page.history,
+            page.saved,
+            page.authoring,
+            page.completion,
+            page.exports,
+        )
     )
     assert marker not in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_page_closed_admission_refuses_open_complete_and_prepare(tmp_path) -> None:
+    page = make_page_vm(PageClient())
+    path = tmp_path / "query.sql"
+    path.write_text("SELECT 2")
+
+    async def confirm(_message: str) -> bool:
+        return True
+
+    page.close_input_admission()
+
+    assert not await page.authoring.open_sql(path, confirm=confirm)
+    assert await page.completion.complete(0) is None
+    assert await page.exports.prepare(scope="loaded", format="csv", path=tmp_path / "r") is None
 
 
 @pytest.mark.asyncio

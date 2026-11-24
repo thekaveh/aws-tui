@@ -7,6 +7,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
 
 import pytest
+from vmx import NULL_DISPATCHER, MessageHub
 
 from aws_tui.domain.emr_dashboard import DashboardLink
 from aws_tui.domain.filesystem import (
@@ -29,10 +30,15 @@ def target():
     )
 
 
-def setup_vm(**kwargs):
+def setup_vm(hub=None):
     current = [target()]
     client = SimpleNamespace(get_dashboard_for_job_run=AsyncMock(return_value=DashboardLink(URL)))
-    vm = DashboardVM(client=client, target=lambda: current[0], **kwargs)
+    vm = DashboardVM(
+        client=client,
+        target=lambda: current[0],
+        hub=hub or MessageHub(),
+        dispatcher=NULL_DISPATCHER,
+    )
     browser = Mock(open=Mock(return_value=True))
     copy = AsyncMock()
     return vm, current, client, browser, copy
@@ -165,8 +171,7 @@ async def test_stale_review_and_ineligible_rejected_before_provider():
     ],
 )
 async def test_pending_provider_ignoring_cancel_cannot_deliver(change):
-    alive = [True]
-    vm, current, client, browser, copy = setup_vm(is_current=lambda: alive[0])
+    vm, current, client, browser, copy = setup_vm()
     started, release = asyncio.Event(), asyncio.Event()
     cancelled = asyncio.Event()
 
@@ -194,7 +199,7 @@ async def test_pending_provider_ignoring_cancel_cannot_deliver(change):
     elif change in {"application_id", "job_run_id", "revision"}:
         current[0] = replace(current[0], **{change: 3 if change == "revision" else "different"})
     elif change == "ownership":
-        alive[0] = False
+        vm.close_input_admission()
     elif change == "close":
         close = asyncio.create_task(vm.aclose())
         await cancelled.wait()
@@ -261,13 +266,16 @@ async def test_idle_cancel_and_reentrant_notify_preserve_actual_result():
     vm, current, _client, browser, copy = setup_vm()
     notifications = []
 
-    def notify():
+    def notify(name):
+        if name != "busy":
+            return
         notifications.append(vm.busy)
         if not vm.busy:
             vm.cancel()
 
-    vm._notify = notify
+    subscription = vm.on_property_changed.subscribe(notify)
     result = await perform(vm, current, browser, copy)
+    subscription.dispose()
     vm.cancel()
     await vm.aclose()
     assert result.status == "opened"
@@ -363,7 +371,7 @@ async def test_queued_thread_rechecks_ownership_on_event_loop(monkeypatch):
 
 async def test_reentrant_busy_cancel_never_calls_provider():
     vm, current, client, browser, copy = setup_vm()
-    vm._notify = vm.cancel
+    vm.on_property_changed.subscribe(lambda _name: vm.cancel())
     result = await perform(vm, current, browser, copy)
     assert result.status == "cancelled"
     assert not vm.busy

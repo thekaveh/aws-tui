@@ -12,6 +12,7 @@ import threading
 from dataclasses import replace
 
 import pytest
+from vmx import NULL_DISPATCHER, MessageHub
 
 from aws_tui.infra.sql_authoring_store import SqlFile, SqlFileStore
 from aws_tui.infra.sql_snippet_store import SqlSnippetStore
@@ -30,9 +31,12 @@ def make_authoring(tmp_path, *, files=None, snippets=None, **kwargs):
     m = api()
     client = InMemoryAthena()
     query = make_query_vm(client)
+    hub = kwargs.pop("hub", None) or MessageHub()
     vm = m.AthenaAuthoringVM(
         query=query,
         client=client,
+        hub=hub,
+        dispatcher=NULL_DISPATCHER,
         files=files,
         snippets=snippets or SqlSnippetStore(path=tmp_path / "snippets.json"),
         **kwargs,
@@ -52,11 +56,12 @@ async def test_format_canceled_by_final_notification_cannot_authorize_an_edit(tm
     vm = query = None
     applied = []
 
-    def cancel_on_status():
-        if vm.status == "SQL layout formatted":
+    def cancel_on_status(name):
+        if name == "status_message" and vm.status_message == "SQL layout formatted":
             asyncio.current_task().cancel()
 
-    vm, query, _ = make_authoring(tmp_path, notify=cancel_on_status)
+    vm, query, _ = make_authoring(tmp_path)
+    vm.on_property_changed.subscribe(cancel_on_status)
     query.set_sql("SELECT amount FROM events")
 
     async def apply():
@@ -143,8 +148,8 @@ async def test_failed_open_is_recoverable_without_mutating_document(tmp_path):
         assert not await vm.open_sql(tmp_path / "missing.sql", confirm=yes)
         assert query.sql == "SELECT 'private'"
         assert vm.path is None
-        assert "missing" in vm.status.lower()
-        assert "private" not in vm.status
+        assert "missing" in vm.status_message.lower()
+        assert "private" not in vm.status_message
     finally:
         await close(vm, query)
 
@@ -177,7 +182,7 @@ async def test_save_as_needs_path_and_existing_target_confirmation(tmp_path):
     try:
         query.set_sql("SELECT 1")
         assert not await vm.save_sql(confirm=yes)
-        assert "Save As" in vm.status
+        assert "Save As" in vm.status_message
         assert not await vm.save_sql(path, confirm=no)
         assert path.read_text() == "original"
         assert vm.path is None
@@ -243,13 +248,13 @@ async def test_cancelled_save_drains_and_acknowledges_actual_publication(tmp_pat
             assert path.read_text() == "SELECT 1"
             assert vm.path == path
             assert not vm.dirty
-            assert "saved" in vm.status.lower()
+            assert "saved" in vm.status_message.lower()
         else:
             assert not result
             assert not path.exists()
             assert vm.path is None
             assert vm.dirty
-            assert "cancelled" in vm.status.lower()
+            assert "cancelled" in vm.status_message.lower()
     finally:
         files.release.set()
         if saving is not None:
@@ -440,7 +445,8 @@ async def test_queued_save_as_cannot_save_a_newer_replacement_document(tmp_path)
 
 async def test_shutdown_retires_confirmation_wait_and_prevents_late_notification(tmp_path):
     notifications = []
-    vm, query, _ = make_authoring(tmp_path, notify=lambda: notifications.append("changed"))
+    vm, query, _ = make_authoring(tmp_path)
+    vm.on_property_changed.subscribe(lambda _name: notifications.append("changed"))
     entered, release = asyncio.Event(), asyncio.Event()
     path = tmp_path / "query.sql"
     path.write_text("SELECT 2")
@@ -594,12 +600,13 @@ def test_owned_actions_cannot_form_a_shutdown_join_cycle(tmp_path):
         from pathlib import Path
         from aws_tui.vm.athena.authoring_vm import AthenaAuthoringVM
         from aws_tui.infra.sql_snippet_store import SqlSnippetStore
+        from vmx import NULL_DISPATCHER, MessageHub
         from tests.unit.vm.athena.test_query_vm import InMemoryAthena, make_query_vm
 
         async def main():
             client = InMemoryAthena()
             query = make_query_vm(client)
-            vm = AthenaAuthoringVM(query=query, client=client, snippets=SqlSnippetStore(path=Path(sys.argv[1])))
+            vm = AthenaAuthoringVM(query=query, client=client, hub=MessageHub(), dispatcher=NULL_DISPATCHER, snippets=SqlSnippetStore(path=Path(sys.argv[1])))
             query.set_sql("SELECT 1")
             entered = asyncio.Event()
             never = asyncio.Event()

@@ -10,6 +10,9 @@ from functools import partial
 from pathlib import Path
 from typing import Any, Literal, TypeVar
 
+from vmx import Message, MessageHub
+from vmx.services.dispatcher import Dispatcher
+
 from aws_tui.domain.athena import ResultArtifactAccessError
 from aws_tui.domain.athena_export import (
     ExportDataError,
@@ -38,6 +41,7 @@ from aws_tui.infra.result_export_store import (
     ExportStorageError,
     ResultExportStore,
 )
+from aws_tui.vm._component import IsolatedComponentVM
 from aws_tui.vm.athena.results_vm import AthenaResultsVM
 
 ExportScope = Literal["loaded", "complete"]
@@ -87,29 +91,36 @@ class _Owner:
     revision: int
 
 
-class AthenaExportVM:
+class AthenaExportVM(IsolatedComponentVM):
+    """Reviewed result export. Publishes ``busy``, ``review``, ``receipt`` and ``status_message``.
+
+    The export is invalidated when the results change, and it is only valid
+    while the Athena results view is active.
+    """
+
     def __init__(
         self,
         *,
         client: Any,
         results: AthenaResultsVM,
         context: Callable[[], QueryContext],
+        hub: MessageHub[Message],
+        dispatcher: Dispatcher,
         context_revision: Callable[[], int] = lambda: 0,
-        is_current: Callable[[], bool] = lambda: True,
-        notify: Callable[[], None] = lambda: None,
+        results_view_active: Callable[[], bool] = lambda: True,
         files: ResultExportStore | None = None,
         limits: ExportLimits = _DEFAULT_LIMITS,
     ) -> None:
+        super().__init__(name="athena.exports", hub=hub, dispatcher=dispatcher)
         self._client = client
         self._results = results
         self._context = context
         self._context_revision = context_revision
-        self._is_current = is_current
-        self._notify = notify
+        self._results_view_active = results_view_active
         self._files = files or ResultExportStore()
         # Injectable budgets may tighten the write size, never exceed its hard cap.
         self._limits = replace(limits, chunk_bytes=min(limits.chunk_bytes, 64 * 1024))
-        self._status = ""
+        self._status_message = ""
         self._review: ExportReview | None = None
         self._receipt: ExportReceipt | None = None
         self._owner: _Owner | None = None
@@ -122,15 +133,21 @@ class AthenaExportVM:
         self._workers: set[asyncio.Task[Any]] = set()
         self._permit: ExportPermit | None = None
         self._cancelled = False
+        self._admission_closed = False
         self._closed = False
+        self._own(
+            results.on_property_changed.subscribe(
+                lambda _name: self.invalidate(), on_completed=self.cancel
+            )
+        )
 
     @property
     def busy(self) -> bool:
         return self._action is not None
 
     @property
-    def status(self) -> str:
-        return self._status
+    def status_message(self) -> str:
+        return self._status_message
 
     @property
     def review(self) -> ExportReview | None:
@@ -140,22 +157,32 @@ class AthenaExportVM:
     def receipt(self) -> ExportReceipt | None:
         return self._receipt
 
-    def _set_status(self, message: str) -> None:
-        self._status = message
-        self._changed()
+    def _set_status_message(self, message: str) -> None:
+        self._status_message = message
+        self._changed("status_message")
 
-    def _changed(self) -> None:
+    def _changed(self, *names: str) -> None:
         # A UI observer cannot unwind resource ownership or hide an actual save.
         if not self._closed:
             with suppress(Exception):
-                self._notify()
+                self._publish(*names)
+
+    def _alive(self) -> bool:
+        return not self._closed and not self._admission_closed and self._results_view_active()
+
+    def close_input_admission(self) -> None:
+        """Refuse new exports and cancel the current one; a finished result still reports."""
+        self._admission_closed = True
+        self.cancel()
+
+    def _on_dispose(self) -> None:
+        self.close_input_admission()
 
     def _owns(self) -> bool:
         owner = self._owner
         return (
             owner is not None
-            and not self._closed
-            and self._is_current()
+            and self._alive()
             and owner.execution_id == self._results.execution_id
             and owner.generation == self._results.projection_generation
             and owner.context == self._context()
@@ -195,7 +222,7 @@ class AthenaExportVM:
 
     def _admit(self) -> bool:
         task = asyncio.current_task()
-        if self.busy or self._closed or not self._is_current() or task is None or task.cancelling():
+        if self.busy or not self._alive() or task is None or task.cancelling():
             return False
         self._action = task
         self._cancelled = False
@@ -238,7 +265,7 @@ class AthenaExportVM:
             if type(rows) is not tuple:
                 raise ExportDataError()
             context = self._owner.context
-            self._set_status("Preparing export review")
+            self._set_status_message("Preparing export review")
             async with asyncio.timeout(self._limits.timeout_seconds):
                 self._check()
                 destination = await self._io(lambda: self._files.inspect(path))
@@ -271,17 +298,17 @@ class AthenaExportVM:
                 )
                 self._rows = rows
                 self._review = review
-                self._set_status("Review the export destination and scope before saving")
+                self._set_status_message("Review the export destination and scope before saving")
                 self._check()
                 return review
         except asyncio.CancelledError:
-            self._set_status("Export cancelled before publication")
+            self._set_status_message("Export cancelled before publication")
         except Exception as error:
             self._failure(error)
         finally:
             self._prepare_seconds = asyncio.get_running_loop().time() - started
             self._action = None
-            self._changed()
+            self._changed("busy", "review")
         self._review = None
         self._rows = ()
         self._detail = None
@@ -326,7 +353,7 @@ class AthenaExportVM:
             self._check()
             if review.destination.version is not None and overwrite is not True:
                 raise ExportStorageError("exists")
-            self._set_status("Export in progress")
+            self._set_status_message("Export in progress")
             async with asyncio.timeout(max(0, remaining)):
                 self._check()
                 if review.scope == "complete":
@@ -367,7 +394,7 @@ class AthenaExportVM:
         except asyncio.CancelledError:
             self._cancelled = True
             self._permit.cancel()
-            self._set_status("Export cancelled before publication")
+            self._set_status_message("Export cancelled before publication")
         except Exception as error:
             self._failure(error)
         finally:
@@ -388,12 +415,14 @@ class AthenaExportVM:
                 message = "Export saved"
                 if self._cancelled or not self._owns():
                     message = "Export saved before cancellation for the reviewed execution"
-                self._set_status(message)
+                self._set_status_message(message)
             self._permit = None
             self._rows = ()
             self._detail = None
             self._action = None
-            self._changed()
+            self._changed("busy", "review", "receipt") if published else self._changed(
+                "busy", "review"
+            )
         return self._receipt if published else None
 
     async def _flush(self, stage: ExportStage, buffer: bytearray) -> None:
@@ -502,7 +531,7 @@ class AthenaExportVM:
             message = "Export source is busy; retry later"
         else:
             message = "Export could not be completed; check source access and destination"
-        self._set_status(message)
+        self._set_status_message(message)
 
     def cancel(self) -> None:
         already_cancelled = self._cancelled
@@ -520,7 +549,7 @@ class AthenaExportVM:
             self._rows = ()
             self._detail = None
             if not already_cancelled and self._receipt is None:
-                self._set_status("Export cancelled before publication")
+                self._set_status_message("Export cancelled before publication")
 
     def invalidate(self) -> None:
         if self._owner is not None and not self._owns():

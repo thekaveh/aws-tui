@@ -9,6 +9,7 @@ import importlib.util
 from dataclasses import replace
 
 import pytest
+from vmx import NULL_DISPATCHER, MessageHub
 
 from aws_tui.demo.in_memory_athena import InMemoryAthena
 from aws_tui.domain.data_catalog import Column
@@ -47,7 +48,14 @@ def make(tmp_path, *, fake=None, **kwargs):
     m = api()
     fake = fake or client()
     query = make_query_vm(fake, context=CTX)
-    vm = m.AthenaCompletionVM(client=fake, query=query, **kwargs)
+    hub = kwargs.pop("hub", None) or MessageHub()
+    vm = m.AthenaCompletionVM(
+        client=fake,
+        query=query,
+        hub=hub,
+        dispatcher=NULL_DISPATCHER,
+        **kwargs,
+    )
     return vm, query, fake
 
 
@@ -64,7 +72,7 @@ async def test_explicit_command_offers_current_schema_without_execution(tmp_path
         assert not fake.calls
         batch = await vm.complete(7)
         assert batch is not None
-        assert vm.is_current(batch)
+        assert vm.is_batch_current(batch)
         assert batch.state == "ready"
         assert any(s.kind == "keyword" and s.text == "SELECT" for s in batch.choices)
         assert any(s.kind == "column" and s.text == '"amount"' for s in batch.choices)
@@ -167,13 +175,13 @@ async def test_schema_cache_is_reused_then_dropped_for_context_change_and_refres
         await query.set_context(replace(CTX, database="other"))
         changed = await vm.complete(7)
         assert changed is not None
-        assert not vm.is_current(first)
+        assert not vm.is_batch_current(first)
         assert any(s.text == '"new_column"' for s in changed.choices)
         assert not any(s.text == '"amount"' for s in changed.choices)
         count = len(fake.calls)
         revision[0] += 1
         vm.invalidate()
-        assert not vm.is_current(changed)
+        assert not vm.is_batch_current(changed)
         assert await vm.complete(7) is not None
         assert len(fake.calls) > count
     finally:
@@ -186,8 +194,10 @@ async def test_new_provider_lifetime_cannot_accept_old_batch(tmp_path):
     try:
         query.set_sql("SELECT  FROM events")
         batch = await first.complete(7)
-        second = api().AthenaCompletionVM(client=fake, query=query)
-        assert not second.is_current(batch)
+        second = api().AthenaCompletionVM(
+            client=fake, query=query, hub=MessageHub(), dispatcher=NULL_DISPATCHER
+        )
+        assert not second.is_batch_current(batch)
     finally:
         if second is not None:
             await second.shutdown()

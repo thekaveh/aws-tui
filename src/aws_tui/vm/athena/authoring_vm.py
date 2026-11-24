@@ -14,6 +14,9 @@ from functools import wraps
 from pathlib import Path
 from typing import Any, Concatenate, ParamSpec, TypeVar
 
+from vmx import Message, MessageHub
+from vmx.services.dispatcher import Dispatcher
+
 from aws_tui.domain.query import QueryContext
 from aws_tui.domain.sql_authoring import FormatResult, format_sql
 from aws_tui.infra.sql_authoring_store import (
@@ -23,6 +26,7 @@ from aws_tui.infra.sql_authoring_store import (
     SqlWritePermit,
 )
 from aws_tui.infra.sql_snippet_store import SqlSnippet, SqlSnippetError, SqlSnippetStore
+from aws_tui.vm._component import IsolatedComponentVM
 from aws_tui.vm.athena.query_vm import AthenaQueryVM
 
 Confirm = Callable[[str], Awaitable[bool]]
@@ -80,29 +84,30 @@ def _owned_action(
     return run
 
 
-class AthenaAuthoringVM:
+class AthenaAuthoringVM(IsolatedComponentVM):
+    """Local SQL document state. Publishes its document and status names as they change."""
+
     def __init__(
         self,
         *,
         query: AthenaQueryVM,
         client: Any,
+        hub: MessageHub[Message],
+        dispatcher: Dispatcher,
         files: SqlFileStore | None = None,
         snippets: SqlSnippetStore | None = None,
         context_revision: Callable[[], int] = lambda: 0,
-        is_current: Callable[[], bool] = lambda: True,
-        notify: Callable[[], None] = lambda: None,
     ) -> None:
+        super().__init__(name="athena.authoring", hub=hub, dispatcher=dispatcher)
         self._query = query
         self._client = client
         self._files = files or SqlFileStore()
         self._store = snippets or SqlSnippetStore()
         self._context_revision = context_revision
-        self._is_current = is_current
-        self._notify = notify
         self._document = AuthoringDocumentSnapshot()
         self._document_id = 0
         self._replacement_revision = 0
-        self._status = ""
+        self._status_message = ""
         self._snippets: tuple[SqlSnippet, ...] = ()
         self._closed = False
         self._action_lock = asyncio.Lock()
@@ -129,23 +134,28 @@ class AthenaAuthoringVM:
         return self._query.sql != self._document.baseline
 
     @property
-    def status(self) -> str:
-        return self._status
+    def status_message(self) -> str:
+        return self._status_message
 
     @property
     def snippets(self) -> tuple[SqlSnippet, ...]:
         return self._snippets
 
-    def _set_status(self, message: str) -> None:
-        self._status = message
+    def _publish_document(self) -> None:
+        self._publish("path", "dirty", "ownership_revision", "replacement_revision")
+
+    def _set_status_message(self, message: str) -> None:
+        self._status_message = message
         if not self._closed:
-            self._notify()
+            self._publish("status_message")
 
     def report_invalid_path(self) -> None:
-        self._set_status("Local SQL path could not be resolved. Choose an accessible .sql path.")
+        self._set_status_message(
+            "Local SQL path could not be resolved. Choose an accessible .sql path."
+        )
 
     def _alive(self) -> bool:
-        return not self._closed and self._is_current()
+        return not self._closed
 
     def _can_admit(self) -> bool:
         task = asyncio.current_task()
@@ -234,12 +244,12 @@ class AthenaAuthoringVM:
         self._document_id += 1
         self._replacement_revision += 1
         if notify:
-            self._notify()
+            self._publish_document()
 
     def _adopt(self, sql: str, *, path: Path | None, origin: str) -> bool:
         proposed = AuthoringDocumentSnapshot(str(path) if path is not None else None, sql, origin)
         if not self.snapshot_is_valid(proposed):
-            self._set_status("SQL document exceeds supported authoring limits")
+            self._set_status_message("SQL document exceeds supported authoring limits")
             return False
         owner = self._owner()
         expected_revision = owner.revision + int(sql != owner.sql)
@@ -268,9 +278,9 @@ class AthenaAuthoringVM:
                 self._document = previous
                 self._document_id += 1
                 if not self._closed:
-                    self._notify()
+                    self._publish_document()
             return False
-        self._notify()
+        self._publish_document()
         return True
 
     @_owned_action
@@ -287,7 +297,7 @@ class AthenaAuthoringVM:
         if self.dirty and not await confirm("Replace modified SQL in the editor?"):
             return False
         if not self._can_admit() or not self._owns(owner) or not still_selected():
-            self._set_status("SQL replacement is no longer current")
+            self._set_status_message("SQL replacement is no longer current")
             return False
         return True
 
@@ -314,7 +324,7 @@ class AthenaAuthoringVM:
         result, cancelled = await self._io(lambda: format_sql(owner.sql))
         if cancelled or not self._owns(owner):
             return None
-        self._set_status(result.reason or "SQL layout formatted")
+        self._set_status_message(result.reason or "SQL layout formatted")
         return result if self._can_admit() and self._owns(owner) else None
 
     @_owned_action
@@ -328,21 +338,21 @@ class AthenaAuthoringVM:
             try:
                 loaded, cancelled = await self._io(lambda: self._files.read(path))
                 if cancelled or not self._owns(owner):
-                    self._set_status("SQL Open cancelled or no longer current")
+                    self._set_status_message("SQL Open cancelled or no longer current")
                     return False
                 if self.dirty and not await confirm(
                     "Replace modified SQL with the selected local file?"
                 ):
                     return False
                 if not self._can_admit() or not self._owns(owner):
-                    self._set_status("SQL Open is no longer current")
+                    self._set_status_message("SQL Open is no longer current")
                     return False
                 adopted = self._adopt(loaded.sql, path=loaded.path, origin="Local file")
                 if adopted:
-                    self._set_status("SQL file opened")
+                    self._set_status_message("SQL file opened")
                 return adopted
             except SqlStorageError as error:
-                self._set_status(str(error))
+                self._set_status_message(str(error))
                 return False
 
     @_owned_action
@@ -352,7 +362,7 @@ class AthenaAuthoringVM:
         owner = self._owner()
         target = path if path is not None else self.path
         if target is None:
-            self._set_status("Choose a .sql path with Save As")
+            self._set_status_message("Choose a .sql path with Save As")
             return False
         async with self._action_lock:
             if not self._can_admit() or not self._owns(owner):
@@ -360,14 +370,14 @@ class AthenaAuthoringVM:
             try:
                 previous, cancelled = await self._io(lambda: self._files.inspect(target))
                 if cancelled or not self._owns(owner):
-                    self._set_status("SQL Save cancelled or no longer current")
+                    self._set_status_message("SQL Save cancelled or no longer current")
                     return False
                 if previous is not None and not await confirm(
                     "Replace the existing SQL file with this editor text?"
                 ):
                     return False
                 if not self._can_admit() or not self._owns(owner):
-                    self._set_status("SQL Save is no longer current")
+                    self._set_status_message("SQL Save is no longer current")
                     return False
                 permit = SqlWritePermit()
                 saved, cancelled = await self._io(
@@ -385,15 +395,16 @@ class AthenaAuthoringVM:
                         str(saved.path), saved.sql, self._document.origin
                     )
                     self._document_id += 1
+                    self._publish_document()
                 message = "SQL file saved before cancellation" if cancelled else "SQL file saved"
                 if not owned:
                     message += " for the earlier document"
                 if saved.version is None:
                     message += "; inspect its version before the next overwrite"
-                self._set_status(message)
+                self._set_status_message(message)
                 return True
             except SqlStorageError as error:
-                self._set_status(str(error))
+                self._set_status_message(str(error))
                 return False
 
     @_owned_action
@@ -407,11 +418,11 @@ class AthenaAuthoringVM:
             if cancelled or not self._alive() or generation != self._snippet_generation:
                 return False
             self._snippets = records
-            self._notify()
+            self._publish("snippets")
             return True
         except SqlSnippetError as error:
             if self._alive() and generation == self._snippet_generation:
-                self._set_status(str(error))
+                self._set_status_message(str(error))
             return False
 
     @_owned_action
@@ -431,18 +442,21 @@ class AthenaAuthoringVM:
             )
             if self._alive():
                 await self.load_snippets()
-            self._set_status(
+            self._set_status_message(
                 "Local snippet saved before cancellation" if cancelled else "Local snippet saved"
             )
             return True
         except SqlSnippetError as error:
-            self._set_status(str(error))
+            self._set_status_message(str(error))
             return False
 
     def snippet_sql(self, snippet_id: str) -> str | None:
         if not self._alive():
             return None
         return next((record.sql for record in self._snippets if record.id == snippet_id), None)
+
+    def _on_dispose(self) -> None:
+        self.close_input_admission()
 
     def close_input_admission(self) -> None:
         self._closed = True
