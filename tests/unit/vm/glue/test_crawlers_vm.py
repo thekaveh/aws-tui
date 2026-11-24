@@ -3,7 +3,14 @@ from __future__ import annotations
 import asyncio
 
 import pytest
-from vmx import NULL_DISPATCHER, MessageHub, TokenPagedComposition
+from vmx import (
+    NULL_DISPATCHER,
+    ComponentVM,
+    ConstructionStatus,
+    MessageHub,
+    PropertyChangedMessage,
+    TokenPagedComposition,
+)
 from vmx.messages.protocols import Message
 
 from aws_tui.domain.filesystem import PermissionDeniedError, ProviderError
@@ -183,7 +190,7 @@ async def test_crawlers_dispose_invalidates_blocked_load_without_notifications()
     fake.release_crawler_detail("ready-crawler")
     await selection
 
-    assert notifications == []
+    assert [name for name in notifications if name not in {"status", "is_constructed"}] == []
     assert (
         vm._crawler_generation,  # type: ignore[attr-defined]
         vm._detail_generation,  # type: ignore[attr-defined]
@@ -212,3 +219,59 @@ def test_crawlers_dispose_reaches_pager_commands_once(
     assert pager._disposed  # type: ignore[attr-defined]
     assert pager.load_more_command._disposed  # type: ignore[attr-defined]
     assert pager.refresh_command._disposed  # type: ignore[attr-defined]
+
+
+def test_crawlers_vm_is_a_component_vm_with_its_own_lifecycle() -> None:
+    vm = make_crawlers_vm(seeded_glue())
+    assert isinstance(vm, ComponentVM)
+    assert vm.name == "glue.crawlers"
+    assert vm.status is ConstructionStatus.CONSTRUCTED
+    vm.dispose()
+    assert vm.status is ConstructionStatus.DISPOSED
+
+
+def test_crawlers_construct_after_dispose_is_a_silent_no_op() -> None:
+    vm = make_crawlers_vm(seeded_glue())
+    vm.dispose()
+    vm.construct()
+    assert vm.status is ConstructionStatus.DISPOSED
+
+
+async def test_crawlers_construct_after_shutdown_is_a_silent_no_op() -> None:
+    vm = make_crawlers_vm(seeded_glue())
+    await vm.shutdown()
+    before = vm.status
+    vm.construct()
+    assert vm.status is before
+    vm.dispose()
+
+
+async def test_crawlers_raising_property_subscriber_does_not_stop_later_subscribers() -> None:
+    vm = make_crawlers_vm(seeded_glue())
+    seen: list[str] = []
+
+    def boom(_name: str) -> None:
+        raise RuntimeError("subscriber failed")
+
+    vm.on_property_changed.subscribe(on_next=boom)
+    vm.on_property_changed.subscribe(on_next=seen.append)
+    await vm.setup()
+    assert "crawlers" in seen
+    vm.dispose()
+
+
+async def test_crawlers_hub_messages_keep_the_vm_as_sender() -> None:
+    hub: MessageHub[Message] = MessageHub()
+    sent: list[PropertyChangedMessage] = []
+    hub.messages.subscribe(
+        on_next=lambda m: sent.append(m) if isinstance(m, PropertyChangedMessage) else None
+    )
+    vm = GlueCrawlersVM(client=seeded_glue(), hub=hub, dispatcher=NULL_DISPATCHER)
+    vm.construct()
+    sent.clear()
+    await vm.setup()
+    matching = [m for m in sent if m.property_name == "crawlers"]
+    assert matching
+    assert all(m.sender_object is vm for m in matching)
+    assert all(m.sender_name == "glue.crawlers" for m in matching)
+    vm.dispose()

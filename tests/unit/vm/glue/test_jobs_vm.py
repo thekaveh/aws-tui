@@ -3,7 +3,14 @@ from __future__ import annotations
 import asyncio
 
 import pytest
-from vmx import NULL_DISPATCHER, MessageHub, TokenPagedComposition
+from vmx import (
+    NULL_DISPATCHER,
+    ComponentVM,
+    ConstructionStatus,
+    MessageHub,
+    PropertyChangedMessage,
+    TokenPagedComposition,
+)
 from vmx.messages.protocols import Message
 
 from aws_tui.domain.filesystem import ProviderError, ProviderUnreachableError
@@ -214,7 +221,7 @@ async def test_jobs_dispose_invalidates_blocked_load_without_notifications() -> 
     fake.release_runs("nightly")
     await selection
 
-    assert notifications == []
+    assert [name for name in notifications if name not in {"status", "is_constructed"}] == []
     assert (
         vm._job_generation,  # type: ignore[attr-defined]
         vm._run_generation,  # type: ignore[attr-defined]
@@ -245,3 +252,59 @@ def test_jobs_dispose_reaches_both_pagers_once(monkeypatch: pytest.MonkeyPatch) 
     assert set(calls.values()) == {1}
     assert all(pager.load_more_command._disposed for pager in pagers)  # type: ignore[attr-defined]
     assert all(pager.refresh_command._disposed for pager in pagers)  # type: ignore[attr-defined]
+
+
+def test_jobs_vm_is_a_component_vm_with_its_own_lifecycle() -> None:
+    vm = make_jobs_vm(seeded_glue())
+    assert isinstance(vm, ComponentVM)
+    assert vm.name == "glue.jobs"
+    assert vm.status is ConstructionStatus.CONSTRUCTED
+    vm.dispose()
+    assert vm.status is ConstructionStatus.DISPOSED
+
+
+def test_jobs_construct_after_dispose_is_a_silent_no_op() -> None:
+    vm = make_jobs_vm(seeded_glue())
+    vm.dispose()
+    vm.construct()
+    assert vm.status is ConstructionStatus.DISPOSED
+
+
+async def test_jobs_construct_after_shutdown_is_a_silent_no_op() -> None:
+    vm = make_jobs_vm(seeded_glue())
+    await vm.shutdown()
+    before = vm.status
+    vm.construct()
+    assert vm.status is before
+    vm.dispose()
+
+
+async def test_jobs_raising_property_subscriber_does_not_stop_later_subscribers() -> None:
+    vm = make_jobs_vm(seeded_glue())
+    seen: list[str] = []
+
+    def boom(_name: str) -> None:
+        raise RuntimeError("subscriber failed")
+
+    vm.on_property_changed.subscribe(on_next=boom)
+    vm.on_property_changed.subscribe(on_next=seen.append)
+    await vm.setup()
+    assert "jobs" in seen
+    vm.dispose()
+
+
+async def test_jobs_hub_messages_keep_the_vm_as_sender() -> None:
+    hub: MessageHub[Message] = MessageHub()
+    sent: list[PropertyChangedMessage] = []
+    hub.messages.subscribe(
+        on_next=lambda m: sent.append(m) if isinstance(m, PropertyChangedMessage) else None
+    )
+    vm = GlueJobsVM(client=seeded_glue(), hub=hub, dispatcher=NULL_DISPATCHER)
+    vm.construct()
+    sent.clear()
+    await vm.setup()
+    matching = [m for m in sent if m.property_name == "jobs"]
+    assert len(matching) == 1
+    assert matching[0].sender_object is vm
+    assert matching[0].sender_name == "glue.jobs"
+    vm.dispose()
