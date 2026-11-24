@@ -16,6 +16,7 @@ from vmx.messages.protocols import Message
 from aws_tui.domain.filesystem import PermissionDeniedError, ProviderError
 from aws_tui.vm.file_manager.pane_vm import PaneState
 from aws_tui.vm.glue.crawlers_vm import GlueCrawlersVM
+from aws_tui.vm.service_diagnostics import capture_service_diagnostics
 from tests.unit.vm.glue._fake_glue import InMemoryGlue, seeded_glue
 
 
@@ -181,20 +182,14 @@ async def test_crawlers_dispose_invalidates_blocked_load_without_notifications()
     selection = asyncio.create_task(vm.select_crawler("ready-crawler"))
     await detail_started.wait()
     notifications.clear()
-    generations = (
-        vm._crawler_generation,  # type: ignore[attr-defined]
-        vm._detail_generation,  # type: ignore[attr-defined]
-    )
+    generation = vm._crawler_generation  # type: ignore[attr-defined]
 
     vm.dispose()
     fake.release_crawler_detail("ready-crawler")
     await selection
 
     assert [name for name in notifications if name not in {"status", "is_constructed"}] == []
-    assert (
-        vm._crawler_generation,  # type: ignore[attr-defined]
-        vm._detail_generation,  # type: ignore[attr-defined]
-    ) == tuple(generation + 1 for generation in generations)
+    assert vm._crawler_generation == generation + 1  # type: ignore[attr-defined]
     subscription.dispose()
 
 
@@ -274,4 +269,110 @@ async def test_crawlers_hub_messages_keep_the_vm_as_sender() -> None:
     assert matching
     assert all(m.sender_object is vm for m in matching)
     assert all(m.sender_name == "glue.crawlers" for m in matching)
+    vm.dispose()
+
+
+@pytest.mark.asyncio
+async def test_select_crawler_cancels_the_superseded_provider_call() -> None:
+    fake = seeded_glue()
+    started = fake.block_crawler_detail("ready-crawler")
+    vm = make_crawlers_vm(fake)
+    await vm.setup()
+
+    first = asyncio.create_task(vm.select_crawler("ready-crawler"))
+    await started.wait()
+    await vm.select_crawler("running-crawler")
+    await asyncio.wait_for(first, 1)
+
+    assert fake.crawler_detail_requests == ["ready-crawler", "running-crawler"]
+    assert vm.crawler_detail is not None
+    assert vm.crawler_detail.summary.name == "running-crawler"
+
+
+@pytest.mark.asyncio
+async def test_select_crawler_clears_the_previous_detail_while_the_next_loads() -> None:
+    fake = seeded_glue()
+    started = fake.block_crawler_detail("running-crawler")
+    vm = make_crawlers_vm(fake)
+    await vm.setup()
+    await vm.select_crawler("ready-crawler")
+    assert vm.crawler_detail is not None
+
+    task = asyncio.create_task(vm.select_crawler("running-crawler"))
+    await started.wait()
+    assert vm.crawler_detail is None
+    assert vm.detail_state is PaneState.LOADING
+    fake.release_crawler_detail("running-crawler")
+    await task
+
+
+@pytest.mark.asyncio
+async def test_crawler_detail_provider_error_maps_to_the_pane_state() -> None:
+    fake = seeded_glue()
+
+    async def denied(name: str) -> None:
+        raise PermissionDeniedError("denied")
+
+    fake.get_crawler = denied  # type: ignore[method-assign]
+    vm = make_crawlers_vm(fake)
+    await vm.setup()
+    await vm.select_crawler("ready-crawler")
+    assert vm.detail_state is PaneState.FORBIDDEN
+    assert vm.crawler_detail is None
+
+
+@pytest.mark.asyncio
+async def test_crawler_detail_unexpected_error_is_redacted_and_reported_once() -> None:
+    fake = seeded_glue()
+
+    async def boom(name: str) -> None:
+        raise RuntimeError("Authorization: Bearer CRAWLER_DETAIL_SECRET")
+
+    fake.get_crawler = boom  # type: ignore[method-assign]
+    vm = make_crawlers_vm(fake)
+    await vm.setup()
+    with capture_service_diagnostics() as diagnostics:
+        await vm.select_crawler("ready-crawler")
+    assert vm.detail_state is PaneState.ERROR
+    assert vm.detail_error_text is not None
+    assert "CRAWLER_DETAIL_SECRET" not in vm.detail_error_text
+    reports = [d for d in diagnostics if getattr(d, "operation", None) == "get_crawler"]
+    assert len(reports) == 1
+
+
+@pytest.mark.asyncio
+async def test_reload_crawlers_resets_the_detail_pane() -> None:
+    vm = make_crawlers_vm(seeded_glue())
+    await vm.setup()
+    await vm.select_crawler("ready-crawler")
+    await vm.set_state_filter("RUNNING")
+    assert vm.selected_crawler_name is None
+    assert vm.crawler_detail is None
+    assert vm.detail_state is PaneState.EMPTY
+
+
+@pytest.mark.asyncio
+async def test_shutdown_during_a_detail_read_ends_the_read() -> None:
+    fake = seeded_glue()
+    started = fake.block_crawler_detail("ready-crawler")
+    vm = make_crawlers_vm(fake)
+    await vm.setup()
+    selection = asyncio.create_task(vm.select_crawler("ready-crawler"))
+    await started.wait()
+    await vm.shutdown()
+    await asyncio.wait_for(selection, 1)
+
+
+@pytest.mark.asyncio
+async def test_detail_resource_never_sends_to_the_shared_hub() -> None:
+    hub: MessageHub[Message] = MessageHub()
+    sent: list[PropertyChangedMessage] = []
+    hub.messages.subscribe(
+        on_next=lambda m: sent.append(m) if isinstance(m, PropertyChangedMessage) else None
+    )
+    vm = GlueCrawlersVM(client=seeded_glue(), hub=hub, dispatcher=NULL_DISPATCHER)
+    vm.construct()
+    await vm.setup()
+    await vm.select_crawler("ready-crawler")
+    assert not [m for m in sent if m.sender_name == "glue.crawlers.detail"]
     vm.dispose()

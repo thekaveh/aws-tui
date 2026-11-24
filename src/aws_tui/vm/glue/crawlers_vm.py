@@ -3,22 +3,38 @@ from __future__ import annotations
 import asyncio
 from typing import Any, cast
 
+from reactivex.abc import DisposableBase
 from vmx import (
+    NULL_MESSAGE_HUB,
+    AsyncResourceError,
+    AsyncResourceReady,
+    AsyncResourceVM,
     ConstructionStatus,
     Dispatcher,
     Message,
     MessageHub,
 )
 
+from aws_tui.domain.filesystem import ProviderError
 from aws_tui.domain.glue import GlueCrawlerDetail, GlueCrawlerSummary
 from aws_tui.vm._component import IsolatedComponentVM
 from aws_tui.vm.file_manager.pane_vm import PaneState
+from aws_tui.vm.glue._errors import map_provider_error, map_unexpected_error
 from aws_tui.vm.glue._guarded import guarded
-from aws_tui.vm.glue._lifecycle import GlueOperationOwner
+from aws_tui.vm.glue._lifecycle import GlueOperationOwner, GlueOperationSuperseded
 from aws_tui.vm.glue._pager import bounded_glue_pager
 from aws_tui.vm.paging import BoundedTokenPagedComposition
+from aws_tui.vm.service_diagnostics import report_unexpected_service_error
 
 _MAX_CRAWLER_ITEMS = 1_000
+
+
+def _classify_detail_error(error: BaseException) -> tuple[PaneState, str | None]:
+    if isinstance(error, GlueOperationSuperseded):
+        return PaneState.LOADING, None  # shutdown ended the read; the old code also stayed LOADING
+    if isinstance(error, ProviderError):
+        return map_provider_error(error)
+    return map_unexpected_error(error)
 
 
 class GlueCrawlersVM(IsolatedComponentVM):
@@ -39,16 +55,15 @@ class GlueCrawlersVM(IsolatedComponentVM):
         self._operations = _operations or GlueOperationOwner()
         self._owns_operations = _operations is None
         self._crawler_generation = 0
-        self._detail_generation = 0
         self._state_filter: str | None = None
         self._crawler_pager = self._make_crawler_pager()
         self._own(lambda: self._crawler_pager.dispose())
         self._selected_crawler_name: str | None = None
-        self._crawler_detail: GlueCrawlerDetail | None = None
         self._state = PaneState.LOADING
-        self._detail_state = PaneState.EMPTY
         self._error_text: str | None = None
-        self._detail_error_text: str | None = None
+        self._detail_subscription: DisposableBase | None = None
+        self._detail_resource = self._new_detail()
+        self._own(self._release_detail)  # reads the current resource when it runs
 
     @property
     def crawlers(self) -> tuple[GlueCrawlerSummary, ...]:
@@ -60,7 +75,8 @@ class GlueCrawlersVM(IsolatedComponentVM):
 
     @property
     def crawler_detail(self) -> GlueCrawlerDetail | None:
-        return self._crawler_detail
+        current = self._detail_resource.state
+        return current.value if isinstance(current, AsyncResourceReady) else None
 
     @property
     def state_filter(self) -> str | None:
@@ -80,7 +96,7 @@ class GlueCrawlersVM(IsolatedComponentVM):
 
     @property
     def detail_state(self) -> PaneState:
-        return self._detail_state
+        return self._detail_view()[0]
 
     @property
     def error_text(self) -> str | None:
@@ -88,7 +104,7 @@ class GlueCrawlersVM(IsolatedComponentVM):
 
     @property
     def detail_error_text(self) -> str | None:
-        return self._detail_error_text
+        return self._detail_view()[1]
 
     def construct(self) -> None:
         if self._is_alive():
@@ -139,26 +155,11 @@ class GlueCrawlersVM(IsolatedComponentVM):
     async def select_crawler(self, name: str) -> None:
         if not self._is_alive() or not any(crawler.name == name for crawler in self.crawlers):
             return
-        self._detail_generation += 1
-        generation = self._detail_generation
+        self._reset_detail()  # drops the old detail and cancels an older read
         self._selected_crawler_name = name
-        self._crawler_detail = None
-        self._detail_error_text = None
         self._notify("selected_crawler_name")
         self._notify("crawler_detail")
-        self._set_detail_state(PaneState.LOADING)
-        ok, detail = await guarded(
-            lambda: self._operations.run(lambda: self._client.get_crawler(name)),
-            hub=self._hub,
-            operation="get_crawler",
-            is_current=lambda: generation == self._detail_generation,
-            on_failure=self._fail_detail,
-        )
-        if not ok:
-            return
-        self._crawler_detail = detail
-        self._notify("crawler_detail")
-        self._set_detail_state(PaneState.IDLE)
+        await self._detail_resource.load()
 
     async def _reload_crawlers(self) -> None:
         self._crawler_generation += 1
@@ -166,15 +167,13 @@ class GlueCrawlersVM(IsolatedComponentVM):
         old_pager = self._crawler_pager
         self._crawler_pager = self._make_crawler_pager()
         old_pager.dispose()
-        self._detail_generation += 1
+        self._reset_detail()
         self._selected_crawler_name = None
-        self._crawler_detail = None
         self._error_text = None
-        self._detail_error_text = None
         self._notify("crawlers")
         self._notify("selected_crawler_name")
         self._notify("crawler_detail")
-        self._set_detail_state(PaneState.EMPTY)
+        self._notify("detail_state")
         self._set_state(PaneState.LOADING)
         ok, _ = await guarded(
             self._crawler_pager.refresh_command.execute_async,
@@ -213,21 +212,11 @@ class GlueCrawlersVM(IsolatedComponentVM):
         self._error_text = text
         self._set_state(state)
 
-    def _fail_detail(self, state: PaneState, text: str | None) -> None:
-        self._detail_error_text = text
-        self._set_detail_state(state)
-
     def _set_state(self, state: PaneState) -> None:
         if self._state == state:
             return
         self._state = state
         self._notify("state")
-
-    def _set_detail_state(self, state: PaneState) -> None:
-        if self._detail_state == state:
-            return
-        self._detail_state = state
-        self._notify("detail_state")
 
     def _begin_shutdown(self) -> None:
         if self._shutdown_started:
@@ -239,7 +228,62 @@ class GlueCrawlersVM(IsolatedComponentVM):
 
     def _invalidate_operations(self) -> None:
         self._crawler_generation += 1
-        self._detail_generation += 1
+
+    def _new_detail(self) -> AsyncResourceVM[GlueCrawlerDetail]:
+        resource = AsyncResourceVM[GlueCrawlerDetail](
+            name="glue.crawlers.detail",
+            loader=self._load_detail,
+            hub=NULL_MESSAGE_HUB,  # nothing reaches the shared hub; the VM sends its own messages
+            dispatcher=self._dispatcher,
+        )  # retention stays DISCARD_PREVIOUS: a new crawler never shows the old detail
+        resource.construct()
+        self._detail_subscription = resource.property_changed.subscribe(
+            on_next=self._on_detail_state
+        )
+        return resource
+
+    def _release_detail(self) -> None:
+        subscription, self._detail_subscription = self._detail_subscription, None
+        if subscription is not None:
+            subscription.dispose()
+        self._detail_resource.dispose()  # cancels a read in flight
+
+    def _reset_detail(self) -> None:
+        self._release_detail()
+        self._detail_resource = self._new_detail()
+
+    async def _load_detail(self) -> GlueCrawlerDetail:
+        name = self._selected_crawler_name
+        if name is None:
+            raise RuntimeError("no crawler selected")  # unreachable: a selection precedes a load
+        detail: GlueCrawlerDetail = await self._operations.run(
+            lambda: self._client.get_crawler(name)
+        )
+        return detail
+
+    def _on_detail_state(self, property_name: str) -> None:
+        if property_name != "state":
+            return
+        current = self._detail_resource.state
+        if isinstance(current, AsyncResourceError) and not isinstance(
+            current.error, ProviderError | GlueOperationSuperseded
+        ):
+            report_unexpected_service_error(
+                self._hub, service="glue", operation="get_crawler", error=current.error
+            )
+        if isinstance(current, AsyncResourceReady):
+            self._notify("crawler_detail")
+        self._notify("detail_state")
+
+    def _detail_view(self) -> tuple[PaneState, str | None]:
+        if self._selected_crawler_name is None:
+            return PaneState.EMPTY, None
+        current = self._detail_resource.state
+        if isinstance(current, AsyncResourceReady):
+            return PaneState.IDLE, None
+        if isinstance(current, AsyncResourceError):
+            return _classify_detail_error(current.error)
+        return PaneState.LOADING, None
 
     def _is_alive(self) -> bool:
         return (
