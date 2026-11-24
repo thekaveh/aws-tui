@@ -12,6 +12,7 @@ import contextlib
 from functools import partial
 from typing import TYPE_CHECKING, ClassVar, Literal
 
+from aws_tui.ui.widgets.confirm_modal import ask_confirmation
 from aws_tui.vm.chrome.focus_coordinator_vm import FocusSlot
 
 if TYPE_CHECKING:
@@ -31,7 +32,6 @@ from aws_tui.infra.keymap_store import KeymapStore
 from aws_tui.ui import notifications
 from aws_tui.ui.widgets._focus_guard import focus_rests_within, is_on_active_screen
 from aws_tui.ui.widgets._worker import DeferredWorkerMixin
-from aws_tui.ui.widgets.confirm_modal import TextualDialogService
 from aws_tui.ui.widgets.context_picker import ContextPicker
 from aws_tui.ui.widgets.emr_serverless.application_picker import ApplicationPicker
 from aws_tui.ui.widgets.emr_serverless.clone_modal import JobRunCloneModal
@@ -672,9 +672,8 @@ class EmrServerlessPage(DeferredWorkerMixin, Widget):
         if not self._cancel_owner_current():
             return
         ctx = self.app.app_ctx  # type: ignore[attr-defined]
-        dialogs = TextualDialogService(self.app, ctx.confirm_vm, hub=self._hub)
         result = await self._vm.cancel_selected_run(
-            partial(ctx.confirm_vm.ask, dialog_service=dialogs),
+            partial(ask_confirmation, self.app, ctx.confirm_vm, hub=self._hub),
             source_is_current=self._cancel_owner_current,
         )
         if not self._cancel_owner_current() or not result.message:
