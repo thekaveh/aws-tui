@@ -85,7 +85,7 @@ def test_set_active_updates_options_and_emits_property_changed() -> None:
             assert vm.active_theme == "voidline"
             assert seen, "set_active must broadcast active_theme PropertyChangedMessage"
             # Option state flipped — only one is active.
-            actives = [opt for opt in vm.options if opt.is_active]
+            actives = [opt for opt in vm.options if opt.is_current]
             assert len(actives) == 1
             assert actives[0].name == "voidline"
         finally:
@@ -145,7 +145,7 @@ def test_pick_theme_command_keeps_active_theme_when_callback_rejects() -> None:
     try:
         vm.pick_theme_command.execute("broken")
         assert vm.active_theme == "carbon"
-        assert [option.name for option in vm.options if option.is_active] == ["carbon"]
+        assert [option.name for option in vm.options if option.is_current] == ["carbon"]
     finally:
         vm.dispose()
 
@@ -161,3 +161,37 @@ def test_next_theme_name_wraps_at_the_end() -> None:
 def test_next_theme_name_starts_at_the_first_name_for_an_unlisted_active() -> None:
     assert next_theme_name(("carbon", "voidline"), "phantom") == "carbon"
     assert next_theme_name((), "carbon") == "carbon"
+
+
+def test_preview_moves_the_marker() -> None:
+    vm = _build("carbon")
+    vm.preview_command.execute("amber")
+    vm.preview_command.execute("voidline")
+    assert [o.name for o in vm.options if o.is_current] == ["voidline"]
+    vm.dispose()
+
+
+def test_set_active_before_construct_marks_row_on_construct() -> None:
+    vm = ThemePickerVM(
+        themes=("carbon", "amber"),
+        active_theme="carbon",
+        on_pick=lambda _n: True,
+        hub=MessageHub(),
+        dispatcher=NULL_DISPATCHER,
+    )
+    vm.set_active("amber")
+    vm.construct()
+    assert [o.name for o in vm.options if o.is_current] == ["amber"]
+    vm.dispose()
+
+
+def test_unregistered_active_shows_no_marker() -> None:
+    vm = _build("phantom")
+    assert not [o for o in vm.options if o.is_current]
+    assert vm.active_theme == "phantom"
+    vm.set_active("amber")
+    assert [o.name for o in vm.options if o.is_current] == ["amber"]
+    vm.set_active("phantom")
+    assert not [o for o in vm.options if o.is_current]
+    assert vm.active_theme == "phantom"
+    vm.dispose()

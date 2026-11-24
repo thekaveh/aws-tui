@@ -107,6 +107,6 @@ def test_preview_command_keeps_active_theme_when_callback_rejects() -> None:
     try:
         picker.preview_command.execute("broken")
         assert picker.active_theme == "carbon"
-        assert [option.name for option in picker.options if option.is_active] == ["carbon"]
+        assert [option.name for option in picker.options if option.is_current] == ["carbon"]
     finally:
         picker.dispose()
