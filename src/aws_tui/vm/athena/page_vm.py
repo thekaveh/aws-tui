@@ -72,7 +72,7 @@ Sleep = Callable[[float], Awaitable[None]]
 T = TypeVar("T")
 
 _VIEWS = frozenset({"query", "history", "results", "saved"})
-_CONTEXT_LIST_KINDS: tuple[Literal["workgroups", "catalogs", "databases"], ...] = (
+_CONTEXT_LIST_KINDS: tuple[_ContextKind, ...] = (
     "workgroups",
     "catalogs",
     "databases",
@@ -144,6 +144,21 @@ class _PageWorker(Generic[T]):
     pager: SnapshotTokenPager[T, str] = field(init=False, repr=False)
 
 
+_ContextKind: TypeAlias = Literal["workgroups", "catalogs", "databases"]
+
+
+@dataclass(eq=False)
+class _ContextList(Generic[T]):
+    """State of one context list: its load state, busy flag and current worker."""
+
+    state: PaneState = PaneState.EMPTY
+    error_text: str | None = None
+    is_loading_more: bool = False
+    generation: int = 0
+    loading_more_worker: _PageWorker[T] | None = None
+    worker: _PageWorker[T] = field(init=False, repr=False)
+
+
 @dataclass(frozen=True, slots=True)
 class _RefreshedChoices(Generic[T]):
     rows: tuple[T, ...]
@@ -204,9 +219,6 @@ class AthenaPageVM:
         self._lifecycle_generation = 0
         self._context_generation = 0
         self._query_refresh_generation = 0
-        self._workgroup_generation = 0
-        self._catalog_generation = 0
-        self._database_generation = 0
         self._setup_lock = asyncio.Lock()
         self._shutdown_lock = asyncio.Lock()
         self._page_tasks: set[asyncio.Task[Any]] = set()
@@ -217,32 +229,19 @@ class AthenaPageVM:
             "",
             "",
         )
-        self._workgroups_state = PaneState.EMPTY
-        self._catalogs_state = PaneState.EMPTY
-        self._databases_state = PaneState.EMPTY
-        self._workgroups_error_text: str | None = None
-        self._catalogs_error_text: str | None = None
-        self._databases_error_text: str | None = None
+        self._workgroup_list: _ContextList[AthenaWorkgroupSummary] = _ContextList()
+        self._catalog_list: _ContextList[AthenaCatalogSummary] = _ContextList()
+        self._database_list: _ContextList[DatabaseSummary] = _ContextList()
         self._workgroup_detail: AthenaWorkgroupDetail | None = None
         self._workgroup_detail_state = PaneState.EMPTY
         self._workgroup_detail_error_text: str | None = None
-        self._is_loading_more_workgroups = False
-        self._is_loading_more_catalogs = False
-        self._is_loading_more_databases = False
-        self._loading_more_workers: dict[
-            Literal["workgroups", "catalogs", "databases"],
-            _PageWorker[Any] | None,
-        ] = {"workgroups": None, "catalogs": None, "databases": None}
         self._on_property_changed = ObserverSafeSubject[str]()
         self._inner: ComponentVM = (
             ComponentVM.builder().name("athena.page").services(hub, dispatcher).build()
         )
-        self._workgroup_worker = self._make_workgroup_worker()
-        self._catalog_worker = self._make_catalog_worker("")
-        self._database_worker = self._make_database_worker("", "")
-        self._workgroup_pager = self._workgroup_worker.pager
-        self._catalog_pager = self._catalog_worker.pager
-        self._database_pager = self._database_worker.pager
+        self._workgroup_list.worker = self._make_workgroup_worker()
+        self._catalog_list.worker = self._make_catalog_worker("")
+        self._database_list.worker = self._make_database_worker("", "")
         self.query = AthenaQueryVM(
             client=client,
             policy=policy,
@@ -618,39 +617,39 @@ class AthenaPageVM:
 
     @property
     def is_loading_more_workgroups(self) -> bool:
-        return self._is_loading_more_workgroups
+        return self._workgroup_list.is_loading_more
 
     @property
     def is_loading_more_catalogs(self) -> bool:
-        return self._is_loading_more_catalogs
+        return self._catalog_list.is_loading_more
 
     @property
     def is_loading_more_databases(self) -> bool:
-        return self._is_loading_more_databases
+        return self._database_list.is_loading_more
 
     @property
     def workgroups_state(self) -> PaneState:
-        return self._workgroups_state
+        return self._workgroup_list.state
 
     @property
     def catalogs_state(self) -> PaneState:
-        return self._catalogs_state
+        return self._catalog_list.state
 
     @property
     def databases_state(self) -> PaneState:
-        return self._databases_state
+        return self._database_list.state
 
     @property
     def workgroups_error_text(self) -> str | None:
-        return self._workgroups_error_text
+        return self._workgroup_list.error_text
 
     @property
     def catalogs_error_text(self) -> str | None:
-        return self._catalogs_error_text
+        return self._catalog_list.error_text
 
     @property
     def databases_error_text(self) -> str | None:
-        return self._databases_error_text
+        return self._database_list.error_text
 
     @property
     def status(self) -> ConstructionStatus:
@@ -701,9 +700,9 @@ class AthenaPageVM:
             await self.refresh_workgroups()
             if not self._is_alive():
                 return
-            if self._workgroups_state not in {PaneState.IDLE, PaneState.EMPTY}:
+            if self._workgroup_list.state not in {PaneState.IDLE, PaneState.EMPTY}:
                 return
-            if self._workgroups_state is PaneState.EMPTY:
+            if self._workgroup_list.state is PaneState.EMPTY:
                 self._clear_context_store()
                 return
             stored_workgroup = self._selection_store.get(
@@ -1140,9 +1139,9 @@ class AthenaPageVM:
         )
         context = snapshot.context_state
         self._context_generation += 1
-        self._workgroup_generation += 1
-        self._catalog_generation += 1
-        self._database_generation += 1
+        self._workgroup_list.generation += 1
+        self._catalog_list.generation += 1
+        self._database_list.generation += 1
         self._context = context.context
         self._context_selection_required = False
         self.tables.replace_context(self._context, notify=False)
@@ -1186,12 +1185,12 @@ class AthenaPageVM:
         self._selected_table_ref = refs[0] if len(refs) == 1 else None
         self.history._install_snapshot(snapshot.history)
         self.saved._install_snapshot(snapshot.saved)
-        self._workgroups_state = PaneState.IDLE if context.workgroups else PaneState.EMPTY
-        self._catalogs_state = PaneState.IDLE if context.catalogs else PaneState.EMPTY
-        self._databases_state = PaneState.IDLE if context.databases else PaneState.EMPTY
-        self._workgroups_error_text = None
-        self._catalogs_error_text = None
-        self._databases_error_text = None
+        self._workgroup_list.state = PaneState.IDLE if context.workgroups else PaneState.EMPTY
+        self._catalog_list.state = PaneState.IDLE if context.catalogs else PaneState.EMPTY
+        self._database_list.state = PaneState.IDLE if context.databases else PaneState.EMPTY
+        self._workgroup_list.error_text = None
+        self._catalog_list.error_text = None
+        self._database_list.error_text = None
         for key, value in (
             ("workgroup", snapshot.context.workgroup),
             ("catalog", snapshot.context.catalog),
@@ -1223,12 +1222,12 @@ class AthenaPageVM:
             frozenset(self._loaded_views),
             self._lifecycle_generation,
             self._context_generation,
-            self._workgroup_generation,
-            self._catalog_generation,
-            self._database_generation,
-            self._workgroup_worker,
-            self._catalog_worker,
-            self._database_worker,
+            self._workgroup_list.generation,
+            self._catalog_list.generation,
+            self._database_list.generation,
+            self._workgroup_list.worker,
+            self._catalog_list.worker,
+            self._database_list.worker,
             self.workgroups,
             self.catalogs,
             self.databases,
@@ -1236,17 +1235,17 @@ class AthenaPageVM:
             self._catalog_pager.current_token,
             self._database_pager.current_token,
             self._workgroup_detail,
-            self._workgroups_state,
-            self._catalogs_state,
-            self._databases_state,
+            self._workgroup_list.state,
+            self._catalog_list.state,
+            self._database_list.state,
             self._workgroup_detail_state,
-            self._workgroups_error_text,
-            self._catalogs_error_text,
-            self._databases_error_text,
+            self._workgroup_list.error_text,
+            self._catalog_list.error_text,
+            self._database_list.error_text,
             self._workgroup_detail_error_text,
-            self._is_loading_more_workgroups,
-            self._is_loading_more_catalogs,
-            self._is_loading_more_databases,
+            self._workgroup_list.is_loading_more,
+            self._catalog_list.is_loading_more,
+            self._database_list.is_loading_more,
             tuple(
                 self._selection_store.get(self._selection_scope, key)
                 for key in (
@@ -1625,7 +1624,7 @@ class AthenaPageVM:
                 current_token=lambda: self._workgroup_pager.current_token,
                 item_count=lambda: len(self.workgroups),
                 load_more=self.load_more_workgroups,
-                failed=lambda: self._workgroups_error_text is not None,
+                failed=lambda: self._workgroup_list.error_text is not None,
             )
             if not choice_is_current():
                 return
@@ -1686,7 +1685,7 @@ class AthenaPageVM:
     async def load_more_workgroups(self) -> None:
         if not self._is_alive():
             return
-        worker = self._workgroup_worker
+        worker = self._workgroup_list.worker
         if self.has_more_workgroups and self._is_current_workgroup(worker):
             self._begin_loading_more("workgroups", worker)
             try:
@@ -1701,7 +1700,7 @@ class AthenaPageVM:
     async def load_more_catalogs(self) -> None:
         if not self._is_alive():
             return
-        worker = self._catalog_worker
+        worker = self._catalog_list.worker
         if self.has_more_catalogs and self._is_current_catalog(worker):
             self._begin_loading_more("catalogs", worker)
             try:
@@ -1716,7 +1715,7 @@ class AthenaPageVM:
     async def load_more_databases(self) -> None:
         if not self._is_alive():
             return
-        worker = self._database_worker
+        worker = self._database_list.worker
         if self.has_more_databases and self._is_current_database(worker):
             self._begin_loading_more("databases", worker)
             try:
@@ -1840,10 +1839,10 @@ class AthenaPageVM:
     async def refresh_workgroups(self) -> None:
         if not self._is_alive():
             return
-        self._workgroup_generation += 1
+        self._workgroup_list.generation += 1
         worker = self._replace_workgroup_worker()
-        self._workgroups_error_text = None
-        self._workgroups_state = PaneState.LOADING
+        self._workgroup_list.error_text = None
+        self._workgroup_list.state = PaneState.LOADING
         self._notify_context_lists("workgroups")
         await self._run_page_command(
             worker.pager.refresh_command.execute_async,
@@ -1986,7 +1985,7 @@ class AthenaPageVM:
 
     async def _refresh_choices(
         self,
-        kind: Literal["workgroups", "catalogs", "databases"],
+        kind: _ContextKind,
         fetch: Callable[[str | None], Awaitable[tuple[list[T], str | None]]],
         *,
         valid: Callable[[T], bool],
@@ -1994,7 +1993,7 @@ class AthenaPageVM:
         selected: Callable[[T], bool],
         current: Callable[[], bool],
     ) -> _RefreshedChoices[T] | None:
-        previous_rows = getattr(self, kind)
+        previous_count = len(self._list(kind).worker.pager.items)
         # Keep loaded controls usable while detached stages fetch. Mutating
         # their loading states here would outlive a superseded request.
         seen_rows: set[object] = set()
@@ -2035,8 +2034,7 @@ class AthenaPageVM:
                 if not current():
                     return None
                 if (
-                    any(selected(row) for row in pager.items)
-                    and len(pager.items) >= len(previous_rows)
+                    any(selected(row) for row in pager.items) and len(pager.items) >= previous_count
                 ) or pager.current_token is None:
                     break
                 token = pager.current_token
@@ -2053,18 +2051,12 @@ class AthenaPageVM:
             present: bool | None = any(selected(row) for row in pager.items)
             if not present and (pager.current_token is not None or pager.limit_reached):
                 present = None
-            worker_name = {
-                "workgroups": "workgroup",
-                "catalogs": "catalog",
-                "databases": "database",
-            }[kind]
-            old_worker = getattr(self, f"_{worker_name}_worker")
+            lst = self._list(kind)
+            old_worker = lst.worker
             self._finish_loading_more(kind, old_worker)
             if not current():
                 return None
-            setattr(
-                self, f"_{worker_name}_generation", getattr(self, f"_{worker_name}_generation") + 1
-            )
+            lst.generation += 1
             worker: _PageWorker[Any]
             if kind == "workgroups":
                 worker = self._make_workgroup_worker()
@@ -2077,8 +2069,7 @@ class AthenaPageVM:
             target_pager.restore(
                 pager.items, pager.current_token, limit_reached=pager.limit_reached
             )
-            setattr(self, f"_{worker_name}_worker", worker)
-            setattr(self, f"_{worker_name}_pager", worker.pager)
+            lst.worker = worker
             old_worker.pager.dispose()
             self._set_list_state(kind, PaneState.IDLE if pager.items else PaneState.EMPTY)
             self._notify_context_lists(kind)
@@ -2147,14 +2138,14 @@ class AthenaPageVM:
             return
         workgroup = self._context.workgroup
         context_generation = self._context_generation
-        workgroup_generation = self._workgroup_generation + 1
+        workgroup_generation = self._workgroup_list.generation + 1
         await self.refresh_workgroups()
         if (
             not self._is_current_context(context_generation)
-            or workgroup_generation != self._workgroup_generation
+            or workgroup_generation != self._workgroup_list.generation
         ):
             return
-        if self._workgroups_state not in {
+        if self._workgroup_list.state not in {
             PaneState.IDLE,
             PaneState.EMPTY,
         }:
@@ -2168,13 +2159,13 @@ class AthenaPageVM:
                 current_token=lambda: self._workgroup_pager.current_token,
                 item_count=lambda: len(self.workgroups),
                 load_more=self.load_more_workgroups,
-                failed=lambda: self._workgroups_error_text is not None,
+                failed=lambda: self._workgroup_list.error_text is not None,
             )
             if (
                 available is None
                 or (not available and self.workgroup_limit_reached)
                 or not self._is_current_context(context_generation)
-                or workgroup_generation != self._workgroup_generation
+                or workgroup_generation != self._workgroup_list.generation
             ):
                 return
         workgroup_names = tuple(row.name for row in self.workgroups)
@@ -2197,8 +2188,8 @@ class AthenaPageVM:
             return
         if (
             self._workgroup_detail_state is PaneState.IDLE
-            and self._catalogs_state is PaneState.IDLE
-            and self._databases_state is PaneState.IDLE
+            and self._catalog_list.state is PaneState.IDLE
+            and self._database_list.state is PaneState.IDLE
             and all(self._context.cache_key)
             and self._workgroup_allows_execution()
         ):
@@ -2248,16 +2239,16 @@ class AthenaPageVM:
         if self._active_view == "results" and self.results.execution_id is not None:
             return self.results.state
         context_states = (
-            self._workgroups_state,
+            self._workgroup_list.state,
             self._workgroup_detail_state,
-            self._catalogs_state,
-            self._databases_state,
+            self._catalog_list.state,
+            self._database_list.state,
         )
         failure = next(
             (state for state in context_states if state in _RECOVERY_FAILURE_STATES),
             None,
         )
-        return failure or self._workgroups_state
+        return failure or self._workgroup_list.state
 
     async def _clear_query_context(self) -> None:
         self._begin_context_change(
@@ -2291,9 +2282,9 @@ class AthenaPageVM:
             self._shutdown_started = True
             self._lifecycle_generation += 1
             self._context_generation += 1
-            self._workgroup_generation += 1
-            self._catalog_generation += 1
-            self._database_generation += 1
+            self._workgroup_list.generation += 1
+            self._catalog_list.generation += 1
+            self._database_list.generation += 1
             self._context = QueryContext(
                 self._connection.name,
                 self._connection.region,
@@ -2304,9 +2295,9 @@ class AthenaPageVM:
             self._workgroup_pager.dispose()
             self._catalog_pager.dispose()
             self._database_pager.dispose()
-            self._workgroups_state = PaneState.EMPTY
-            self._catalogs_state = PaneState.EMPTY
-            self._databases_state = PaneState.EMPTY
+            self._workgroup_list.state = PaneState.EMPTY
+            self._catalog_list.state = PaneState.EMPTY
+            self._database_list.state = PaneState.EMPTY
             self._workgroup_detail = None
             self._workgroup_detail_state = PaneState.EMPTY
             self._workgroup_detail_error_text = None
@@ -2372,7 +2363,7 @@ class AthenaPageVM:
         await self._refresh_catalogs(generation)
         if not self._is_current_context(generation):
             return
-        if self._catalogs_state not in {PaneState.IDLE, PaneState.EMPTY}:
+        if self._catalog_list.state not in {PaneState.IDLE, PaneState.EMPTY}:
             return
         catalog_names = tuple(row.name for row in self.catalogs)
         catalog = (
@@ -2411,7 +2402,7 @@ class AthenaPageVM:
         await self._refresh_databases(generation)
         if not self._is_current_context(generation):
             return
-        if self._databases_state not in {PaneState.IDLE, PaneState.EMPTY}:
+        if self._database_list.state not in {PaneState.IDLE, PaneState.EMPTY}:
             return
         database_names = tuple(row.ref.database_name for row in self.databases)
         database = (
@@ -2444,7 +2435,7 @@ class AthenaPageVM:
             current_token=lambda: self._catalog_pager.current_token,
             item_count=lambda: len(self.catalogs),
             load_more=self.load_more_catalogs,
-            failed=lambda: self._catalogs_error_text is not None,
+            failed=lambda: self._catalog_list.error_text is not None,
         )
         if discovery is None:
             raise ProviderError("Athena catalog discovery did not complete")
@@ -2466,7 +2457,7 @@ class AthenaPageVM:
             current_token=lambda: self._database_pager.current_token,
             item_count=lambda: len(self.databases),
             load_more=self.load_more_databases,
-            failed=lambda: self._databases_error_text is not None,
+            failed=lambda: self._database_list.error_text is not None,
         )
         if discovery is None:
             raise ProviderError("Athena catalog discovery did not complete")
@@ -2537,15 +2528,15 @@ class AthenaPageVM:
         self._loaded_views.discard("history")
         self._loaded_views.discard("saved")
         if clear_catalogs:
-            self._catalog_generation += 1
+            self._catalog_list.generation += 1
             self._replace_catalog_worker(workgroup)
-            self._catalogs_state = PaneState.EMPTY
-            self._catalogs_error_text = None
+            self._catalog_list.state = PaneState.EMPTY
+            self._catalog_list.error_text = None
         if clear_databases:
-            self._database_generation += 1
+            self._database_list.generation += 1
             self._replace_database_worker(workgroup, catalog)
-            self._databases_state = PaneState.EMPTY
-            self._databases_error_text = None
+            self._database_list.state = PaneState.EMPTY
+            self._database_list.error_text = None
         self._notify("context")
         self._notify_context_lists()
         return generation
@@ -2625,9 +2616,9 @@ class AthenaPageVM:
         return True
 
     async def _refresh_catalogs(self, context_generation: int) -> None:
-        worker = self._catalog_worker
-        self._catalogs_error_text = None
-        self._catalogs_state = PaneState.LOADING
+        worker = self._catalog_list.worker
+        self._catalog_list.error_text = None
+        self._catalog_list.state = PaneState.LOADING
         self._notify_context_lists("catalogs")
         await self._run_page_command(
             worker.pager.refresh_command.execute_async,
@@ -2638,9 +2629,9 @@ class AthenaPageVM:
             return
 
     async def _refresh_databases(self, context_generation: int) -> None:
-        worker = self._database_worker
-        self._databases_error_text = None
-        self._databases_state = PaneState.LOADING
+        worker = self._database_list.worker
+        self._database_list.error_text = None
+        self._database_list.state = PaneState.LOADING
         self._notify_context_lists("databases")
         await self._run_page_command(
             worker.pager.refresh_command.execute_async,
@@ -2723,7 +2714,7 @@ class AthenaPageVM:
         self,
         command: Callable[[], Awaitable[None]],
         worker: _PageWorker[Any],
-        kind: Literal["workgroups", "catalogs", "databases"],
+        kind: _ContextKind,
     ) -> None:
         task = asyncio.current_task()
         if task is not None:
@@ -2732,7 +2723,7 @@ class AthenaPageVM:
             await command()
         except PagerCollectionLimitError:
             if self._is_current_worker(worker, kind):
-                setattr(self, f"_{kind}_error_text", None)
+                self._list(kind).error_text = None
                 items = {
                     "workgroups": self.workgroups,
                     "catalogs": self.catalogs,
@@ -2782,7 +2773,7 @@ class AthenaPageVM:
         *,
         restored_page: tuple[tuple[AthenaWorkgroupSummary, ...], str | None] | None = None,
     ) -> _PageWorker[AthenaWorkgroupSummary]:
-        generation = self._workgroup_generation
+        generation = self._workgroup_list.generation
         worker: _PageWorker[AthenaWorkgroupSummary] = _PageWorker(generation)
 
         async def fetch(
@@ -2814,7 +2805,7 @@ class AthenaPageVM:
         *,
         restored_page: tuple[tuple[AthenaCatalogSummary, ...], str | None] | None = None,
     ) -> _PageWorker[AthenaCatalogSummary]:
-        generation = self._catalog_generation
+        generation = self._catalog_list.generation
         worker: _PageWorker[AthenaCatalogSummary] = _PageWorker(generation)
 
         async def fetch(
@@ -2850,7 +2841,7 @@ class AthenaPageVM:
         *,
         restored_page: tuple[tuple[DatabaseSummary, ...], str | None] | None = None,
     ) -> _PageWorker[DatabaseSummary]:
-        generation = self._database_generation
+        generation = self._database_list.generation
         worker: _PageWorker[DatabaseSummary] = _PageWorker(generation)
 
         async def fetch(
@@ -2892,11 +2883,10 @@ class AthenaPageVM:
         *,
         restored_page: tuple[tuple[AthenaWorkgroupSummary, ...], str | None] | None = None,
     ) -> _PageWorker[AthenaWorkgroupSummary]:
-        old_worker = self._workgroup_worker
+        old_worker = self._workgroup_list.worker
         self._finish_loading_more("workgroups", old_worker)
         worker = self._make_workgroup_worker(restored_page=restored_page)
-        self._workgroup_worker = worker
-        self._workgroup_pager = worker.pager
+        self._workgroup_list.worker = worker
         old_worker.pager.dispose()
         return worker
 
@@ -2906,11 +2896,10 @@ class AthenaPageVM:
         *,
         restored_page: tuple[tuple[AthenaCatalogSummary, ...], str | None] | None = None,
     ) -> _PageWorker[AthenaCatalogSummary]:
-        old_worker = self._catalog_worker
+        old_worker = self._catalog_list.worker
         self._finish_loading_more("catalogs", old_worker)
         worker = self._make_catalog_worker(workgroup, restored_page=restored_page)
-        self._catalog_worker = worker
-        self._catalog_pager = worker.pager
+        self._catalog_list.worker = worker
         old_worker.pager.dispose()
         return worker
 
@@ -2921,15 +2910,14 @@ class AthenaPageVM:
         *,
         restored_page: tuple[tuple[DatabaseSummary, ...], str | None] | None = None,
     ) -> _PageWorker[DatabaseSummary]:
-        old_worker = self._database_worker
+        old_worker = self._database_list.worker
         self._finish_loading_more("databases", old_worker)
         worker = self._make_database_worker(
             workgroup,
             catalog,
             restored_page=restored_page,
         )
-        self._database_worker = worker
-        self._database_pager = worker.pager
+        self._database_list.worker = worker
         old_worker.pager.dispose()
         return worker
 
@@ -2938,8 +2926,8 @@ class AthenaPageVM:
         worker: _PageWorker[AthenaWorkgroupSummary],
     ) -> bool:
         return (
-            worker is self._workgroup_worker
-            and worker.generation == self._workgroup_generation
+            worker is self._workgroup_list.worker
+            and worker.generation == self._workgroup_list.generation
             and self._is_alive()
         )
 
@@ -2948,8 +2936,8 @@ class AthenaPageVM:
         worker: _PageWorker[AthenaCatalogSummary],
     ) -> bool:
         return (
-            worker is self._catalog_worker
-            and worker.generation == self._catalog_generation
+            worker is self._catalog_list.worker
+            and worker.generation == self._catalog_list.generation
             and self._is_alive()
         )
 
@@ -2958,24 +2946,43 @@ class AthenaPageVM:
         worker: _PageWorker[DatabaseSummary],
     ) -> bool:
         return (
-            worker is self._database_worker
-            and worker.generation == self._database_generation
+            worker is self._database_list.worker
+            and worker.generation == self._database_list.generation
             and self._is_alive()
         )
 
     def _is_current_worker(
         self,
         worker: _PageWorker[Any],
-        kind: Literal["workgroups", "catalogs", "databases"],
+        kind: _ContextKind,
     ) -> bool:
         if kind == "workgroups":
-            return worker is self._workgroup_worker and self._is_alive()
+            return worker is self._workgroup_list.worker and self._is_alive()
         if kind == "catalogs":
-            return worker is self._catalog_worker and self._is_alive()
-        return worker is self._database_worker and self._is_alive()
+            return worker is self._catalog_list.worker and self._is_alive()
+        return worker is self._database_list.worker and self._is_alive()
 
     def _is_current_context(self, generation: int) -> bool:
         return generation == self._context_generation and self._is_alive()
+
+    def _list(self, kind: _ContextKind) -> _ContextList[Any]:
+        if kind == "workgroups":
+            return self._workgroup_list
+        if kind == "catalogs":
+            return self._catalog_list
+        return self._database_list
+
+    @property
+    def _workgroup_pager(self) -> SnapshotTokenPager[AthenaWorkgroupSummary, str]:
+        return self._workgroup_list.worker.pager
+
+    @property
+    def _catalog_pager(self) -> SnapshotTokenPager[AthenaCatalogSummary, str]:
+        return self._catalog_list.worker.pager
+
+    @property
+    def _database_pager(self) -> SnapshotTokenPager[DatabaseSummary, str]:
+        return self._database_list.worker.pager
 
     def _is_alive(self) -> bool:
         return (
@@ -3010,64 +3017,50 @@ class AthenaPageVM:
 
     def _set_list_error(
         self,
-        kind: Literal["workgroups", "catalogs", "databases"],
+        kind: _ContextKind,
         state: PaneState,
         error_text: str,
     ) -> None:
-        if kind == "workgroups":
-            self._workgroups_state = state
-            self._workgroups_error_text = error_text
-        elif kind == "catalogs":
-            self._catalogs_state = state
-            self._catalogs_error_text = error_text
-        else:
-            self._databases_state = state
-            self._databases_error_text = error_text
+        lst = self._list(kind)
+        lst.state = state
+        lst.error_text = error_text
         self._notify_context_lists(kind)
 
     def _set_list_state(
         self,
-        kind: Literal["workgroups", "catalogs", "databases"],
+        kind: _ContextKind,
         state: PaneState,
     ) -> None:
-        if kind == "workgroups":
-            self._workgroups_state = state
-            if state in {PaneState.IDLE, PaneState.EMPTY}:
-                self._workgroups_error_text = None
-        elif kind == "catalogs":
-            self._catalogs_state = state
-            if state in {PaneState.IDLE, PaneState.EMPTY}:
-                self._catalogs_error_text = None
-        else:
-            self._databases_state = state
-            if state in {PaneState.IDLE, PaneState.EMPTY}:
-                self._databases_error_text = None
+        lst = self._list(kind)
+        lst.state = state
+        if state in {PaneState.IDLE, PaneState.EMPTY}:
+            lst.error_text = None
 
     def _begin_loading_more(
         self,
-        kind: Literal["workgroups", "catalogs", "databases"],
+        kind: _ContextKind,
         worker: _PageWorker[Any],
     ) -> None:
-        self._loading_more_workers[kind] = worker
-        attribute = f"_is_loading_more_{kind}"
-        if not getattr(self, attribute):
-            setattr(self, attribute, True)
+        lst = self._list(kind)
+        lst.loading_more_worker = worker
+        if not lst.is_loading_more:
+            lst.is_loading_more = True
             self._notify(f"is_loading_more_{kind}")
 
     def _finish_loading_more(
         self,
-        kind: Literal["workgroups", "catalogs", "databases"],
+        kind: _ContextKind,
         worker: _PageWorker[Any],
     ) -> None:
-        if self._loading_more_workers[kind] is not worker:
+        lst = self._list(kind)
+        if lst.loading_more_worker is not worker:
             return
-        self._loading_more_workers[kind] = None
-        attribute = f"_is_loading_more_{kind}"
-        if getattr(self, attribute):
-            setattr(self, attribute, False)
+        lst.loading_more_worker = None
+        if lst.is_loading_more:
+            lst.is_loading_more = False
             self._notify(f"is_loading_more_{kind}")
 
-    def _notify_context_lists(self, *kinds: Literal["workgroups", "catalogs", "databases"]) -> None:
+    def _notify_context_lists(self, *kinds: _ContextKind) -> None:
         """Publish the named context lists' four names, or all twelve with no kind.
 
         With no kind, the names go out in the order the page has always used.

@@ -2511,12 +2511,12 @@ async def test_context_load_more_exposes_busy_state_without_reloading_page_one()
 
 def test_retired_context_worker_cannot_clear_current_busy_state() -> None:
     page = make_page_vm(PageClient())
-    old_worker = page._catalog_worker  # type: ignore[attr-defined]
+    old_worker = page._catalog_list.worker  # type: ignore[attr-defined]
     page._begin_loading_more("catalogs", old_worker)  # type: ignore[attr-defined]
 
-    page._catalog_generation += 1  # type: ignore[attr-defined]
+    page._catalog_list.generation += 1  # type: ignore[attr-defined]
     page._replace_catalog_worker("primary")  # type: ignore[attr-defined]
-    current_worker = page._catalog_worker  # type: ignore[attr-defined]
+    current_worker = page._catalog_list.worker  # type: ignore[attr-defined]
     page._begin_loading_more("catalogs", current_worker)  # type: ignore[attr-defined]
     page._finish_loading_more("catalogs", old_worker)  # type: ignore[attr-defined]
 
@@ -3093,3 +3093,19 @@ async def test_notify_context_lists_without_kind_publishes_all_names_in_order() 
         ]
     finally:
         page.dispose()
+
+
+@pytest.mark.parametrize("kind", ["workgroups", "catalogs", "databases"])
+def test_set_list_error_changes_only_its_own_kind(kind: str) -> None:
+    page = make_page_vm(PageClient())
+    others = [name for name in ("workgroups", "catalogs", "databases") if name != kind]
+    before = {
+        name: (getattr(page, f"{name}_state"), getattr(page, f"{name}_error_text"))
+        for name in others
+    }
+    page._set_list_error(kind, PaneState.ERROR, "failed")  # type: ignore[attr-defined,arg-type]
+    assert getattr(page, f"{kind}_state") is PaneState.ERROR
+    assert getattr(page, f"{kind}_error_text") == "failed"
+    for name in others:
+        assert (getattr(page, f"{name}_state"), getattr(page, f"{name}_error_text")) == before[name]
+    page.dispose()
