@@ -189,8 +189,9 @@ protocol applies.
   `DualPaneVM(left=PaneVM(S3FS), right=PaneVM(LocalFS))` each call.
 - An optional `s3_fs_factory` test hook lets unit tests swap S3FS
   for `InMemoryFS` so no AWS calls leak in CI.
-- `bind_hub(hub)` late-wires the hub since the service is registered
-  before `RootVM` has its hub.
+- The constructor takes a required `hub` keyword argument. Composition passes
+  the application `MessageHub` when it builds the service, so there is no
+  late-binding step.
 
 ### 5.2. EMR Serverless
 `src/aws_tui/services/emr_serverless/service.py` is the second
