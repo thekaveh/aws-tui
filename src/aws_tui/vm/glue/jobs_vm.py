@@ -3,18 +3,15 @@ from __future__ import annotations
 import asyncio
 from typing import Any, cast
 
-import reactivex as rx
 from vmx import (
-    ComponentVM,
     ConstructionStatus,
     Dispatcher,
     Message,
     MessageHub,
-    PropertyChangedMessage,
 )
 
 from aws_tui.domain.glue import GlueJobRunSummary, GlueJobSummary
-from aws_tui.vm._observable import ObserverSafeSubject, send_value_free
+from aws_tui.vm._component import IsolatedComponentVM
 from aws_tui.vm.file_manager.pane_vm import PaneState
 from aws_tui.vm.glue._guarded import guarded
 from aws_tui.vm.glue._lifecycle import GlueOperationOwner
@@ -25,7 +22,7 @@ _MAX_JOB_ITEMS = 1_000
 _MAX_JOB_RUN_ITEMS = 1_000
 
 
-class GlueJobsVM:
+class GlueJobsVM(IsolatedComponentVM):
     def __init__(
         self,
         *,
@@ -34,23 +31,21 @@ class GlueJobsVM:
         dispatcher: Dispatcher,
         _operations: GlueOperationOwner | None = None,
     ) -> None:
+        super().__init__(name="glue.jobs", hub=hub, dispatcher=dispatcher)
         self._client = client
-        self._hub = hub
-        self._disposed = False
+        self._hub: MessageHub[Message] = hub  # keeps the narrow type the helpers need
         self._shutdown_started = False
         self._shutdown_complete = False
         self._shutdown_lock = asyncio.Lock()
         self._operations = _operations or GlueOperationOwner()
         self._owns_operations = _operations is None
-        self._on_property_changed = ObserverSafeSubject[str]()
-        self._inner: ComponentVM = (
-            ComponentVM.builder().name("glue.jobs").services(hub, dispatcher).build()
-        )
         self._job_generation = 0
         self._run_generation = 0
         self._run_state_filter: frozenset[str] = frozenset()
         self._job_pager = self._make_job_pager()
         self._run_pager = self._make_run_pager(None)
+        self._own(lambda: self._job_pager.dispose())
+        self._own(lambda: self._run_pager.dispose())
         self._selected_job_name: str | None = None
         self._selected_run_id: str | None = None
         self._jobs_state = PaneState.LOADING
@@ -126,31 +121,14 @@ class GlueJobsVM:
     def runs_error_text(self) -> str | None:
         return self._runs_error_text
 
-    @property
-    def status(self) -> ConstructionStatus:
-        return self._inner.status
-
-    @property
-    def on_property_changed(self) -> rx.Observable[str]:
-        return self._on_property_changed
-
     def construct(self) -> None:
-        if not self._is_alive():
-            return
-        self._inner.construct()
+        if self._is_alive():
+            super().construct()
 
-    def dispose(self) -> None:
-        if self._disposed:
-            return
-        self._disposed = True
+    def _on_dispose(self) -> None:
         if self._owns_operations:
             self._operations.close()
         self._invalidate_operations()
-        self._run_pager.dispose()
-        self._job_pager.dispose()
-        self._on_property_changed.on_completed()
-        self._on_property_changed.dispose()
-        self._inner.dispose()
 
     async def shutdown(self) -> None:
         self._begin_shutdown()
@@ -370,13 +348,15 @@ class GlueJobsVM:
         self._run_generation += 1
 
     def _is_alive(self) -> bool:
-        return not self._disposed and not self._shutdown_started and self._operations.accepting
+        return (
+            self.status is not ConstructionStatus.DISPOSED
+            and not self._shutdown_started
+            and self._operations.accepting
+        )
 
     def _notify(self, property_name: str) -> None:
-        if not self._is_alive():
-            return
-        send_value_free(self._hub, PropertyChangedMessage.create(self, "glue.jobs", property_name))
-        self._on_property_changed.on_next(property_name)
+        if self._is_alive():
+            self._publish(property_name)
 
 
 __all__ = ["GlueJobsVM"]
