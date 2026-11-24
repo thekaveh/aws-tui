@@ -1084,6 +1084,7 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
             hub=ctx.hub,
             demo=ctx.demo,
             identity=self._compact_identity,
+            identity_source=ctx.root_vm.content_host,
             id="brand-banner",
         )
         with Horizontal(id="main-area"):

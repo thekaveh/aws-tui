@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import pytest
 from textual.app import App, ComposeResult
-from vmx import MessageHub, RxDispatcher
+from vmx import MessageHub, PropertyChangedMessage, RxDispatcher
 
 from aws_tui.ui.widgets.brand_banner import _THEME_PALETTES, BrandBanner
 from aws_tui.vm.messages import ThemeChangedMessage
@@ -78,3 +78,36 @@ async def test_banner_set_theme_idempotent() -> None:
         before = banner.palette
         banner.set_theme("carbon")
         assert banner.palette is before
+
+
+@pytest.mark.asyncio
+async def test_banner_identity_refreshes_only_on_identity_source_current() -> None:
+    hub: MessageHub = MessageHub()
+    source = object()
+    other = object()
+    calls: list[int] = []
+
+    def identity() -> str:
+        calls.append(1)
+        return "identity"
+
+    class _App(App[None]):
+        def compose(self) -> ComposeResult:
+            yield BrandBanner(
+                theme_name="carbon",
+                hub=hub,
+                identity=identity,
+                identity_source=source,
+                id="banner",
+            )
+
+    app = _App()
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        baseline = len(calls)
+        hub.send(PropertyChangedMessage.create(other, "other", "current"))
+        await pilot.pause()
+        assert len(calls) == baseline
+        hub.send(PropertyChangedMessage.create(source, "source", "current"))
+        await pilot.pause()
+        assert len(calls) == baseline + 1
