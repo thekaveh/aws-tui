@@ -11,7 +11,6 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from vmx import (
-    ComponentVMOf,
     CompositeVM,
     ConstructionStatus,
     Dispatcher,
@@ -49,10 +48,8 @@ class TransfersVM:
         self._dispatcher: Dispatcher = dispatcher
         self._disposed: bool = False
 
-        self._transfers: list[TransferVM] = []
-
-        self._inner: CompositeVM[ComponentVMOf[TransferModel]] = (
-            CompositeVM[ComponentVMOf[TransferModel]]
+        self._inner: CompositeVM[TransferVM] = (
+            CompositeVM[TransferVM]
             .builder()
             .name("transfers")
             .services(hub, dispatcher)
@@ -74,15 +71,15 @@ class TransfersVM:
 
     @property
     def transfers(self) -> tuple[TransferVM, ...]:
-        return tuple(self._transfers)
+        return tuple(self._rows())
 
     @property
     def active(self) -> tuple[TransferVM, ...]:
-        return tuple(t for t in self._transfers if t.is_active or t.state == TransferState.PENDING)
+        return tuple(t for t in self._rows() if t.is_active or t.state == TransferState.PENDING)
 
     @property
     def finished(self) -> tuple[TransferVM, ...]:
-        return tuple(t for t in self._transfers if t.is_finished)
+        return tuple(t for t in self._rows() if t.is_finished)
 
     @property
     def finished_limit(self) -> int:
@@ -91,15 +88,15 @@ class TransfersVM:
 
     @property
     def active_count(self) -> int:
-        return sum(1 for t in self._transfers if t.is_active or t.state == TransferState.PENDING)
+        return sum(1 for t in self._rows() if t.is_active or t.state == TransferState.PENDING)
 
     @property
     def total_bytes_done(self) -> int:
-        return sum(t.model.bytes_done for t in self._transfers)
+        return sum(t.model.bytes_done for t in self._rows())
 
     @property
     def total_bytes_total(self) -> int | None:
-        totals = [t.model.bytes_total for t in self._transfers]
+        totals = [t.model.bytes_total for t in self._rows()]
         if any(t is None for t in totals):
             return None
         return sum(t for t in totals if t is not None)
@@ -134,9 +131,6 @@ class TransfersVM:
         self._disposed = True
         self._subscription.dispose()
         self._cancel_all_command.dispose()
-        for child in self._transfers:
-            child.dispose()
-        self._transfers.clear()
         self._inner.dispose()
 
     # ── Public API ──────────────────────────────────────────────────────────
@@ -162,8 +156,7 @@ class TransfersVM:
         existing = self._find(vm.id)
         if existing is not None:
             return existing
-        self._transfers.append(vm)
-        self._inner.append(vm.inner)
+        self._inner.append(vm)
         send_value_free(
             self._hub, PropertyChangedMessage.create(self, self._inner.name, "transfers")
         )
@@ -243,15 +236,18 @@ class TransfersVM:
     # ── Internal ────────────────────────────────────────────────────────────
 
     def _cancel_all(self) -> None:
-        for t in list(self._transfers):
+        for t in list(self._rows()):
             if t.is_active or t.state == TransferState.PENDING:
                 t.cancel_command.execute()
         send_value_free(
             self._hub, PropertyChangedMessage.create(self, self._inner.name, "transfers")
         )
 
+    def _rows(self) -> tuple[TransferVM, ...]:
+        return () if self._disposed else self._inner.snapshot()
+
     def _find(self, transfer_id: str) -> TransferVM | None:
-        for t in self._transfers:
+        for t in self._rows():
             if t.id == transfer_id:
                 return t
         return None
@@ -260,10 +256,9 @@ class TransfersVM:
         excess = len(self.finished) - _MAX_FINISHED_TRANSFERS
         if excess <= 0:
             return
-        for transfer in [item for item in self._transfers if item.is_finished][:excess]:
-            self._transfers.remove(transfer)
-            if transfer.inner in self._inner:
-                self._inner.remove(transfer.inner)
+        for transfer in [item for item in self._rows() if item.is_finished][:excess]:
+            if transfer in self._inner:
+                self._inner.remove(transfer)
             transfer.dispose()
 
 

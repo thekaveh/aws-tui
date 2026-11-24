@@ -1,9 +1,9 @@
-"""TransferVM — single transfer facade.
+"""TransferVM — one transfer row.
 
 A transfer is one of: upload (local → s3), download (s3 → local),
-local-copy (local → local), or s3-copy (s3 → s3). The facade wraps a
-:class:`ComponentVMOf[TransferModel]` so subscribers can bind to model
-changes via :class:`PropertyChangedMessage` ("model").
+local-copy (local → local), or s3-copy (s3 → s3). The row is a
+:class:`ComponentVMOf[TransferModel]`, so subscribers bind to model changes
+via :class:`PropertyChangedMessage` ("model") and to state changes ("state").
 """
 
 from __future__ import annotations
@@ -16,7 +16,6 @@ from typing import Literal
 
 from vmx import (
     ComponentVMOf,
-    ConstructionStatus,
     Dispatcher,
     Message,
     MessageHub,
@@ -48,8 +47,8 @@ class TransferModel:
     error: str | None = None
 
 
-class TransferVM:
-    """Facade for one transfer entry."""
+class TransferVM(ComponentVMOf[TransferModel]):
+    """One transfer entry: a ComponentVMOf whose model is the TransferModel."""
 
     def __init__(
         self,
@@ -59,44 +58,40 @@ class TransferVM:
         dispatcher: Dispatcher,
         clock: Callable[[], float] = time.monotonic,
     ) -> None:
-        self._hub: MessageHub[Message] = hub
+        super().__init__(
+            name=f"transfer.{model.id}",
+            hint="",
+            initial_model=model,
+            modeled_hinter=lambda _model: "",
+            on_model_changed=None,
+            hub=hub,
+            dispatcher=dispatcher,
+        )
         self._clock: Callable[[], float] = clock
         self._speed_window: deque[tuple[float, int]] = deque()
-
-        self._inner: ComponentVMOf[TransferModel] = (
-            ComponentVMOf[TransferModel]
-            .builder()
-            .name(f"transfer.{model.id}")
-            .model(model)
-            .services(hub, dispatcher)
-            .build()
-        )
 
         self._cancel_command: RelayCommand = (
             RelayCommand.builder().predicate(self._can_cancel).task(self._cancel).build()
         )
+        self._own(self._cancel_command)
 
     # ── Properties ──────────────────────────────────────────────────────────
 
     @property
-    def model(self) -> TransferModel:
-        return self._inner.model
-
-    @property
     def id(self) -> str:
-        return self._inner.model.id
+        return self.model.id
 
     @property
     def state(self) -> TransferState:
-        return self._inner.model.state
+        return self.model.state
 
     @property
     def is_active(self) -> bool:
-        return self._inner.model.state is TransferState.RUNNING
+        return self.model.state is TransferState.RUNNING
 
     @property
     def is_finished(self) -> bool:
-        return self._inner.model.state in (
+        return self.model.state in (
             TransferState.COMPLETED,
             TransferState.SKIPPED,
             TransferState.FAILED,
@@ -124,10 +119,10 @@ class TransferVM:
     def current_eta(self) -> float | None:
         """Seconds remaining at current speed, or ``None`` if unknowable."""
         speed = self.current_speed
-        total = self._inner.model.bytes_total
+        total = self.model.bytes_total
         if speed is None or speed <= 0 or total is None:
             return None
-        remaining = total - self._inner.model.bytes_done
+        remaining = total - self.model.bytes_done
         if remaining <= 0:
             return 0.0
         return remaining / speed
@@ -135,34 +130,6 @@ class TransferVM:
     @property
     def cancel_command(self) -> RelayCommand:
         return self._cancel_command
-
-    @property
-    def status(self) -> ConstructionStatus:
-        return self._inner.status
-
-    @property
-    def is_constructed(self) -> bool:
-        return self._inner.is_constructed
-
-    @property
-    def name(self) -> str:
-        return self._inner.name
-
-    @property
-    def inner(self) -> ComponentVMOf[TransferModel]:
-        return self._inner
-
-    # ── Lifecycle ───────────────────────────────────────────────────────────
-
-    def construct(self) -> None:
-        self._inner.construct()
-
-    def destruct(self) -> None:
-        self._inner.destruct()
-
-    def dispose(self) -> None:
-        self._cancel_command.dispose()
-        self._inner.dispose()
 
     # ── Mutators (driven by TransfersVM from the hub) ──────────────────────
 
@@ -219,21 +186,21 @@ class TransferVM:
         """
         self._record_sample(bytes_done)
         new = replace(
-            self._inner.model,
+            self.model,
             bytes_done=bytes_done,
             bytes_total=bytes_total,
             state=state,
             error=error,
         )
-        if new == self._inner.model:
+        if new == self.model:
             return
-        self._inner.model = new
-        send_value_free(self._hub, PropertyChangedMessage.create(self, self._inner.name, "state"))
+        self.model = new
+        send_value_free(self.hub, PropertyChangedMessage.create(self, self.name, "state"))
 
     # ── Command predicates / handlers ──────────────────────────────────────
 
     def _can_cancel(self) -> bool:
-        return self._inner.model.state in (
+        return self.model.state in (
             TransferState.PENDING,
             TransferState.RUNNING,
         )
@@ -247,11 +214,11 @@ class TransferVM:
         # bytes keep transferring until the copy finishes naturally —
         # the user-reported "cancel doesn't work" bug.
         self.apply_update(
-            bytes_done=self._inner.model.bytes_done,
-            bytes_total=self._inner.model.bytes_total,
+            bytes_done=self.model.bytes_done,
+            bytes_total=self.model.bytes_total,
             state=TransferState.CANCELLED,
         )
-        self._hub.send(TransferCancelRequestedMessage(transfer_id=self._inner.model.id))
+        self.hub.send(TransferCancelRequestedMessage(transfer_id=self.model.id))
 
     def _record_sample(self, bytes_done: int) -> None:
         """Append a sample to the rolling 5-second speed window."""
