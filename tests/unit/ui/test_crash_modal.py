@@ -52,7 +52,7 @@ async def test_crash_modal_keyboard_cannot_continue_after_an_unsafe_crash(key: s
                 yield from ()
 
             async def on_mount(self) -> None:
-                self.push_screen(CrashModal(vm, hub=hub), answered.append)
+                self.push_screen(CrashModal(vm), answered.append)
 
         app = _App()
         async with app.run_test(size=(100, 30)) as pilot:
@@ -88,7 +88,7 @@ async def test_crash_modal_continue_button_disabled_when_unsafe() -> None:
                 yield from ()
 
             async def on_mount(self) -> None:
-                await self.push_screen(CrashModal(vm, hub=hub))
+                await self.push_screen(CrashModal(vm))
 
         app = _App()
         async with app.run_test(size=(100, 30)) as pilot:
@@ -119,7 +119,7 @@ async def test_crash_modal_continue_button_enabled_when_safe() -> None:
                 yield from ()
 
             async def on_mount(self) -> None:
-                await self.push_screen(CrashModal(vm, hub=hub))
+                await self.push_screen(CrashModal(vm))
 
         app = _App()
         async with app.run_test(size=(100, 30)) as pilot:

@@ -1100,7 +1100,7 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
             )
             yield Container(id="content-host")
         yield HintLegend(ctx.root_vm.chrome.hint_legend, hub=ctx.hub, id="hint-legend")
-        yield ToastStack(ctx.root_vm.chrome.toast_stack, hub=ctx.hub, id="toast-stack")
+        yield ToastStack(ctx.root_vm.chrome.toast_stack, id="toast-stack")
         yield TransfersOverlay(
             ctx.transfers_vm,
             hub=ctx.hub,
@@ -2061,7 +2061,7 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
         """Mount the existing form and local setup guidance without opening a source."""
         ctx = self._app_ctx
         host = self.query_one("#content-host", Container)
-        await self._replace_content_widget(host, FirstRunView(ctx.config_store.path, ctx.hub))
+        await self._replace_content_widget(host, FirstRunView(ctx.config_store.path))
 
     def _first_run_view(self) -> FirstRunView | None:
         if not self.screen_stack:
@@ -9637,7 +9637,7 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
         ask_task: asyncio.Task[CrashChoice] | None = None
         try:
             ask_task = asyncio.create_task(crash_vm.ask())
-            await self.push_screen(CrashModal(crash_vm, hub=ctx.hub))
+            await self.push_screen(CrashModal(crash_vm))
             return await ask_task
         finally:
             # Cancel + drain ask_task on the cancellation path BEFORE

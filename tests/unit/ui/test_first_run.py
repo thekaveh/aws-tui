@@ -109,7 +109,7 @@ class Host(App[None]):
 
 
 def _view(tmp_path: Path) -> FirstRunView:
-    return FirstRunView(config_path=tmp_path / "config[local].toml", hub=_hub())
+    return FirstRunView(config_path=tmp_path / "config[local].toml")
 
 
 def _plain(widget: Widget) -> str:

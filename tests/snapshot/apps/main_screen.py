@@ -156,7 +156,7 @@ class MainScreenApp(App[None]):
             # we've awaited the seeds.
             yield Container(id="content-host")
         yield HintLegend(self._hint_vm, hub=self._hub, id="hint-legend")
-        yield ToastStack(self._toast_vm, hub=self._hub, id="toast-stack")
+        yield ToastStack(self._toast_vm, id="toast-stack")
         yield TransfersOverlay(self._transfers_vm, hub=self._hub, id="transfers-overlay")
 
     async def on_mount(self) -> None:

@@ -16,7 +16,6 @@ from textual.app import ComposeResult
 from textual.containers import Vertical
 from textual.css.query import NoMatches
 from textual.widget import Widget
-from vmx import Message, MessageHub
 
 from aws_tui.vm.chrome.toast_stack_vm import ToastStackVM
 from aws_tui.vm.chrome.toast_vm import ToastLevel, ToastVM
@@ -99,13 +98,11 @@ class ToastStack(Widget):
         self,
         vm: ToastStackVM,
         *,
-        hub: MessageHub[Message],
         id: str | None = None,
         classes: str | None = None,
     ) -> None:
         super().__init__(id=id, classes=classes)
         self._vm: ToastStackVM = vm
-        self._hub: MessageHub[Message] = hub
         self._sub: DisposableBase | None = None
 
     @property

@@ -546,7 +546,7 @@ class EmrServerlessPage(DeferredWorkerMixin, Widget):
             source_is_current=lambda: self._new_job_source_current(application_id),
         )
         vm.construct()
-        modal = JobRunCloneModal(vm, hub=self._hub)
+        modal = JobRunCloneModal(vm)
         try:
             try:
                 new_id = await self.app.push_screen_wait(modal)
@@ -621,7 +621,7 @@ class EmrServerlessPage(DeferredWorkerMixin, Widget):
             self._post_advisory_toast("Job", unsupported)
             clone_vm.dispose()
             return
-        modal = JobRunCloneModal(clone_vm, hub=self._hub)
+        modal = JobRunCloneModal(clone_vm)
         # Unified try/finally so cancellation (CancelledError is a
         # BaseException, NOT an Exception) disposes the VM too.
         # Previously the outer try caught only Exception, so an

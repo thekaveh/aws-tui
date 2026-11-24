@@ -25,7 +25,6 @@ from textual.events import Click
 from textual.message import Message as TextualMessage
 from textual.widget import Widget
 from textual.widgets import Input, Static
-from vmx import Message, MessageHub
 
 from aws_tui.infra.connection_validation import validate_endpoint_url
 from aws_tui.ui.widgets.modal_button import ModalButton
@@ -165,9 +164,8 @@ class ConnectionFormInline(Widget):
         ("escape", "cancel", "Cancel"),
     ]
 
-    def __init__(self, *, hub: MessageHub[Message], submit_label: str = "save") -> None:
+    def __init__(self, *, submit_label: str = "save") -> None:
         super().__init__()
-        self._hub: MessageHub[Message] = hub
         self._submit_label = submit_label
         self._ctx: _OpenContext | None = None
         # Form VM: composes VMx FormVM over S3CompatForm. A

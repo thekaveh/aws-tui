@@ -3,7 +3,6 @@
 import pytest
 from textual.app import App
 from textual.widgets import Static
-from vmx import MessageHub
 
 from aws_tui.domain.mutation_guard import PROTECTED_MESSAGE, ConnectionProtectedError
 from aws_tui.ui.widgets.emr_serverless.clone_modal import JobRunCloneModal, _submission_error
@@ -20,7 +19,7 @@ async def test_blank_modal_has_new_job_titles_and_inline_required_error():
     app = App()
     try:
         async with app.run_test(size=(80, 24)):
-            modal = JobRunCloneModal(vm, hub=MessageHub())
+            modal = JobRunCloneModal(vm)
             await app.push_screen(modal)
             assert str(modal.query_one("#clone-title", Static).render()) == "New Spark job"
             modal.action_review()

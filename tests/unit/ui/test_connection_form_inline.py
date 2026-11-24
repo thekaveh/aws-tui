@@ -68,15 +68,10 @@ def test_session_token_is_optional(value: str) -> None:
 
 def test_construction_smoke() -> None:
     """Sanity-check that the widget instantiates without an app context."""
-    from typing import cast
-
-    from vmx import MessageHub
-    from vmx.messages.protocols import Message
 
     from aws_tui.ui.widgets.settings.connection_form import ConnectionFormInline
 
-    hub = cast("MessageHub[Message]", MessageHub())
-    widget = ConnectionFormInline(hub=hub)
+    widget = ConnectionFormInline()
     assert widget is not None
 
 
@@ -89,19 +84,15 @@ async def test_submit_does_not_close_form_so_parent_can_keep_open_on_error(
     succeeded. If the form closes itself on submit and the parent's
     vm.add raises ValueError on a duplicate name, the user sees
     silence: the form disappeared with no error."""
-    from typing import cast
 
     from textual.app import App, ComposeResult
     from textual.widgets import Input
-    from vmx import MessageHub
-    from vmx.messages.protocols import Message
 
     from aws_tui.ui.widgets.settings.connection_form import (
         ConnectionFormInline,
         ConnectionFormSubmitted,
     )
 
-    hub = cast("MessageHub[Message]", MessageHub())
     submissions: list[ConnectionFormSubmitted] = []
 
     class _Host(App[None]):
@@ -115,7 +106,7 @@ async def test_submit_does_not_close_form_so_parent_can_keep_open_on_error(
         def on_connection_form_submitted(self, event: ConnectionFormSubmitted) -> None:
             submissions.append(event)
 
-    form = ConnectionFormInline(hub=hub)
+    form = ConnectionFormInline()
     app = _Host(form)
     async with app.run_test() as pilot:
         await pilot.pause()
@@ -144,18 +135,15 @@ async def test_submit_does_not_close_form_so_parent_can_keep_open_on_error(
 
 @pytest.mark.asyncio
 async def test_public_caption_errors_pending_controls_and_edit_name_lock() -> None:
-    from typing import cast
 
     from textual.app import App, ComposeResult
     from textual.widgets import Input
-    from vmx import Message, MessageHub
 
     from aws_tui.ui.widgets.modal_button import ModalButton
     from aws_tui.ui.widgets.settings.connection_form import ConnectionFormInline
     from aws_tui.vm.settings.s3_compat_form import S3CompatForm
 
-    hub = cast("MessageHub[Message]", MessageHub())
-    form = ConnectionFormInline(hub=hub, submit_label="Save and open")
+    form = ConnectionFormInline(submit_label="Save and open")
 
     class Host(App[None]):
         def compose(self) -> ComposeResult:
@@ -203,15 +191,13 @@ async def test_public_caption_errors_pending_controls_and_edit_name_lock() -> No
 
 @pytest.mark.asyncio
 async def test_settings_default_caption_remains_save() -> None:
-    from typing import cast
 
     from textual.app import App, ComposeResult
-    from vmx import Message, MessageHub
 
     from aws_tui.ui.widgets.modal_button import ModalButton
     from aws_tui.ui.widgets.settings.connection_form import ConnectionFormInline
 
-    form = ConnectionFormInline(hub=cast("MessageHub[Message]", MessageHub()))
+    form = ConnectionFormInline()
 
     class Host(App[None]):
         def compose(self) -> ComposeResult:
