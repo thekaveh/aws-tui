@@ -17,22 +17,19 @@ from vmx import Message as HubMessage
 from vmx import MessageHub
 from vmx.services.dispatcher import Dispatcher
 
-from aws_tui.ui.widgets.confirm_modal import TextualDialogService
-from aws_tui.vm.chrome.confirm_vm import ConfirmationVM, ConfirmRequest
+from aws_tui.ui.widgets.confirm_modal import ask_with_scratch_confirmation
+from aws_tui.vm.chrome.confirm_vm import ConfirmRequest
 
 
 async def ask_sql_confirmation(
     host: DOMNode, *, hub: MessageHub[HubMessage], dispatcher: Dispatcher, message: str
 ) -> bool:
-    confirmation = ConfirmationVM(hub=hub, dispatcher=dispatcher)
-    confirmation.construct()
-    try:
-        return await confirmation.ask(
-            ConfirmRequest(title=message, confirm_label="Replace"),
-            dialog_service=TextualDialogService(host.app, confirmation, hub=hub),
-        )
-    finally:
-        confirmation.dispose()
+    return await ask_with_scratch_confirmation(
+        host.app,
+        ConfirmRequest(title=message, confirm_label="Replace"),
+        hub=hub,
+        dispatcher=dispatcher,
+    )
 
 
 class _SqlPrompt(ModalScreen[str | None]):

@@ -11,14 +11,13 @@ from textual.widgets import Button, Static
 from vmx import Message, MessageHub
 
 from aws_tui.infra.redaction import safe_endpoint_display
-from aws_tui.ui.widgets.confirm_modal import TextualDialogService
+from aws_tui.ui.widgets.confirm_modal import ask_with_scratch_confirmation
 from aws_tui.ui.widgets.settings.connection_form import (
     ConnectionFormCancelled,
     ConnectionFormInline,
     ConnectionFormSubmitted,
 )
 from aws_tui.vm.chrome.confirm_vm import (
-    ConfirmationVM,
     ConfirmPath,
     ConfirmRequest,
 )
@@ -328,23 +327,17 @@ class S3ConnectionsPanel(Widget):
     async def _do_delete(self, name: str) -> None:
         # The latest delete request supersedes any in-flight request in
         # this group, so two workers cannot confirm and remove concurrently.
-        confirm_vm = ConfirmationVM(hub=self._hub, dispatcher=self._vm.dispatcher)
-        confirm_vm.construct()
-        try:
-            request = ConfirmRequest(
-                title=f"Delete connection {name!r}?",
-                paths=(ConfirmPath(label="Name", path=name),),
-                body_lines=("This cannot be undone.",),
-                confirm_label="Delete",
-                cancel_label="Cancel",
-                danger=True,
-            )
-            confirmed = await confirm_vm.ask(
-                request,
-                dialog_service=TextualDialogService(self.app, confirm_vm, hub=self._hub),
-            )
-        finally:
-            confirm_vm.dispose()
+        request = ConfirmRequest(
+            title=f"Delete connection {name!r}?",
+            paths=(ConfirmPath(label="Name", path=name),),
+            body_lines=("This cannot be undone.",),
+            confirm_label="Delete",
+            cancel_label="Cancel",
+            danger=True,
+        )
+        confirmed = await ask_with_scratch_confirmation(
+            self.app, request, hub=self._hub, dispatcher=self._vm.dispatcher
+        )
         if not confirmed:
             return
         try:

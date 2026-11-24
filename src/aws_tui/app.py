@@ -99,7 +99,7 @@ from aws_tui.ui.widgets.athena.query_view import AthenaQueryView
 from aws_tui.ui.widgets.athena.results_view import AthenaResultsView
 from aws_tui.ui.widgets.brand_banner import BrandBanner
 from aws_tui.ui.widgets.command_palette import CommandPalette
-from aws_tui.ui.widgets.confirm_modal import TextualDialogService
+from aws_tui.ui.widgets.confirm_modal import ask_confirmation
 from aws_tui.ui.widgets.context_picker import ContextPicker
 from aws_tui.ui.widgets.crash_modal import CrashModal
 from aws_tui.ui.widgets.dual_pane import DualPane
@@ -2736,14 +2736,16 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
             if isinstance(outgoing, AthenaPageVM):
 
                 async def confirm(message: str) -> bool:
-                    return await ctx.confirm_vm.ask(
+                    return await ask_confirmation(
+                        self,
+                        ctx.confirm_vm,
                         ConfirmRequest(
                             title="Open overview detail?",
                             body_lines=(message,),
                             confirm_label="Open",
                             danger=True,
                         ),
-                        dialog_service=TextualDialogService(self, ctx.confirm_vm, hub=ctx.hub),
+                        hub=ctx.hub,
                     )
 
                 if not await outgoing.authoring.confirm_replacement(
@@ -3029,14 +3031,16 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
             if isinstance(outgoing, AthenaPageVM):
 
                 async def confirm(message: str) -> bool:
-                    return await ctx.confirm_vm.ask(
+                    return await ask_confirmation(
+                        self,
+                        ctx.confirm_vm,
                         ConfirmRequest(
                             title="Open saved navigation?",
                             body_lines=(message,),
                             confirm_label="Open",
                             danger=True,
                         ),
-                        dialog_service=TextualDialogService(self, ctx.confirm_vm, hub=ctx.hub),
+                        hub=ctx.hub,
                     )
 
                 if not await outgoing.authoring.confirm_replacement(
@@ -3524,8 +3528,7 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
                     else prepared.plan.policy.value == "overwrite"
                 ),
             )
-            dialogs = TextualDialogService(self, ctx.confirm_vm, hub=ctx.hub)
-            if not await ctx.confirm_vm.ask(request, dialog_service=dialogs):
+            if not await ask_confirmation(self, ctx.confirm_vm, request, hub=ctx.hub):
                 return
             if isinstance(screen, SyncModal):
                 screen.validate_controls()
@@ -3724,8 +3727,7 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
                 body_lines=body,
                 confirm_label="Download" if mode == "download" else "Create new key",
             )
-            dialogs = TextualDialogService(self, ctx.confirm_vm, hub=ctx.hub)
-            if not await ctx.confirm_vm.ask(confirm, dialog_service=dialogs):
+            if not await ask_confirmation(self, ctx.confirm_vm, confirm, hub=ctx.hub):
                 return
             if not screen.vm.accepts(prepared) or not self._versions_origin_current(origin):
                 self._file_confirmation_invalidated()
@@ -6081,8 +6083,7 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
             if not is_current():
                 self._file_confirmation_invalidated()
                 return
-            dialogs = TextualDialogService(self, ctx.confirm_vm, hub=ctx.hub)
-            if not await ctx.confirm_vm.ask(request, dialog_service=dialogs):
+            if not await ask_confirmation(self, ctx.confirm_vm, request, hub=ctx.hub):
                 return
             if not is_current():
                 self._file_confirmation_invalidated()
@@ -6284,8 +6285,7 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
             confirm_label="Rename" if target is not None else "Create",
         )
         ctx = self._app_ctx
-        dialogs = TextualDialogService(self, ctx.confirm_vm, hub=ctx.hub)
-        if not await ctx.confirm_vm.ask(request, dialog_service=dialogs):
+        if not await ask_confirmation(self, ctx.confirm_vm, request, hub=ctx.hub):
             return
         if not is_current():
             self._file_confirmation_invalidated()
@@ -6391,8 +6391,7 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
             if not is_current():
                 self._file_confirmation_invalidated()
                 return
-            dialogs = TextualDialogService(self, ctx.confirm_vm, hub=ctx.hub)
-            if not await ctx.confirm_vm.ask(request, dialog_service=dialogs):
+            if not await ask_confirmation(self, ctx.confirm_vm, request, hub=ctx.hub):
                 return
             if not is_current():
                 self._file_confirmation_invalidated()
@@ -8031,9 +8030,11 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
         async def confirm_replace(message: str) -> bool:
             if not owns_outgoing() or ctx.confirm_vm.is_open:
                 return False
-            dialogs = TextualDialogService(self, ctx.confirm_vm, hub=ctx.hub)
-            return await ctx.confirm_vm.ask(
-                ConfirmRequest(title=message, confirm_label="Replace"), dialog_service=dialogs
+            return await ask_confirmation(
+                self,
+                ctx.confirm_vm,
+                ConfirmRequest(title=message, confirm_label="Replace"),
+                hub=ctx.hub,
             )
 
         if outgoing is not None and not await outgoing.authoring.confirm_replacement(
@@ -8303,13 +8304,15 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
             ctx = self._app_ctx
             if not owns_retry() or ctx.confirm_vm.is_open:
                 return False
-            accepted = await ctx.confirm_vm.ask(
+            accepted = await ask_confirmation(
+                self,
+                ctx.confirm_vm,
                 ConfirmRequest(
                     title="Restore previous SQL before opening the table?",
                     body_lines=("This replaces the current editor with the retained document.",),
                     confirm_label="Restore",
                 ),
-                dialog_service=TextualDialogService(self, ctx.confirm_vm, hub=ctx.hub),
+                hub=ctx.hub,
             )
             if not accepted or not owns_retry():
                 return False

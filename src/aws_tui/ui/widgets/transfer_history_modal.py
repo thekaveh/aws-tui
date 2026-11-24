@@ -18,7 +18,7 @@ from vmx import Message, MessageHub
 from aws_tui.domain.cross_fs import ConflictResolution
 from aws_tui.domain.transfer_history import TransferConnectionIdentity, TransferHistoryRecord
 from aws_tui.ui.widgets._subscriber import HubSubscriberMixin
-from aws_tui.ui.widgets.confirm_modal import TextualDialogService
+from aws_tui.ui.widgets.confirm_modal import ask_confirmation
 from aws_tui.ui.widgets.modal_button import ModalButton
 from aws_tui.vm.chrome.confirm_vm import ConfirmRequest
 from aws_tui.vm.file_manager.transfer_history_vm import (
@@ -358,9 +358,7 @@ class TransferHistoryModal(HubSubscriberMixin, ModalScreen[None]):
                 )
                 if ctx.confirm_vm.is_open:
                     return
-                confirmed = await ctx.confirm_vm.ask(
-                    request, dialog_service=TextualDialogService(app, ctx.confirm_vm, hub=ctx.hub)
-                )
+                confirmed = await ask_confirmation(app, ctx.confirm_vm, request, hub=ctx.hub)
                 if confirmed and not self._history_closed:
                     await self.vm.clear()
             elif action == "recheck" and record is not None:
