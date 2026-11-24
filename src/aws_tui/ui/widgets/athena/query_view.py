@@ -167,11 +167,11 @@ class AthenaQueryView(DeferredWorkerMixin, Widget):
     """
 
     def __init__(
-        self, vm: AthenaPageVM, *, hub: MessageHub[HubMessage] | None = None, id: str | None = None
+        self, vm: AthenaPageVM, *, hub: MessageHub[HubMessage], id: str | None = None
     ) -> None:
         super().__init__(id=id, classes="athena-service-view")
         self._page_vm = vm
-        self._hub = hub if hub is not None else MessageHub()
+        self._hub = hub
         self._vm = vm.query
         self._sub: DisposableBase | None = None
         self._drafts_sub: DisposableBase | None = None

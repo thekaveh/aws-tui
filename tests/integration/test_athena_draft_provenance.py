@@ -6,6 +6,7 @@ from dataclasses import replace
 import pytest
 from textual.app import App, ComposeResult
 from textual.widgets import Button, TextArea
+from vmx import Message, MessageHub
 
 from aws_tui.domain.filesystem import AuthRequiredError
 from aws_tui.ui.widgets.athena.page import AthenaPage
@@ -26,13 +27,16 @@ from tests.unit.vm.athena.test_page_vm import (
 
 async def test_staged_editor_label_changes_when_its_saved_snapshot_is_superseded(tmp_path):
     runtime, _store = runtime_at(tmp_path)
+    hub: MessageHub[Message] = MessageHub()
     source = make_page_vm(PageClient(), drafts=runtime, source_is_current=yes)
-    target = make_page_vm(PageClient(), drafts=runtime, source_is_current=yes, drafts_active=False)
+    target = make_page_vm(
+        PageClient(), drafts=runtime, source_is_current=yes, drafts_active=False, hub=hub
+    )
     newer = runtime.open_session()
 
     class EditorApp(App[None]):
         def compose(self) -> ComposeResult:
-            yield AthenaQueryView(target)
+            yield AthenaQueryView(target, hub=hub)
 
     try:
         await source.setup()
