@@ -18,8 +18,7 @@ from __future__ import annotations
 
 import asyncio
 import inspect
-from collections.abc import Awaitable, Callable, Iterator
-from contextlib import contextmanager
+from collections.abc import Awaitable, Callable
 
 from vmx import (
     ComponentVM,
@@ -204,6 +203,13 @@ class CommandPaletteVM:
             .task(self._move_selection)
             .build()
         )
+        self._published_entries: tuple[PaletteEntry, ...] = self.filtered_entries
+        self._published_index: int = self.selected_index
+        # One subscription publishes both names for every change of the view,
+        # including a cursor move that no VM method made.
+        self._view_sub = self._scored_filter.on_changed.subscribe(
+            lambda _change: self._publish_projection()
+        )
 
     # ── Properties ──────────────────────────────────────────────────────────
 
@@ -219,11 +225,10 @@ class CommandPaletteVM:
     def filter_text(self, value: str) -> None:
         if self._filter_text == value:
             return
-        with self._publishing():
-            self._filter_text = value
-            self._notify("filter_text")
-            self._scored_filter.refresh_scores()
-            self._select_first()
+        self._filter_text = value
+        self._notify("filter_text")
+        self._scored_filter.refresh_scores()
+        self._select_first()
 
     @property
     def active_service_id(self) -> str | None:
@@ -232,11 +237,10 @@ class CommandPaletteVM:
     def set_active_service(self, service_id: str | None) -> None:
         if self._active_service_id == service_id:
             return
-        with self._publishing():
-            self._active_service_id = service_id
-            self._notify("active_service_id")
-            self._scored_filter.refresh_scores()
-            self._select_first()
+        self._active_service_id = service_id
+        self._notify("active_service_id")
+        self._scored_filter.refresh_scores()
+        self._select_first()
 
     @property
     def filtered_entries(self) -> tuple[PaletteEntry, ...]:
@@ -305,6 +309,8 @@ class CommandPaletteVM:
         self._close_command.dispose()
         self._execute_selected_command.dispose()
         self._move_selection_command.dispose()
+        # End the view subscription first, so teardown publishes no projection.
+        self._view_sub.dispose()
         # Dispose the scored filter BEFORE the registry it subscribes to, so
         # its subscription unwinds against a live source. `PaneVM.dispose`
         # documents the same ordering for its `FilteredCompositeVM`; this
@@ -325,40 +331,37 @@ class CommandPaletteVM:
         if existing is not None and existing.entry == entry:
             self._actions[entry.id] = action
             return
-        with self._publishing():
-            if existing is not None:
-                if existing.inner in self._inner_registry:
-                    self._inner_registry.remove(existing.inner)
-                existing.dispose()
-            item = PaletteEntryVM(entry=entry, hub=self._hub, dispatcher=self._dispatcher)
-            self._items[entry.id] = item
-            self._actions[entry.id] = action
-            if self._inner_registry.is_constructed:
-                item.construct()
-            self._inner_registry.append(item.inner)
-            self._select_first()
+        if existing is not None:
+            if existing.inner in self._inner_registry:
+                self._inner_registry.remove(existing.inner)
+            existing.dispose()
+        item = PaletteEntryVM(entry=entry, hub=self._hub, dispatcher=self._dispatcher)
+        self._items[entry.id] = item
+        self._actions[entry.id] = action
+        if self._inner_registry.is_constructed:
+            item.construct()
+        self._inner_registry.append(item.inner)
+        self._select_first()
 
     def unregister_entry(self, entry_id: str) -> None:
         item = self._items.pop(entry_id, None)
         if item is None:
             return
-        with self._publishing():
-            self._actions.pop(entry_id, None)
-            if item.inner in self._inner_registry:
-                self._inner_registry.remove(item.inner)
-            item.dispose()
-            self._select_first()
+        self._actions.pop(entry_id, None)
+        if item.inner in self._inner_registry:
+            self._inner_registry.remove(item.inner)
+        item.dispose()
+        self._select_first()
 
     # ── Command implementations ────────────────────────────────────────────
 
     def _open(self) -> None:
-        with self._publishing():
-            self._set_open(True)
-            if self._filter_text != "":
-                self._filter_text = ""
-                self._notify("filter_text")
-            self._scored_filter.refresh_scores()
-            self._select_first()
+        self._set_open(True)
+        if self._filter_text != "":
+            self._filter_text = ""
+            self._notify("filter_text")
+        self._scored_filter.refresh_scores()
+        self._select_first()
 
     def _close(self) -> None:
         self._set_open(False)
@@ -431,9 +434,8 @@ class CommandPaletteVM:
             return
         view = self._scored_filter
         step = view.move_to_next_visible if delta > 0 else view.move_to_previous_visible
-        with self._publishing():
-            for _ in range(min(abs(delta), view.visible_count)):
-                step()
+        for _ in range(min(abs(delta), view.visible_count)):
+            step()
 
     # ── Filter machinery ───────────────────────────────────────────────────
 
@@ -458,16 +460,14 @@ class CommandPaletteVM:
     def _notify(self, name: str) -> None:
         send_value_free(self._hub, PropertyChangedMessage.create(self, self.name, name))
 
-    @contextmanager
-    def _publishing(self) -> Iterator[None]:
+    def _publish_projection(self) -> None:
         entries, index = self.filtered_entries, self.selected_index
-        try:
-            yield
-        finally:
-            if self.filtered_entries != entries:
-                self._notify("filtered_entries")
-            if self.selected_index != index:
-                self._notify("selected_index")
+        if entries != self._published_entries:
+            self._published_entries = entries
+            self._notify("filtered_entries")
+        if index != self._published_index:
+            self._published_index = index
+            self._notify("selected_index")
 
 
 __all__ = ["CommandPaletteVM", "PaletteAction", "PaletteEntry", "PaletteEntryVM"]
