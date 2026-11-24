@@ -64,6 +64,18 @@ from aws_tui.vm.service_diagnostics import report_unexpected_service_error
 #: Module-level singleton for the default initial path (root).
 _ROOT_PATH: PathRef = PathRef(())
 
+_VIEWMODEL_INPUTS: frozenset[str] = frozenset(
+    {
+        "entries",
+        "state",
+        "path",
+        "filter_text",
+        "filtered_entries",
+        "cursor_index",
+        "is_multiselect_mode",
+    }
+)
+
 
 def _visible_error_text(exc: BaseException) -> str | None:
     text = str(exc)
@@ -646,7 +658,6 @@ class PaneVM:
         self._sort_descending = descending
         self._sync_filtered_from_composite()
         self._notify("filtered_entries")
-        self._notify("viewmodel")
 
     def find_entries(self, query: str) -> tuple[EntryVM, ...]:
         """Rank loaded real rows without visiting the provider."""
@@ -826,7 +837,6 @@ class PaneVM:
         await self._reload()
         if filter_reset:
             self._notify("filter_text")
-            self._notify("viewmodel")
 
     async def refresh(self) -> None:
         await self._reload()
@@ -929,10 +939,7 @@ class PaneVM:
         materialized = self._materialize_entries(staged.entries, staged.path)
         self._replace_entries(materialized)
         self._set_state(PaneState.IDLE if materialized else PaneState.EMPTY)
-        self._notify("path")
-        if filter_reset:
-            self._notify("filter_text")
-        self._notify("viewmodel")
+        self._notify(*(("path", "filter_text") if filter_reset else ("path",)))
 
     async def swap_provider(
         self,
@@ -973,11 +980,9 @@ class PaneVM:
         self._filter_text = ""
         self._is_multiselect_mode = False
         self._notify("path")
-        self._notify("viewmodel")
         await self._reload()
         if filter_reset:
             self._notify("filter_text")
-            self._notify("viewmodel")
 
     async def activate(self, target_index: int) -> None:
         """Activate the entry at ``target_index`` in :attr:`filtered_entries`.
@@ -1085,7 +1090,6 @@ class PaneVM:
             return
         self._cursor_index = clamped
         self._notify("cursor_index")
-        self._notify("viewmodel")
 
     async def delete_marked(self) -> None:
         """Delete every marked entry; reload regardless of partial failure.
@@ -1424,19 +1428,21 @@ class PaneVM:
         self._recompute_filtered()
         self._cursor_index = 0
         self._notify("entries")
-        self._notify("viewmodel")
 
     def _set_state(self, value: PaneState) -> None:
         if self._state == value:
             return
         self._state = value
         self._notify("state")
-        self._notify("viewmodel")
 
     # ── Helpers ─────────────────────────────────────────────────────────────
 
-    def _notify(self, prop: str) -> None:
+    def _notify(self, *props: str) -> None:
         """Emit on BOTH the shared hub and this pane's own Observable.
+
+        Each call publishes its names in order. When a name is an input of
+        :attr:`viewmodel` and ``"viewmodel"`` is not among them, ``"viewmodel"``
+        follows once, after the last name. A mutator therefore cannot forget it.
 
         Never either/or. The hub send is a published contract two app-level
         subscribers still depend on -- ``AwsTuiApp._on_hub_message_pane_state``
@@ -1453,8 +1459,12 @@ class PaneVM:
         """
         if self._disposed:
             return
-        send_value_free(self._hub, PropertyChangedMessage.create(self, self._inner.name, prop))
-        self._on_property_changed.on_next(prop)
+        names = list(props)
+        if "viewmodel" not in names and not _VIEWMODEL_INPUTS.isdisjoint(names):
+            names.append("viewmodel")
+        for name in names:
+            send_value_free(self._hub, PropertyChangedMessage.create(self, self._inner.name, name))
+            self._on_property_changed.on_next(name)
 
     # ── Cursor / selection / filter ─────────────────────────────────────────
 
@@ -1473,7 +1483,6 @@ class PaneVM:
             return
         self._cursor_index = new_index
         self._notify("cursor_index")
-        self._notify("viewmodel")
 
     def _toggle_select_cursor(self) -> None:
         target = self._cursor_target()
@@ -1493,7 +1502,6 @@ class PaneVM:
         if not value:
             self._clear_marks()
         self._notify("is_multiselect_mode")
-        self._notify("viewmodel")
 
     def _select_all(self) -> None:
         if not self._filtered:
@@ -1518,9 +1526,7 @@ class PaneVM:
         self._filter_text = new
         self._recompute_filtered()
         self._cursor_index = 0
-        self._notify("filter_text")
-        self._notify("filtered_entries")
-        self._notify("viewmodel")
+        self._notify("filter_text", "filtered_entries")
 
     def _filter_predicate(self, inner: ComponentVMOf[EntryState]) -> bool:
         """Predicate used by the inner :class:`FilteredCompositeVM`.
