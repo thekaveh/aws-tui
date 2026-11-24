@@ -4,7 +4,8 @@ from __future__ import annotations
 
 from typing import cast
 
-from vmx import NULL_DISPATCHER, MessageHub
+import pytest
+from vmx import NULL_DISPATCHER, ComponentVMOf, MessageHub, PropertyChangedMessage
 from vmx.lifecycle.status import ConstructionStatus
 from vmx.messages.protocols import Message
 
@@ -362,3 +363,51 @@ def test_finished_history_at_exactly_the_cap_is_not_trimmed() -> None:
         assert vm.finished[-1].id == "t99"
     finally:
         vm.dispose()
+
+
+def test_transfer_vm_is_a_component_vm_of() -> None:
+    vm = TransferVM(_model(), hub=_hub(), dispatcher=NULL_DISPATCHER)
+    try:
+        assert isinstance(vm, ComponentVMOf)
+        assert not hasattr(vm, "inner")
+    finally:
+        vm.dispose()
+
+
+def test_transfer_update_messages_name_the_transfer_as_sender() -> None:
+    hub = _hub()
+    seen: list[tuple[str, object]] = []
+    hub.messages.subscribe(
+        on_next=lambda m: (
+            seen.append((m.property_name, m.sender_object))
+            if isinstance(m, PropertyChangedMessage)
+            else None
+        )
+    )
+    vm = TransferVM(_model(), hub=hub, dispatcher=NULL_DISPATCHER)
+    vm.construct()
+    seen.clear()
+    vm.apply_update(bytes_done=500, bytes_total=1000, state=TransferState.RUNNING)
+    assert [name for name, _sender in seen] == ["model", "state"]
+    assert all(sender is vm for _name, sender in seen)
+    vm.dispose()
+
+
+def test_transfers_vm_disposes_its_transfers() -> None:
+    vm = TransfersVM(hub=_hub(), dispatcher=NULL_DISPATCHER)
+    vm.construct()
+    rows = [vm.register(_model(id=f"t{i}", state=TransferState.RUNNING)) for i in range(2)]
+    vm.dispose()
+    assert all(row.status is ConstructionStatus.DISPOSED for row in rows)
+    assert vm.transfers == ()
+
+
+def test_trim_disposes_the_oldest_finished_transfer(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("aws_tui.vm.file_manager.transfers_vm._MAX_FINISHED_TRANSFERS", 1)
+    vm = TransfersVM(hub=_hub(), dispatcher=NULL_DISPATCHER)
+    vm.construct()
+    first = vm.register(_model(id="t0", state=TransferState.COMPLETED))
+    second = vm.register(_model(id="t1", state=TransferState.COMPLETED))
+    assert first.status is ConstructionStatus.DISPOSED
+    assert vm.transfers == (second,)
+    vm.dispose()

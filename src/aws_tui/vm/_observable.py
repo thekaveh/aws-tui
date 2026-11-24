@@ -11,7 +11,7 @@ import anyio
 import reactivex as rx
 from reactivex import abc
 from reactivex.subject import Subject
-from vmx import Message, MessageHub
+from vmx import Message, MessageHubProto
 
 T = TypeVar("T")
 P = ParamSpec("P")
@@ -135,7 +135,7 @@ def value_free_hub_sends() -> Iterator[None]:
         _is_value_free_hub_send.reset(token)
 
 
-def send_value_free(hub: MessageHub[Message], message: Message) -> None:
+def send_value_free(hub: MessageHubProto[Message], message: Message) -> None:
     """Publish while redacting VMx subscriber tracebacks from this synchronous send."""
     with value_free_hub_sends():
         hub.send(message)
