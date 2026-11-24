@@ -6,9 +6,22 @@ import asyncio
 import contextlib
 from collections.abc import AsyncIterator, Awaitable, Callable
 from dataclasses import dataclass
-from typing import Literal
+from typing import Final, Literal
 
-from vmx import Dispatcher, Message, MessageHub, PropertyChangedMessage
+from reactivex.abc import DisposableBase
+from vmx import (
+    NULL_MESSAGE_HUB,
+    AsyncResourceErrorWithValue,
+    AsyncResourceLoadingWithValue,
+    AsyncResourceReady,
+    AsyncResourceRetention,
+    AsyncResourceStatus,
+    AsyncResourceVM,
+    Dispatcher,
+    Message,
+    MessageHub,
+    PropertyChangedMessage,
+)
 
 from aws_tui.domain.cross_fs import ConflictResolution, CrossFsCopy
 from aws_tui.domain.filesystem import (
@@ -84,6 +97,14 @@ def original_path(uri: str) -> PathRef:
     return PathRef.from_posix(uri)
 
 
+_LOAD_STATE: Final[dict[AsyncResourceStatus, Literal["idle", "loading", "ready", "error"]]] = {
+    AsyncResourceStatus.IDLE: "idle",
+    AsyncResourceStatus.LOADING: "loading",
+    AsyncResourceStatus.READY: "ready",
+    AsyncResourceStatus.ERROR: "error",
+}
+
+
 class TransferHistoryVM:
     def __init__(
         self,
@@ -97,14 +118,21 @@ class TransferHistoryVM:
         self._journal, self._resolve_endpoint, self._hub = journal, resolve_endpoint, hub
         self._dispatcher = dispatcher
         self.runtime = runtime or TransferRuntime(journal, hub)
-        self.records: tuple[TransferHistoryRecord, ...] = ()
-        self.load_state: Literal["idle", "loading", "ready", "error"] = "idle"
         self.error_text: str | None = None
         self._eligibility: dict[str, EndpointInspection] = {}
-        self._generation = 0
         self._closed = False
         self._operations: dict[asyncio.Task[object], int] = {}
         self._metadata_lock = asyncio.Lock()
+        self._history: AsyncResourceVM[tuple[TransferHistoryRecord, ...]] = AsyncResourceVM(
+            name="transfer_history.records",
+            loader=self._read_history,
+            hub=NULL_MESSAGE_HUB,
+            dispatcher=dispatcher,
+            retention=AsyncResourceRetention.RETAIN_PREVIOUS,
+        )
+        self._history_sub: DisposableBase = self._history.property_changed.subscribe(
+            on_next=self._on_history_state
+        )
 
     @contextlib.asynccontextmanager
     async def _owned_operation(self) -> AsyncIterator[None]:
@@ -155,32 +183,51 @@ class TransferHistoryVM:
             and not (self.runtime.begins_pending and record.finished_at is None)
         )
 
+    @property
+    def records(self) -> tuple[TransferHistoryRecord, ...]:
+        state = self._history.state
+        if isinstance(
+            state, AsyncResourceReady | AsyncResourceLoadingWithValue | AsyncResourceErrorWithValue
+        ):
+            return state.value
+        return ()
+
+    @property
+    def load_state(self) -> Literal["idle", "loading", "ready", "error"]:
+        return _LOAD_STATE[self._history.state.status]
+
+    async def _read_history(self) -> tuple[TransferHistoryRecord, ...]:
+        owned = frozenset(self.runtime.owned_ids)
+        pending = self.runtime.begins_pending
+        async with self._metadata_lock:
+            records = await self.runtime.disk.call(self._journal.load_history)
+        return tuple(
+            record
+            for record in self._visible(records)
+            if record.id not in owned and not (pending and record.finished_at is None)
+        )
+
     async def _load(self) -> None:
         if self._closed:
             return
-        self._generation += 1
-        generation = self._generation
-        self.load_state, self.error_text = "loading", None
-        self._notify("load_state")
-        owned = frozenset(self.runtime.owned_ids)
-        pending = self.runtime.begins_pending
-        try:
-            async with self._metadata_lock:
-                records = await self.runtime.disk.call(self._journal.load_history)
-        except Exception:
-            if generation == self._generation and not self._closed:
-                self.load_state, self.error_text = "error", "Transfer history could not be loaded."
-                self._notify("error_text")
-                self._notify("load_state")
+        if self._history.state.status is AsyncResourceStatus.IDLE:
+            await self._history.load()
+        else:
+            await self._history.reload()
+
+    def _on_history_state(self, property_name: str) -> None:
+        if property_name != "state" or self._closed:
             return
-        if generation == self._generation and not self._closed:
-            self.records = tuple(
-                record
-                for record in self._visible(records)
-                if record.id not in owned and not (pending and record.finished_at is None)
-            )
-            self.load_state = "ready"
+        status = self._history.state.status
+        if status is AsyncResourceStatus.LOADING:
+            self.error_text = None
+            self._notify("load_state")
+        elif status is AsyncResourceStatus.READY:
             self._notify("records")
+            self._notify("load_state")
+        elif status is AsyncResourceStatus.ERROR:
+            self.error_text = "Transfer history could not be loaded."
+            self._notify("error_text")
             self._notify("load_state")
 
     async def _clear(self) -> None:
@@ -401,14 +448,16 @@ class TransferHistoryVM:
     def dispose(self) -> None:
         """Release observers; the app awaits shutdown before normal disposal."""
         self._closed = True
-        self._generation += 1
+        self._history_sub.dispose()
+        self._history.dispose()
         for operation in tuple(self._operations):
             operation.cancel()
         self.runtime.dispose()
 
     async def shutdown(self) -> None:
         self._closed = True
-        self._generation += 1
+        self._history_sub.dispose()
+        self._history.dispose()
         operations = tuple(self._operations)
         for operation in operations:
             operation.cancel()
