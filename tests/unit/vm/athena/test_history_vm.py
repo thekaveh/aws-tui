@@ -355,7 +355,7 @@ async def test_history_shutdown_drains_blocked_page_and_publishes_nothing_late()
     assert waited_for_page
     assert vm.items == ()
     assert vm.state is PaneState.EMPTY
-    assert not vm.load_more_command.can_execute()
+    assert not vm.has_more
 
 
 @pytest.mark.asyncio

@@ -6,7 +6,6 @@ from typing import Any, Literal
 
 import reactivex as rx
 from vmx import (
-    AsyncRelayCommand,
     ComponentVM,
     ConstructionStatus,
     Dispatcher,
@@ -69,7 +68,6 @@ class _HistoryWorker:
         init=False,
         repr=False,
     )
-    load_more_command: AsyncRelayCommand = field(init=False, repr=False)
 
 
 class AthenaHistoryVM:
@@ -138,10 +136,6 @@ class AthenaHistoryVM:
     @property
     def is_loading_more(self) -> bool:
         return self._is_loading_more
-
-    @property
-    def load_more_command(self) -> AsyncRelayCommand:
-        return self._worker.load_more_command
 
     @property
     def status(self) -> ConstructionStatus:
@@ -473,13 +467,6 @@ class AthenaHistoryVM:
             return [detail.summary for detail in details], next_token
 
         worker.pager = SnapshotTokenPager(fetch, max_items=_MAX_HISTORY_ITEMS)
-        worker.load_more_command = (
-            AsyncRelayCommand.builder()
-            .predicate(lambda: self._can_load_more(worker))
-            .triggers(self._on_property_changed)
-            .task(lambda: self._run_pager(worker, refresh=False))
-            .build()
-        )
         self._workers.add(worker)
         return worker
 
@@ -504,7 +491,6 @@ class AthenaHistoryVM:
         if worker.retired:
             return
         worker.retired = True
-        worker.load_more_command.dispose()
         worker.pager.dispose()
         if not worker.tasks and worker is not self._worker:
             self._workers.discard(worker)
