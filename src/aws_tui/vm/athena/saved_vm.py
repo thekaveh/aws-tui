@@ -8,7 +8,7 @@ from typing import Any, Generic, TypeVar
 import reactivex as rx
 from vmx import (
     AsyncRelayCommand,
-    ComponentVMOf,
+    ComponentVM,
     ConstructionStatus,
     Dispatcher,
     Message,
@@ -129,13 +129,8 @@ class AthenaSavedVM:
         self._loading_more_prepared_worker: _SavedWorker[PreparedStatementSummary] | None = None
         self._detail_tasks: set[asyncio.Task[Any]] = set()
         self._on_property_changed = ObserverSafeSubject[str]()
-        self._inner: ComponentVMOf[None] = (
-            ComponentVMOf[None]
-            .builder()
-            .name("athena.saved")
-            .model(None)
-            .services(hub, dispatcher)
-            .build()
+        self._inner: ComponentVM = (
+            ComponentVM.builder().name("athena.saved").services(hub, dispatcher).build()
         )
         self._workers: set[_SavedWorker[Any]] = set()
         self._named_worker = self._make_named_worker()

@@ -20,7 +20,7 @@ from vmx import (
     AsyncResourceRetention,
     AsyncResourceStatus,
     AsyncResourceVM,
-    ComponentVMOf,
+    ComponentVM,
     ConstructionStatus,
     Dispatcher,
     Message,
@@ -315,13 +315,8 @@ class GlueIcebergVM:
             view: self._new_pane(view) for view in _VIEWS
         }
         self._on_property_changed = ObserverSafeSubject[str]()
-        self._inner: ComponentVMOf[None] = (
-            ComponentVMOf[None]
-            .builder()
-            .name("glue.iceberg")
-            .model(None)
-            .services(hub, dispatcher)
-            .build()
+        self._inner: ComponentVM = (
+            ComponentVM.builder().name("glue.iceberg").services(hub, dispatcher).build()
         )
         self._preview: IcebergPreviewVM = IcebergPreviewVM(
             port=duckdb_port or NativeDuckDb(),

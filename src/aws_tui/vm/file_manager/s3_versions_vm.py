@@ -11,7 +11,7 @@ from urllib.parse import quote, urlencode
 from reactivex import Observable
 from reactivex.abc import DisposableBase
 from vmx import (
-    ComponentVMOf,
+    ComponentVM,
     ConstructionStatus,
     Dispatcher,
     Message,
@@ -102,14 +102,7 @@ class S3VersionsVM:
         self._pane, self._provider, self._hub = pane, provider, hub
         self._binding = _binding(pane)
         self._prefix = pane.path
-        self._inner = (
-            ComponentVMOf[None]
-            .builder()
-            .name("s3.versions")
-            .model(None)
-            .services(hub, dispatcher)
-            .build()
-        )
+        self._inner = ComponentVM.builder().name("s3.versions").services(hub, dispatcher).build()
         entry = pane.selected_entry
         self._key = (
             entry.name

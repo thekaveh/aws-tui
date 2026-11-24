@@ -5,7 +5,7 @@ from typing import Any
 
 import reactivex as rx
 from vmx import (
-    ComponentVMOf,
+    ComponentVM,
     ConstructionStatus,
     Dispatcher,
     Message,
@@ -45,13 +45,8 @@ class GlueJobsVM:
         self._operations = _operations or GlueOperationOwner()
         self._owns_operations = _operations is None
         self._on_property_changed = ObserverSafeSubject[str]()
-        self._inner: ComponentVMOf[None] = (
-            ComponentVMOf[None]
-            .builder()
-            .name("glue.jobs")
-            .model(None)
-            .services(hub, dispatcher)
-            .build()
+        self._inner: ComponentVM = (
+            ComponentVM.builder().name("glue.jobs").services(hub, dispatcher).build()
         )
         self._job_generation = 0
         self._run_generation = 0
