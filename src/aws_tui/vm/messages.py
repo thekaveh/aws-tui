@@ -8,6 +8,9 @@ chrome, toasts, hint legend) can react without hard references between VMs.
 
 The envelopes carry plain infra types (:class:`Connection`, :class:`TokenState`)
 to keep the VM layer free of Textual / boto3 imports.
+
+Every envelope derives from ``_SelfSender``, which returns the message itself as
+``sender_object``.
 """
 
 from __future__ import annotations
@@ -34,8 +37,18 @@ class TransferState(StrEnum):
     CANCELLED = "cancelled"
 
 
+class _SelfSender:
+    """VMx Message protocol: a value message is its own sender_object."""
+
+    __slots__ = ()
+
+    @property
+    def sender_object(self) -> object:
+        return self
+
+
 @dataclass(frozen=True, slots=True)
-class ConnectionChangedMessage:
+class ConnectionChangedMessage(_SelfSender):
     """Published by ``RootVM`` after a successful connection switch.
 
     Subscribers: :class:`NavMenuVM`, service content VMs, and the active
@@ -49,25 +62,17 @@ class ConnectionChangedMessage:
     auth_state: TokenState
     sender_name: str = "root"
 
-    @property
-    def sender_object(self) -> object:
-        return self
-
 
 @dataclass(frozen=True, slots=True)
-class ConnectionProtectionChangedMessage:
+class ConnectionProtectionChangedMessage(_SelfSender):
     """Metadata-only policy update; no credential or route replacement."""
 
     connection: Connection
     sender_name: str = "connection_protection"
 
-    @property
-    def sender_object(self) -> object:
-        return self
-
 
 @dataclass(frozen=True, slots=True)
-class ThemeChangedMessage:
+class ThemeChangedMessage(_SelfSender):
     """Published by ``RootVM`` when the active theme changes.
 
     Subscribers: the view layer (re-applies ``.tcss``).
@@ -76,13 +81,9 @@ class ThemeChangedMessage:
     name: str
     sender_name: str = "root"
 
-    @property
-    def sender_object(self) -> object:
-        return self
-
 
 @dataclass(frozen=True, slots=True)
-class TransferProgressMessage:
+class TransferProgressMessage(_SelfSender):
     """Published by ``domain.CrossFsCopy`` / ``CrossFsMove`` workers.
 
     Subscribers: :class:`TransferVM` (per-transfer detail).
@@ -102,13 +103,9 @@ class TransferProgressMessage:
     destination_label: str = ""
     sender_name: str = "transfers"
 
-    @property
-    def sender_object(self) -> object:
-        return self
-
 
 @dataclass(frozen=True, slots=True)
-class TransferCancelRequestedMessage:
+class TransferCancelRequestedMessage(_SelfSender):
     """Published by :class:`TransferVM` when the user clicks the cancel
     chip (or otherwise fires ``cancel_command``).
 
@@ -127,13 +124,9 @@ class TransferCancelRequestedMessage:
     transfer_id: str
     sender_name: str = "transfer"
 
-    @property
-    def sender_object(self) -> object:
-        return self
-
 
 @dataclass(frozen=True, slots=True)
-class ConnectionListChangedMessage:
+class ConnectionListChangedMessage(_SelfSender):
     """Published by :class:`S3ConnectionsVM` after each successful CRUD
     on the s3-compatible connection list.
 
@@ -159,26 +152,18 @@ class ConnectionListChangedMessage:
     change: Literal["added", "updated", "deleted"]
     sender_name: str = "s3_connections"
 
-    @property
-    def sender_object(self) -> object:
-        return self
-
 
 @dataclass(frozen=True, slots=True)
-class PaletteActionFailedMessage:
+class PaletteActionFailedMessage(_SelfSender):
     """A command-palette action failed before or during execution."""
 
     entry_id: str
     error_type: str
     sender_name: str = "command_palette"
 
-    @property
-    def sender_object(self) -> object:
-        return self
-
 
 @dataclass(frozen=True, slots=True)
-class ServiceOperationFailedMessage:
+class ServiceOperationFailedMessage(_SelfSender):
     """An unexpected service exception recovered into a visible VM state."""
 
     service: str
@@ -212,13 +197,9 @@ class ServiceOperationFailedMessage:
             region=region,
         )
 
-    @property
-    def sender_object(self) -> object:
-        return self
-
 
 @dataclass(frozen=True, slots=True)
-class OpenS3LocationRequest:
+class OpenS3LocationRequest(_SelfSender):
     """Request composition-root navigation to one S3 location.
 
     The source connection identity is explicit so cross-service navigation
@@ -232,13 +213,9 @@ class OpenS3LocationRequest:
     reveal_object: bool = False
     sender_name: str = "service_navigation"
 
-    @property
-    def sender_object(self) -> object:
-        return self
-
 
 @dataclass(frozen=True, slots=True)
-class OpenAthenaTableRequest:
+class OpenAthenaTableRequest(_SelfSender):
     """Request Athena navigation for one exact Glue table identity."""
 
     table_ref: TableRef
@@ -252,13 +229,9 @@ class OpenAthenaTableRequest:
         ):
             raise ValueError("snapshot ID is invalid")
 
-    @property
-    def sender_object(self) -> object:
-        return self
-
 
 @dataclass(frozen=True, slots=True)
-class CopyTableReferenceRequest:
+class CopyTableReferenceRequest(_SelfSender):
     """Request copying one exact Glue table identity without navigation."""
 
     table_ref: TableRef
@@ -267,13 +240,9 @@ class CopyTableReferenceRequest:
     def __post_init__(self) -> None:
         _validate_table_ref(self.table_ref)
 
-    @property
-    def sender_object(self) -> object:
-        return self
-
 
 @dataclass(frozen=True, slots=True)
-class OpenGlueTableRequest:
+class OpenGlueTableRequest(_SelfSender):
     """Request Glue navigation for one exact Athena table identity."""
 
     table_ref: TableRef
@@ -281,10 +250,6 @@ class OpenGlueTableRequest:
 
     def __post_init__(self) -> None:
         _validate_table_ref(self.table_ref)
-
-    @property
-    def sender_object(self) -> object:
-        return self
 
 
 def _validate_table_ref(value: object) -> None:
