@@ -584,7 +584,9 @@ def test_equal_registration_preserves_child_and_refreshes_callback():
         assert not child.is_constructed
         assert vm.selected_index == 0
         assert vm._scored_filter.current is vm._scored_filter.visible[0]
-        assert names == ["filtered_entries", "selected_index"]
+        # Replacing an entry recomputes the view twice (removal, then append), so
+        # each name can appear twice. The order of first publication is what matters.
+        assert list(dict.fromkeys(names)) == ["filtered_entries", "selected_index"]
         vm.move_selection_command.execute(2)
         vm.execute_selected_command.execute()
         assert calls == ["fresh", "changed"]
@@ -634,3 +636,48 @@ def test_unavailable_entries_are_excluded_before_fuzzy_scoring():
         assert [row.id for row in vm.filtered_entries] == ["ready"]
     finally:
         vm.dispose()
+
+
+def test_cursor_move_outside_the_vm_methods_is_published() -> None:
+    vm = _build()
+    names: list[str] = []
+    subscription = vm._hub.messages.subscribe(
+        on_next=lambda message: (
+            names.append(message.property_name)
+            if isinstance(message, PropertyChangedMessage) and message.sender_object is vm
+            else None
+        )
+    )
+    try:
+        for i, label in enumerate(("alpha", "alphabet", "beta")):
+            vm.register_entry(_entry(f"e{i}", label), lambda: None)
+        vm.open_command.execute()
+        names.clear()
+        vm._scored_filter.move_to_next_visible()
+        assert names == ["selected_index"]
+        assert vm.selected_index == 1
+    finally:
+        subscription.dispose()
+        vm.dispose()
+
+
+def test_dispose_publishes_no_projection_names() -> None:
+    vm = _build()
+    names: list[str] = []
+    subscription = vm._hub.messages.subscribe(
+        on_next=lambda message: (
+            names.append(message.property_name)
+            if isinstance(message, PropertyChangedMessage) and message.sender_object is vm
+            else None
+        )
+    )
+    try:
+        for i, label in enumerate(("alpha", "beta")):
+            vm.register_entry(_entry(f"e{i}", label), lambda: None)
+        vm.open_command.execute()
+        names.clear()
+        vm.dispose()
+        assert "filtered_entries" not in names
+        assert "selected_index" not in names
+    finally:
+        subscription.dispose()
