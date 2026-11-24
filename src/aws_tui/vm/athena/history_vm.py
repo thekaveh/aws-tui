@@ -8,12 +8,12 @@ import reactivex as rx
 from vmx import (
     AsyncRelayCommand,
     ComponentVMOf,
+    ConstructionStatus,
+    Dispatcher,
     Message,
     MessageHub,
     PropertyChangedMessage,
 )
-from vmx.lifecycle.status import ConstructionStatus
-from vmx.services.dispatcher import Dispatcher
 
 from aws_tui.domain.filesystem import ProviderError
 from aws_tui.domain.query import (

@@ -25,9 +25,7 @@ from functools import partial
 
 import anyio
 import reactivex as rx
-from vmx import ComponentVMOf, Message, MessageHub
-from vmx.lifecycle.status import ConstructionStatus
-from vmx.services.dispatcher import Dispatcher
+from vmx import ComponentVMOf, ConstructionStatus, Dispatcher, Message, MessageHub
 
 from aws_tui.infra.clipboard import NO_MECHANISM, ClipboardPort, ClipboardResult
 

@@ -9,9 +9,14 @@ from enum import StrEnum
 
 import reactivex as rx
 from reactivex.abc import DisposableBase
-from vmx import ComponentVMOf, Message, MessageHub, PropertyChangedMessage
-from vmx.lifecycle.status import ConstructionStatus
-from vmx.services.dispatcher import Dispatcher
+from vmx import (
+    ComponentVMOf,
+    ConstructionStatus,
+    Dispatcher,
+    Message,
+    MessageHub,
+    PropertyChangedMessage,
+)
 
 from aws_tui.domain.filesystem import EntryKind, PathRef
 from aws_tui.domain.s3_object_details import S3ObjectDetails, S3ObjectDetailsProvider

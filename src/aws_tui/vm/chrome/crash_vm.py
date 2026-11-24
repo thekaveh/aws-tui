@@ -18,9 +18,16 @@ from enum import StrEnum
 from pathlib import Path
 from typing import Final
 
-from vmx import ComponentVM, Message, MessageHub, ModalVM, PropertyChangedMessage, RelayCommand
-from vmx.lifecycle.status import ConstructionStatus
-from vmx.services.dispatcher import Dispatcher
+from vmx import (
+    ComponentVM,
+    ConstructionStatus,
+    Dispatcher,
+    Message,
+    MessageHub,
+    ModalVM,
+    PropertyChangedMessage,
+    RelayCommand,
+)
 
 from aws_tui.vm._observable import send_value_free
 

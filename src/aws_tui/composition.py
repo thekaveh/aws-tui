@@ -29,8 +29,7 @@ if TYPE_CHECKING:
     from aws_tui.demo.in_memory_emr import InMemoryEmr
     from aws_tui.launch import ResolvedLaunch
 
-from vmx import Message, MessageHub, RxDispatcher
-from vmx.services.dispatcher import Dispatcher
+from vmx import Dispatcher, Message, MessageHub, RxDispatcher
 
 from aws_tui.domain.emr_dashboard import validate_dashboard_url
 from aws_tui.domain.filesystem import PermissionDeniedError

@@ -19,9 +19,16 @@ from dataclasses import dataclass, replace
 from typing import Any
 from uuid import uuid4
 
-from vmx import ComponentVM, FormVM, FormVMBuilder, Message, MessageHub, PropertyChangedMessage
-from vmx.lifecycle.status import ConstructionStatus
-from vmx.services.dispatcher import Dispatcher
+from vmx import (
+    ComponentVM,
+    ConstructionStatus,
+    Dispatcher,
+    FormVM,
+    FormVMBuilder,
+    Message,
+    MessageHub,
+    PropertyChangedMessage,
+)
 
 from aws_tui.domain.emr_job_request import (
     build_start_job_run_request,

@@ -10,8 +10,7 @@ from functools import partial
 from pathlib import Path
 from typing import Any, Literal, TypeVar
 
-from vmx import Message, MessageHub
-from vmx.services.dispatcher import Dispatcher
+from vmx import Dispatcher, Message, MessageHub
 
 from aws_tui.domain.athena import ResultArtifactAccessError
 from aws_tui.domain.athena_export import (

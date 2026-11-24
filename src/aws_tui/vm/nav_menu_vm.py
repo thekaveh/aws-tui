@@ -17,13 +17,13 @@ from reactivex.abc import DisposableBase
 from vmx import (
     ComponentVMOf,
     CompositeVM,
+    ConstructionStatus,
+    Dispatcher,
     Message,
     MessageHub,
     PropertyChangedMessage,
     RelayCommandOf,
 )
-from vmx.lifecycle.status import ConstructionStatus
-from vmx.services.dispatcher import Dispatcher
 
 from aws_tui.infra.connection_resolver import Connection
 from aws_tui.vm._observable import send_value_free

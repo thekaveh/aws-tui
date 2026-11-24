@@ -8,8 +8,7 @@ changed property, and its observers cannot break it or leak values into logs.
 from __future__ import annotations
 
 import reactivex as rx
-from vmx import ComponentVM, Message, MessageHub
-from vmx.services.dispatcher import Dispatcher
+from vmx import ComponentVM, Dispatcher, Message, MessageHub
 
 from aws_tui.vm._observable import isolated, value_free_hub_sends
 

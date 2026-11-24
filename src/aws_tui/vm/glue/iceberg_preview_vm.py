@@ -55,11 +55,11 @@ from vmx import (
     AsyncResourceState,
     AsyncResourceStatus,
     AsyncResourceVM,
+    ConstructionStatus,
+    Dispatcher,
     Message,
     MessageHub,
 )
-from vmx.lifecycle.status import ConstructionStatus
-from vmx.services.dispatcher import Dispatcher
 
 from aws_tui.domain.iceberg_preview import (
     ROW_LIMIT_STEPS,

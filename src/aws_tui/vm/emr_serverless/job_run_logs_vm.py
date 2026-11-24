@@ -23,8 +23,7 @@ from time import monotonic
 from typing import Literal, cast
 
 import reactivex as rx
-from vmx import ComponentVMOf, Message, MessageHub, PropertyChangedMessage
-from vmx.services.dispatcher import Dispatcher
+from vmx import ComponentVMOf, Dispatcher, Message, MessageHub, PropertyChangedMessage
 
 from aws_tui.domain.emr_cloudwatch_logs import (
     CloudWatchLogEvent,

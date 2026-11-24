@@ -25,9 +25,14 @@ import inspect
 from collections.abc import Callable
 from typing import Any
 
-from vmx import ComponentVM, Message, MessageHub, PropertyChangedMessage
-from vmx.lifecycle.status import ConstructionStatus
-from vmx.services.dispatcher import Dispatcher
+from vmx import (
+    ComponentVM,
+    ConstructionStatus,
+    Dispatcher,
+    Message,
+    MessageHub,
+    PropertyChangedMessage,
+)
 
 from aws_tui.vm._observable import send_value_free
 

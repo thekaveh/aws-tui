@@ -8,8 +8,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any, Literal, TypeVar
 
-from vmx import Message, MessageHub
-from vmx.services.dispatcher import Dispatcher
+from vmx import Dispatcher, Message, MessageHub
 
 from aws_tui.domain.data_catalog import Column, TableRef, TableSummary
 from aws_tui.domain.query import QueryContext

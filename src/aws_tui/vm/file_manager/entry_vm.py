@@ -17,9 +17,15 @@ from datetime import datetime
 
 import reactivex as rx
 from reactivex.abc import DisposableBase
-from vmx import ComponentVMOf, Message, MessageHub, PropertyChangedMessage, RelayCommand
-from vmx.lifecycle.status import ConstructionStatus
-from vmx.services.dispatcher import Dispatcher
+from vmx import (
+    ComponentVMOf,
+    ConstructionStatus,
+    Dispatcher,
+    Message,
+    MessageHub,
+    PropertyChangedMessage,
+    RelayCommand,
+)
 
 from aws_tui.domain.filesystem import EntryKind, FileEntry
 from aws_tui.vm._observable import ObserverSafeSubject, send_value_free
