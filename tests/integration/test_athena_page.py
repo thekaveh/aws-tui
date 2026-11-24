@@ -414,7 +414,7 @@ async def test_athena_command_hints_follow_live_command_and_pager_state(
         )
         assert hint_enabled("athena.load_more")
 
-        workgroup_worker = vm._workgroup_worker  # type: ignore[attr-defined]
+        workgroup_worker = vm._workgroup_list.worker  # type: ignore[attr-defined]
         vm._begin_loading_more(  # type: ignore[attr-defined]
             "workgroups",
             workgroup_worker,
