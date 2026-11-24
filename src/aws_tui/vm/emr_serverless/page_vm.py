@@ -453,6 +453,7 @@ class EmrServerlessPageVM:
         self._operations.close()
         await self.dashboards.aclose()
         await self._operations.cancel_and_drain()
+        await self.job_run_detail.shutdown()
         await self.job_run_logs.shutdown()
 
     # ── Public surface ──────────────────────────────────────────────────────
