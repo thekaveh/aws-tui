@@ -15,12 +15,15 @@ from __future__ import annotations
 
 import colorsys
 from collections.abc import Callable
+from typing import Any
 
+import reactivex as rx
+from reactivex import operators as ops
 from reactivex.abc import DisposableBase
 from rich.text import Text
 from textual.reactive import reactive
 from textual.widget import Widget
-from vmx import Message, MessageHub, PropertyChangedMessage
+from vmx import Message, MessageHub, when_property_changed
 
 from aws_tui.version import __version__
 from aws_tui.vm.messages import ConnectionChangedMessage, ThemeChangedMessage
@@ -257,12 +260,16 @@ class BrandBanner(Widget):
         hub: MessageHub[Message] | None = None,
         demo: bool = False,
         identity: Callable[[], str] | None = None,
+        identity_source: object | None = None,
         id: str | None = None,
         classes: str | None = None,
     ) -> None:
         super().__init__(id=id, classes=classes)
         self._demo = demo
         self._identity = identity
+        # The identity callback reruns on a ``current`` change of this object,
+        # and on a connection change.
+        self._identity_source = identity_source
         self._rows: tuple[str, ...] = _build_rows()
         self._palette: tuple[str, ...] = _palette_for(theme_name)
         self._hub: MessageHub[Message] | None = hub
@@ -300,7 +307,16 @@ class BrandBanner(Widget):
         if self._identity is not None:
             self.compact_identity = self._identity()
         if self._hub is not None:
-            self._sub = self._hub.messages.subscribe(on_next=self._on_hub_message)
+            streams: list[rx.Observable[Any]] = [
+                self._hub.messages.pipe(
+                    ops.filter(
+                        lambda m: isinstance(m, (ThemeChangedMessage, ConnectionChangedMessage))
+                    )
+                )
+            ]
+            if self._identity_source is not None:
+                streams.append(when_property_changed(self._hub, self._identity_source, "current"))
+            self._sub = rx.merge(*streams).subscribe(on_next=self._on_hub_message)
 
     def on_unmount(self) -> None:
         if self._sub is not None:
@@ -311,10 +327,7 @@ class BrandBanner(Widget):
         """Keep theme and committed identity in sync with the shared chrome."""
         if isinstance(msg, ThemeChangedMessage):
             self.set_theme(msg.name)
-        elif self._identity is not None and (
-            isinstance(msg, ConnectionChangedMessage)
-            or (isinstance(msg, PropertyChangedMessage) and msg.property_name == "current")
-        ):
+        elif self._identity is not None:
             self.compact_identity = self._identity()
 
     def set_theme(self, theme_name: str) -> None:
