@@ -42,7 +42,12 @@ from textual.driver import Driver
 from textual.widget import Widget
 from textual.widgets import Button, DataTable, Input, OptionList, Static, TextArea
 
-from aws_tui.composition import AppContext, build_app_context, make_source_check_factory
+from aws_tui.composition import (
+    AppContext,
+    build_app_context,
+    lifecycle_owners,
+    make_source_check_factory,
+)
 from aws_tui.domain.data_catalog import TableRef
 from aws_tui.domain.filesystem import (
     AuthRequiredError,
@@ -9819,20 +9824,8 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
             self._dispose_table_clipboard_subscription,
         )
 
-        for step, disposable in (
-            ("s3_connections_vm.dispose", ctx.s3_connections_vm),
-            ("command_palette_vm.dispose", ctx.command_palette_vm),
-            ("quick_look_vm.dispose", ctx.quick_look_vm),
-            ("confirm_vm.dispose", ctx.confirm_vm),
-            ("transfers_vm.dispose", ctx.transfers_vm),
-            ("athena_drafts_vm.dispose", ctx.athena_drafts_vm),
-            ("transfer_history_vm.dispose", ctx.transfer_history_vm),
-            ("table_clipboard_vm.dispose", ctx.table_clipboard_vm),
-            ("clipboard_vm.dispose", ctx.clipboard_vm),
-            ("root_vm.dispose", ctx.root_vm),
-            ("focus_coordinator.dispose", ctx.focus_coordinator),
-        ):
-            run_cleanup(step, disposable.dispose)
+        for step, disposable in lifecycle_owners(ctx):
+            run_cleanup(f"{step}.dispose", disposable.dispose)
 
         for connection_name, demo_emr in ctx.demo_emrs.items():
             await await_cleanup(f"demo_emrs.{connection_name}.aclose", demo_emr.aclose)
