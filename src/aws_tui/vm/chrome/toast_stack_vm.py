@@ -133,16 +133,9 @@ class ToastStackVM:
             on_dismiss=self._on_toast_dismissed,
         )
         self._toasts.append(toast)
-        # CompositeVM owns the lifecycle of the *inner* VM; we construct the
-        # facade in lockstep so the dismiss_command is wired before the toast
-        # is observable.
-        if self._inner.is_constructed:
-            toast.construct()
+        # auto_construct_on_add(True) constructs toast.inner inside append()
+        # once the stack is constructed. Before that, construct() does it.
         self._inner.append(toast.inner)
-        # auto_construct_on_add=True takes care of construct() on the inner
-        # once the composite itself is constructed. If we're called before
-        # construct() the toast gets constructed by the composite's own
-        # _on_construct cascade.
 
         if not model.sticky and model.timeout_seconds is not None:
             self._schedule_auto_dismiss(toast)

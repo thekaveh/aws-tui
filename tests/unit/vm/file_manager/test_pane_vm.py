@@ -1352,3 +1352,14 @@ async def test_a_shrinking_refresh_rederives_the_filter_from_the_new_listing() -
         assert selected.name == "row8.txt"
     finally:
         pane.dispose()
+
+
+@pytest.mark.asyncio
+async def test_listed_rows_are_constructed_by_the_constructed_pane() -> None:
+    pane = await _make_pane(await _seed_fs())
+    try:
+        rows = list(pane._inner)
+        assert rows
+        assert all(row.is_constructed for row in rows)
+    finally:
+        pane.dispose()
