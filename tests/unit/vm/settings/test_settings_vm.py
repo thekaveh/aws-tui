@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import cast
 
 import pytest
-from vmx import NULL_DISPATCHER, MessageHub
+from vmx import NULL_DISPATCHER, ComponentVM, MessageHub
 from vmx.lifecycle.status import ConstructionStatus
 from vmx.messages.protocols import Message
 
@@ -33,6 +33,7 @@ def _make_vm(tmp_path: Path) -> tuple[SettingsVM, S3ConnectionsVM]:
 
 def test_settings_vm_lifecycle(tmp_path: Path) -> None:
     vm, s3 = _make_vm(tmp_path)
+    assert isinstance(vm, ComponentVM)
     assert vm.status == ConstructionStatus.CONSTRUCTED
     assert vm.s3 is s3
     vm.dispose()

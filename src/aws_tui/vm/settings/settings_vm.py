@@ -2,20 +2,20 @@
 
 A peer to the service VMs hosted by :class:`ContentHostVM`. Owns the
 S3 connections sub-VM. Construction and disposal follow the standard
-VMx facade pattern; ``setup()`` is a no-op today (kept so the
+VMx ``ComponentVM`` pattern; ``setup()`` is a no-op today (kept so the
 ContentHost lifecycle calls it without an attribute error).
 """
 
 from __future__ import annotations
 
-from vmx import ComponentVM, ConstructionStatus, Dispatcher, Message, MessageHub
+from vmx import ComponentVM, Dispatcher, Message, MessageHub
 
 from aws_tui.vm.athena.drafts_vm import AthenaDraftsVM
 from aws_tui.vm.settings.connection_protection_vm import ConnectionProtectionVM
 from aws_tui.vm.settings.s3_connections_vm import S3ConnectionsVM
 
 
-class SettingsVM:
+class SettingsVM(ComponentVM):
     """Top-level VM hosted by ``ContentHostVM`` when the Settings nav
     item is selected.
 
@@ -34,12 +34,10 @@ class SettingsVM:
         hub: MessageHub[Message],
         dispatcher: Dispatcher,
     ) -> None:
+        super().__init__(name="settings", hint="", hub=hub, dispatcher=dispatcher)
         self.protection = protection
         self._s3: S3ConnectionsVM = s3
         self._athena_drafts = athena_drafts
-        self._inner: ComponentVM = (
-            ComponentVM.builder().name("settings").services(hub, dispatcher).build()
-        )
 
     # ── Properties ─────────────────────────────────────────────────────────
 
@@ -50,29 +48,6 @@ class SettingsVM:
     @property
     def athena_drafts(self) -> AthenaDraftsVM | None:
         return self._athena_drafts
-
-    @property
-    def status(self) -> ConstructionStatus:
-        return self._inner.status
-
-    @property
-    def is_constructed(self) -> bool:
-        return self._inner.is_constructed
-
-    @property
-    def name(self) -> str:
-        return self._inner.name
-
-    # ── Lifecycle ──────────────────────────────────────────────────────────
-
-    def construct(self) -> None:
-        self._inner.construct()
-
-    def destruct(self) -> None:
-        self._inner.destruct()
-
-    def dispose(self) -> None:
-        self._inner.dispose()
 
     async def setup(self) -> None:
         """No-op placeholder so :class:`ContentHostVM.set_content` can

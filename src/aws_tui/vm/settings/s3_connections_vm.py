@@ -6,7 +6,7 @@ from dataclasses import replace
 from functools import partial
 
 import anyio
-from vmx import ComponentVM, ConstructionStatus, Dispatcher, Message, MessageHub
+from vmx import ComponentVM, Dispatcher, Message, MessageHub
 
 from aws_tui.infra.config_store import ConfigError, ConfigStore, ConnectionEntry
 from aws_tui.infra.connection_resolver import Connection, ConnectionNotFound, ConnectionResolver
@@ -42,7 +42,7 @@ def entry_from_s3_form(form: S3CompatForm) -> ConnectionEntry:
     )
 
 
-class S3ConnectionsVM:
+class S3ConnectionsVM(ComponentVM):
     """List + CRUD over the s3-compatible subset of TOML connections.
 
     The CRUD verbs (``add`` / ``update`` / ``remove``) validate, persist
@@ -61,37 +61,10 @@ class S3ConnectionsVM:
         hub: MessageHub[Message],
         dispatcher: Dispatcher,
     ) -> None:
+        super().__init__(name="s3_connections", hint="", hub=hub, dispatcher=dispatcher)
         self._resolver: ConnectionResolver = resolver
         self._config_store: ConfigStore = config_store
         self._keychain = keychain
-        self._hub: MessageHub[Message] = hub
-        self._dispatcher: Dispatcher = dispatcher
-        self._inner: ComponentVM = (
-            ComponentVM.builder().name("s3_connections").services(hub, dispatcher).build()
-        )
-
-    # ── Lifecycle ──────────────────────────────────────────────────────────
-
-    def construct(self) -> None:
-        self._inner.construct()
-
-    def destruct(self) -> None:
-        self._inner.destruct()
-
-    def dispose(self) -> None:
-        self._inner.dispose()
-
-    @property
-    def status(self) -> ConstructionStatus:
-        return self._inner.status
-
-    @property
-    def is_constructed(self) -> bool:
-        return self._inner.is_constructed
-
-    @property
-    def name(self) -> str:
-        return self._inner.name
 
     # ── Read ───────────────────────────────────────────────────────────────
 

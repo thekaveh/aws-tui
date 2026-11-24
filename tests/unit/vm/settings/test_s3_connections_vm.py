@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import cast
 
 import pytest
-from vmx import NULL_DISPATCHER, MessageHub
+from vmx import NULL_DISPATCHER, ComponentVM, MessageHub
 from vmx.messages.protocols import Message
 
 from aws_tui.infra.config_store import ConfigError, ConfigStore, ConnectionEntry
@@ -88,6 +88,7 @@ def _make_vm(tmp_path: Path) -> tuple[S3ConnectionsVM, MessageHub[Message], Conf
 
 def test_connections_filters_to_s3_compatible(tmp_path: Path) -> None:
     vm, _, store = _make_vm(tmp_path)
+    assert isinstance(vm, ComponentVM)
     store.add_connection(_entry("minio-local"))
     store.add_connection(
         ConnectionEntry(name="aws-prod", kind="aws", profile="default", region="us-east-1")
