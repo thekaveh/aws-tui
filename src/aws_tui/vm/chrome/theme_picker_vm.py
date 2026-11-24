@@ -1,8 +1,8 @@
 """ThemePickerVM — VMx-backed model for the help-modal theme switcher.
 
-Each available theme is exposed as a child :class:`ThemeOptionVM` with an
-observable ``is_active`` flag (mirrors the row-level reactivity the
-file-manager panes use for ``EntryVM.is_current``). The picker
+Each available theme is exposed as a child :class:`ThemeOptionVM`. The active
+theme is the composite's ``current`` child, so each row's ``is_current`` marks
+it (mirrors the file-manager panes' ``EntryVM.is_current``). The picker
 owns a :class:`RelayCommandOf[str]` ``pick_theme_command`` that delegates
 to a caller-injected callback — the View never touches the App service
 directly.
@@ -11,7 +11,7 @@ directly.
 from __future__ import annotations
 
 from collections.abc import Callable, Iterable, Sequence
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 
 from vmx import (
     ComponentVMOf,
@@ -29,31 +29,28 @@ from aws_tui.vm._observable import send_value_free
 
 @dataclass(frozen=True, slots=True)
 class ThemeOptionState:
-    """Per-row model: theme name + whether it's the active stylesheet."""
+    """Per-row model: the theme name."""
 
     name: str
-    is_active: bool = False
 
 
 class ThemeOptionVM:
-    """One row in the theme-picker. Observable ``is_active`` drives the
-    glyph swap (●/○) in the view."""
+    """One row in the theme picker. ``is_current`` (the picker's active
+    theme) drives the glyph swap (●/○) in the view."""
 
     def __init__(
         self,
         *,
         name: str,
-        is_active: bool,
         hub: MessageHub[Message],
         dispatcher: Dispatcher,
         id_prefix: str = "theme_option",
     ) -> None:
-        self._hub: MessageHub[Message] = hub
         self._inner: ComponentVMOf[ThemeOptionState] = (
             ComponentVMOf[ThemeOptionState]
             .builder()
             .name(f"{id_prefix}.{name}")
-            .model(ThemeOptionState(name=name, is_active=is_active))
+            .model(ThemeOptionState(name=name))
             .services(hub, dispatcher)
             .build()
         )
@@ -65,13 +62,13 @@ class ThemeOptionVM:
         return self._inner.model.name
 
     @property
-    def is_active(self) -> bool:
-        return self._inner.model.is_active
+    def is_current(self) -> bool:
+        return self._inner.is_current
 
     @property
     def marker_glyph(self) -> str:
         """``●`` for the active theme, ``○`` otherwise."""
-        return "●" if self._inner.model.is_active else "○"
+        return "●" if self._inner.is_current else "○"
 
     @property
     def inner(self) -> ComponentVMOf[ThemeOptionState]:
@@ -91,16 +88,6 @@ class ThemeOptionVM:
 
     def dispose(self) -> None:
         self._inner.dispose()
-
-    # ── State mutators ─────────────────────────────────────────────────────
-
-    def set_active(self, value: bool) -> None:
-        if self._inner.model.is_active == value:
-            return
-        self._inner.model = replace(self._inner.model, is_active=value)
-        send_value_free(
-            self._hub, PropertyChangedMessage.create(self, self._inner.name, "is_active")
-        )
 
 
 def next_theme_name(names: Sequence[str], active: str) -> str:
@@ -139,7 +126,6 @@ class ThemePickerVM:
         self._options: list[ThemeOptionVM] = [
             ThemeOptionVM(
                 name=name,
-                is_active=(name == active_theme),
                 hub=hub,
                 dispatcher=dispatcher,
                 id_prefix=f"{id_prefix}.option",
@@ -153,6 +139,7 @@ class ThemePickerVM:
             .name(id_prefix)
             .services(hub, dispatcher)
             .children(self._initial_children)
+            .current(self._initial_current)
             .auto_construct_on_add(True)
             .build()
         )
@@ -213,8 +200,10 @@ class ThemePickerVM:
         if self._active_theme == name:
             return
         self._active_theme = name
-        for opt in self._options:
-            opt.set_active(opt.name == name)
+        if self._inner.is_constructed:
+            option = next((o for o in self._options if o.name == name), None)
+            # VMx publishes is_current for the old and the new row; None clears every row.
+            self._inner.current = option.inner if option is not None else None
         send_value_free(
             self._hub, PropertyChangedMessage.create(self, self._inner.name, "active_theme")
         )
@@ -247,6 +236,11 @@ class ThemePickerVM:
 
     def _initial_children(self) -> Iterable[ComponentVMOf[ThemeOptionState]]:
         return tuple(opt.inner for opt in self._options)
+
+    def _initial_current(
+        self, children: Iterable[ComponentVMOf[ThemeOptionState]]
+    ) -> ComponentVMOf[ThemeOptionState] | None:
+        return next((c for c in children if c.model.name == self._active_theme), None)
 
 
 __all__ = ["ThemeOptionState", "ThemeOptionVM", "ThemePickerVM", "next_theme_name"]

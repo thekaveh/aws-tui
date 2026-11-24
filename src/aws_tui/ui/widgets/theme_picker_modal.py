@@ -31,11 +31,11 @@ from aws_tui.vm.chrome.theme_picker_vm import ThemeOptionVM, ThemePickerVM
 
 class _ThemeRow(HubSubscriberMixin, Static):
     """One selectable theme row. Owns no state — observes its
-    :class:`ThemeOptionVM` for ``is_active`` and re-renders on change.
+    :class:`ThemeOptionVM` for ``is_current`` and re-renders on change.
 
     Cursor highlight (the row the user is about to apply) is tracked by
     the modal via the ``-cursor`` CSS class — separate from
-    ``is_active`` (the currently-applied theme)."""
+    ``is_current`` (the currently-applied theme)."""
 
     DEFAULT_CSS = """
     _ThemeRow {
@@ -60,8 +60,8 @@ class _ThemeRow(HubSubscriberMixin, Static):
     def on_mount(self) -> None:
         self.subscribe_to_vm(
             hub=self._hub,
-            vm=self._vm,
-            property_names=("is_active",),
+            vm=self._vm.inner,
+            property_names=("is_current",),
             on_property_changed=self._on_property_changed,
         )
 
@@ -69,7 +69,7 @@ class _ThemeRow(HubSubscriberMixin, Static):
         self.unsubscribe_from_vm()
 
     def _on_property_changed(self, property_name: str) -> None:
-        if property_name == "is_active":
+        if property_name == "is_current":
             self.update(self._format(self._vm))
 
     def set_cursor(self, value: bool) -> None:
