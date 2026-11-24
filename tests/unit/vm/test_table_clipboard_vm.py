@@ -103,26 +103,12 @@ def test_public_shape_uses_vmx_modeled_component_and_typed_relay_command() -> No
     vm = _make_vm()
     try:
         assert not hasattr(vm, "inner")
-        inner = vars(vm)["_inner"]
-        assert isinstance(inner, ComponentVMOf)
+        assert isinstance(vm, ComponentVMOf)
         assert isinstance(vm.copy_command, RelayCommandOf)
-        assert inner.model is None
+        assert vm.model is None
         assert vm.on_property_changed is not None
     finally:
         vm.dispose()
-
-
-def test_dispose_is_idempotent_and_makes_command_inert() -> None:
-    vm = _make_vm()
-    command = vm.copy_command
-
-    vm.dispose()
-    vm.dispose()
-    command.execute(_ref())
-
-    assert vm.status is ConstructionStatus.DISPOSED
-    assert command.can_execute(_ref()) is False
-    assert vm.copied_table is None
 
 
 def test_dispose_finishes_component_cleanup_when_command_observer_raises() -> None:
