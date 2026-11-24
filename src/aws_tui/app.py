@@ -154,7 +154,7 @@ from aws_tui.vm.chrome.confirm_vm import ConfirmPath, ConfirmRequest
 from aws_tui.vm.chrome.crash_vm import CrashChoice, CrashReport, CrashVM
 from aws_tui.vm.chrome.focus_coordinator_vm import FocusSlot
 from aws_tui.vm.chrome.quick_look_vm import QuickLookContent
-from aws_tui.vm.chrome.theme_picker_vm import ThemePickerVM
+from aws_tui.vm.chrome.theme_picker_vm import ThemePickerVM, next_theme_name
 from aws_tui.vm.clipboard_vm import ClipboardChannel
 from aws_tui.vm.credential_recovery import (
     RecoveryGuidance,
@@ -6450,43 +6450,21 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
                 _flash_cursor_fallback_marks(src_pane, targets, marked=False)
 
     def action_cycle_theme(self) -> None:
-        """Cycle to the next theme without opening the picker modal —
-        bound to ``Shift+T`` so the footer chip is reachable too.
+        """Cycle to the next built-in theme without opening the picker modal.
 
-        Uses the canonical :class:`ThemePickerVM` (same VMx model the
-        modal flow uses) to determine the next theme, then raises a
-        top-right toast through :class:`ToastStackVM` so the
-        notification overlay layer (not Textual's built-in bottom-
-        center notify) handles placement + theme conformance.
+        Bound to ``Shift+T`` so the footer chip is reachable too. The order
+        comes from :func:`next_theme_name`; a top-right toast through
+        :class:`ToastStackVM` reports the change.
         """
         self.record_action("app.cycle_theme")
         ctx = self._app_ctx
-
-        def _pick_with_toast(name: str) -> bool:
-            if not self.switch_theme(name):
-                return False
+        # Built-ins ONLY, deliberately: `test_cycle_theme_remains_limited_to_builtins`
+        # pins Shift+T to a predictable quick-cycle over the shipped themes,
+        # while `action_open_themes` offers the full `list_themes()` set
+        # including user themes.
+        name = next_theme_name(ctx.theme_store.BUILTIN_NAMES, ctx.initial_theme)
+        if self.switch_theme(name):
             self._raise_theme_changed_toast(name)
-            return True
-
-        picker = ThemePickerVM(
-            # Built-ins ONLY, deliberately: `test_cycle_theme_remains_limited_to_builtins`
-            # pins Shift+T to a predictable quick-cycle over the shipped themes,
-            # while `action_open_themes` offers the full `list_themes()` set
-            # including user themes. The shared "canonical source of truth" the
-            # docstrings mention is the `ThemePickerVM` MODEL, not the theme list.
-            themes=ctx.theme_store.BUILTIN_NAMES,
-            active_theme=ctx.initial_theme,
-            on_pick=_pick_with_toast,
-            on_preview=self.switch_theme,
-            hub=ctx.hub,
-            dispatcher=ctx.dispatcher,
-        )
-        picker.construct()
-        try:
-            nxt = picker.next_theme()
-            picker.pick_theme_command.execute(nxt)
-        finally:
-            self.call_after_refresh(picker.dispose)
 
     def action_mark_up(self) -> None:
         self.record_action("pane.mark_up")

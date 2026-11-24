@@ -10,7 +10,7 @@ directly.
 
 from __future__ import annotations
 
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass, replace
 
 from vmx import (
@@ -101,6 +101,18 @@ class ThemeOptionVM:
         send_value_free(
             self._hub, PropertyChangedMessage.create(self, self._inner.name, "is_active")
         )
+
+
+def next_theme_name(names: Sequence[str], active: str) -> str:
+    """Return the theme after ``active``, wrapping at the end.
+
+    Return the first name when ``active`` is not listed. Return ``active``
+    when ``names`` is empty.
+    """
+    if not names:
+        return active
+    index = names.index(active) if active in names else -1
+    return names[(index + 1) % len(names)]
 
 
 class ThemePickerVM:
@@ -208,21 +220,8 @@ class ThemePickerVM:
         )
 
     def next_theme(self) -> str:
-        """Return the next theme in the cycle order. Wraps at the end.
-
-        Used by the cycle action (Shift+T) so both the cycle and modal
-        paths share one canonical source of truth (the registered theme
-        tuple this VM owns) instead of computing the order in the View
-        layer.
-        """
-        names = [opt.name for opt in self._options]
-        if not names:
-            return self._active_theme
-        try:
-            idx = names.index(self._active_theme)
-        except ValueError:
-            idx = -1
-        return names[(idx + 1) % len(names)]
+        """Return the next theme in the cycle order. Wraps at the end."""
+        return next_theme_name([opt.name for opt in self._options], self._active_theme)
 
     # ── Internal ────────────────────────────────────────────────────────────
 
@@ -250,4 +249,4 @@ class ThemePickerVM:
         return tuple(opt.inner for opt in self._options)
 
 
-__all__ = ["ThemeOptionState", "ThemeOptionVM", "ThemePickerVM"]
+__all__ = ["ThemeOptionState", "ThemeOptionVM", "ThemePickerVM", "next_theme_name"]

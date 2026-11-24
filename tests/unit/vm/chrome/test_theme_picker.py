@@ -8,7 +8,7 @@ from typing import cast
 from vmx import NULL_DISPATCHER, MessageHub
 from vmx.messages.protocols import Message
 
-from aws_tui.vm.chrome.theme_picker_vm import ThemePickerVM
+from aws_tui.vm.chrome.theme_picker_vm import ThemePickerVM, next_theme_name
 
 
 def _hub() -> MessageHub[Message]:
@@ -148,3 +148,16 @@ def test_pick_theme_command_keeps_active_theme_when_callback_rejects() -> None:
         assert [option.name for option in vm.options if option.is_active] == ["carbon"]
     finally:
         vm.dispose()
+
+
+def test_next_theme_name_returns_the_following_name() -> None:
+    assert next_theme_name(("carbon", "voidline", "amber"), "carbon") == "voidline"
+
+
+def test_next_theme_name_wraps_at_the_end() -> None:
+    assert next_theme_name(("carbon", "voidline", "amber"), "amber") == "carbon"
+
+
+def test_next_theme_name_starts_at_the_first_name_for_an_unlisted_active() -> None:
+    assert next_theme_name(("carbon", "voidline"), "phantom") == "carbon"
+    assert next_theme_name((), "carbon") == "carbon"
