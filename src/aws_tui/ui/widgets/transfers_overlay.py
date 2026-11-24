@@ -19,7 +19,6 @@ import os
 from collections.abc import Callable
 from typing import ClassVar, Literal
 
-from reactivex.abc import DisposableBase
 from textual.app import ComposeResult
 from textual.binding import Binding, BindingType
 from textual.containers import Horizontal, VerticalScroll
@@ -27,7 +26,7 @@ from textual.css.query import NoMatches
 from textual.events import Key
 from textual.widget import Widget
 from textual.widgets import Button, Static
-from vmx import Message, MessageHub, PropertyChangedMessage
+from vmx import Message, MessageHub
 
 from aws_tui.ui.formatters import humanize_bytes
 from aws_tui.ui.widgets._subscriber import HubSubscriberMixin
@@ -318,7 +317,7 @@ class TransferRowWidget(HubSubscriberMixin, Widget):
         return int(self._vm.model.bytes_done / total * 100)
 
 
-class TransfersOverlay(Widget, can_focus=True):
+class TransfersOverlay(HubSubscriberMixin, Widget, can_focus=True):
     """Top-right floating box that aggregates active + recently-finished
     transfers."""
 
@@ -376,7 +375,6 @@ class TransfersOverlay(Widget, can_focus=True):
         self._open_history = open_history
         self._restore_focus = restore_focus
         self._hub: MessageHub[Message] = hub
-        self._sub: DisposableBase | None = None
         self._expired_ids: set[str] = set()
         self._inspected_transfer_id: str | None = None
         # Tracks transfer ids whose linger timer is currently armed
@@ -401,13 +399,20 @@ class TransfersOverlay(Widget, can_focus=True):
                 yield Button("Recovery", id="transfer-recovery-open", compact=True, flat=True)
 
     async def on_mount(self) -> None:
-        self._sub = self._hub.messages.subscribe(on_next=self._on_hub_message)
+        bindings: list[tuple[object, tuple[str, ...]]] = [(self._vm, ("transfers",))]
+        if self._history_vm is not None:
+            bindings.append(
+                (self._history_vm, ("load_state", "error_text", "records", "inspection"))
+            )
+        self.subscribe_to_vms(
+            hub=self._hub,
+            bindings=bindings,
+            on_property_changed=self._on_vm_property_changed,
+        )
         await self._rebuild()
 
     def on_unmount(self) -> None:
-        if self._sub is not None:
-            self._sub.dispose()
-            self._sub = None
+        self.unsubscribe_from_vm()
 
     def on_resize(self) -> None:
         if self.is_mounted:
@@ -435,16 +440,7 @@ class TransfersOverlay(Widget, can_focus=True):
         if focused is not None and container in focused.ancestors:
             container.scroll_to_widget(focused, animate=False, immediate=True)
 
-    def _on_hub_message(self, msg: object) -> None:
-        if not isinstance(msg, PropertyChangedMessage):
-            return
-        if self._history_vm is not None and msg.sender_object is self._history_vm:
-            self.call_after_refresh(self._rebuild)
-            return
-        if msg.sender_object is not self._vm:
-            return
-        if msg.property_name != "transfers":
-            return
+    def _on_vm_property_changed(self, _name: str) -> None:
         self.call_after_refresh(self._rebuild)
 
     async def _rebuild(self) -> None:
