@@ -9,7 +9,6 @@ from vmx import NULL_DISPATCHER, MessageHub
 from vmx.messages.protocols import Message
 
 from aws_tui.infra.connection_resolver import Connection
-from aws_tui.vm.nav_menu_vm import NavItemVM as ServiceItemVM
 from aws_tui.vm.nav_menu_vm import NavMenuVM as ServicesMenuVM
 from aws_tui.vm.services_protocol import (
     Service,
@@ -124,8 +123,8 @@ def test_menu_initially_has_settings_only() -> None:
     reg = ServiceRegistry()
     menu = _menu(reg)
     assert len(menu.items) == 1
-    assert menu.items[0].descriptor.id == "settings"
-    assert menu.items[-1].descriptor.id == "settings", (
+    assert menu.items[0].model.id == "settings"
+    assert menu.items[-1].model.id == "settings", (
         "Settings must be the last entry so the View can dock it to the bottom"
     )
     menu.dispose()
@@ -138,7 +137,7 @@ def test_menu_lists_compatible_services_for_aws_connection() -> None:
     reg.register(FakeService("iam", "IAM", accepts_aws=True, accepts_s3_compat=False))
     menu = _menu(reg)
     menu.update_connection(_aws_conn())
-    ids = {item.descriptor.id for item in menu.items}
+    ids = {item.model.id for item in menu.items}
     assert ids == {"s3", "ec2", "iam", "settings"}
     menu.dispose()
 
@@ -150,7 +149,7 @@ def test_menu_collapses_for_s3_compatible_connection() -> None:
     reg.register(FakeService("iam", "IAM", accepts_aws=True, accepts_s3_compat=False))
     menu = _menu(reg)
     menu.update_connection(_minio_conn())
-    ids = {item.descriptor.id for item in menu.items}
+    ids = {item.model.id for item in menu.items}
     assert ids == {"s3", "settings"}
     menu.dispose()
 
@@ -185,33 +184,8 @@ def test_menu_re_filters_on_connection_change() -> None:
     menu.update_connection(_aws_conn())
     assert len(menu.items) == 3  # s3, ec2, settings
     menu.update_connection(_minio_conn())
-    assert {item.descriptor.id for item in menu.items} == {"s3", "settings"}
+    assert {item.model.id for item in menu.items} == {"s3", "settings"}
     menu.dispose()
-
-
-def test_service_item_vm_construct_dispose() -> None:
-    hub = _hub()
-    item = ServiceItemVM(
-        descriptor=ServiceDescriptor(id="s3", label="S3", icon="s"),
-        hub=hub,
-        dispatcher=NULL_DISPATCHER,
-    )
-    item.construct()
-    assert item.is_constructed
-    item.dispose()
-
-
-def test_service_item_is_current_defaults_false() -> None:
-    item = ServiceItemVM(
-        descriptor=ServiceDescriptor(id="s3", label="S3", icon="s"),
-        hub=_hub(),
-        dispatcher=NULL_DISPATCHER,
-    )
-    assert item.inner.is_current is False
-    item.dispose()
-
-
-# -------------------- Service protocol (structural) --------------------
 
 
 def test_fake_service_satisfies_protocol() -> None:
@@ -236,11 +210,11 @@ def test_nav_menu_always_includes_settings_item_last() -> None:
     vm.construct()
     try:
         vm.update_connection(_aws_conn())
-        assert vm.items[-1].descriptor.id == "settings"
-        assert vm.items[-1].descriptor.label == "Settings"
+        assert vm.items[-1].model.id == "settings"
+        assert vm.items[-1].model.label == "Settings"
         # ``⚙️`` = U+2699 GEAR + U+FE0F VARIATION SELECTOR-16 — the
         # VS-16 forces terminal emoji-presentation rendering.
-        assert vm.items[-1].descriptor.icon == "⚙️"
+        assert vm.items[-1].model.icon == "⚙️"
         # select("settings") via the canonical API.
         vm.switch_service_command.execute("settings")
         assert vm.selected_id == "settings"
@@ -283,13 +257,13 @@ def test_switch_service_promotes_to_composite_current_slot() -> None:
     # No selection yet → composite.current is None.
     assert menu._inner.current is None
     menu.switch_service_command.execute("ec2")
-    # composite.current is now the inner of the EC2 NavItemVM.
-    ec2_item = next(i for i in menu.items if i.descriptor.id == "ec2")
-    assert menu._inner.current is ec2_item.inner
+    # composite.current is now the EC2 row.
+    ec2_item = next(i for i in menu.items if i.model.id == "ec2")
+    assert menu._inner.current is ec2_item
     # Switching again moves the cursor.
     menu.switch_service_command.execute("s3")
-    s3_item = next(i for i in menu.items if i.descriptor.id == "s3")
-    assert menu._inner.current is s3_item.inner
+    s3_item = next(i for i in menu.items if i.model.id == "s3")
+    assert menu._inner.current is s3_item
     menu.dispose()
 
 
@@ -300,17 +274,17 @@ def test_per_item_is_current_follows_composite_current() -> None:
     menu = _menu(reg)
     try:
         menu.update_connection(_aws_conn())
-        assert not any(item.inner.is_current for item in menu.items)
+        assert not any(item.is_current for item in menu.items)
 
         menu.switch_service_command.execute("s3")
-        assert [item.descriptor.id for item in menu.items if item.inner.is_current] == ["s3"]
+        assert [item.model.id for item in menu.items if item.is_current] == ["s3"]
 
         menu.switch_service_command.execute("settings")
-        assert [item.descriptor.id for item in menu.items if item.inner.is_current] == ["settings"]
+        assert [item.model.id for item in menu.items if item.is_current] == ["settings"]
 
         menu.clear_selection()
         assert menu.selected_id is None
-        assert not any(item.inner.is_current for item in menu.items)
+        assert not any(item.is_current for item in menu.items)
     finally:
         menu.dispose()
 
@@ -433,3 +407,13 @@ def test_nav_menu_vm_refreshes_on_connection_list_change() -> None:
         )
     finally:
         vm.dispose()
+
+
+def test_menu_row_is_constructed_and_not_current() -> None:
+    reg = ServiceRegistry()
+    reg.register(FakeService("s3", "S3", accepts_aws=True, accepts_s3_compat=True))
+    menu = _menu(reg)
+    menu.update_connection(_aws_conn())
+    assert menu.items[0].is_constructed
+    assert menu.items[0].is_current is False
+    menu.dispose()

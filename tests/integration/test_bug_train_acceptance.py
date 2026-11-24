@@ -226,12 +226,12 @@ def test_pr_105_nav_menu_selection_is_singular() -> None:
     try:
         menu.update_connection(Connection(name="aws", kind="aws", region="us-east-1", source="env"))
         menu.switch_service_command.execute("s3")
-        selected = [it for it in menu.items if it.inner.is_current]
+        selected = [it for it in menu.items if it.is_current]
         assert len(selected) == 1
-        assert selected[0].descriptor.id == "s3"
+        assert selected[0].model.id == "s3"
         menu.switch_service_command.execute("ec2")
-        selected = [it for it in menu.items if it.inner.is_current]
+        selected = [it for it in menu.items if it.is_current]
         assert len(selected) == 1
-        assert selected[0].descriptor.id == "ec2"
+        assert selected[0].model.id == "ec2"
     finally:
         menu.dispose()

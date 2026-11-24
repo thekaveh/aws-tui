@@ -119,7 +119,7 @@ async def test_switch_connection_updates_connection_and_menu() -> None:
     root = _build_root(s3, ec2)
     await root.switch_connection_with(_aws_conn(), TokenState.CONNECTED)
     assert root.active_connection == _aws_conn()
-    ids = {item.descriptor.id for item in root.services_menu.items}
+    ids = {item.model.id for item in root.services_menu.items}
     assert ids == {"s3", "ec2", "settings"}
     root.dispose()
 
@@ -169,7 +169,7 @@ async def test_switch_connection_to_s3_collapses_menu() -> None:
     ec2 = _FakeService("ec2", accepts_s3=False)
     root = _build_root(s3, ec2)
     await root.switch_connection_with(_minio_conn(), TokenState.CONNECTED)
-    ids = {item.descriptor.id for item in root.services_menu.items}
+    ids = {item.model.id for item in root.services_menu.items}
     assert ids == {"s3", "settings"}
     root.dispose()
 

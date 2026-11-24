@@ -38,66 +38,6 @@ from aws_tui.vm.services_protocol import ServiceDescriptor, ServiceRegistry
 SETTINGS_NAV_ID: Final[str] = "settings"
 
 
-class NavItemVM:
-    """A single row in the nav menu."""
-
-    def __init__(
-        self,
-        *,
-        descriptor: ServiceDescriptor,
-        hub: MessageHub[Message],
-        dispatcher: Dispatcher,
-    ) -> None:
-        self._descriptor: ServiceDescriptor = descriptor
-
-        self._inner: ComponentVMOf[ServiceDescriptor] = (
-            ComponentVMOf[ServiceDescriptor]
-            .builder()
-            .name(f"nav_item.{descriptor.id}")
-            .model(descriptor)
-            .services(hub, dispatcher)
-            .build()
-        )
-
-    # ── Properties ──────────────────────────────────────────────────────────
-
-    @property
-    def descriptor(self) -> ServiceDescriptor:
-        return self._descriptor
-
-    @property
-    def status(self) -> ConstructionStatus:
-        return self._inner.status
-
-    @property
-    def is_constructed(self) -> bool:
-        return self._inner.is_constructed
-
-    @property
-    def name(self) -> str:
-        return self._inner.name
-
-    @property
-    def inner(self) -> ComponentVMOf[ServiceDescriptor]:
-        """Underlying VMx component. ``NavMenuVM`` composes a
-        parent ``CompositeVM`` over the live items via this accessor,
-        which matches the public ``inner`` pattern on the other VM
-        facades (``EntryVM`` / ``TransferVM`` / ``PaneVM`` / ``ToastVM``).
-        """
-        return self._inner
-
-    # ── Lifecycle ───────────────────────────────────────────────────────────
-
-    def construct(self) -> None:
-        self._inner.construct()
-
-    def destruct(self) -> None:
-        self._inner.destruct()
-
-    def dispose(self) -> None:
-        self._inner.dispose()
-
-
 class NavMenuVM:
     """Left-rail nav-picker viewmodel."""
 
@@ -114,7 +54,6 @@ class NavMenuVM:
 
         self._connection: Connection | None = None
         self._local_navigation = False
-        self._items: list[NavItemVM] = []
         # Selection lives in `self._inner.current` (the CompositeVM's
         # canonical slot). `selected_id` is a derived property — see the
         # round-3 "compose, don't reject" directive (spec §9.bis.11) and
@@ -127,7 +66,7 @@ class NavMenuVM:
             .builder()
             .name("nav_menu")
             .services(hub, dispatcher)
-            .children(self._initial_children)
+            .children(lambda: ())
             .auto_construct_on_add(True)
             .build()
         )
@@ -144,8 +83,8 @@ class NavMenuVM:
     # ── Properties ──────────────────────────────────────────────────────────
 
     @property
-    def items(self) -> tuple[NavItemVM, ...]:
-        return tuple(self._items)
+    def items(self) -> tuple[ComponentVMOf[ServiceDescriptor], ...]:
+        return self._inner.snapshot()
 
     @property
     def selected_id(self) -> str | None:
@@ -197,8 +136,6 @@ class NavMenuVM:
             self._sub.dispose()
             self._sub = None
         self._switch_command.dispose()
-        for item in self._items:
-            item.dispose()
         self._inner.dispose()
 
     # ── Public API ─────────────────────────────────────────────────────────
@@ -218,10 +155,6 @@ class NavMenuVM:
 
     # ── Internal ────────────────────────────────────────────────────────────
 
-    def _initial_children(self) -> tuple[ComponentVMOf[ServiceDescriptor], ...]:
-        # The initial pass uses whatever update_connection(...) has staged.
-        return tuple(item.inner for item in self._items)
-
     def _on_message(self, msg: object) -> None:
         if isinstance(msg, ConnectionChangedMessage):
             self.update_connection(msg.connection)
@@ -231,7 +164,7 @@ class NavMenuVM:
     def _can_switch(self, service_id: str | None) -> bool:
         if service_id is None:
             return False
-        return any(item.descriptor.id == service_id for item in self._items)
+        return any(item.model.id == service_id for item in self._inner.snapshot())
 
     def _switch_service(self, service_id: str | None) -> None:
         if service_id is None:
@@ -239,29 +172,25 @@ class NavMenuVM:
         # Idempotent: re-selecting the active service is a no-op.
         if self.selected_id == service_id:
             return
-        # Find the matching NavItemVM. Unknown ids are a silent no-op
+        # Find the matching row. Unknown ids are a silent no-op
         # (preserves the pre-Phase-1 behaviour exercised by
         # tests/unit/vm/test_nav_menu_vm.py::test_menu_switch_service_unknown_id_noop).
-        match: NavItemVM | None = None
-        for item in self._items:
-            if item.descriptor.id == service_id:
-                match = item
-                break
+        match = next((item for item in self._inner.snapshot() if item.model.id == service_id), None)
         if match is None:
             return
         # Commit the composite's current child before publishing selected_id
         # so the view reads the new selection when it handles the message.
-        self._inner.current = match.inner
+        self._inner.current = match
         send_value_free(self._hub, selection_changed(self, self.name, self.selected_id))
 
     def _rebuild_items(self, *, notify: bool = True) -> None:
         prior_selected_id = self.selected_id
         desired_ids = self._desired_service_ids()
-        current_ids = [item.descriptor.id for item in self._items]
+        current_ids = [item.model.id for item in self._inner.snapshot()]
         # The Settings item is always last; compare only service-derived items.
         current_service_ids = [id_ for id_ in current_ids if id_ != SETTINGS_NAV_ID]
         if desired_ids == current_service_ids and any(
-            item.descriptor.id == SETTINGS_NAV_ID for item in self._items
+            item.model.id == SETTINGS_NAV_ID for item in self._inner.snapshot()
         ):
             return
         self._clear_items()
@@ -281,15 +210,7 @@ class NavMenuVM:
             # alone is treated as a text symbol per Unicode TR51.
             icon="⚙️",
         )
-        settings_item = NavItemVM(
-            descriptor=settings_descriptor,
-            hub=self._hub,
-            dispatcher=self._dispatcher,
-        )
-        self._items.append(settings_item)
-        if self._inner.is_constructed:
-            settings_item.construct()
-        self._inner.append(settings_item.inner)
+        self._add_item(settings_descriptor)
 
         if notify:
             # Notify subscribers that the items collection changed so the View
@@ -315,29 +236,30 @@ class NavMenuVM:
             return ["s3"] if self._local_navigation and "s3" in self._registry else []
         return [s.descriptor.id for s in self._registry.all() if s.supports(conn)]
 
+    def _add_item(self, descriptor: ServiceDescriptor) -> None:
+        # auto_construct_on_add(True) constructs the row when the menu is constructed.
+        self._inner.append(
+            ComponentVMOf[ServiceDescriptor]
+            .builder()
+            .name(f"nav_item.{descriptor.id}")
+            .model(descriptor)
+            .services(self._hub, self._dispatcher)
+            .build()
+        )
+
     def _clear_items(self) -> None:
-        """Detach + dispose every current ``NavItemVM``."""
-        for item in list(self._items):
-            if item.inner in self._inner:
-                self._inner.remove(item.inner)
+        """Detach and dispose every current row."""
+        for item in self._inner.snapshot():
+            self._inner.remove(item)
             item.dispose()
-        self._items.clear()
 
     def _repopulate_items(self, desired_ids: list[str]) -> None:
-        """Build new ``NavItemVM`` rows for ``desired_ids`` in registry order."""
+        """Build new rows for ``desired_ids`` in registry order."""
         desired = set(desired_ids)
         for service in self._registry.all():
             if service.descriptor.id not in desired:
                 continue
-            item = NavItemVM(
-                descriptor=service.descriptor,
-                hub=self._hub,
-                dispatcher=self._dispatcher,
-            )
-            self._items.append(item)
-            if self._inner.is_constructed:
-                item.construct()
-            self._inner.append(item.inner)
+            self._add_item(service.descriptor)
 
 
-__all__ = ["SETTINGS_NAV_ID", "NavItemVM", "NavMenuVM"]
+__all__ = ["SETTINGS_NAV_ID", "NavMenuVM"]

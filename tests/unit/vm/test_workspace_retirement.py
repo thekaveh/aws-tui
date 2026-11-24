@@ -136,7 +136,7 @@ async def test_prepared_local_workspace_adoption_clears_global_source_without_du
         assert root.active_connection is None
         assert root.active_auth_state is TokenState.MISSING
         assert root.services_menu.selected_id == "s3"
-        assert {item.descriptor.id for item in root.services_menu.items} == {"s3", "settings"}
+        assert {item.model.id for item in root.services_menu.items} == {"s3", "settings"}
         assert messages == [
             ConnectionChangedMessage(connection=None, auth_state=TokenState.MISSING)
         ]
@@ -229,7 +229,7 @@ async def test_published_local_workspace_keeps_truthful_menu_after_observer_fail
         assert root.active_connection is None
         assert root.active_auth_state is TokenState.MISSING
         assert root.services_menu.selected_id == "s3"
-        assert {item.descriptor.id for item in root.services_menu.items} == {"s3", "settings"}
+        assert {item.model.id for item in root.services_menu.items} == {"s3", "settings"}
         assert messages == [ConnectionChangedMessage(None, TokenState.MISSING)]
         stage.commit_selection()
     finally:
