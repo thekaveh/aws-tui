@@ -42,11 +42,27 @@ class HubSubscriberMixin:
         on_property_changed: Callable[[str], None],
     ) -> None:
         """Subscribe to ``hub`` and invoke ``on_property_changed`` per match."""
+        self.subscribe_to_vms(
+            hub=hub,
+            bindings=((vm, property_names),),
+            on_property_changed=on_property_changed,
+        )
+
+    def subscribe_to_vms(
+        self,
+        *,
+        hub: MessageHub[Message],
+        bindings: Iterable[tuple[Any, Iterable[str]]],
+        on_property_changed: Callable[[str], None],
+    ) -> None:
+        """Subscribe to several VMs at once; one subscription covers every pair."""
         if self._hub_subscription is not None:
             self._hub_subscription.dispose()
 
         streams = tuple(
-            when_property_changed(hub, vm, property_name) for property_name in property_names
+            when_property_changed(hub, vm, property_name)
+            for vm, property_names in bindings
+            for property_name in property_names
         )
         self._hub_subscription = rx.merge(*streams).subscribe(
             on_next=lambda msg: on_property_changed(msg.property_name)

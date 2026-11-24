@@ -6,7 +6,6 @@ import asyncio
 from functools import partial
 from typing import TYPE_CHECKING, ClassVar, Literal, cast
 
-from reactivex.abc import DisposableBase
 from textual.app import ComposeResult
 from textual.binding import Binding, BindingType
 from textual.containers import Horizontal, Vertical
@@ -14,10 +13,11 @@ from textual.events import Click
 from textual.screen import ModalScreen
 from textual.widgets import OptionList, Static, TextArea
 from textual.widgets.option_list import Option
-from vmx import Message, MessageHub, PropertyChangedMessage
+from vmx import Message, MessageHub
 
 from aws_tui.domain.cross_fs import ConflictResolution
 from aws_tui.domain.transfer_history import TransferConnectionIdentity, TransferHistoryRecord
+from aws_tui.ui.widgets._subscriber import HubSubscriberMixin
 from aws_tui.ui.widgets.confirm_modal import TextualDialogService
 from aws_tui.ui.widgets.modal_button import ModalButton
 from aws_tui.vm.chrome.confirm_vm import ConfirmRequest
@@ -138,7 +138,7 @@ class RetryConflictModal(ModalScreen[ConflictResolution | None]):
         self.dismiss(None)
 
 
-class TransferHistoryModal(ModalScreen[None]):
+class TransferHistoryModal(HubSubscriberMixin, ModalScreen[None]):
     """Bounded, keyboard-accessible history with cancellation-safe UI replies."""
 
     DEFAULT_CSS = """
@@ -163,7 +163,6 @@ class TransferHistoryModal(ModalScreen[None]):
     ) -> None:
         super().__init__()
         self.vm, self._hub, self.mode = vm, hub, mode
-        self._sub: DisposableBase | None = None
         self._worker: Worker[None] | None = None
         self._busy = False
         self._history_closed = False
@@ -188,14 +187,20 @@ class TransferHistoryModal(ModalScreen[None]):
                 yield _history_button("Reload", button_id="reload")
 
     def on_mount(self) -> None:
-        self._sub = self._hub.messages.subscribe(on_next=self._on_history_hub_message)
+        self.subscribe_to_vms(
+            hub=self._hub,
+            bindings=(
+                (self.vm, ("load_state", "error_text", "records", "inspection")),
+                (self.vm.runtime, ("error_text",)),
+            ),
+            on_property_changed=self._on_history_property_changed,
+        )
         self.call_after_refresh(self._refresh_records)
         self.query_one(OptionList).focus()
 
     def on_unmount(self) -> None:
         self._history_closed = True
-        if self._sub is not None:
-            self._sub.dispose()
+        self.unsubscribe_from_vm()
         if self._worker is not None and not self._worker.is_finished:
             self._worker.cancel()
 
@@ -203,12 +208,8 @@ class TransferHistoryModal(ModalScreen[None]):
         if self.is_mounted and not self._history_closed:
             self.call_after_refresh(self._refresh_records)
 
-    def _on_history_hub_message(self, message: object) -> None:
-        if (
-            isinstance(message, PropertyChangedMessage)
-            and message.sender_object in (self.vm, self.vm.runtime)
-            and not self._history_closed
-        ):
+    def _on_history_property_changed(self, _name: str) -> None:
+        if not self._history_closed:
             self.call_after_refresh(self._refresh_records)
 
     def _refresh_records(self) -> None:
