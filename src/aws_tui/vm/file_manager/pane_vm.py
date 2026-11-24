@@ -1400,8 +1400,6 @@ class PaneVM:
                 child.dispose()
             self._entries = new_entries
             for child in self._entries:
-                if self._inner.is_constructed:
-                    child.construct()
                 self._inner.append(child.inner)
         # ORDER MATTERS: ``_recompute_filtered()`` MUST run before
         # ``self._cursor_index = 0`` because the setter reads

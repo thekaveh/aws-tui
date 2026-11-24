@@ -338,8 +338,6 @@ class CommandPaletteVM:
         item = PaletteEntryVM(entry=entry, hub=self._hub, dispatcher=self._dispatcher)
         self._items[entry.id] = item
         self._actions[entry.id] = action
-        if self._inner_registry.is_constructed:
-            item.construct()
         self._inner_registry.append(item.inner)
         self._select_first()
 
