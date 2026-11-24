@@ -237,3 +237,26 @@ async def test_casefold_name_ties_use_original_name_for_sort_and_find() -> None:
         assert [entry.name for entry in pane.filtered_entries] == ["ALPHA", "Alpha", "alpha"]
     finally:
         pane.dispose()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "mutate",
+    [
+        lambda pane: pane.set_sort(pane_vm.PaneSortField.SIZE),
+        lambda pane: pane.move_cursor_to(2),
+        lambda pane: pane.set_filter_command.execute("a"),
+    ],
+    ids=["set_sort", "move_cursor_to", "set_filter"],
+)
+async def test_input_mutators_publish_viewmodel_once_and_last(mutate) -> None:
+    pane = await _make_pane(CountingFS())
+    try:
+        notices: list[str] = []
+        subscription = pane.on_property_changed.subscribe(notices.append)
+        mutate(pane)
+        subscription.dispose()
+        assert notices.count("viewmodel") == 1
+        assert notices[-1] == "viewmodel"
+    finally:
+        pane.dispose()
