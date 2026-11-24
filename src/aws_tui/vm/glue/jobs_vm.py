@@ -13,15 +13,13 @@ from vmx import (
     PropertyChangedMessage,
 )
 
-from aws_tui.domain.filesystem import ProviderError
 from aws_tui.domain.glue import GlueJobRunSummary, GlueJobSummary
 from aws_tui.vm._observable import ObserverSafeSubject, send_value_free
 from aws_tui.vm._token_paging import reject_token_cycles
 from aws_tui.vm.file_manager.pane_vm import PaneState
-from aws_tui.vm.glue._errors import map_provider_error, map_unexpected_error
-from aws_tui.vm.glue._lifecycle import GlueOperationOwner, GlueOperationSuperseded
+from aws_tui.vm.glue._guarded import guarded
+from aws_tui.vm.glue._lifecycle import GlueOperationOwner
 from aws_tui.vm.paging import BoundedTokenPagedComposition
-from aws_tui.vm.service_diagnostics import report_unexpected_service_error
 
 _MAX_JOB_ITEMS = 1_000
 _MAX_JOB_RUN_ITEMS = 1_000
@@ -178,26 +176,14 @@ class GlueJobsVM:
         generation = self._job_generation
         self._jobs_error_text = None
         self._set_state("_jobs_state", PaneState.LOADING, "state")
-        try:
-            await self._job_pager.refresh_command.execute_async()
-        except GlueOperationSuperseded:
-            return
-        except ProviderError as exc:
-            if generation != self._job_generation:
-                return
-            state, self._jobs_error_text = map_provider_error(exc)
-            self._set_state("_jobs_state", state, "state")
-            return
-        except Exception as exc:
-            if generation != self._job_generation:
-                return
-            state, self._jobs_error_text = map_unexpected_error(exc)
-            report_unexpected_service_error(
-                self._hub, service="glue", operation="list_jobs", error=exc
-            )
-            self._set_state("_jobs_state", state, "state")
-            return
-        if generation != self._job_generation:
+        ok, _ = await guarded(
+            self._job_pager.refresh_command.execute_async,
+            hub=self._hub,
+            operation="list_jobs",
+            is_current=lambda: generation == self._job_generation,
+            on_failure=self._fail_jobs,
+        )
+        if not ok:
             return
         self._notify("jobs")
         self._notify("has_more_jobs")
@@ -213,28 +199,17 @@ class GlueJobsVM:
         if not self._is_alive() or not self.has_more_jobs:
             return
         generation = self._job_generation
-        try:
-            await self._job_pager.load_more_command.execute_async()
-        except GlueOperationSuperseded:
+        ok, _ = await guarded(
+            self._job_pager.load_more_command.execute_async,
+            hub=self._hub,
+            operation="list_jobs",
+            is_current=lambda: generation == self._job_generation,
+            on_failure=self._fail_jobs,
+        )
+        if not ok:
             return
-        except ProviderError as exc:
-            if generation != self._job_generation:
-                return
-            state, self._jobs_error_text = map_provider_error(exc)
-            self._set_state("_jobs_state", state, "state")
-            return
-        except Exception as exc:
-            if generation != self._job_generation:
-                return
-            state, self._jobs_error_text = map_unexpected_error(exc)
-            report_unexpected_service_error(
-                self._hub, service="glue", operation="list_jobs", error=exc
-            )
-            self._set_state("_jobs_state", state, "state")
-            return
-        if generation == self._job_generation:
-            self._notify("jobs")
-            self._notify("has_more_jobs")
+        self._notify("jobs")
+        self._notify("has_more_jobs")
 
     async def select_job(self, job_name: str) -> None:
         if not self._is_alive() or not any(job.name == job_name for job in self.jobs):
@@ -264,28 +239,17 @@ class GlueJobsVM:
         if not self._is_alive() or not self.has_more_runs:
             return
         generation = self._run_generation
-        try:
-            await self._run_pager.load_more_command.execute_async()
-        except GlueOperationSuperseded:
+        ok, _ = await guarded(
+            self._run_pager.load_more_command.execute_async,
+            hub=self._hub,
+            operation="list_job_runs",
+            is_current=lambda: generation == self._run_generation,
+            on_failure=self._fail_runs,
+        )
+        if not ok:
             return
-        except ProviderError as exc:
-            if generation != self._run_generation:
-                return
-            state, self._runs_error_text = map_provider_error(exc)
-            self._set_state("_runs_state", state, "runs_state")
-            return
-        except Exception as exc:
-            if generation != self._run_generation:
-                return
-            state, self._runs_error_text = map_unexpected_error(exc)
-            report_unexpected_service_error(
-                self._hub, service="glue", operation="list_job_runs", error=exc
-            )
-            self._set_state("_runs_state", state, "runs_state")
-            return
-        if generation == self._run_generation:
-            self._notify("runs")
-            self._notify("has_more_runs")
+        self._notify("runs")
+        self._notify("has_more_runs")
 
     async def _reload_runs(self) -> None:
         self._run_generation += 1
@@ -301,26 +265,14 @@ class GlueJobsVM:
             self._set_state("_runs_state", PaneState.EMPTY, "runs_state")
             return
         self._set_state("_runs_state", PaneState.LOADING, "runs_state")
-        try:
-            await self._run_pager.refresh_command.execute_async()
-        except GlueOperationSuperseded:
-            return
-        except ProviderError as exc:
-            if generation != self._run_generation:
-                return
-            state, self._runs_error_text = map_provider_error(exc)
-            self._set_state("_runs_state", state, "runs_state")
-            return
-        except Exception as exc:
-            if generation != self._run_generation:
-                return
-            state, self._runs_error_text = map_unexpected_error(exc)
-            report_unexpected_service_error(
-                self._hub, service="glue", operation="list_job_runs", error=exc
-            )
-            self._set_state("_runs_state", state, "runs_state")
-            return
-        if generation != self._run_generation:
+        ok, _ = await guarded(
+            self._run_pager.refresh_command.execute_async,
+            hub=self._hub,
+            operation="list_job_runs",
+            is_current=lambda: generation == self._run_generation,
+            on_failure=self._fail_runs,
+        )
+        if not ok:
             return
         if self.runs:
             self._selected_run_id = self.runs[0].run_id
@@ -394,6 +346,14 @@ class GlueJobsVM:
             ),
             max_items=_MAX_JOB_RUN_ITEMS,
         )
+
+    def _fail_jobs(self, state: PaneState, text: str | None) -> None:
+        self._jobs_error_text = text
+        self._set_state("_jobs_state", state, "state")
+
+    def _fail_runs(self, state: PaneState, text: str | None) -> None:
+        self._runs_error_text = text
+        self._set_state("_runs_state", state, "runs_state")
 
     def _set_state(self, field: str, state: PaneState, property_name: str) -> None:
         if getattr(self, field) == state:

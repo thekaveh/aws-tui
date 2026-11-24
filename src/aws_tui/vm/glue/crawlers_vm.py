@@ -13,15 +13,13 @@ from vmx import (
     PropertyChangedMessage,
 )
 
-from aws_tui.domain.filesystem import ProviderError
 from aws_tui.domain.glue import GlueCrawlerDetail, GlueCrawlerSummary
 from aws_tui.vm._observable import ObserverSafeSubject, send_value_free
 from aws_tui.vm._token_paging import reject_token_cycles
 from aws_tui.vm.file_manager.pane_vm import PaneState
-from aws_tui.vm.glue._errors import map_provider_error, map_unexpected_error
-from aws_tui.vm.glue._lifecycle import GlueOperationOwner, GlueOperationSuperseded
+from aws_tui.vm.glue._guarded import guarded
+from aws_tui.vm.glue._lifecycle import GlueOperationOwner
 from aws_tui.vm.paging import BoundedTokenPagedComposition
-from aws_tui.vm.service_diagnostics import report_unexpected_service_error
 
 _MAX_CRAWLER_ITEMS = 1_000
 
@@ -148,28 +146,17 @@ class GlueCrawlersVM:
         if not self._is_alive() or not self.has_more_crawlers:
             return
         generation = self._crawler_generation
-        try:
-            await self._crawler_pager.load_more_command.execute_async()
-        except GlueOperationSuperseded:
+        ok, _ = await guarded(
+            self._crawler_pager.load_more_command.execute_async,
+            hub=self._hub,
+            operation="list_crawlers",
+            is_current=lambda: generation == self._crawler_generation,
+            on_failure=self._fail_list,
+        )
+        if not ok:
             return
-        except ProviderError as exc:
-            if generation != self._crawler_generation:
-                return
-            state, self._error_text = map_provider_error(exc)
-            self._set_state(state)
-            return
-        except Exception as exc:
-            if generation != self._crawler_generation:
-                return
-            state, self._error_text = map_unexpected_error(exc)
-            report_unexpected_service_error(
-                self._hub, service="glue", operation="list_crawlers", error=exc
-            )
-            self._set_state(state)
-            return
-        if generation == self._crawler_generation:
-            self._notify("crawlers")
-            self._notify("has_more_crawlers")
+        self._notify("crawlers")
+        self._notify("has_more_crawlers")
 
     async def select_crawler(self, name: str) -> None:
         if not self._is_alive() or not any(crawler.name == name for crawler in self.crawlers):
@@ -182,26 +169,14 @@ class GlueCrawlersVM:
         self._notify("selected_crawler_name")
         self._notify("crawler_detail")
         self._set_detail_state(PaneState.LOADING)
-        try:
-            detail = await self._operations.run(lambda: self._client.get_crawler(name))
-        except GlueOperationSuperseded:
-            return
-        except ProviderError as exc:
-            if generation != self._detail_generation:
-                return
-            state, self._detail_error_text = map_provider_error(exc)
-            self._set_detail_state(state)
-            return
-        except Exception as exc:
-            if generation != self._detail_generation:
-                return
-            state, self._detail_error_text = map_unexpected_error(exc)
-            report_unexpected_service_error(
-                self._hub, service="glue", operation="get_crawler", error=exc
-            )
-            self._set_detail_state(state)
-            return
-        if generation != self._detail_generation:
+        ok, detail = await guarded(
+            lambda: self._operations.run(lambda: self._client.get_crawler(name)),
+            hub=self._hub,
+            operation="get_crawler",
+            is_current=lambda: generation == self._detail_generation,
+            on_failure=self._fail_detail,
+        )
+        if not ok:
             return
         self._crawler_detail = detail
         self._notify("crawler_detail")
@@ -223,26 +198,14 @@ class GlueCrawlersVM:
         self._notify("crawler_detail")
         self._set_detail_state(PaneState.EMPTY)
         self._set_state(PaneState.LOADING)
-        try:
-            await self._crawler_pager.refresh_command.execute_async()
-        except GlueOperationSuperseded:
-            return
-        except ProviderError as exc:
-            if generation != self._crawler_generation:
-                return
-            state, self._error_text = map_provider_error(exc)
-            self._set_state(state)
-            return
-        except Exception as exc:
-            if generation != self._crawler_generation:
-                return
-            state, self._error_text = map_unexpected_error(exc)
-            report_unexpected_service_error(
-                self._hub, service="glue", operation="list_crawlers", error=exc
-            )
-            self._set_state(state)
-            return
-        if generation != self._crawler_generation:
+        ok, _ = await guarded(
+            self._crawler_pager.refresh_command.execute_async,
+            hub=self._hub,
+            operation="list_crawlers",
+            is_current=lambda: generation == self._crawler_generation,
+            on_failure=self._fail_list,
+        )
+        if not ok:
             return
         self._notify("crawlers")
         self._notify("has_more_crawlers")
@@ -272,6 +235,14 @@ class GlueCrawlersVM:
             ),
             max_items=_MAX_CRAWLER_ITEMS,
         )
+
+    def _fail_list(self, state: PaneState, text: str | None) -> None:
+        self._error_text = text
+        self._set_state(state)
+
+    def _fail_detail(self, state: PaneState, text: str | None) -> None:
+        self._detail_error_text = text
+        self._set_detail_state(state)
 
     def _set_state(self, state: PaneState) -> None:
         if self._state == state:
