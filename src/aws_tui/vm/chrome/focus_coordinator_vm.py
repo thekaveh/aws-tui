@@ -33,16 +33,13 @@ from enum import StrEnum
 import reactivex as rx
 from reactivex.abc import DisposableBase
 from vmx import (
-    ComponentVM,
-    ConstructionStatus,
     DiscriminatorVM,
     Dispatcher,
     Message,
     MessageHub,
-    PropertyChangedMessage,
 )
 
-from aws_tui.vm._observable import send_value_free
+from aws_tui.vm._component import IsolatedComponentVM
 
 
 class FocusSlot(StrEnum):
@@ -109,7 +106,7 @@ class FocusSlot(StrEnum):
     MODAL = "modal"
 
 
-class FocusCoordinatorVM:
+class FocusCoordinatorVM(IsolatedComponentVM):
     """Single source of truth for the app-wide focus slot."""
 
     def __init__(
@@ -119,16 +116,14 @@ class FocusCoordinatorVM:
         dispatcher: Dispatcher,
         initial: FocusSlot = FocusSlot.NAV_MENU,
     ) -> None:
-        self._hub: MessageHub[Message] = hub
+        super().__init__(name="focus_coordinator", hub=hub, dispatcher=dispatcher)
         self._focus_discriminator: DiscriminatorVM[FocusSlot] = DiscriminatorVM(initial)
+        self._own(self._focus_discriminator)
         self._focus_sub: DisposableBase = self._focus_discriminator.active_changed.subscribe(
             on_next=self._emit_changed
         )
+        self._own(self._focus_sub)
         self._underlying_slot_override: FocusSlot | None = None
-        self._disposed = False
-        self._inner: ComponentVM = (
-            ComponentVM.builder().name("focus_coordinator").services(hub, dispatcher).build()
-        )
 
     # ── Public surface ──────────────────────────────────────────────────────
 
@@ -147,14 +142,6 @@ class FocusCoordinatorVM:
         """Hot Observable. Fires every time ``focused_slot`` changes;
         the payload is the NEW slot."""
         return self._focus_discriminator.active_changed
-
-    @property
-    def status(self) -> ConstructionStatus:
-        return self._inner.status
-
-    @property
-    def name(self) -> str:
-        return self._inner.name
 
     # ── Mutation ────────────────────────────────────────────────────────────
 
@@ -303,27 +290,13 @@ class FocusCoordinatorVM:
 
     # ── Lifecycle ───────────────────────────────────────────────────────────
 
-    def construct(self) -> None:
-        self._inner.construct()
-
-    def destruct(self) -> None:
-        self._inner.destruct()
-
-    def dispose(self) -> None:
-        if self._disposed:
-            return
-        self._disposed = True
+    def _on_dispose(self) -> None:
         self._underlying_slot_override = None
-        self._focus_sub.dispose()
-        self._focus_discriminator.dispose()
-        self._inner.dispose()
 
     # ── Internal ────────────────────────────────────────────────────────────
 
     def _emit_changed(self, _slot: FocusSlot) -> None:
-        send_value_free(
-            self._hub, PropertyChangedMessage.create(self, self._inner.name, "focused_slot")
-        )
+        self._publish("focused_slot")
 
     def _cycle(self, order: tuple[FocusSlot, ...]) -> None:
         try:

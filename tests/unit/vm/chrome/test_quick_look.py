@@ -6,9 +6,10 @@ from collections.abc import AsyncIterator
 from typing import cast
 
 import pytest
-from vmx import NULL_DISPATCHER, MessageHub
+from vmx import NULL_DISPATCHER, ConstructionStatus, MessageHub
 from vmx.messages.protocols import Message
 
+from aws_tui.vm._component import IsolatedComponentVM
 from aws_tui.vm.chrome.quick_look_vm import QuickLookContent, QuickLookVM
 
 
@@ -169,3 +170,20 @@ def test_content_four_positional_fields_and_lazy_loader_identity() -> None:
     assert vm.content is content
     assert vm.content.load_preview is loader
     vm.dispose()
+
+
+def test_quick_look_isolated_component_publishes_property_names() -> None:
+    vm = _build()
+    names: list[str] = []
+    sub = vm.on_property_changed.subscribe(names.append)
+    try:
+        assert isinstance(vm, IsolatedComponentVM)
+        vm.open_command.execute(
+            QuickLookContent(title="x", mime="text/plain", chunks=None, line_count_estimate=3)
+        )
+        assert names == ["content", "is_open"]
+    finally:
+        sub.dispose()
+        vm.dispose()
+    assert vm.status is ConstructionStatus.DISPOSED
+    assert not vm.close_command.can_execute()

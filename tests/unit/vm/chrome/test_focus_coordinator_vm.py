@@ -7,6 +7,7 @@ from vmx import NULL_DISPATCHER, DiscriminatorVM, MessageHub
 from vmx.lifecycle.status import ConstructionStatus
 from vmx.messages.protocols import Message
 
+from aws_tui.vm._component import IsolatedComponentVM
 from aws_tui.vm.chrome.focus_coordinator_vm import FocusCoordinatorVM, FocusSlot
 
 
@@ -531,3 +532,17 @@ def test_focus_slot_values_are_canonical_strings() -> None:
     assert FocusSlot.ATHENA_SAVED_OPEN_EDITOR.value == "athena.saved.open_editor"
     assert FocusSlot.SETTINGS.value == "settings"
     assert FocusSlot.MODAL.value == "modal"
+
+
+def test_focus_coordinator_isolated_component_publishes_property_names() -> None:
+    vm = _make()
+    names: list[str] = []
+    sub = vm.on_property_changed.subscribe(names.append)
+    try:
+        assert isinstance(vm, IsolatedComponentVM)
+        vm.set_focused_slot(FocusSlot.S3_RIGHT)
+        assert names == ["focused_slot"]
+    finally:
+        sub.dispose()
+        vm.dispose()
+    assert vm.status is ConstructionStatus.DISPOSED

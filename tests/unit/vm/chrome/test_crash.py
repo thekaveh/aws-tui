@@ -8,9 +8,10 @@ from pathlib import Path
 from typing import cast
 
 import pytest
-from vmx import NULL_DISPATCHER, MessageHub
+from vmx import NULL_DISPATCHER, ConstructionStatus, MessageHub
 from vmx.messages.protocols import Message
 
+from aws_tui.vm._component import IsolatedComponentVM
 from aws_tui.vm.chrome.crash_vm import (
     SAFE_CONTINUE_ACTIONS,
     CrashChoice,
@@ -190,3 +191,22 @@ def test_safe_continue_actions_are_ids_the_app_actually_records() -> None:
     assert recorded, "expected record_action call sites in app.py"
     orphans = sorted(set(SAFE_CONTINUE_ACTIONS) - recorded)
     assert orphans == [], f"safe-continue ids the app never records: {orphans}"
+
+
+async def test_crash_isolated_component_publishes_property_names() -> None:
+    vm = _build()
+    names: list[str] = []
+    sub = vm.on_property_changed.subscribe(names.append)
+    try:
+        assert isinstance(vm, IsolatedComponentVM)
+        task = asyncio.create_task(vm.ask())
+        await asyncio.sleep(0)
+        vm.quit_command.execute()
+        await task
+        assert names == ["is_open", "is_open"]
+    finally:
+        sub.dispose()
+        vm.dispose()
+    assert vm.status is ConstructionStatus.DISPOSED
+    with pytest.raises(RuntimeError):
+        await vm.ask()
