@@ -5,7 +5,7 @@ from dataclasses import replace
 from datetime import UTC, datetime
 
 import pytest
-from vmx import NULL_DISPATCHER, MessageHub
+from vmx import NULL_DISPATCHER, ConstructionStatus, MessageHub
 from vmx.messages.protocols import Message
 
 from aws_tui.domain.filesystem import ProviderError
@@ -17,6 +17,7 @@ from aws_tui.domain.query import (
     QueryState,
     QueryStatistics,
 )
+from aws_tui.vm._component import IsolatedComponentVM
 from aws_tui.vm.athena._pager_compat import SnapshotTokenPager
 from aws_tui.vm.athena.history_vm import AthenaHistoryVM
 from aws_tui.vm.file_manager.pane_vm import PaneState
@@ -673,3 +674,31 @@ async def test_refresh_clears_the_previous_selection_and_detail() -> None:
     assert vm.detail is None
     # The snapshot must remain exportable; this raised before.
     vm.export_snapshot()
+
+
+def test_athena_history_vm_component_base() -> None:
+    assert issubclass(AthenaHistoryVM, IsolatedComponentVM)
+
+
+def test_athena_history_vm_lifecycle() -> None:
+    vm = make_history_vm(_seeded_client())
+    vm.construct()
+    assert vm.status is ConstructionStatus.CONSTRUCTED
+    vm.dispose()
+    assert vm.status is ConstructionStatus.DISPOSED
+    vm.dispose()
+    assert vm.status is ConstructionStatus.DISPOSED
+
+
+def test_athena_history_vm_raising_subscriber() -> None:
+    vm = make_history_vm(_seeded_client())
+    seen: list[str] = []
+
+    def boom(_name: str) -> None:
+        raise RuntimeError("subscriber failed")
+
+    vm.on_property_changed.subscribe(on_next=boom)
+    vm.on_property_changed.subscribe(on_next=seen.append)
+    vm._publish("items")
+    assert "items" in seen
+    vm.dispose()
