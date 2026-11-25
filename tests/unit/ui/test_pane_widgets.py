@@ -909,7 +909,7 @@ async def test_the_view_layer_binds_per_view_model_and_never_to_the_hub() -> Non
                 # unless the rows are actually mounted at both sizes.
                 assert len(app.query(EntryRow)) == row_count
                 hub_counts[row_count] = len(hub._subject.observers)
-                pane_observers[row_count] = _bound_observers(vm._on_property_changed)
+                pane_observers[row_count] = len(vm._property_changed_subject.observers)
                 entry_observers[row_count] = sum(
                     _bound_observers(entry._on_property_changed) for entry in vm.filtered_entries
                 )
@@ -1134,7 +1134,7 @@ async def test_the_pane_releases_its_binding_when_it_unmounts(
             await pilot.pause()
             await pilot.pause()
             pane = app.query_one(_CountingPane)
-            assert _bound_observers(vm._on_property_changed) == 1, (
+            assert len(vm._property_changed_subject.observers) == 1, (
                 "the pane never bound to its view model"
             )
             pane.render_log.clear()
@@ -1176,7 +1176,7 @@ async def test_the_pane_releases_its_binding_when_it_unmounts(
             await pilot.pause()
             # Named precondition: the pane really left the DOM.
             assert len(app.query(Pane)) == 0
-            assert _bound_observers(vm._on_property_changed) == 0, (
+            assert len(vm._property_changed_subject.observers) == 0, (
                 "the unmounted pane is still bound to its view model"
             )
 
