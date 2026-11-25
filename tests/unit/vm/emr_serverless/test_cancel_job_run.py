@@ -8,7 +8,7 @@ from datetime import timedelta
 from unittest.mock import AsyncMock
 
 import pytest
-from vmx import NULL_DISPATCHER, MessageHub, PropertyChangedMessage
+from vmx import NULL_DISPATCHER, MessageHub, PropertyChangedMessage, when_property_changed
 
 from aws_tui.demo.in_memory_emr import InMemoryEmr
 from aws_tui.domain.emr_serverless import CANCELLABLE_JOB_RUN_STATES, JobRunDetail, JobRunState
@@ -761,16 +761,13 @@ async def test_sent_feedback_revalidates_after_public_delivery_handoffs(
         fake.on_completion = change_identity
     else:
 
-        def observe_release(message):
-            if (
-                isinstance(message, PropertyChangedMessage)
-                and message.sender_object is page
-                and message.property_name == "cancel_busy"
-                and not page.cancel_busy
-            ):
+        def release_seen(_message: object) -> None:
+            if not page.cancel_busy:
                 change_identity()
 
-        subscription = page.hub.messages.subscribe(on_next=observe_release)
+        subscription = when_property_changed(page.hub, page, "cancel_busy").subscribe(
+            on_next=release_seen
+        )
     try:
         ask = AsyncMock(return_value=True)
         result = await page.cancel_selected_run(ask, source_is_current=lambda: current)
@@ -797,17 +794,14 @@ async def test_busy_release_owner_close_suppresses_sent_feedback(page_with_state
     page, fake = await page_with_state(JobRunState.RUNNING, fake=fake)
     closed = asyncio.Event()
 
-    def observe_release(message):
-        if (
-            isinstance(message, PropertyChangedMessage)
-            and message.sender_object is page
-            and message.property_name == "cancel_busy"
-            and not page.cancel_busy
-        ):
+    def release_seen(_message: object) -> None:
+        if not page.cancel_busy:
             page._operations.close()
             closed.set()
 
-    subscription = page.hub.messages.subscribe(on_next=observe_release)
+    subscription = when_property_changed(page.hub, page, "cancel_busy").subscribe(
+        on_next=release_seen
+    )
     try:
         result = await page.cancel_selected_run(AsyncMock(return_value=True))
         assert closed.is_set()
@@ -830,16 +824,13 @@ async def test_unsent_dismissed_and_stale_results_survive_busy_release_change(
             page.job_runs.set_application(None)
         return accepted
 
-    def observe_release(message):
-        if (
-            isinstance(message, PropertyChangedMessage)
-            and message.sender_object is page
-            and message.property_name == "cancel_busy"
-            and not page.cancel_busy
-        ):
+    def release_seen(_message: object) -> None:
+        if not page.cancel_busy:
             page._source = ServiceSourceContext("other", "other-profile", "us-west-2")
 
-    subscription = page.hub.messages.subscribe(on_next=observe_release)
+    subscription = when_property_changed(page.hub, page, "cancel_busy").subscribe(
+        on_next=release_seen
+    )
     try:
         result = await page.cancel_selected_run(ask)
         assert result.status == ("stale" if accepted else "dismissed")
