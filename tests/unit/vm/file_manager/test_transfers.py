@@ -2,20 +2,14 @@
 
 from __future__ import annotations
 
-from typing import cast
-
 import pytest
-from vmx import NULL_DISPATCHER, ComponentVMOf, MessageHub, PropertyChangedMessage
+from vmx import NULL_DISPATCHER, ComponentVMOf, PropertyChangedMessage
 from vmx.lifecycle.status import ConstructionStatus
-from vmx.messages.protocols import Message
 
 from aws_tui.vm.file_manager.transfer_vm import TransferModel, TransferState, TransferVM
 from aws_tui.vm.file_manager.transfers_vm import TransfersVM
 from aws_tui.vm.messages import TransferProgressMessage
-
-
-def _hub() -> MessageHub[Message]:
-    return cast("MessageHub[Message]", MessageHub())
+from tests.helpers import new_hub
 
 
 def _model(
@@ -37,7 +31,7 @@ def _model(
 
 
 def test_transfer_vm_construct_dispose() -> None:
-    vm = TransferVM(_model(), hub=_hub(), dispatcher=NULL_DISPATCHER)
+    vm = TransferVM(_model(), hub=new_hub(), dispatcher=NULL_DISPATCHER)
     vm.construct()
     assert vm.is_constructed
     vm.dispose()
@@ -45,7 +39,7 @@ def test_transfer_vm_construct_dispose() -> None:
 
 
 def test_transfer_vm_apply_update_publishes() -> None:
-    hub = _hub()
+    hub = new_hub()
     received: list[str] = []
     hub.messages.subscribe(
         on_next=lambda m: received.append(getattr(m, "property_name", "")) if m else None
@@ -59,7 +53,7 @@ def test_transfer_vm_apply_update_publishes() -> None:
 
 
 def test_transfer_vm_cancel_command() -> None:
-    vm = TransferVM(_model(state=TransferState.RUNNING), hub=_hub(), dispatcher=NULL_DISPATCHER)
+    vm = TransferVM(_model(state=TransferState.RUNNING), hub=new_hub(), dispatcher=NULL_DISPATCHER)
     vm.construct()
     assert vm.cancel_command.can_execute()
     vm.cancel_command.execute()
@@ -78,12 +72,12 @@ def test_transfer_vm_is_finished_property_covers_terminal_states() -> None:
         TransferState.FAILED,
         TransferState.CANCELLED,
     ):
-        vm = TransferVM(_model(state=terminal), hub=_hub(), dispatcher=NULL_DISPATCHER)
+        vm = TransferVM(_model(state=terminal), hub=new_hub(), dispatcher=NULL_DISPATCHER)
         vm.construct()
         assert vm.is_finished, f"{terminal} must be finished"
         vm.dispose()
     for active in (TransferState.PENDING, TransferState.RUNNING):
-        vm = TransferVM(_model(state=active), hub=_hub(), dispatcher=NULL_DISPATCHER)
+        vm = TransferVM(_model(state=active), hub=new_hub(), dispatcher=NULL_DISPATCHER)
         vm.construct()
         assert not vm.is_finished, f"{active} must NOT be finished"
         vm.dispose()
@@ -93,7 +87,7 @@ def test_transfer_vm_terminal_state_is_sticky() -> None:
     """A late RUNNING progress event after CANCELLED must not clobber
     the terminal flag — otherwise the row reverts to ``... 73 %`` after
     the user clicked cancel."""
-    vm = TransferVM(_model(state=TransferState.RUNNING), hub=_hub(), dispatcher=NULL_DISPATCHER)
+    vm = TransferVM(_model(state=TransferState.RUNNING), hub=new_hub(), dispatcher=NULL_DISPATCHER)
     vm.construct()
     # User cancels — TransferVM transitions to CANCELLED.
     vm.cancel_command.execute()
@@ -112,7 +106,9 @@ def test_transfer_vm_terminal_to_terminal_is_allowed() -> None:
     """A terminal → terminal transition (e.g. FAILED arriving while
     already CANCELLED) is allowed so the final error can be recorded.
     """
-    vm = TransferVM(_model(state=TransferState.CANCELLED), hub=_hub(), dispatcher=NULL_DISPATCHER)
+    vm = TransferVM(
+        _model(state=TransferState.CANCELLED), hub=new_hub(), dispatcher=NULL_DISPATCHER
+    )
     vm.construct()
     vm.apply_update(
         bytes_done=0,
@@ -126,7 +122,7 @@ def test_transfer_vm_terminal_to_terminal_is_allowed() -> None:
 
 
 def test_transfers_vm_bounds_finished_history() -> None:
-    vm = TransfersVM(hub=_hub(), dispatcher=NULL_DISPATCHER)
+    vm = TransfersVM(hub=new_hub(), dispatcher=NULL_DISPATCHER)
     vm.construct()
 
     for index in range(105):
@@ -138,7 +134,7 @@ def test_transfers_vm_bounds_finished_history() -> None:
 
 
 def test_transfers_vm_register_and_active_count() -> None:
-    hub = _hub()
+    hub = new_hub()
     tvms = TransfersVM(hub=hub, dispatcher=NULL_DISPATCHER)
     tvms.construct()
     tvms.register(_model(id="a", state=TransferState.RUNNING))
@@ -153,7 +149,7 @@ def test_transfers_vm_register_and_active_count() -> None:
 
 
 def test_transfers_vm_subscribes_to_progress_messages() -> None:
-    hub = _hub()
+    hub = new_hub()
     tvms = TransfersVM(hub=hub, dispatcher=NULL_DISPATCHER)
     tvms.construct()
     tvms.register(_model(id="a", state=TransferState.RUNNING))
@@ -180,7 +176,7 @@ def test_transfers_vm_subscribes_to_progress_messages() -> None:
 
 
 def test_transfers_vm_auto_registers_unknown_id() -> None:
-    hub = _hub()
+    hub = new_hub()
     tvms = TransfersVM(hub=hub, dispatcher=NULL_DISPATCHER)
     tvms.construct()
     hub.send(
@@ -197,7 +193,7 @@ def test_transfers_vm_auto_registers_unknown_id() -> None:
 
 
 def test_transfers_cancel_all_command() -> None:
-    hub = _hub()
+    hub = new_hub()
     tvms = TransfersVM(hub=hub, dispatcher=NULL_DISPATCHER)
     tvms.construct()
     tvms.register(_model(id="a", state=TransferState.RUNNING))
@@ -213,7 +209,7 @@ def test_transfers_cancel_all_command() -> None:
 
 
 def test_transfers_total_bytes_aggregation() -> None:
-    hub = _hub()
+    hub = new_hub()
     tvms = TransfersVM(hub=hub, dispatcher=NULL_DISPATCHER)
     tvms.construct()
     tvms.register(_model(id="a", state=TransferState.RUNNING, bytes_done=100, bytes_total=200))
@@ -245,7 +241,7 @@ def test_auto_register_infers_direction_from_uri_schemes() -> None:
         ("local-copy", "/Users/kaveh/foo.txt", "/Users/kaveh/bar.txt"),
     ]
     for expected, src, dst in pairs:
-        hub = _hub()
+        hub = new_hub()
         tvms = TransfersVM(hub=hub, dispatcher=NULL_DISPATCHER)
         tvms.construct()
         hub.send(
@@ -271,7 +267,7 @@ def test_transfers_register_vm_accepts_prebuilt_transfer_vm() -> None:
     construct a TransferVM with a custom clock and register it directly,
     bypassing register(model) which builds its own production-clock VM.
     """
-    hub = _hub()
+    hub = new_hub()
     tvms = TransfersVM(hub=hub, dispatcher=NULL_DISPATCHER)
     tvms.construct()
     # Pre-build a TransferVM with a fake clock; populate the speed window.
@@ -305,7 +301,7 @@ def test_transfers_register_vm_accepts_prebuilt_transfer_vm() -> None:
 
 
 def test_transfers_register_vm_before_parent_construction_attaches_once() -> None:
-    hub = _hub()
+    hub = new_hub()
     tvms = TransfersVM(hub=hub, dispatcher=NULL_DISPATCHER)
     child = TransferVM(
         _model(id="early", state=TransferState.RUNNING),
@@ -332,7 +328,7 @@ def test_dispose_detaches_the_vm_from_the_hub() -> None:
     list for the process lifetime. Assert the detachment itself by counting the
     hub's observers.
     """
-    hub = _hub()
+    hub = new_hub()
     tvms = TransfersVM(hub=hub, dispatcher=NULL_DISPATCHER)
     tvms.construct()
     subscription = tvms._subscription  # type: ignore[attr-defined]
@@ -352,7 +348,7 @@ def test_finished_history_at_exactly_the_cap_is_not_trimmed() -> None:
     an off-by-one in ``_MAX_FINISHED_TRANSFERS`` itself would trim a transfer
     here.
     """
-    vm = TransfersVM(hub=_hub(), dispatcher=NULL_DISPATCHER)
+    vm = TransfersVM(hub=new_hub(), dispatcher=NULL_DISPATCHER)
     vm.construct()
     try:
         for index in range(100):
@@ -366,7 +362,7 @@ def test_finished_history_at_exactly_the_cap_is_not_trimmed() -> None:
 
 
 def test_transfer_vm_is_a_component_vm_of() -> None:
-    vm = TransferVM(_model(), hub=_hub(), dispatcher=NULL_DISPATCHER)
+    vm = TransferVM(_model(), hub=new_hub(), dispatcher=NULL_DISPATCHER)
     try:
         assert isinstance(vm, ComponentVMOf)
         assert not hasattr(vm, "inner")
@@ -375,7 +371,7 @@ def test_transfer_vm_is_a_component_vm_of() -> None:
 
 
 def test_transfer_update_messages_name_the_transfer_as_sender() -> None:
-    hub = _hub()
+    hub = new_hub()
     seen: list[tuple[str, object]] = []
     hub.messages.subscribe(
         on_next=lambda m: (
@@ -394,7 +390,7 @@ def test_transfer_update_messages_name_the_transfer_as_sender() -> None:
 
 
 def test_transfers_vm_disposes_its_transfers() -> None:
-    vm = TransfersVM(hub=_hub(), dispatcher=NULL_DISPATCHER)
+    vm = TransfersVM(hub=new_hub(), dispatcher=NULL_DISPATCHER)
     vm.construct()
     rows = [vm.register(_model(id=f"t{i}", state=TransferState.RUNNING)) for i in range(2)]
     vm.dispose()
@@ -404,7 +400,7 @@ def test_transfers_vm_disposes_its_transfers() -> None:
 
 def test_trim_disposes_the_oldest_finished_transfer(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr("aws_tui.vm.file_manager.transfers_vm._MAX_FINISHED_TRANSFERS", 1)
-    vm = TransfersVM(hub=_hub(), dispatcher=NULL_DISPATCHER)
+    vm = TransfersVM(hub=new_hub(), dispatcher=NULL_DISPATCHER)
     vm.construct()
     first = vm.register(_model(id="t0", state=TransferState.COMPLETED))
     second = vm.register(_model(id="t1", state=TransferState.COMPLETED))

@@ -4,24 +4,19 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from typing import cast
 
 import pytest
-from vmx import NULL_DISPATCHER, MessageHub
+from vmx import NULL_DISPATCHER
 from vmx.lifecycle.status import ConstructionStatus
-from vmx.messages.protocols import Message
 
 from aws_tui.vm._component import IsolatedComponentVM
 from aws_tui.vm.chrome.toast_stack_vm import ToastStackVM
 from aws_tui.vm.chrome.toast_vm import ToastLevel, ToastModel, ToastVM
-
-
-def _hub() -> MessageHub[Message]:
-    return cast("MessageHub[Message]", MessageHub())
+from tests.helpers import new_hub
 
 
 def _stack() -> ToastStackVM:
-    return ToastStackVM(hub=_hub(), dispatcher=NULL_DISPATCHER)
+    return ToastStackVM(hub=new_hub(), dispatcher=NULL_DISPATCHER)
 
 
 def _model(*, sticky: bool = True, timeout: float | None = None) -> ToastModel:
@@ -52,7 +47,7 @@ def test_toast_model_round_trip() -> None:
 
 
 def test_toast_vm_construct_dispose() -> None:
-    hub = _hub()
+    hub = new_hub()
     toast = ToastVM(_model(), hub=hub, dispatcher=NULL_DISPATCHER)
     toast.construct()
     assert toast.is_constructed
@@ -62,7 +57,7 @@ def test_toast_vm_construct_dispose() -> None:
 
 def test_toast_dismiss_command() -> None:
     """dismiss_command marks the toast dismissed."""
-    hub = _hub()
+    hub = new_hub()
     dismissed: list[str] = []
     toast = ToastVM(
         _model(),
@@ -99,7 +94,7 @@ def test_toast_stack_dismiss_unknown_is_noop() -> None:
 
 
 def test_toast_stack_publishes_collection_changed_on_raise() -> None:
-    hub = _hub()
+    hub = new_hub()
     stack = ToastStackVM(hub=hub, dispatcher=NULL_DISPATCHER)
     stack.construct()
     events: list[object] = []

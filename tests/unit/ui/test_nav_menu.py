@@ -10,7 +10,6 @@ and each cursor move executes ``switch_service_command``
 from __future__ import annotations
 
 from pathlib import Path
-from typing import cast
 
 import pytest
 from rich.cells import cell_len
@@ -26,15 +25,11 @@ from aws_tui.vm.chrome.focus_coordinator_vm import FocusCoordinatorVM, FocusSlot
 from aws_tui.vm.messages import ConnectionListChangedMessage
 from aws_tui.vm.nav_menu_vm import NavMenuVM
 from aws_tui.vm.services_protocol import ServiceDescriptor, ServiceRegistry
-from tests.helpers import wait_until
-
-
-def _hub() -> MessageHub[Message]:
-    return cast("MessageHub[Message]", MessageHub())
+from tests.helpers import new_hub, wait_until
 
 
 def _make_vm_with_hub(tmp_path: Path) -> tuple[NavMenuVM, MessageHub[Message]]:
-    hub = _hub()
+    hub = new_hub()
     registry = ServiceRegistry()
     vm = NavMenuVM(registry=registry, hub=hub, dispatcher=NULL_DISPATCHER)
     vm.construct()
@@ -83,7 +78,7 @@ class _AthenaStub:
 
 
 def _vm_with_services() -> tuple[NavMenuVM, MessageHub[Message]]:
-    hub = _hub()
+    hub = new_hub()
     registry = ServiceRegistry()
     registry.register(_S3Stub())
     registry.register(_EmrStub())

@@ -13,10 +13,11 @@ from aws_tui.vm.glue._errors import map_provider_error
 from aws_tui.vm.glue._guarded import guarded
 from aws_tui.vm.glue._lifecycle import GlueOperationSuperseded
 from aws_tui.vm.messages import ServiceOperationFailedMessage
+from tests.helpers import new_hub
 
 
-def _hub() -> tuple[MessageHub[Message], list[Any]]:
-    hub: MessageHub[Message] = MessageHub()
+def _recording_hub() -> tuple[MessageHub[Message], list[Any]]:
+    hub = new_hub()
     seen: list[Any] = []
     hub.messages.subscribe(on_next=seen.append)
     return hub, seen
@@ -31,7 +32,7 @@ async def _raise(exc: BaseException) -> str:
 
 
 async def test_success_current_returns_value() -> None:
-    hub, _ = _hub()
+    hub, _ = _recording_hub()
     failures: list[tuple[PaneState, str | None]] = []
     ok, value = await guarded(
         lambda: _value("rows"),
@@ -45,7 +46,7 @@ async def test_success_current_returns_value() -> None:
 
 
 async def test_success_stale_returns_false() -> None:
-    hub, _ = _hub()
+    hub, _ = _recording_hub()
     ok, value = await guarded(
         lambda: _value("rows"),
         hub=hub,
@@ -57,7 +58,7 @@ async def test_success_stale_returns_false() -> None:
 
 
 async def test_superseded_is_silent() -> None:
-    hub, seen = _hub()
+    hub, seen = _recording_hub()
     failures: list[tuple[PaneState, str | None]] = []
     ok, value = await guarded(
         lambda: _raise(GlueOperationSuperseded()),
@@ -74,7 +75,7 @@ async def test_superseded_is_silent() -> None:
 async def test_provider_error_current_and_stale() -> None:
     exc = ProviderError("denied")
     expected = map_provider_error(exc)
-    hub, _ = _hub()
+    hub, _ = _recording_hub()
     current: list[tuple[PaneState, str | None]] = []
     await guarded(
         lambda: _raise(exc),
@@ -96,7 +97,7 @@ async def test_provider_error_current_and_stale() -> None:
 
 
 async def test_unexpected_error_current_reports_once() -> None:
-    hub, seen = _hub()
+    hub, seen = _recording_hub()
     failures: list[tuple[PaneState, str | None]] = []
     ok, value = await guarded(
         lambda: _raise(RuntimeError("boom")),
@@ -112,7 +113,7 @@ async def test_unexpected_error_current_reports_once() -> None:
 
 
 async def test_unexpected_error_stale_is_silent() -> None:
-    hub, seen = _hub()
+    hub, seen = _recording_hub()
     failures: list[tuple[PaneState, str | None]] = []
     await guarded(
         lambda: _raise(RuntimeError("boom")),

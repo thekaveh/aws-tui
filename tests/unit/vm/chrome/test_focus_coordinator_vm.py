@@ -3,20 +3,16 @@
 from __future__ import annotations
 
 import pytest
-from vmx import NULL_DISPATCHER, DiscriminatorVM, MessageHub
+from vmx import NULL_DISPATCHER, DiscriminatorVM
 from vmx.lifecycle.status import ConstructionStatus
-from vmx.messages.protocols import Message
 
 from aws_tui.vm._component import IsolatedComponentVM
 from aws_tui.vm.chrome.focus_coordinator_vm import FocusCoordinatorVM, FocusSlot
-
-
-def _hub() -> MessageHub[Message]:
-    return MessageHub()
+from tests.helpers import new_hub
 
 
 def _make(initial: FocusSlot = FocusSlot.NAV_MENU) -> FocusCoordinatorVM:
-    vm = FocusCoordinatorVM(hub=_hub(), dispatcher=NULL_DISPATCHER, initial=initial)
+    vm = FocusCoordinatorVM(hub=new_hub(), dispatcher=NULL_DISPATCHER, initial=initial)
     vm.construct()
     return vm
 
@@ -387,7 +383,7 @@ def test_modal_restore_uses_public_discriminator_api() -> None:
 
 
 def test_set_focused_slot_emits_property_changed_on_hub() -> None:
-    hub = _hub()
+    hub = new_hub()
     vm = FocusCoordinatorVM(hub=hub, dispatcher=NULL_DISPATCHER)
     vm.construct()
     notified: list[str] = []

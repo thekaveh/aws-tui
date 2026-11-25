@@ -3,29 +3,23 @@
 from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
-from typing import cast
 
 import pytest
 from vmx import (
     NULL_DISPATCHER,
     ComponentVMOf,
     ConstructionStatus,
-    MessageHub,
     PropertyChangedMessage,
 )
-from vmx.messages.protocols import Message
 
 from aws_tui.vm._component import IsolatedComponentVM
 from aws_tui.vm.chrome.command_palette_vm import CommandPaletteVM, PaletteEntry
 from aws_tui.vm.messages import PaletteActionFailedMessage
-
-
-def _hub() -> MessageHub[Message]:
-    return cast("MessageHub[Message]", MessageHub())
+from tests.helpers import new_hub
 
 
 def _build() -> CommandPaletteVM:
-    vm = CommandPaletteVM(hub=_hub(), dispatcher=NULL_DISPATCHER)
+    vm = CommandPaletteVM(hub=new_hub(), dispatcher=NULL_DISPATCHER)
     vm.construct()
     return vm
 
@@ -359,7 +353,7 @@ async def test_shutdown_owns_an_action_returning_an_existing_awaitable(kind: str
 
 @pytest.mark.parametrize("async_action", [False, True])
 async def test_execute_failure_publishes_entry_identity(async_action: bool) -> None:
-    hub = _hub()
+    hub = new_hub()
     vm = CommandPaletteVM(hub=hub, dispatcher=NULL_DISPATCHER)
     vm.construct()
     messages: list[PaletteActionFailedMessage] = []
@@ -410,7 +404,7 @@ def test_execute_with_empty_filtered_is_noop() -> None:
 
 
 def test_async_action_without_running_loop_is_closed_and_reported() -> None:
-    hub = _hub()
+    hub = new_hub()
     vm = CommandPaletteVM(hub=hub, dispatcher=NULL_DISPATCHER)
     vm.construct()
     messages: list[PaletteActionFailedMessage] = []

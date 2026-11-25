@@ -26,10 +26,7 @@ from aws_tui.vm.messages import (
     TransferProgressMessage,
     TransferState,
 )
-
-
-def _hub() -> MessageHub[Message]:
-    return cast("MessageHub[Message]", MessageHub())
+from tests.helpers import new_hub
 
 
 async def _astream(payload: bytes) -> AsyncIterator[bytes]:
@@ -49,7 +46,7 @@ async def _seed_right() -> InMemoryFS:
 
 
 async def _make_dual(tmp_path: Path) -> tuple[DualPaneVM, MessageHub[Message]]:
-    hub = _hub()
+    hub = new_hub()
     left_fs = await _seed_left()
     right_fs = await _seed_right()
     left = PaneVM(provider=left_fs, hub=hub, dispatcher=NULL_DISPATCHER, id_prefix="left")

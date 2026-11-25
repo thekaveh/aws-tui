@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 from inspect import getattr_static
-from typing import cast
 
 import pytest
 from reactivex import Observable
@@ -15,10 +14,7 @@ from vmx.messages.protocols import Message
 
 from aws_tui.domain.filesystem import EntryKind, FileEntry
 from aws_tui.vm.file_manager.entry_vm import EntryState, EntryVM
-
-
-def _hub() -> MessageHub[Message]:
-    return cast("MessageHub[Message]", MessageHub())
+from tests.helpers import new_hub
 
 
 def _file_entry(name: str = "a.txt", kind: EntryKind = EntryKind.FILE) -> FileEntry:
@@ -43,7 +39,7 @@ def _parent_composite(hub: MessageHub[Message], *entries: EntryVM) -> CompositeV
 
 
 def test_entry_vm_construct_dispose() -> None:
-    hub = _hub()
+    hub = new_hub()
     vm = EntryVM(entry=_file_entry(), hub=hub, dispatcher=NULL_DISPATCHER)
     vm.construct()
     assert vm.is_constructed
@@ -52,7 +48,7 @@ def test_entry_vm_construct_dispose() -> None:
 
 
 def test_entry_vm_initial_state() -> None:
-    vm = EntryVM(entry=_file_entry("readme.md"), hub=_hub(), dispatcher=NULL_DISPATCHER)
+    vm = EntryVM(entry=_file_entry("readme.md"), hub=new_hub(), dispatcher=NULL_DISPATCHER)
     assert vm.name == "readme.md"
     assert vm.kind == EntryKind.FILE
     assert vm.state == EntryState(entry=vm.entry, is_marked=False)
@@ -62,7 +58,7 @@ def test_entry_vm_initial_state() -> None:
 
 
 def test_is_current_follows_the_parent_composite() -> None:
-    hub = _hub()
+    hub = new_hub()
     a = EntryVM(entry=_file_entry("a"), hub=hub, dispatcher=NULL_DISPATCHER)
     b = EntryVM(entry=_file_entry("b"), hub=hub, dispatcher=NULL_DISPATCHER)
     parent = _parent_composite(hub, a, b)
@@ -106,7 +102,7 @@ def test_is_current_follows_the_parent_composite() -> None:
 
 
 def test_toggle_mark_flips_and_publishes() -> None:
-    hub = _hub()
+    hub = new_hub()
     received: list[str] = []
     hub.messages.subscribe(
         on_next=lambda m: received.append(getattr(m, "property_name", "")) if m else None
@@ -130,7 +126,7 @@ def test_set_marked_notifies_both_the_hub_and_the_per_vm_observable() -> None:
     repainting, and without the hub send anything filtering the hub for this
     entry goes deaf.
     """
-    hub = _hub()
+    hub = new_hub()
     hub_props: list[str] = []
     hub.messages.subscribe(
         on_next=lambda m: hub_props.append(getattr(m, "property_name", "")) if m else None
@@ -164,7 +160,7 @@ def test_is_current_is_not_forwarded_after_dispose(monkeypatch: pytest.MonkeyPat
         )
 
     monkeypatch.setattr(ComponentVMOf, "property_changed", property(track_subscription))
-    hub = _hub()
+    hub = new_hub()
     a = EntryVM(entry=_file_entry("a"), hub=hub, dispatcher=NULL_DISPATCHER)
     b = EntryVM(entry=_file_entry("b"), hub=hub, dispatcher=NULL_DISPATCHER)
     parent = _parent_composite(hub, a, b)
@@ -198,7 +194,7 @@ def test_dispose_completes_the_per_vm_observable_and_is_idempotent() -> None:
     bound to. Completing the subject tells it the stream ended instead of
     leaving it holding a live observer on a disposed view model.
     """
-    vm = EntryVM(entry=_file_entry(), hub=_hub(), dispatcher=NULL_DISPATCHER)
+    vm = EntryVM(entry=_file_entry(), hub=new_hub(), dispatcher=NULL_DISPATCHER)
     vm.construct()
     completions: list[bool] = []
     vm.on_property_changed.subscribe(
@@ -219,7 +215,7 @@ def test_dispose_completes_the_per_vm_observable_and_is_idempotent() -> None:
 def test_directory_kind_round_trip() -> None:
     vm = EntryVM(
         entry=_file_entry("docs", EntryKind.DIRECTORY),
-        hub=_hub(),
+        hub=new_hub(),
         dispatcher=NULL_DISPATCHER,
     )
     assert vm.kind == EntryKind.DIRECTORY
@@ -253,7 +249,7 @@ def test_size_display_covers_every_unit_boundary(size: int | None, expected: str
         size=size,
         modified=None,
     )
-    vm = EntryVM(entry=entry, hub=_hub(), dispatcher=NULL_DISPATCHER)
+    vm = EntryVM(entry=entry, hub=new_hub(), dispatcher=NULL_DISPATCHER)
     vm.construct()
     try:
         assert vm.size_display == expected
@@ -263,7 +259,7 @@ def test_size_display_covers_every_unit_boundary(size: int | None, expected: str
 
 def test_size_display_is_dir_for_directories_regardless_of_size() -> None:
     entry = FileEntry(name="d", kind=EntryKind.DIRECTORY, size=4096, modified=None)
-    vm = EntryVM(entry=entry, hub=_hub(), dispatcher=NULL_DISPATCHER)
+    vm = EntryVM(entry=entry, hub=new_hub(), dispatcher=NULL_DISPATCHER)
     vm.construct()
     try:
         assert vm.size_display == "<DIR>"
@@ -278,7 +274,7 @@ def test_modified_display_formats_and_handles_absence() -> None:
         size=1,
         modified=datetime(2026, 9, 4, 13, 45, tzinfo=UTC),
     )
-    vm = EntryVM(entry=stamped, hub=_hub(), dispatcher=NULL_DISPATCHER)
+    vm = EntryVM(entry=stamped, hub=new_hub(), dispatcher=NULL_DISPATCHER)
     vm.construct()
     try:
         assert vm.modified_display == "2026-09-04 13:45"

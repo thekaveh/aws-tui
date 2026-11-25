@@ -12,13 +12,9 @@ from __future__ import annotations
 
 from datetime import UTC
 
-from vmx import NULL_DISPATCHER, MessageHub
-from vmx.messages.protocols import Message
+from vmx import NULL_DISPATCHER
 
-
-def _hub() -> MessageHub[Message]:
-    return MessageHub()
-
+from tests.helpers import new_hub
 
 # -------------------- Chrome VMs --------------------
 
@@ -27,7 +23,7 @@ def test_confirmation_vm_is_an_isolated_component() -> None:
     from aws_tui.vm._component import IsolatedComponentVM
     from aws_tui.vm.chrome.confirm_vm import ConfirmationVM
 
-    vm = ConfirmationVM(hub=_hub(), dispatcher=NULL_DISPATCHER)
+    vm = ConfirmationVM(hub=new_hub(), dispatcher=NULL_DISPATCHER)
     # The view-model is the VMx component itself; there is no inner handle.
     assert isinstance(vm, IsolatedComponentVM)
     assert not hasattr(vm, "_inner")
@@ -51,7 +47,7 @@ def test_crash_vm_is_an_isolated_component() -> None:
         dump_path=Path("/tmp/x"),
         can_continue=False,
     )
-    vm = CrashVM(report=report, hub=_hub(), dispatcher=NULL_DISPATCHER)
+    vm = CrashVM(report=report, hub=new_hub(), dispatcher=NULL_DISPATCHER)
     assert isinstance(vm, IsolatedComponentVM)
     assert not hasattr(vm, "_inner")
     assert not any("inner" in name for name in dir(vm) if not name.startswith("_"))
@@ -61,7 +57,7 @@ def test_crash_vm_is_an_isolated_component() -> None:
 def test_toast_stack_vm_composes_compositevm_internally() -> None:
     from aws_tui.vm.chrome.toast_stack_vm import ToastStackVM
 
-    vm = ToastStackVM(hub=_hub(), dispatcher=NULL_DISPATCHER)
+    vm = ToastStackVM(hub=new_hub(), dispatcher=NULL_DISPATCHER)
     assert hasattr(vm, "_inner")
     # The inner is a CompositeVM — not exposed publicly.
     assert not any("inner" in name for name in dir(vm) if not name.startswith("_"))
@@ -72,7 +68,7 @@ def test_focus_coordinator_vm_is_an_isolated_component() -> None:
     from aws_tui.vm._component import IsolatedComponentVM
     from aws_tui.vm.chrome.focus_coordinator_vm import FocusCoordinatorVM
 
-    vm = FocusCoordinatorVM(hub=_hub(), dispatcher=NULL_DISPATCHER)
+    vm = FocusCoordinatorVM(hub=new_hub(), dispatcher=NULL_DISPATCHER)
     vm.construct()
     assert isinstance(vm, IsolatedComponentVM)
     assert not hasattr(vm, "_inner")
@@ -85,7 +81,7 @@ def test_command_palette_vm_composes_scored_filter_internally() -> None:
 
     from aws_tui.vm.chrome.command_palette_vm import CommandPaletteVM
 
-    vm = CommandPaletteVM(hub=_hub(), dispatcher=NULL_DISPATCHER)
+    vm = CommandPaletteVM(hub=new_hub(), dispatcher=NULL_DISPATCHER)
     assert hasattr(vm, "_scored_filter")
     assert isinstance(vm._scored_filter, ScoredFilteredCompositeVM)
     assert not any("scored_filter" in name for name in dir(vm) if not name.startswith("_"))
@@ -130,7 +126,11 @@ def test_job_run_clone_composes_formvm_internally() -> None:
 
     client = InMemoryEmr()
     vm = JobRunCloneVM(
-        None, application_id="application001", client=client, hub=_hub(), dispatcher=NULL_DISPATCHER
+        None,
+        application_id="application001",
+        client=client,
+        hub=new_hub(),
+        dispatcher=NULL_DISPATCHER,
     )
     try:
         assert hasattr(vm, "_form")
@@ -154,7 +154,7 @@ def test_job_run_clone_composes_formvm_internally() -> None:
 def test_transfers_vm_composes_compositevm_internally() -> None:
     from aws_tui.vm.file_manager.transfers_vm import TransfersVM
 
-    vm = TransfersVM(hub=_hub(), dispatcher=NULL_DISPATCHER)
+    vm = TransfersVM(hub=new_hub(), dispatcher=NULL_DISPATCHER)
     assert hasattr(vm, "_inner")
     assert not any("inner" in name for name in dir(vm) if not name.startswith("_"))
     vm.dispose()
@@ -170,7 +170,7 @@ def test_theme_picker_vm_composes_compositevm_internally() -> None:
         themes=("amber", "nord"),
         active_theme="amber",
         on_pick=lambda _: True,
-        hub=_hub(),
+        hub=new_hub(),
         dispatcher=NULL_DISPATCHER,
     )
     assert hasattr(vm, "_inner")
