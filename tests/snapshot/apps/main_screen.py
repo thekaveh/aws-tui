@@ -215,5 +215,16 @@ class MainScreenApp(App[None]):
         # own initial focus-grant pass.
         self.set_focus(None)
 
+    async def on_unmount(self) -> None:
+        if self._dual_vm is not None:
+            await self._dual_vm.shutdown()
+            self._dual_vm.dispose()
+        self._menu_vm.dispose()
+        self._focus_coordinator.dispose()
+        self._transfers_vm.dispose()
+        self._toast_vm.dispose()
+        self._hint_vm.dispose()
+        self._hub.dispose()
+
 
 __all__ = ["MainScreenApp"]

@@ -97,5 +97,9 @@ class EmrCloneModalApp(App[None]):
     async def on_mount(self) -> None:
         await self.push_screen(JobRunCloneModal(self._vm))
 
+    async def on_unmount(self) -> None:
+        self._vm.dispose()
+        self._hub.dispose()
+
 
 __all__ = ["EmrCloneModalApp"]

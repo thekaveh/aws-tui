@@ -41,3 +41,7 @@ class ListingApp(App):
         self.vm.set_filter_command.execute(self.filter_query)
         self.vm.set_sort(PaneSortField.NAME)
         self.query_one(Pane).set_focused(True)
+
+    async def on_unmount(self) -> None:
+        self.vm.dispose()
+        self.hub.dispose()

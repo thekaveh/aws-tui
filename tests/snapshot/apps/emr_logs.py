@@ -21,7 +21,7 @@ def _load_css(theme: str) -> str:
     return ThemeStore().load(theme)
 
 
-def _build_logs_vm() -> JobRunLogsVM:
+def _build_logs_vm() -> tuple[JobRunLogsVM, MessageHub[Message]]:
     """Build a JobRunLogsVM with a mock aioboto3 session."""
     session = aioboto3.Session()
     hub: MessageHub[Message] = MessageHub()
@@ -35,17 +35,29 @@ def _build_logs_vm() -> JobRunLogsVM:
         dispatcher=NULL_DISPATCHER,
     )
     vm.construct()
-    return vm
+    return vm, hub
 
 
-class JobRunLogsEmptyTargetApp(App[None]):
+class _LogsTeardown:
+    """Drain and dispose the logs view model and its hub when the app exits."""
+
+    _vm: JobRunLogsVM
+    _hub: MessageHub[Message]
+
+    async def on_unmount(self) -> None:
+        await self._vm.shutdown()
+        self._vm.dispose()
+        self._hub.dispose()
+
+
+class JobRunLogsEmptyTargetApp(_LogsTeardown, App[None]):
     """Fixture: EMPTY_TARGET state (no run selected yet)."""
 
     def __init__(self, theme: str) -> None:
         super().__init__()
         self.CSS = _load_css(theme)
         self._theme = theme
-        self._vm: JobRunLogsVM = _build_logs_vm()
+        self._vm, self._hub = _build_logs_vm()
 
     def compose(self) -> ComposeResult:
         yield Container(id="content-host")
@@ -56,14 +68,14 @@ class JobRunLogsEmptyTargetApp(App[None]):
         await host.mount(pane)
 
 
-class JobRunLogsIdleApp(App[None]):
+class JobRunLogsIdleApp(_LogsTeardown, App[None]):
     """Fixture: IDLE state (target set, not loaded yet)."""
 
     def __init__(self, theme: str) -> None:
         super().__init__()
         self.CSS = _load_css(theme)
         self._theme = theme
-        self._vm: JobRunLogsVM = _build_logs_vm()
+        self._vm, self._hub = _build_logs_vm()
 
     def compose(self) -> ComposeResult:
         yield Container(id="content-host")
@@ -75,14 +87,14 @@ class JobRunLogsIdleApp(App[None]):
         await host.mount(pane)
 
 
-class JobRunLogsLoadingApp(App[None]):
+class JobRunLogsLoadingApp(_LogsTeardown, App[None]):
     """Fixture: LOADING state (currently streaming logs)."""
 
     def __init__(self, theme: str) -> None:
         super().__init__()
         self.CSS = _load_css(theme)
         self._theme = theme
-        self._vm: JobRunLogsVM = _build_logs_vm()
+        self._vm, self._hub = _build_logs_vm()
 
     def compose(self) -> ComposeResult:
         yield Container(id="content-host")
@@ -103,14 +115,14 @@ class JobRunLogsLoadingApp(App[None]):
         await host.mount(pane)
 
 
-class JobRunLogsReadyApp(App[None]):
+class JobRunLogsReadyApp(_LogsTeardown, App[None]):
     """Fixture: READY state (logs fully loaded and rendered)."""
 
     def __init__(self, theme: str) -> None:
         super().__init__()
         self.CSS = _load_css(theme)
         self._theme = theme
-        self._vm: JobRunLogsVM = _build_logs_vm()
+        self._vm, self._hub = _build_logs_vm()
 
     def compose(self) -> ComposeResult:
         yield Container(id="content-host")
@@ -135,14 +147,14 @@ class JobRunLogsReadyApp(App[None]):
         await host.mount(pane)
 
 
-class JobRunLogsNoLogConfigApp(App[None]):
+class JobRunLogsNoLogConfigApp(_LogsTeardown, App[None]):
     """Fixture: NO_LOG_CONFIG state (job has no log monitoring)."""
 
     def __init__(self, theme: str) -> None:
         super().__init__()
         self.CSS = _load_css(theme)
         self._theme = theme
-        self._vm: JobRunLogsVM = _build_logs_vm()
+        self._vm, self._hub = _build_logs_vm()
 
     def compose(self) -> ComposeResult:
         yield Container(id="content-host")
@@ -154,14 +166,14 @@ class JobRunLogsNoLogConfigApp(App[None]):
         await host.mount(pane)
 
 
-class JobRunLogsErrorApp(App[None]):
+class JobRunLogsErrorApp(_LogsTeardown, App[None]):
     """Fixture: ERROR state (error fetching logs)."""
 
     def __init__(self, theme: str) -> None:
         super().__init__()
         self.CSS = _load_css(theme)
         self._theme = theme
-        self._vm: JobRunLogsVM = _build_logs_vm()
+        self._vm, self._hub = _build_logs_vm()
 
     def compose(self) -> ComposeResult:
         yield Container(id="content-host")
@@ -186,13 +198,13 @@ __all__ = [
 ]
 
 
-class CloudWatchLogsApp(App[None]):
+class CloudWatchLogsApp(_LogsTeardown, App[None]):
     """Deterministic CloudWatch pane states with literal body content."""
 
     def __init__(self, theme: str, variant: str = "ready") -> None:
         super().__init__()
         self.CSS = _load_css(theme)
-        self._vm = _build_logs_vm()
+        self._vm, self._hub = _build_logs_vm()
         self._variant = variant
 
     def compose(self) -> ComposeResult:
@@ -275,3 +287,8 @@ class CompactCloudWatchPageApp(App[None]):
         vm._last_event_at_ms = 90_000
         vm._state = LogsState.READY
         await self.mount(EmrServerlessPage(self._page_vm, hub=self._page_vm.hub))
+
+    async def on_unmount(self) -> None:
+        await self._page_vm.shutdown()
+        self._page_vm.dispose()
+        self._page_vm.hub.dispose()
