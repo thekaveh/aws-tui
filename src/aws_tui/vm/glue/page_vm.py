@@ -3,11 +3,12 @@ from __future__ import annotations
 import asyncio
 from typing import Any, Literal, TypeAlias
 
-from vmx import ComponentVM, Dispatcher, Message, MessageHub, PropertyChangedMessage
+from vmx import ConstructionStatus, Dispatcher, Message, MessageHub, PropertyChangedMessage
 
 from aws_tui.domain.data_catalog import TableRef
 from aws_tui.infra.connection_resolver import Connection
 from aws_tui.infra.duckdb import DuckDbPort
+from aws_tui.vm._component import IsolatedComponentVM
 from aws_tui.vm._observable import send_value_free
 from aws_tui.vm.file_manager.pane_vm import PaneState
 from aws_tui.vm.glue._lifecycle import GlueOperationOwner
@@ -34,7 +35,7 @@ _RECOVERY_FAILURE_STATES = frozenset(
 )
 
 
-class GluePageVM:
+class GluePageVM(IsolatedComponentVM):
     def __init__(
         self,
         *,
@@ -46,16 +47,16 @@ class GluePageVM:
         selection_store: ServiceSelectionStore | None = None,
         duckdb_port: DuckDbPort | None = None,
     ) -> None:
+        super().__init__(name="glue.page", hub=hub, dispatcher=dispatcher)
         self._client = client
         self._connection = connection
-        self._hub = hub
-        self._dispatcher = dispatcher
+        self._hub: MessageHub[Message] = hub
+        self._dispatcher: Dispatcher = dispatcher
         self._source = ServiceSourceContext.from_connection(connection)
         self._selection_scope = SelectionScope("glue", connection.name, connection.region)
         self._selection_store = selection_store or ServiceSelectionStore()
         self._active_view: GlueView = "catalog"
         self._loaded_views: set[GlueView] = set()
-        self._disposed = False
         self._shutdown_started = False
         self._shutdown_complete = False
         self._shutdown_lock = asyncio.Lock()
@@ -63,9 +64,6 @@ class GluePageVM:
         self._catalog_selection_revision = 0
         self._operations = GlueOperationOwner()
         self._provider_tasks = self._operations.tasks
-        self._inner: ComponentVM = (
-            ComponentVM.builder().name("glue.page").services(hub, dispatcher).build()
-        )
         self.catalog = GlueCatalogVM(
             client=client,
             iceberg_inspector=iceberg_inspector,
@@ -87,6 +85,14 @@ class GluePageVM:
             dispatcher=dispatcher,
             _operations=self._operations,
         )
+        # Owned in creation order: the base releases them newest first (crawlers, jobs, catalog).
+        for child in (self.catalog, self.jobs, self.crawlers):
+            self._own(child)
+
+    @property
+    def _disposed(self) -> bool:
+        # Read-only view of the lifecycle; readers of the old flag keep working.
+        return self.status is ConstructionStatus.DISPOSED
 
     @property
     def connection(self) -> Connection:
@@ -119,24 +125,18 @@ class GluePageVM:
     def construct(self) -> None:
         if not self._is_alive():
             return
-        self._inner.construct()
+        super().construct()
         self.catalog.construct()
         self.jobs.construct()
         self.crawlers.construct()
 
-    def dispose(self) -> None:
-        if self._disposed:
-            return
+    def _on_dispose(self) -> None:
         self._operations.close()
-        self._disposed = True
         self._lifecycle_generation += 1
+        # _publish is inert once the VM is DISPOSED, so the final notice goes out directly.
         send_value_free(
-            self._hub, PropertyChangedMessage.create(self, "glue.page", "actions_available")
+            self._hub, PropertyChangedMessage.create(self, self.name, "actions_available")
         )
-        self.crawlers.dispose()
-        self.jobs.dispose()
-        self.catalog.dispose()
-        self._inner.dispose()
 
     async def shutdown(self) -> None:
         self._begin_shutdown()
@@ -200,13 +200,13 @@ class GluePageVM:
             raise ValueError("table is unavailable in the active Glue source")
         generation = self._lifecycle_generation
         await self.select_view("catalog")
-        if not self._is_current(generation):
+        if not self._is_current_generation(generation):
             raise ValueError("table is unavailable in the active Glue source")
         revision = self._catalog_selection_revision
         await self.catalog.open_table(table_ref)
         if revision != self._catalog_selection_revision:
             raise GlueSelectionSuperseded("table selection was superseded")
-        if not self._is_current(generation):
+        if not self._is_current_generation(generation):
             raise ValueError("table is unavailable in the active Glue source")
         self._selection_store.set(
             self._selection_scope,
@@ -220,7 +220,7 @@ class GluePageVM:
         )
 
     async def _select_table(self, table_name: str, generation: int) -> None:
-        if not self._is_current(generation) or not any(
+        if not self._is_current_generation(generation) or not any(
             row.ref.table_name == table_name for row in self.catalog.tables
         ):
             return
@@ -235,7 +235,7 @@ class GluePageVM:
         await self._select_job(job_name, generation)
 
     async def _select_job(self, job_name: str, generation: int) -> None:
-        if not self._is_current(generation) or not any(
+        if not self._is_current_generation(generation) or not any(
             job.name == job_name for job in self.jobs.jobs
         ):
             return
@@ -265,7 +265,7 @@ class GluePageVM:
         await self._select_crawler(name, generation)
 
     async def _select_crawler(self, name: str, generation: int) -> None:
-        if not self._is_current(generation) or not any(
+        if not self._is_current_generation(generation) or not any(
             crawler.name == name for crawler in self.crawlers.crawlers
         ):
             return
@@ -281,7 +281,7 @@ class GluePageVM:
         else:
             self._selection_store.set(self._selection_scope, "crawler_state", state)
         await self.crawlers.set_state_filter(state)
-        if not self._is_current(generation):
+        if not self._is_current_generation(generation):
             return
         if self.crawlers.state not in _SUCCESS_STATES:
             return
@@ -382,7 +382,7 @@ class GluePageVM:
         )
 
     async def _setup_view(self, view: GlueView, generation: int) -> None:
-        if not self._is_current(generation) or view in self._loaded_views:
+        if not self._is_current_generation(generation) or view in self._loaded_views:
             return
         if view == "catalog":
             await self._setup_catalog(generation)
@@ -390,13 +390,13 @@ class GluePageVM:
             await self._setup_jobs(generation)
         else:
             await self._setup_crawlers(generation)
-        if not self._is_current(generation):
+        if not self._is_current_generation(generation):
             return
         self._loaded_views.add(view)
 
     async def _setup_catalog(self, generation: int) -> None:
         await self.catalog.setup()
-        if not self._is_current(generation):
+        if not self._is_current_generation(generation):
             return
         if self.catalog.databases_state not in _SUCCESS_STATES:
             return
@@ -425,7 +425,7 @@ class GluePageVM:
         preferred_table: str | None,
         generation: int,
     ) -> None:
-        if not self._is_current(generation) or not any(
+        if not self._is_current_generation(generation) or not any(
             row.ref.database_name == database_name for row in self.catalog.databases
         ):
             return
@@ -435,7 +435,10 @@ class GluePageVM:
         if preferred_table is None:
             self._selection_store.discard(self._selection_scope, "table_name")
         await self.catalog.select_database(database_name)
-        if not self._is_current(generation) or revision != self._catalog_selection_revision:
+        if (
+            not self._is_current_generation(generation)
+            or revision != self._catalog_selection_revision
+        ):
             return
         if self.catalog.selected_database_name != database_name:
             return
@@ -455,10 +458,10 @@ class GluePageVM:
         if stored_states is not None:
             states = frozenset(state for state in stored_states.split(",") if state)
             await self.jobs.set_run_state_filter(states)
-            if not self._is_current(generation):
+            if not self._is_current_generation(generation):
                 return
         await self.jobs.setup()
-        if not self._is_current(generation):
+        if not self._is_current_generation(generation):
             return
         if self.jobs.jobs_state not in _SUCCESS_STATES:
             return
@@ -478,7 +481,7 @@ class GluePageVM:
             await self.crawlers.set_state_filter(stored_state)
         else:
             await self.crawlers.setup()
-        if not self._is_current(generation):
+        if not self._is_current_generation(generation):
             return
         if self.crawlers.state not in _SUCCESS_STATES:
             return
@@ -492,11 +495,15 @@ class GluePageVM:
             return
         await self._select_crawler(crawler_name, generation)
 
-    def _is_current(self, generation: int) -> bool:
+    def _is_current_generation(self, generation: int) -> bool:
         return generation == self._lifecycle_generation and self._is_alive()
 
     def _is_alive(self) -> bool:
-        return not self._disposed and not self._shutdown_started and self._operations.accepting
+        return (
+            self.status is not ConstructionStatus.DISPOSED
+            and not self._shutdown_started
+            and self._operations.accepting
+        )
 
     def _begin_shutdown(self) -> None:
         if self._shutdown_started:
@@ -511,7 +518,7 @@ class GluePageVM:
     def _notify(self, property_name: str) -> None:
         if not self._is_alive():
             return
-        send_value_free(self._hub, PropertyChangedMessage.create(self, "glue.page", property_name))
+        self._publish(property_name)
 
 
 __all__ = ["GluePageVM", "GlueView"]
