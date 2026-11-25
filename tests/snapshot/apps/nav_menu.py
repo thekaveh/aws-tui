@@ -45,7 +45,7 @@ def _load_css(theme: str) -> str:
     return ThemeStore().load(theme)
 
 
-def _build_vm() -> NavMenuVM:
+def _build_vm() -> tuple[NavMenuVM, MessageHub[Message]]:
     hub: MessageHub[Message] = MessageHub()
     registry = ServiceRegistry()
     for service_id, label in (
@@ -73,7 +73,7 @@ def _build_vm() -> NavMenuVM:
     # paints the ``▌`` ribbon on that row — pins the indicator code
     # path.
     vm.switch_service_command.execute("s3")
-    return vm
+    return vm, hub
 
 
 class _UnfocusedMixin:
@@ -91,11 +91,11 @@ class NavMenuApp(_UnfocusedMixin, App[None]):
     def __init__(self, *, theme: str = "carbon") -> None:
         super().__init__()
         self.CSS = _load_css(theme)
-        self._vm = _build_vm()
+        self._vm, self._hub = _build_vm()
         self._tmp = Path(tempfile.mkdtemp(prefix="navmenu-"))
 
     def compose(self) -> ComposeResult:
-        yield NavMenu(vm=self._vm, hub=MessageHub())
+        yield NavMenu(vm=self._vm, hub=self._hub)
 
 
 __all__ = ["NavMenuApp"]
