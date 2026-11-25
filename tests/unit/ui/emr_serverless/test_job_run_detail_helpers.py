@@ -9,6 +9,8 @@ output gets caught here even when the snapshot still passes.
 
 from __future__ import annotations
 
+from collections.abc import Callable, Iterator
+
 import pytest
 from textual.app import App, ComposeResult
 from textual.widgets import Static
@@ -27,6 +29,17 @@ from aws_tui.ui.widgets.emr_serverless.job_run_detail_pane import (
 from aws_tui.vm.emr_serverless.job_run_detail_vm import JobRunDetailVM
 
 # ── _pair_args ────────────────────────────────────────────────────────────────
+
+
+_dispose_later: list[Callable[[], None]] = []
+
+
+@pytest.fixture(autouse=True)
+def _dispose_built_vms() -> Iterator[None]:
+    """Dispose each VM and hub that the helper built, newest first, after every test."""
+    yield
+    while _dispose_later:
+        _dispose_later.pop()()
 
 
 @pytest.mark.parametrize(
@@ -136,6 +149,8 @@ async def _render_placeholder(*, selected: bool = False, error: ProviderError | 
     hub: MessageHub[Message] = MessageHub()
     vm = JobRunDetailVM(client=fake, hub=hub, dispatcher=NULL_DISPATCHER)
     vm.construct()
+    _dispose_later.append(hub.dispose)
+    _dispose_later.append(vm.dispose)
 
     class _App(App[None]):
         def compose(self) -> ComposeResult:

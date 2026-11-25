@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import asyncio
 import inspect
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 
 import pytest
 from rich.text import Text
@@ -28,12 +28,24 @@ from aws_tui.vm.emr_serverless.applications_vm import ApplicationsVM
 from tests.helpers import focus_and_settle, wait_until
 from tests.snapshot.apps.emr import EmrPageApp, _build_page_vm
 
+_dispose_later: list[Callable[[], None]] = []
+
+
+@pytest.fixture(autouse=True)
+def _dispose_built_vms() -> Iterator[None]:
+    """Dispose each VM and hub that the helper built, newest first, after every test."""
+    yield
+    while _dispose_later:
+        _dispose_later.pop()()
+
 
 def _make_vm(fake: _InMemoryEmr | None = None) -> tuple[ApplicationsVM, MessageHub[Message]]:
     fake = fake or _InMemoryEmr()
     hub: MessageHub[Message] = MessageHub()
     vm = ApplicationsVM(client=fake, hub=hub, dispatcher=NULL_DISPATCHER)
     vm.construct()
+    _dispose_later.append(hub.dispose)
+    _dispose_later.append(vm.dispose)
     return vm, hub
 
 
