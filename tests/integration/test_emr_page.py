@@ -724,7 +724,7 @@ async def test_emr_picker_commit_cascades_to_runs_pane(tmp_path: Path) -> None:
     """User-reported: selecting a different application in the picker
     dropdown did NOT update the JobRuns pane below.
 
-    Root cause: the picker called ``ApplicationsVM.select(id)``
+    Root cause: the picker called ``ApplicationsVM.select_by_id(id)``
     which only flips the picker's own ``_selected_id``; the sibling
     ``JobRunsVM`` doesn't observe it. The fix has the picker post
     ``ApplicationPicker.ApplicationCommitted``; the page widget

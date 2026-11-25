@@ -37,8 +37,8 @@ async def test_dashboard_review_invalidated_by_selection_away_and_back():
         original = page.dashboard_target()
         assert original is not None
         assert page.dashboards.available(original)
-        page.job_runs.select("r2")
-        page.job_runs.select("r1")
+        page.job_runs.select_by_id("r2")
+        page.job_runs.select_by_id("r1")
         assert page.dashboard_target().revision > original.revision
         assert not page.dashboards.available(original)
         latest = page.dashboard_target()

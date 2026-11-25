@@ -117,7 +117,7 @@ class ApplicationPicker(Widget, can_focus=True):
         click on a row). The parent ``EmrServerlessPage`` catches
         this and routes through ``page_vm.select_application()`` so
         the JobRuns and JobRunDetail panes refresh in lockstep —
-        ``ApplicationsVM.select(id)`` alone only updates the picker's
+        ``ApplicationsVM.select_by_id(id)`` alone only updates the picker's
         own ``_selected_id`` and the sibling VMs don't see it.
         """
 
@@ -274,7 +274,7 @@ class ApplicationPicker(Widget, can_focus=True):
             return
         self.close()
         if opt.id is not None:
-            self._vm.select(opt.id)
+            self._vm.select_by_id(opt.id)
             # Post up so the page widget can cascade through
             # ``page_vm.select_application(id)`` — see the
             # ``ApplicationCommitted`` docstring.
@@ -328,7 +328,7 @@ class ApplicationPicker(Widget, can_focus=True):
         # the row is the only option could slip through.
         self.close()
         if event.option.id is not None and event.option.id != "__placeholder__":
-            self._vm.select(event.option.id)
+            self._vm.select_by_id(event.option.id)
             self.post_message(self.ApplicationCommitted(event.option.id))
 
     def _on_vm_property_changed(self, prop: str) -> None:

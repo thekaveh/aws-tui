@@ -13,6 +13,7 @@ from aws_tui.demo.in_memory_emr import DEMO_NOW
 from aws_tui.demo.in_memory_emr import InMemoryEmr as _InMemoryEmr
 from aws_tui.domain.emr_serverless import JobRunState, JobRunSummary
 from aws_tui.domain.filesystem import ProviderError
+from aws_tui.vm._component import IsolatedComponentVM
 from aws_tui.vm.emr_serverless.job_runs_vm import _ACTIVE_STATES, JobRunsVM
 from aws_tui.vm.file_manager.pane_vm import PaneState
 
@@ -87,7 +88,7 @@ async def test_select_routes_change_notification() -> None:
         on_next=lambda m: notified.append(getattr(m, "property_name", ""))
     )
     try:
-        vm.select("r2")
+        vm.select_by_id("r2")
         assert vm.selected_id == "r2"
         assert "selected_id" in notified
     finally:
@@ -103,7 +104,7 @@ async def test_selection_survives_a_refresh_that_changes_the_list() -> None:
     await vm.refresh()
 
     try:
-        vm.select("r1")
+        vm.select_by_id("r1")
         first_inner = vm._inner.current
         assert first_inner is not None
         fake.add_job_run(
@@ -124,7 +125,7 @@ async def test_refresh_add_remove_emits_one_reset() -> None:
     _seed_runs(fake, "a1")
     vm.set_application("a1")
     await vm.refresh()
-    vm.select("r1")
+    vm.select_by_id("r1")
     survivor, removed, *_ = vm._inner
     events: list[str] = []
     sub = vm._inner.on_collection_changed.subscribe(lambda event: events.append(event.action))
@@ -155,7 +156,7 @@ async def test_run_model_change_emits_no_collection_event() -> None:
     _seed_runs(fake, "a1")
     vm.set_application("a1")
     await vm.refresh()
-    vm.select("r2")
+    vm.select_by_id("r2")
     selected = vm._inner.current
     assert selected is not None
     events: list[str] = []
@@ -324,7 +325,7 @@ async def test_load_more_keeps_current_and_emits_one_reset() -> None:
     fake.page_size = 2
     vm.set_application("a1")
     await vm.refresh()
-    vm.select("r2")
+    vm.select_by_id("r2")
     first, second = vm._inner
     events: list[str] = []
     sub = vm._inner.on_collection_changed.subscribe(lambda event: events.append(event.action))
@@ -348,7 +349,7 @@ async def test_load_more_keeps_first_row_for_duplicate_run_id() -> None:
     fake.page_size = 2
     vm.set_application("a1")
     await vm.refresh()
-    vm.select("r2")
+    vm.select_by_id("r2")
     boundary_row = vm._inner[1]
     first_model = boundary_row.model
     try:
@@ -548,7 +549,7 @@ async def test_selected_id_derives_from_composite_current() -> None:
         "JobRunsVM must not have a hand-rolled _selected_id field; "
         "selection lives in CompositeVM.current after Phase 2."
     )
-    vm.select("r2")
+    vm.select_by_id("r2")
     assert vm.selected_id == "r2"
     assert vm._inner.current is not None
     assert vm._inner.current.model.job_run_id == "r2"
@@ -560,8 +561,8 @@ async def test_select_unknown_run_id_is_noop() -> None:
     _seed_runs(fake, "a1")
     vm.set_application("a1")
     await vm.refresh()
-    vm.select("r1")
-    vm.select("does-not-exist")
+    vm.select_by_id("r1")
+    vm.select_by_id("does-not-exist")
     # Selection unchanged.
     assert vm.selected_id == "r1"
 
@@ -575,13 +576,13 @@ async def test_reselecting_same_run_id_is_idempotent() -> None:
     _seed_runs(fake, "a1")
     vm.set_application("a1")
     await vm.refresh()
-    vm.select("r2")
+    vm.select_by_id("r2")
     notified: list[str] = []
     sub = vm._hub.messages.subscribe(  # type: ignore[attr-defined]
         on_next=lambda m: notified.append(getattr(m, "property_name", ""))
     )
     try:
-        vm.select("r2")
+        vm.select_by_id("r2")
         assert "selected_id" not in notified
     finally:
         sub.dispose()
@@ -596,7 +597,7 @@ async def test_refresh_restores_selection_when_run_id_still_present() -> None:
     _seed_runs(fake, "a1")
     vm.set_application("a1")
     await vm.refresh()
-    vm.select("r2")
+    vm.select_by_id("r2")
     await vm.refresh()
     # selected_id preserved across refresh.
     assert vm.selected_id == "r2"
@@ -612,7 +613,7 @@ async def test_refresh_clears_selection_when_run_id_vanished() -> None:
     fake.add_job_run(application_id="a1", job_run_id="r2", state=JobRunState.RUNNING)
     vm.set_application("a1")
     await vm.refresh()
-    vm.select("r1")
+    vm.select_by_id("r1")
     # Remove r1 from the fake (the fake's _runs is dict[app_id, dict[run_id, ...]]).
     fake._runs["a1"].pop("r1", None)  # type: ignore[attr-defined]
     notified: list[str] = []
@@ -671,7 +672,7 @@ async def test_state_filter_does_not_lose_selection_on_filter_change() -> None:
     _seed_runs(fake, "a1")
     vm.set_application("a1")
     await vm.refresh()
-    vm.select("r1")  # SUCCESS
+    vm.select_by_id("r1")  # SUCCESS
     # Narrow filter to exclude SUCCESS — cursor's identity unchanged.
     vm.set_state_filter(frozenset({JobRunState.RUNNING}))
     # selected_id is still "r1" (it's a property on the composite, not
@@ -773,7 +774,7 @@ async def test_selection_made_during_poll_survives_changed_rows(monkeypatch):
     _seed_runs(fake, "a1")
     vm.set_application("a1")
     await vm.refresh()
-    vm.select("r1")
+    vm.select_by_id("r1")
     entered = asyncio.Event()
     release = asyncio.Event()
     original_list = fake.list_job_runs_page
@@ -786,7 +787,7 @@ async def test_selection_made_during_poll_survives_changed_rows(monkeypatch):
     monkeypatch.setattr(fake, "list_job_runs_page", blocked_list)
     poll = asyncio.create_task(vm.refresh())
     await entered.wait()
-    vm.select("r2")
+    vm.select_by_id("r2")
     fake.add_job_run(application_id="a1", job_run_id="r5", state=JobRunState.SUCCESS)
     release.set()
     await poll
@@ -824,3 +825,19 @@ async def test_expected_application_is_checked_after_refresh_lock_admission():
             await asyncio.gather(task, return_exceptions=True)
         vm.dispose()
         fake.dispose()
+
+
+@pytest.mark.asyncio
+async def test_job_runs_vm_isolated_component_publishes_and_completes() -> None:
+    vm, fake = _make()
+    assert isinstance(vm, IsolatedComponentVM)
+    _seed_runs(fake, "a1")
+    names: list[str] = []
+    completed: list[bool] = []
+    vm.on_property_changed.subscribe(names.append, on_completed=lambda: completed.append(True))
+    vm.set_application("a1")
+    await vm.refresh()
+    assert "runs" in names
+    vm.dispose()
+    assert vm.status is ConstructionStatus.DISPOSED
+    assert completed == [True]
