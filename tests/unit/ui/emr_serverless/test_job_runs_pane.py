@@ -10,6 +10,9 @@ WIDGET-level binding contract — pressing ``1`` actually reaches
 
 from __future__ import annotations
 
+from collections.abc import Callable, Iterator
+
+import pytest
 from textual.app import App, ComposeResult
 from textual.containers import VerticalScroll
 from textual.widgets import Static
@@ -23,12 +26,24 @@ from aws_tui.vm.emr_serverless.job_runs_vm import JobRunsVM
 from aws_tui.vm.file_manager.pane_vm import PaneState
 from tests.helpers import focus_and_settle, wait_until
 
+_dispose_later: list[Callable[[], None]] = []
+
+
+@pytest.fixture(autouse=True)
+def _dispose_built_vms() -> Iterator[None]:
+    """Dispose each VM and hub that the helper built, newest first, after every test."""
+    yield
+    while _dispose_later:
+        _dispose_later.pop()()
+
 
 def _make_vm() -> tuple[JobRunsVM, MessageHub[Message], _InMemoryEmr]:
     fake = _InMemoryEmr()
     hub: MessageHub[Message] = MessageHub()
     vm = JobRunsVM(client=fake, hub=hub, dispatcher=NULL_DISPATCHER)
     vm.construct()
+    _dispose_later.append(hub.dispose)
+    _dispose_later.append(vm.dispose)
     return vm, hub, fake
 
 
