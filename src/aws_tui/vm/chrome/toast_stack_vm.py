@@ -13,14 +13,15 @@ import logging
 from collections.abc import Iterable
 
 import reactivex as rx
-from vmx import ComponentVMOf, CompositeVM, ConstructionStatus, Dispatcher, Message, MessageHub
+from vmx import ComponentVMOf, CompositeVM, Dispatcher, Message, MessageHub
 
+from aws_tui.vm._component import IsolatedComponentVM
 from aws_tui.vm.chrome.toast_vm import ToastModel, ToastVM
 
 _logger = logging.getLogger(__name__)
 
 
-class ToastStackVM:
+class ToastStackVM(IsolatedComponentVM):
     """Facade for the toast collection.
 
     Backed by a VMx :class:`CompositeVM` so the view layer can observe
@@ -33,11 +34,11 @@ class ToastStackVM:
         hub: MessageHub[Message],
         dispatcher: Dispatcher,
     ) -> None:
+        super().__init__(name="toast_stack", hub=hub, dispatcher=dispatcher)
         self._hub: MessageHub[Message] = hub
         self._dispatcher: Dispatcher = dispatcher
         self._toasts: list[ToastVM] = []
         self._timers: dict[str, asyncio.Task[None]] = {}
-        self._disposed: bool = False
 
         # The composite tracks the underlying VMx ``ComponentVMOf`` instances
         # (CompositeVM requires real VMx VMs as children — facade objects
@@ -46,12 +47,13 @@ class ToastStackVM:
         self._inner: CompositeVM[ComponentVMOf[ToastModel]] = (
             CompositeVM[ComponentVMOf[ToastModel]]
             .builder()
-            .name("toast_stack")
+            .name("toast_stack.toasts")
             .services(hub, dispatcher)
             .children(self._initial_children)
             .auto_construct_on_add(True)
             .build()
         )
+        self._own(self._inner)
 
     # ── Properties ──────────────────────────────────────────────────────────
 
@@ -70,41 +72,26 @@ class ToastStackVM:
         # type lives under vmx.collections and we don't need that detail here.
         return self._inner.on_collection_changed
 
-    @property
-    def status(self) -> ConstructionStatus:
-        return self._inner.status
-
-    @property
-    def is_constructed(self) -> bool:
-        return self._inner.is_constructed
-
-    @property
-    def name(self) -> str:
-        return self._inner.name
-
     # ── Lifecycle ───────────────────────────────────────────────────────────
 
-    def construct(self) -> None:
-        self._inner.construct()
+    def _on_construct(self) -> None:
+        super()._on_construct()
+        self._complete_lifecycle_hook_after(
+            self._transition_children((self._inner,), construct=True)
+        )
 
-    def destruct(self) -> None:
+    def _on_destruct(self) -> None:
+        super()._on_destruct()
         self._cancel_all_timers()
-        self._inner.destruct()
+        self._complete_lifecycle_hook_after(
+            self._transition_children((self._inner,), construct=False)
+        )
 
-    def dispose(self) -> None:
-        if self._disposed:
-            return
-        self._disposed = True
+    def _on_dispose(self) -> None:
         self._cancel_all_timers()
-        # Inner CompositeVM cascades through its ComponentVMOf
-        # children but NOT through the wrapping ToastVM facades —
-        # each facade owns a RelayCommand (``_dismiss_command``)
-        # that must be disposed via ToastVM.dispose(). Mirror the
-        # sibling pattern used by TransfersVM and ThemePickerVM.
         for toast in self._toasts:
             toast.dispose()
         self._toasts.clear()
-        self._inner.dispose()
 
     # ── Public API ──────────────────────────────────────────────────────────
 
@@ -188,7 +175,7 @@ class ToastStackVM:
                 await asyncio.sleep(timeout)
             except asyncio.CancelledError:
                 return
-            if self._disposed:
+            if self._is_disposed():
                 return
             if toast.is_dismissed:
                 return
