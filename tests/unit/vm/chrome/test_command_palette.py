@@ -6,9 +6,16 @@ from collections.abc import Awaitable, Callable
 from typing import cast
 
 import pytest
-from vmx import NULL_DISPATCHER, ComponentVMOf, MessageHub, PropertyChangedMessage
+from vmx import (
+    NULL_DISPATCHER,
+    ComponentVMOf,
+    ConstructionStatus,
+    MessageHub,
+    PropertyChangedMessage,
+)
 from vmx.messages.protocols import Message
 
+from aws_tui.vm._component import IsolatedComponentVM
 from aws_tui.vm.chrome.command_palette_vm import CommandPaletteVM, PaletteEntry
 from aws_tui.vm.messages import PaletteActionFailedMessage
 
@@ -705,3 +712,17 @@ def test_registry_rows_hold_the_entry_as_model() -> None:
         assert row in vm._inner_registry
     finally:
         vm.dispose()
+
+
+def test_command_palette_lifecycle_drives_members() -> None:
+    palette = _build()
+    assert isinstance(palette, IsolatedComponentVM)
+    assert palette.status is ConstructionStatus.CONSTRUCTED
+    assert palette._inner_registry.status is ConstructionStatus.CONSTRUCTED
+    palette.destruct()
+    assert palette.status is ConstructionStatus.DESTRUCTED
+    assert palette._inner_registry.status is ConstructionStatus.DESTRUCTED
+    palette.construct()
+    palette.dispose()
+    assert palette.status is ConstructionStatus.DISPOSED
+    assert palette._inner_registry.status is ConstructionStatus.DISPOSED

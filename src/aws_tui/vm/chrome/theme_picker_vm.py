@@ -20,11 +20,10 @@ from vmx import (
     Dispatcher,
     Message,
     MessageHub,
-    PropertyChangedMessage,
     RelayCommandOf,
 )
 
-from aws_tui.vm._observable import send_value_free
+from aws_tui.vm._component import IsolatedComponentVM
 
 
 @dataclass(frozen=True, slots=True)
@@ -102,7 +101,7 @@ def next_theme_name(names: Sequence[str], active: str) -> str:
     return names[(index + 1) % len(names)]
 
 
-class ThemePickerVM:
+class ThemePickerVM(IsolatedComponentVM):
     """Composite VM for the help-modal theme switcher."""
 
     def __init__(
@@ -116,7 +115,7 @@ class ThemePickerVM:
         dispatcher: Dispatcher,
         id_prefix: str = "theme_picker",
     ) -> None:
-        self._hub: MessageHub[Message] = hub
+        super().__init__(name=id_prefix, hub=hub, dispatcher=dispatcher)
         self._on_pick: Callable[[str], bool] = on_pick
         self._on_preview: Callable[[str], bool] = (
             on_preview if on_preview is not None else (lambda _name: True)
@@ -136,21 +135,24 @@ class ThemePickerVM:
         self._inner: CompositeVM[ComponentVMOf[ThemeOptionState]] = (
             CompositeVM[ComponentVMOf[ThemeOptionState]]
             .builder()
-            .name(id_prefix)
+            .name(f"{id_prefix}.options")
             .services(hub, dispatcher)
             .children(self._initial_children)
             .current(self._initial_current)
             .auto_construct_on_add(True)
             .build()
         )
+        self._own(self._inner)
 
         self._pick_theme_command: RelayCommandOf[str] = (
             RelayCommandOf[str].builder().task(self._pick).build()
         )
+        self._own(self._pick_theme_command)
 
         self._preview_theme_command: RelayCommandOf[str] = (
             RelayCommandOf[str].builder().task(self._preview).build()
         )
+        self._own(self._preview_theme_command)
 
     # ── Properties ──────────────────────────────────────────────────────────
 
@@ -170,28 +172,23 @@ class ThemePickerVM:
     def preview_command(self) -> RelayCommandOf[str]:
         return self._preview_theme_command
 
-    @property
-    def status(self) -> ConstructionStatus:
-        return self._inner.status
-
-    @property
-    def name(self) -> str:
-        return self._inner.name
-
     # ── Lifecycle ───────────────────────────────────────────────────────────
 
-    def construct(self) -> None:
-        self._inner.construct()
+    def _on_construct(self) -> None:
+        super()._on_construct()
+        self._complete_lifecycle_hook_after(
+            self._transition_children((self._inner,), construct=True)
+        )
 
-    def destruct(self) -> None:
-        self._inner.destruct()
+    def _on_destruct(self) -> None:
+        super()._on_destruct()
+        self._complete_lifecycle_hook_after(
+            self._transition_children((self._inner,), construct=False)
+        )
 
-    def dispose(self) -> None:
-        self._pick_theme_command.dispose()
-        self._preview_theme_command.dispose()
+    def _on_dispose(self) -> None:
         for opt in self._options:
             opt.dispose()
-        self._inner.dispose()
 
     # ── Mutators ───────────────────────────────────────────────────────────
 
@@ -204,9 +201,7 @@ class ThemePickerVM:
             option = next((o for o in self._options if o.name == name), None)
             # VMx publishes is_current for the old and the new row; None clears every row.
             self._inner.current = option.inner if option is not None else None
-        send_value_free(
-            self._hub, PropertyChangedMessage.create(self, self._inner.name, "active_theme")
-        )
+        self._publish("active_theme")
 
     def next_theme(self) -> str:
         """Return the next theme in the cycle order. Wraps at the end."""

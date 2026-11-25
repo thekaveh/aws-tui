@@ -1,21 +1,22 @@
 """ChromeVM — aggregate of HintLegendVM and ToastStackVM.
 
 The chrome is the persistent UI furniture that never gets disposed during a
-session — only at app exit. This facade wraps the two independent child VMs
-(we don't use a VMx aggregate here because our child VMs are facades;
-AggregateVMs require real VMx VMs).
+session — only at app exit. The class is an isolated component that owns its
+two child VMs as lifecycle members: construct and destruct drive them in
+order, and dispose releases them newest first.
 """
 
 from __future__ import annotations
 
-from vmx import ComponentVM, ConstructionStatus, Dispatcher, Message, MessageHub
+from vmx import Dispatcher, Message, MessageHub
 
 from aws_tui.infra.keymap_store import KeymapStore
+from aws_tui.vm._component import IsolatedComponentVM
 from aws_tui.vm.chrome.hint_legend_vm import HintLegendVM
 from aws_tui.vm.chrome.toast_stack_vm import ToastStackVM
 
 
-class ChromeVM:
+class ChromeVM(IsolatedComponentVM):
     """Cross-service chrome aggregate (hint legend and toasts)."""
 
     def __init__(
@@ -25,12 +26,11 @@ class ChromeVM:
         dispatcher: Dispatcher,
         keymap: KeymapStore,
     ) -> None:
+        super().__init__(name="chrome", hub=hub, dispatcher=dispatcher)
         self._hint_legend = HintLegendVM(hub=hub, dispatcher=dispatcher, keymap=keymap)
+        self._own(self._hint_legend)
         self._toast_stack = ToastStackVM(hub=hub, dispatcher=dispatcher)
-
-        self._inner: ComponentVM = (
-            ComponentVM.builder().name("chrome").services(hub, dispatcher).build()
-        )
+        self._own(self._toast_stack)
 
     # ── Children accessors ──────────────────────────────────────────────────
 
@@ -42,34 +42,19 @@ class ChromeVM:
     def toast_stack(self) -> ToastStackVM:
         return self._toast_stack
 
-    @property
-    def status(self) -> ConstructionStatus:
-        return self._inner.status
-
-    @property
-    def is_constructed(self) -> bool:
-        return self._inner.is_constructed
-
-    @property
-    def name(self) -> str:
-        return self._inner.name
-
     # ── Lifecycle ───────────────────────────────────────────────────────────
 
-    def construct(self) -> None:
-        self._inner.construct()
-        self._hint_legend.construct()
-        self._toast_stack.construct()
+    def _on_construct(self) -> None:
+        super()._on_construct()
+        self._complete_lifecycle_hook_after(
+            self._transition_children((self._hint_legend, self._toast_stack), construct=True)
+        )
 
-    def destruct(self) -> None:
-        self._toast_stack.destruct()
-        self._hint_legend.destruct()
-        self._inner.destruct()
-
-    def dispose(self) -> None:
-        self._toast_stack.dispose()
-        self._hint_legend.dispose()
-        self._inner.dispose()
+    def _on_destruct(self) -> None:
+        super()._on_destruct()
+        self._complete_lifecycle_hook_after(
+            self._transition_children((self._toast_stack, self._hint_legend), construct=False)
+        )
 
 
 __all__ = ["ChromeVM"]

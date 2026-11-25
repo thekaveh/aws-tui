@@ -5,9 +5,10 @@ from __future__ import annotations
 
 from typing import cast
 
-from vmx import NULL_DISPATCHER, MessageHub
+from vmx import NULL_DISPATCHER, ConstructionStatus, MessageHub
 from vmx.messages.protocols import Message
 
+from aws_tui.vm._component import IsolatedComponentVM
 from aws_tui.vm.chrome.theme_picker_vm import ThemePickerVM, next_theme_name
 
 
@@ -195,3 +196,17 @@ def test_unregistered_active_shows_no_marker() -> None:
     assert not [o for o in vm.options if o.is_current]
     assert vm.active_theme == "phantom"
     vm.dispose()
+
+
+def test_theme_picker_lifecycle_drives_members() -> None:
+    picker = _build()
+    assert isinstance(picker, IsolatedComponentVM)
+    assert picker.status is ConstructionStatus.CONSTRUCTED
+    assert picker._inner.status is ConstructionStatus.CONSTRUCTED
+    picker.destruct()
+    assert picker.status is ConstructionStatus.DESTRUCTED
+    assert picker._inner.status is ConstructionStatus.DESTRUCTED
+    picker.construct()
+    picker.dispose()
+    assert picker.status is ConstructionStatus.DISPOSED
+    assert picker._inner.status is ConstructionStatus.DISPOSED
