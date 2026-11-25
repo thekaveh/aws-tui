@@ -26,7 +26,6 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from enum import StrEnum
 
-import reactivex as rx
 from vmx import (
     ComponentVMOf,
     CompositeVM,
@@ -36,7 +35,6 @@ from vmx import (
     FilteredCursorPolicy,
     Message,
     MessageHub,
-    PropertyChangedMessage,
     RelayCommand,
     RelayCommandOf,
 )
@@ -56,7 +54,7 @@ from aws_tui.domain.filesystem import (
 )
 from aws_tui.domain.transfer_history import TransferConnectionIdentity
 from aws_tui.infra.redaction import redact_text
-from aws_tui.vm._observable import ObserverSafeSubject, send_value_free
+from aws_tui.vm._component import IsolatedComponentVM
 from aws_tui.vm.file_manager.entry_vm import EntryState, EntryVM
 from aws_tui.vm.file_manager.file_names import require_entry_name
 from aws_tui.vm.service_diagnostics import report_unexpected_service_error
@@ -271,8 +269,8 @@ def _filter_matches(name: str, query: str) -> bool:
     return query.casefold() in name.casefold()
 
 
-class PaneVM:
-    """Facade for one file-manager pane."""
+class PaneVM(IsolatedComponentVM):
+    """Component for one file-manager pane."""
 
     def __init__(
         self,
@@ -288,6 +286,7 @@ class PaneVM:
         transfer_connection: TransferConnectionIdentity | None = None,
         connection_region: str | None = None,
     ) -> None:
+        super().__init__(name=id_prefix, hub=hub, dispatcher=dispatcher)
         self._hub: MessageHub[Message] = hub
         self._dispatcher: Dispatcher = dispatcher
         self._provider: FileSystemProvider = provider
@@ -325,17 +324,6 @@ class PaneVM:
         self._error_text: str | None = None
         self._reload_generation: int = 0
         self._is_multiselect_mode: bool = False
-        self._disposed: bool = False
-
-        # Per-VM Observable (round-3 §9.bis.11 / PR #103 retirement path):
-        # fires the name of the property that just changed, scoped to THIS
-        # pane. :class:`aws_tui.ui.widgets.pane.Pane` binds here instead of
-        # filtering the shared ``MessageHub`` by ``sender_object``. The hub
-        # has no sender-keyed routing, so a hub filter costs one observer per
-        # watched property on a stream carrying every message in the app --
-        # and it cannot tell two panes apart until the message has already
-        # been fanned out to both of them.
-        self._on_property_changed: ObserverSafeSubject[str] = ObserverSafeSubject[str]()
 
         self._inner: CompositeVM[ComponentVMOf[EntryState]] = (
             CompositeVM[ComponentVMOf[EntryState]]
@@ -346,6 +334,8 @@ class PaneVM:
             .auto_construct_on_add(True)
             .build()
         )
+        self._own(self._inner)
+        self._own(self._dispose_entries)
         # Round-3 composition (spec §9.bis.11 / §9.bis.3): the
         # FilteredCompositeVM IS the source of truth for "which
         # entries are visible". Its ``visible`` projection drives
@@ -360,6 +350,7 @@ class PaneVM:
                 cursor_policy=FilteredCursorPolicy.SNAP_TO_FIRST,
             )
         )
+        self._own(self._filtered_composite)
         # Single source of truth: subscription re-derives ``_filtered``
         # whenever the composite's visible set changes (predicate or
         # source mutation). Pre-computed once below so the field is
@@ -367,6 +358,7 @@ class PaneVM:
         self._filter_sub = self._filtered_composite.on_changed.subscribe(
             on_next=lambda _: self._sync_filtered_from_composite()
         )
+        self._own(self._filter_sub)
 
         # ── Commands ────────────────────────────────────────────────────────
         self._move_cursor_command: RelayCommandOf[int] = (
@@ -376,39 +368,46 @@ class PaneVM:
             .task(self._move_cursor)
             .build()
         )
+        self._own(self._move_cursor_command)
         self._toggle_select_command: RelayCommand = (
             RelayCommand.builder()
             .predicate(lambda: self._cursor_target() is not None)
             .task(self._toggle_select_cursor)
             .build()
         )
+        self._own(self._toggle_select_command)
         self._enter_multiselect_command: RelayCommand = (
             RelayCommand.builder()
             .predicate(lambda: not self._is_multiselect_mode)
             .task(lambda: self._set_multiselect(True))
             .build()
         )
+        self._own(self._enter_multiselect_command)
         self._exit_multiselect_command: RelayCommand = (
             RelayCommand.builder()
             .predicate(lambda: self._is_multiselect_mode)
             .task(lambda: self._set_multiselect(False))
             .build()
         )
+        self._own(self._exit_multiselect_command)
         self._select_all_command: RelayCommand = (
             RelayCommand.builder()
             .predicate(lambda: len(self._filtered) > 0)
             .task(self._select_all)
             .build()
         )
+        self._own(self._select_all_command)
         self._clear_selection_command: RelayCommand = (
             RelayCommand.builder()
             .predicate(lambda: any(e.is_marked for e in self._entries))
             .task(self._clear_marks)
             .build()
         )
+        self._own(self._clear_selection_command)
         self._set_filter_command: RelayCommandOf[str] = (
             RelayCommandOf[str].builder().task(self._set_filter_text).build()
         )
+        self._own(self._set_filter_command)
 
     # ── Properties ──────────────────────────────────────────────────────────
 
@@ -436,17 +435,6 @@ class PaneVM:
     @property
     def is_multiselect_mode(self) -> bool:
         return self._is_multiselect_mode
-
-    @property
-    def on_property_changed(self) -> rx.Observable[str]:
-        """Per-VM-instance Observable scoped to THIS pane.
-
-        The binding surface for the pane view. Round-3 / PR #103 retirement
-        path: a subscriber here hears only this pane's own property changes,
-        so it never pays for the other pane, the entries, or any other view
-        model publishing on the shared hub.
-        """
-        return self._on_property_changed
 
     @property
     def cursor_index(self) -> int:
@@ -768,58 +756,32 @@ class PaneVM:
     def set_filter_command(self) -> RelayCommandOf[str]:
         return self._set_filter_command
 
-    # ── VMx lifecycle accessors ─────────────────────────────────────────────
-
-    @property
-    def status(self) -> ConstructionStatus:
-        return self._inner.status
-
-    @property
-    def is_constructed(self) -> bool:
-        return self._inner.is_constructed
-
-    @property
-    def name(self) -> str:
-        return self._inner.name
-
     # ── Lifecycle ───────────────────────────────────────────────────────────
 
-    def construct(self) -> None:
-        self._inner.construct()
+    @property
+    def _disposed(self) -> bool:
+        return self.status is ConstructionStatus.DISPOSED
 
-    def destruct(self) -> None:
-        self._inner.destruct()
+    def _on_construct(self) -> None:
+        super()._on_construct()
+        self._complete_lifecycle_hook_after(
+            self._transition_children((self._inner,), construct=True)
+        )
 
-    def dispose(self) -> None:
-        if self._disposed:
-            return
-        self._disposed = True
+    def _on_destruct(self) -> None:
+        super()._on_destruct()
+        self._complete_lifecycle_hook_after(
+            self._transition_children((self._inner,), construct=False)
+        )
+
+    def _on_dispose(self) -> None:
         self._reload_generation += 1
-        self._move_cursor_command.dispose()
-        self._toggle_select_command.dispose()
-        self._enter_multiselect_command.dispose()
-        self._exit_multiselect_command.dispose()
-        self._select_all_command.dispose()
-        self._clear_selection_command.dispose()
-        self._set_filter_command.dispose()
-        # Dispose the FilteredCompositeVM before the inner composite —
-        # the filter has a live subscription to inner's
-        # on_collection_changed that must unwind first. Drop our
-        # ``on_changed`` subscriber first to keep the teardown order
-        # explicit.
-        self._filter_sub.dispose()
-        self._filtered_composite.dispose()
+
+    def _dispose_entries(self) -> None:
         for child in self._entries:
             child.dispose()
         self._filtered = ()
         self._entries.clear()
-        # Complete and tear the subject down BEFORE the inner VM, matching
-        # ``EntryVM.dispose``: a bound pane view that is still mounted
-        # (Textual removes children asynchronously) must be told the stream
-        # ended rather than left holding a live observer on a disposed VM.
-        self._on_property_changed.on_completed()
-        self._on_property_changed.dispose()
-        self._inner.dispose()
 
     # ── Async operations ────────────────────────────────────────────────────
 
@@ -1455,14 +1417,10 @@ class PaneVM:
         a disposed view model, matching ``EntryVM._notify`` and
         ``JobRunDetailVM._notify``.
         """
-        if self._disposed:
-            return
         names = list(props)
         if "viewmodel" not in names and not _VIEWMODEL_INPUTS.isdisjoint(names):
             names.append("viewmodel")
-        for name in names:
-            send_value_free(self._hub, PropertyChangedMessage.create(self, self._inner.name, name))
-            self._on_property_changed.on_next(name)
+        self._publish(*names)
 
     # ── Cursor / selection / filter ─────────────────────────────────────────
 

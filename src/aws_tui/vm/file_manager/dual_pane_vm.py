@@ -6,10 +6,8 @@ through M2's :class:`CrossFsCopy` / :class:`CrossFsMove`; per-file
 progress is bridged to :class:`TransferProgressMessage` on the hub so
 :class:`TransfersVM` and the transfers overlay can react.
 
-The facade does not subclass VMx's ``AggregateVM2`` — its components are
-facades (which AggregateVMN cannot wrap). We mirror the pattern used by
-``ChromeVM``: hold a marker :class:`ComponentVM` named ``"dual_pane"``
-plus the two child facades, and forward lifecycle calls explicitly.
+The class is a component. It owns its two child :class:`PaneVM` components
+and drives them through the lifecycle hooks.
 """
 
 from __future__ import annotations
@@ -22,14 +20,11 @@ from enum import StrEnum
 from functools import partial
 from typing import TYPE_CHECKING
 
-import reactivex as rx
 from vmx import (
-    ComponentVM,
     ConstructionStatus,
     Dispatcher,
     Message,
     MessageHub,
-    PropertyChangedMessage,
     RelayCommand,
 )
 
@@ -37,7 +32,7 @@ from aws_tui.domain.cross_fs import ConflictResolution, CrossFsCopy, CrossFsMove
 from aws_tui.domain.filesystem import EntryKind, FileSystemProvider, PathRef, ProviderError
 from aws_tui.domain.transfer_history import TransferHistoryDescriptor
 from aws_tui.domain.transfer_journal import TransferJournal
-from aws_tui.vm._observable import ObserverSafeSubject, send_value_free
+from aws_tui.vm._component import IsolatedComponentVM
 from aws_tui.vm.file_manager.entry_vm import EntryVM
 from aws_tui.vm.file_manager.pane_vm import PaneVM
 from aws_tui.vm.file_manager.transfer_runtime import HistoryWriteError, TransferRuntime
@@ -96,8 +91,8 @@ def _pane_uri(pane: PaneVM, leaf: str) -> str:
     return body
 
 
-class DualPaneVM:
-    """Two-pane file-manager facade."""
+class DualPaneVM(IsolatedComponentVM):
+    """Two-pane file-manager component."""
 
     def __init__(
         self,
@@ -109,6 +104,7 @@ class DualPaneVM:
         transfer_journal: TransferJournal,
         transfer_runtime: TransferRuntime | None = None,
     ) -> None:
+        super().__init__(name="dual_pane", hub=hub, dispatcher=dispatcher)
         self._hub: MessageHub[Message] = hub
         self._left: PaneVM = left
         self._right: PaneVM = right
@@ -127,25 +123,20 @@ class DualPaneVM:
         self._refresh_tasks: set[asyncio.Task[None]] = set()
         self._listing_tasks: dict[asyncio.Task[None], PaneVM] = {}
         self._shutdown_started = False
-        self._disposed = False
-
-        # Per-VM Observable (round-3 §9.bis.11 / PR #103 retirement path):
-        # fires the name of the property that just changed, scoped to THIS
-        # facade. :class:`aws_tui.ui.widgets.dual_pane.DualPane` binds here
-        # instead of filtering the shared ``MessageHub`` by
-        # ``sender_object`` -- the hub has no sender-keyed routing, so that
-        # filter woke the widget for every message in the app to learn about
-        # one boolean.
-        self._on_property_changed: ObserverSafeSubject[str] = ObserverSafeSubject[str]()
-
-        self._inner: ComponentVM = (
-            ComponentVM.builder().name("dual_pane").services(hub, dispatcher).build()
-        )
 
         # ── Commands ────────────────────────────────────────────────────────
         self._switch_focus_command: RelayCommand = (
             RelayCommand.builder().task(self._switch_focus).build()
         )
+        # Owned in creation order. The base disposes them in reverse: cancel
+        # subscription, transfer runtime (if owned), focus command, right pane,
+        # left pane. That is the order dispose() always used.
+        self._own(self._left)
+        self._own(self._right)
+        self._own(self._switch_focus_command)
+        if self._owns_runtime:
+            self._own(self.transfer_runtime)
+        self._own(self._release_cancel_sub)
 
     # ── Children accessors ──────────────────────────────────────────────────
 
@@ -162,16 +153,6 @@ class DualPaneVM:
         return self._focused
 
     @property
-    def on_property_changed(self) -> rx.Observable[str]:
-        """Per-VM-instance Observable scoped to THIS facade.
-
-        The binding surface for :class:`~aws_tui.ui.widgets.dual_pane.DualPane`.
-        Round-3 / PR #103 retirement path: a subscriber here hears only this
-        facade's own property changes.
-        """
-        return self._on_property_changed
-
-    @property
     def focused_pane(self) -> PaneVM:
         return self._focused_pane()
 
@@ -183,67 +164,47 @@ class DualPaneVM:
     def switch_focus_command(self) -> RelayCommand:
         return self._switch_focus_command
 
-    @property
-    def status(self) -> ConstructionStatus:
-        return self._inner.status
-
-    @property
-    def is_constructed(self) -> bool:
-        return self._inner.is_constructed
-
-    @property
-    def name(self) -> str:
-        return self._inner.name
-
     # ── Lifecycle ───────────────────────────────────────────────────────────
 
-    def construct(self) -> None:
-        self._inner.construct()
-        self._left.construct()
-        self._right.construct()
+    def _on_construct(self) -> None:
+        super()._on_construct()
         # Subscribe AFTER children construct so any cancel message that
         # somehow arrives mid-construction doesn't fire before the
         # children are ready to handle the subsequent state shuffle.
-        # ``if … is None`` guard makes construct→destruct→construct
-        # cycles safe: each construct must subscribe exactly once.
-        # Mirrors the other hub-subscribing VMs' symmetric
-        # construct/destruct contracts.
+        self._complete_lifecycle_hook_after(
+            self._transition_children(
+                (self._left, self._right), construct=True, after=self._subscribe_cancel
+            )
+        )
+
+    def _on_destruct(self) -> None:
+        super()._on_destruct()
+        # Release the hub subscription FIRST — without this it outlives
+        # destruct (the hub keeps the bound method alive, pinning the
+        # DualPaneVM + both panes + _cancel_events registry).
+        self._release_cancel_sub()
+        self._complete_lifecycle_hook_after(
+            self._transition_children((self._right, self._left), construct=False)
+        )
+
+    def _on_dispose(self) -> None:
+        self._shutdown_started = True
+        self._cancel_detached_refreshes()
+
+    @property
+    def _disposed(self) -> bool:
+        return self.status is ConstructionStatus.DISPOSED
+
+    def _subscribe_cancel(self) -> None:
+        # ``if … is None`` guard makes construct→destruct→construct cycles
+        # safe: each construct must subscribe exactly once.
         if self._cancel_sub is None:
             self._cancel_sub = self._hub.messages.subscribe(on_next=self._on_hub_message)
 
-    def destruct(self) -> None:
-        # Release the hub subscription FIRST — without this it
-        # outlives destruct (the hub keeps the bound method alive,
-        # pinning the DualPaneVM + both panes + _cancel_events
-        # registry). Symmetric with ``construct``'s subscribe.
+    def _release_cancel_sub(self) -> None:
         if self._cancel_sub is not None:
             self._cancel_sub.dispose()
             self._cancel_sub = None
-        self._right.destruct()
-        self._left.destruct()
-        self._inner.destruct()
-
-    def dispose(self) -> None:
-        if self._disposed:
-            return
-        self._disposed = True
-        self._shutdown_started = True
-        self._cancel_detached_refreshes()
-        if self._cancel_sub is not None:
-            self._cancel_sub.dispose()
-            self._cancel_sub = None
-        if self._owns_runtime:
-            self.transfer_runtime.dispose()
-        self._switch_focus_command.dispose()
-        self._right.dispose()
-        self._left.dispose()
-        # Complete and tear the subject down BEFORE the inner VM, matching
-        # ``PaneVM.dispose`` / ``EntryVM.dispose``: a bound widget that is
-        # still mounted must be told the stream ended rather than left
-        # holding a live observer on a disposed view model.
-        self._on_property_changed.on_completed()
-        self._on_property_changed.dispose()
-        self._inner.dispose()
 
     async def shutdown(self) -> None:
         """Cancel and durably drain detached pane refreshes."""
@@ -726,10 +687,7 @@ class DualPaneVM:
         The guard stops a late caller from publishing a property change for
         a disposed view model, matching ``PaneVM._notify`` and ``EntryVM._notify``.
         """
-        if self._disposed:
-            return
-        send_value_free(self._hub, PropertyChangedMessage.create(self, self._inner.name, prop))
-        self._on_property_changed.on_next(prop)
+        self._publish(prop)
 
 
 __all__ = ["DualPaneVM", "FocusedPane"]

@@ -18,6 +18,7 @@ from aws_tui.demo.in_memory_fs import InMemoryFS
 from aws_tui.domain.cross_fs import ConflictResolution
 from aws_tui.domain.filesystem import NotFoundError, PathRef, ProviderError
 from aws_tui.domain.transfer_journal import TransferJournal
+from aws_tui.vm._component import IsolatedComponentVM
 from aws_tui.vm.file_manager.dual_pane_vm import DualPaneVM, FocusedPane, _drain_refresh_exception
 from aws_tui.vm.file_manager.pane_vm import PaneVM
 from aws_tui.vm.messages import (
@@ -853,3 +854,21 @@ async def test_dispose_releases_the_transfer_cancel_subscription(
     dp.dispose()
 
     assert subscription.is_disposed, "cancel subscription outlived the VM"
+
+
+@pytest.mark.asyncio
+async def test_dual_pane_vm_isolated_component_drives_both_panes(tmp_path: Path) -> None:
+    dp, _ = await _make_dual(tmp_path)
+    assert isinstance(dp, IsolatedComponentVM)
+    assert dp.status is ConstructionStatus.CONSTRUCTED
+    assert dp.left.status is ConstructionStatus.CONSTRUCTED
+    assert dp.right.status is ConstructionStatus.CONSTRUCTED
+    dp.destruct()
+    assert dp.left.status is ConstructionStatus.DESTRUCTED
+    assert dp.right.status is ConstructionStatus.DESTRUCTED
+    assert dp._cancel_sub is None
+    dp.construct()
+    assert dp._cancel_sub is not None
+    dp.dispose()
+    assert dp.left.status is ConstructionStatus.DISPOSED
+    assert dp.right.status is ConstructionStatus.DISPOSED
