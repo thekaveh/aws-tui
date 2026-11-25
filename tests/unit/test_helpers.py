@@ -5,11 +5,21 @@ from __future__ import annotations
 import asyncio
 
 import pytest
+from reactivex import Observable
+from reactivex.subject import Subject
 from textual.app import App, ComposeResult
 from textual.containers import Container
 from textual.widgets import Static
+from vmx import PropertyChangedMessage
 
-from tests.helpers import WAIT_UNTIL_TIMEOUT_SECONDS, focus_and_settle, wait_until
+from tests.helpers import (
+    WAIT_UNTIL_TIMEOUT_SECONDS,
+    focus_and_settle,
+    new_hub,
+    record_hub,
+    record_properties,
+    wait_until,
+)
 
 
 @pytest.mark.asyncio
@@ -214,3 +224,43 @@ async def test_focus_retries_a_dropped_ready_request(monkeypatch: pytest.MonkeyP
         await focus_and_settle(widget)
         assert widget.has_focus
         assert attempts >= 2
+
+
+class _Probe:
+    def __init__(self) -> None:
+        self._subject: Subject[str] = Subject()
+
+    @property
+    def on_property_changed(self) -> Observable[str]:
+        return self._subject
+
+    def emit(self, name: str) -> None:
+        self._subject.on_next(name)
+
+
+def _message() -> PropertyChangedMessage[str]:
+    return PropertyChangedMessage.create("s", "s", "p")
+
+
+def test_record_hub_collects_inside_the_block_only() -> None:
+    hub, message = new_hub(), _message()
+    with record_hub(hub) as seen:
+        hub.send(message)
+    hub.send(message)
+    assert seen == [message]
+
+
+def test_record_hub_unsubscribes_when_the_body_raises() -> None:
+    hub = new_hub()
+    with pytest.raises(RuntimeError, match="body failed"), record_hub(hub) as seen:
+        raise RuntimeError("body failed")
+    hub.send(_message())
+    assert seen == []
+
+
+def test_record_properties_collects_inside_the_block_only() -> None:
+    probe = _Probe()
+    with record_properties(probe) as seen:
+        probe.emit("a")
+    probe.emit("b")
+    assert seen == ["a"]

@@ -14,6 +14,7 @@ from aws_tui.domain.emr_serverless import ApplicationState, ApplicationSummary
 from aws_tui.vm._component import IsolatedComponentVM
 from aws_tui.vm.emr_serverless.applications_vm import ApplicationsVM
 from aws_tui.vm.file_manager.pane_vm import PaneState
+from tests.helpers import record_properties
 
 
 def _make() -> tuple[ApplicationsVM, _InMemoryEmr]:
@@ -170,12 +171,8 @@ async def test_refresh_is_no_op_when_provider_only_changes_application_order() -
     await vm.refresh()
     assert [app.id for app in vm.applications] == ["started-a", "started-b", "stopped"]
 
-    notified: list[str] = []
-    sub = vm.on_property_changed.subscribe(notified.append)
-    try:
+    with record_properties(vm) as notified:
         await vm.refresh()
-    finally:
-        sub.dispose()
 
     assert "applications" not in notified
     assert [app.id for app in vm.applications] == ["started-a", "started-b", "stopped"]
@@ -459,15 +456,11 @@ async def test_on_property_changed_fires_per_vm_instance() -> None:
     shared hub."""
     vm, fake = _make()
     fake.add_application(app_id="a1", name="etl")
-    events: list[str] = []
-    sub = vm.on_property_changed.subscribe(on_next=events.append)
-    try:
+    with record_properties(vm) as events:
         await vm.refresh()
         # state transitions: LOADING → IDLE; applications populated.
         assert "state" in events
         assert "applications" in events
-    finally:
-        sub.dispose()
 
 
 @pytest.mark.asyncio

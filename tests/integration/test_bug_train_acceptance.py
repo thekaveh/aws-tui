@@ -24,7 +24,7 @@ from aws_tui.domain.emr_serverless import ApplicationState, JobRunState
 from aws_tui.vm.chrome.focus_coordinator_vm import FocusCoordinatorVM, FocusSlot
 from aws_tui.vm.emr_serverless.applications_vm import ApplicationsVM
 from aws_tui.vm.emr_serverless.job_runs_vm import JobRunsVM
-from tests.helpers import new_hub
+from tests.helpers import new_hub, record_properties
 
 # -------------------- PR #100(b): fingerprint guard absorbed into VM --------------------
 
@@ -78,14 +78,10 @@ async def test_pr_100b_dedup_parity_for_job_runs_vm() -> None:
     try:
         vm.set_application("a1")
         await vm.refresh()
-        events: list[str] = []
-        sub = vm.on_property_changed.subscribe(on_next=events.append)
-        try:
+        with record_properties(vm) as events:
             await vm.refresh()  # same page
             assert "runs" not in events
             assert "selected_id" not in events
-        finally:
-            sub.dispose()
     finally:
         vm.dispose()
 
@@ -113,16 +109,12 @@ async def test_pr_103_two_emr_vms_on_same_hub_have_isolated_observables() -> Non
     vm_runs_2.construct()
 
     try:
-        events_on_vm1: list[str] = []
-        sub = vm_runs_1.on_property_changed.subscribe(on_next=events_on_vm1.append)
-        try:
+        with record_properties(vm_runs_1) as events_on_vm1:
             vm_runs_2.set_application("b1")
             await vm_runs_2.refresh()
             # vm_runs_2's refresh emitted state + runs on ITS
             # Observable. vm_runs_1's Observable must stay silent.
             assert events_on_vm1 == []
-        finally:
-            sub.dispose()
     finally:
         vm_runs_1.dispose()
         vm_runs_2.dispose()
@@ -141,14 +133,10 @@ async def test_pr_103_applications_vm_isolated_from_job_runs_vm() -> None:
     runs_vm = JobRunsVM(client=fake, hub=hub, dispatcher=NULL_DISPATCHER)
     runs_vm.construct()
     try:
-        events_on_apps: list[str] = []
-        sub = apps_vm.on_property_changed.subscribe(on_next=events_on_apps.append)
-        try:
+        with record_properties(apps_vm) as events_on_apps:
             runs_vm.set_application("a1")
             await runs_vm.refresh()
             assert events_on_apps == []  # JobRuns events stay on JobRuns
-        finally:
-            sub.dispose()
     finally:
         apps_vm.dispose()
         runs_vm.dispose()
