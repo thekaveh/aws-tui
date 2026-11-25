@@ -72,8 +72,8 @@ class ContentHostVM(IsolatedComponentVM):
     def _on_destruct(self) -> None:
         super()._on_destruct()
         self._cancel_pending_setup()
-        # Only DualPaneVM implements destruct; the EMR, Glue and Athena page VMs
-        # expose construct/setup/shutdown/dispose and no destruct. Calling it
+        # DualPaneVM and EmrServerlessPageVM implement destruct; the Glue and Athena
+        # page VMs expose construct/setup/shutdown/dispose and no destruct. Calling it
         # unconditionally raised AttributeError for three of the four hosted
         # services, aborting RootVM.destruct mid-cascade and leaving the nav
         # menu, chrome and inner host un-destructed. Tolerate it the same way

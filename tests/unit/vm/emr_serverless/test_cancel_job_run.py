@@ -254,7 +254,7 @@ async def test_missing_or_mismatched_visible_target_is_inert(page_with_state, mi
     elif missing == "picker_match":
         fake.add_application(app_id="a2", name="other")
         await page.applications.refresh()
-        page.applications.select("a2")
+        page.applications.select_by_id("a2")
     else:
         fake._runs["a1"]["r1"] = replace(fake._runs["a1"]["r1"], application_id="a2")
         await page.refresh_job_runs()
@@ -744,9 +744,9 @@ async def test_sent_feedback_revalidates_after_public_delivery_handoffs(
     def change_identity():
         nonlocal current, snapshot
         if change == "application":
-            page.applications.select("a2")
+            page.applications.select_by_id("a2")
         elif change == "run":
-            page.job_runs.select("r2")
+            page.job_runs.select_by_id("r2")
         elif change == "source":
             page._source = ServiceSourceContext("other", "other-profile", "us-west-2")
         elif change == "guard":

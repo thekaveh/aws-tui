@@ -13,7 +13,6 @@ from __future__ import annotations
 
 import asyncio
 
-import reactivex as rx
 from vmx import (
     ComponentVMOf,
     CompositeVM,
@@ -21,7 +20,6 @@ from vmx import (
     Dispatcher,
     Message,
     MessageHub,
-    PropertyChangedMessage,
 )
 
 from aws_tui.domain.emr_serverless import (
@@ -31,7 +29,7 @@ from aws_tui.domain.emr_serverless import (
 )
 from aws_tui.domain.filesystem import ProviderError
 from aws_tui.infra.redaction import redact_text
-from aws_tui.vm._observable import ObserverSafeSubject, send_value_free
+from aws_tui.vm._component import IsolatedComponentVM
 from aws_tui.vm._reconcile import reconcile_rows
 from aws_tui.vm.emr_serverless._errors import map_provider_error
 from aws_tui.vm.file_manager.pane_vm import PaneState
@@ -63,7 +61,7 @@ def _application_sort_key(application: ApplicationSummary) -> tuple[int, str, st
     )
 
 
-class ApplicationsVM:
+class ApplicationsVM(IsolatedComponentVM):
     """Live application list + selection state."""
 
     def __init__(
@@ -73,18 +71,13 @@ class ApplicationsVM:
         hub: MessageHub[Message],
         dispatcher: Dispatcher,
     ) -> None:
+        super().__init__(name="emr.applications", hub=hub, dispatcher=dispatcher)
         self._client = client
         self._hub: MessageHub[Message] = hub
         self._dispatcher: Dispatcher = dispatcher
         self._state: PaneState = PaneState.LOADING
         self._error_text: str | None = None
-        self._disposed: bool = False
         self._refresh_lock = asyncio.Lock()
-        # Per-VM Observable (round-3 / PR #103 retirement path): fires
-        # the name of the property that just changed, scoped to THIS
-        # VM instance. Views can subscribe here instead of filtering
-        # ``MessageHub`` events by ``sender_object``.
-        self._on_property_changed = ObserverSafeSubject[str]()
         self._inner: CompositeVM[ComponentVMOf[ApplicationSummary]] = (
             CompositeVM[ComponentVMOf[ApplicationSummary]]
             .builder()
@@ -94,6 +87,7 @@ class ApplicationsVM:
             .auto_construct_on_add(True)
             .build()
         )
+        self._own(self._inner)
 
     # ── Public surface ──────────────────────────────────────────────────────
 
@@ -131,24 +125,7 @@ class ApplicationsVM:
     def error_text(self) -> str | None:
         return self._error_text
 
-    @property
-    def status(self) -> ConstructionStatus:
-        return self._inner.status
-
-    @property
-    def is_constructed(self) -> bool:
-        return self._inner.is_constructed
-
-    @property
-    def on_property_changed(self) -> rx.Observable[str]:
-        """Per-VM-instance Observable that fires the name of the
-        property that just changed. Subscribing here scopes view
-        widgets to THIS VM's events only — no shared-hub
-        ``sender_object`` filtering needed (round-3 / PR #103
-        retirement path)."""
-        return self._on_property_changed
-
-    def select(self, app_id: str) -> None:
+    def select_by_id(self, app_id: str) -> None:
         """Mark ``app_id`` as the active application. No-op if already selected."""
         if self._disposed or self.selected_id == app_id:
             return
@@ -216,16 +193,21 @@ class ApplicationsVM:
 
     # ── Lifecycle ───────────────────────────────────────────────────────────
 
-    def construct(self) -> None:
-        self._inner.construct()
+    @property
+    def _disposed(self) -> bool:
+        return self.status is ConstructionStatus.DISPOSED
 
-    def dispose(self) -> None:
-        if self._disposed:
-            return
-        self._disposed = True
-        self._on_property_changed.on_completed()
-        self._on_property_changed.dispose()
-        self._inner.dispose()
+    def _on_construct(self) -> None:
+        super()._on_construct()
+        self._complete_lifecycle_hook_after(
+            self._transition_children((self._inner,), construct=True)
+        )
+
+    def _on_destruct(self) -> None:
+        super()._on_destruct()
+        self._complete_lifecycle_hook_after(
+            self._transition_children((self._inner,), construct=False)
+        )
 
     # ── Internal ────────────────────────────────────────────────────────────
 
@@ -240,16 +222,7 @@ class ApplicationsVM:
         )
 
     def _notify(self, prop: str) -> None:
-        """Emit a PropertyChanged event on BOTH the shared hub AND
-        the per-VM-instance Observable (round-3 / PR #103 retirement
-        path). Mirrors the helper on JobRunsVM / JobRunLogsVM."""
-        if self._disposed:
-            # The Athena and Glue VMs have always guarded this; these four
-            # did not, so a late callback could publish a property change
-            # for a disposed view model.
-            return
-        send_value_free(self._hub, PropertyChangedMessage.create(self, "emr.applications", prop))
-        self._on_property_changed.on_next(prop)
+        self._publish(prop)
 
     def _set_state(self, state: PaneState) -> None:
         if self._state == state:

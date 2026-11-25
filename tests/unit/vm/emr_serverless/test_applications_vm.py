@@ -11,6 +11,7 @@ from vmx.messages.protocols import Message
 
 from aws_tui.demo.in_memory_emr import InMemoryEmr as _InMemoryEmr
 from aws_tui.domain.emr_serverless import ApplicationState, ApplicationSummary
+from aws_tui.vm._component import IsolatedComponentVM
 from aws_tui.vm.emr_serverless.applications_vm import ApplicationsVM
 from aws_tui.vm.file_manager.pane_vm import PaneState
 
@@ -76,7 +77,7 @@ async def test_select_publishes_property_changed() -> None:
         on_next=lambda m: notified.append(getattr(m, "property_name", ""))
     )
     try:
-        vm.select("a1")
+        vm.select_by_id("a1")
         assert vm.selected_id == "a1"
         assert "selected_id" in notified
     finally:
@@ -194,7 +195,7 @@ async def test_selected_id_derives_from_composite_current() -> None:
         "ApplicationsVM must not have a hand-rolled _selected_id field; "
         "selection lives in CompositeVM.current after Phase 1."
     )
-    vm.select("a1")
+    vm.select_by_id("a1")
     assert vm.selected_id == "a1"
     assert vm._inner.current is not None
     assert vm._inner.current.model.id == "a1"
@@ -207,7 +208,7 @@ async def test_select_promotes_to_composite_current_slot() -> None:
     fake.add_application(app_id="a2", name="ad-hoc")
     await vm.refresh()
     assert vm._inner.current is None
-    vm.select("a2")
+    vm.select_by_id("a2")
     assert vm._inner.current is not None
     assert vm._inner.current.model.id == "a2"
 
@@ -217,8 +218,8 @@ async def test_unknown_app_id_select_is_no_op() -> None:
     vm, fake = _make()
     fake.add_application(app_id="a1", name="etl")
     await vm.refresh()
-    vm.select("a1")
-    vm.select("missing")
+    vm.select_by_id("a1")
+    vm.select_by_id("missing")
     # Selection unchanged.
     assert vm.selected_id == "a1"
 
@@ -229,13 +230,13 @@ async def test_reselecting_same_app_is_idempotent() -> None:
     vm, fake = _make()
     fake.add_application(app_id="a1", name="etl")
     await vm.refresh()
-    vm.select("a1")
+    vm.select_by_id("a1")
     notified: list[str] = []
     sub = vm._hub.messages.subscribe(  # type: ignore[attr-defined]
         on_next=lambda m: notified.append(getattr(m, "property_name", ""))
     )
     try:
-        vm.select("a1")
+        vm.select_by_id("a1")
         assert "selected_id" not in notified
     finally:
         sub.dispose()
@@ -270,7 +271,7 @@ async def test_refresh_drops_selection_when_selected_app_vanishes() -> None:
     fake.add_application(app_id="a1", name="etl")
     fake.add_application(app_id="a2", name="ad-hoc")
     await vm.refresh()
-    vm.select("a2")
+    vm.select_by_id("a2")
     # Remove a2 from the fake (deletes both the app and its runs slot).
     fake._apps.pop("a2", None)  # type: ignore[attr-defined]
     fake._runs.pop("a2", None)  # type: ignore[attr-defined]
@@ -295,7 +296,7 @@ async def test_refresh_keeps_rows_and_current() -> None:
     for app_id, name in (("a1", "alpha"), ("a2", "bravo"), ("a3", "charlie")):
         fake.add_application(app_id=app_id, name=name)
     await vm.refresh()
-    vm.select("a2")
+    vm.select_by_id("a2")
     before = {row.model.id: row for row in vm._inner}
     events: list[str] = []
     sub = vm._inner.on_collection_changed.subscribe(lambda event: events.append(event.action))
@@ -329,7 +330,7 @@ async def test_refresh_keeps_rows_for_first_sorted_duplicate(
 
         assert vm.applications == (started,)
         (first,) = vm._inner
-        vm.select("a1")
+        vm.select_by_id("a1")
 
         notified: list[str] = []
         events: list[str] = []
@@ -359,7 +360,7 @@ async def test_application_state_change_reorders_rows() -> None:
     started = fake.add_application(app_id="a1", name="alpha")
     stopped = fake.add_application(app_id="a2", name="bravo", state=ApplicationState.STOPPED)
     await vm.refresh()
-    vm.select(started.id)
+    vm.select_by_id(started.id)
     first, second = vm._inner
     events: list[str] = []
     sub = vm._inner.on_collection_changed.subscribe(lambda event: events.append(event.action))
@@ -386,7 +387,7 @@ async def test_refresh_add_remove_emits_one_reset() -> None:
     kept = fake.add_application(app_id="a1", name="alpha")
     fake.add_application(app_id="a2", name="bravo")
     await vm.refresh()
-    vm.select(kept.id)
+    vm.select_by_id(kept.id)
     survivor, removed = vm._inner
     events: list[str] = []
     sub = vm._inner.on_collection_changed.subscribe(lambda event: events.append(event.action))
@@ -434,7 +435,7 @@ async def test_dispose_cleans_up_items() -> None:
     fake.add_application(app_id="a1", name="etl")
     fake.add_application(app_id="a2", name="adhoc")
     await vm.refresh()
-    vm.select("a1")
+    vm.select_by_id("a1")
     rows = tuple(vm._inner)
     selected = vm._inner.current
     assert len(rows) == 2
@@ -446,7 +447,7 @@ async def test_dispose_cleans_up_items() -> None:
     assert vm.applications == vm.sorted_applications == ()
     assert vm._inner.current is selected
     assert vm.selected_id == "a1"
-    vm.select("a2")
+    vm.select_by_id("a2")
     assert vm._inner.current is selected
 
 
@@ -556,3 +557,18 @@ async def test_concurrent_refreshes_commit_in_request_order() -> None:
     assert second_started.is_set()
     assert vm.applications == (second,)
     vm.dispose()
+
+
+@pytest.mark.asyncio
+async def test_applications_vm_isolated_component_publishes_and_completes() -> None:
+    vm, fake = _make()
+    assert isinstance(vm, IsolatedComponentVM)
+    fake.add_application(app_id="a1", name="etl")
+    names: list[str] = []
+    completed: list[bool] = []
+    vm.on_property_changed.subscribe(names.append, on_completed=lambda: completed.append(True))
+    await vm.refresh()
+    assert "applications" in names
+    vm.dispose()
+    assert vm.status is ConstructionStatus.DISPOSED
+    assert completed == [True]

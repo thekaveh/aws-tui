@@ -223,8 +223,8 @@ async def test_selection_away_and_back_fences_an_open_review(tmp_path, monkeypat
             page = ctx.root_vm.content_host.current
             original = page.job_runs.selected_id
             other = "run001" if original == "run002" else "run002"
-            page.job_runs.select(other)
-            page.job_runs.select(original)
+            page.job_runs.select_by_id(other)
+            page.job_runs.select_by_id(original)
             assert modal._invalidated
             assert modal.query_one("#emr-dashboard-open").disabled
             modal.action_open()
