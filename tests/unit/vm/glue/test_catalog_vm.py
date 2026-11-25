@@ -18,6 +18,7 @@ from aws_tui.vm.file_manager.pane_vm import PaneState
 from aws_tui.vm.glue._lifecycle import GlueOperationOwner
 from aws_tui.vm.glue.catalog_vm import GlueCatalogVM
 from aws_tui.vm.messages import OpenS3LocationRequest
+from tests.pager_helpers import assert_pager_disposed, assert_pager_live
 from tests.unit.vm.glue._fake_glue import (
     InMemoryGlue,
     seeded_cancellation_resistant_glue,
@@ -1549,13 +1550,13 @@ async def test_replacing_catalog_pagers_disposes_old_pagers_and_commands() -> No
     await vm.setup()
     old_table_pager = vm._table_pager  # type: ignore[attr-defined]
     old_partition_pager = vm._partition_pager  # type: ignore[attr-defined]
+    assert_pager_live(old_table_pager)
+    assert_pager_live(old_partition_pager)
 
     await vm.select_database("analytics")
 
-    assert old_table_pager._disposed  # type: ignore[attr-defined]
-    assert old_table_pager.load_more_command._disposed  # type: ignore[attr-defined]
-    assert old_table_pager.refresh_command._disposed  # type: ignore[attr-defined]
-    assert old_partition_pager._disposed  # type: ignore[attr-defined]
+    assert_pager_disposed(old_table_pager)
+    assert_pager_disposed(old_partition_pager)
 
 
 def test_catalog_dispose_reaches_every_pager_and_command_exactly_once(
@@ -1568,6 +1569,8 @@ def test_catalog_dispose_reaches_every_pager_and_command_exactly_once(
         vm._partition_pager,  # type: ignore[attr-defined]
     ]
     calls = {id(pager): 0 for pager in pagers}
+    for pager in pagers:
+        assert_pager_live(pager)
     for pager in pagers:
         original = pager.dispose
 
@@ -1586,9 +1589,7 @@ def test_catalog_dispose_reaches_every_pager_and_command_exactly_once(
 
     assert set(calls.values()) == {1}
     for pager in pagers:
-        assert pager._disposed  # type: ignore[attr-defined]
-        assert pager.load_more_command._disposed  # type: ignore[attr-defined]
-        assert pager.refresh_command._disposed  # type: ignore[attr-defined]
+        assert_pager_disposed(pager)
 
 
 def _status(vm: ComponentVM) -> ConstructionStatus:
@@ -1603,10 +1604,13 @@ def test_catalog_vm_is_a_component_vm_with_owned_members() -> None:
     assert _status(vm) is ConstructionStatus.CONSTRUCTED
     assert vm.iceberg.status is ConstructionStatus.CONSTRUCTED
     pagers = (vm._database_pager, vm._table_pager, vm._partition_pager)
+    for pager in pagers:
+        assert_pager_live(pager)
     vm.dispose()
     assert _status(vm) is ConstructionStatus.DISPOSED
     assert vm.iceberg.status is ConstructionStatus.DISPOSED
-    assert all(pager._disposed for pager in pagers)  # type: ignore[attr-defined]
+    for pager in pagers:
+        assert_pager_disposed(pager)
 
 
 async def test_catalog_vm_disposes_replaced_pager_that_is_current() -> None:
@@ -1614,8 +1618,9 @@ async def test_catalog_vm_disposes_replaced_pager_that_is_current() -> None:
     vm.construct()
     await vm.select_database("analytics")
     current = vm._table_pager
+    assert_pager_live(current)
     vm.dispose()
-    assert current._disposed  # type: ignore[attr-defined]
+    assert_pager_disposed(current)
 
 
 def test_construct_after_dispose_is_a_silent_no_op() -> None:

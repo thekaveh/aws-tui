@@ -16,6 +16,7 @@ from vmx.messages.protocols import Message
 from aws_tui.domain.filesystem import ProviderError, ProviderUnreachableError
 from aws_tui.vm.file_manager.pane_vm import PaneState
 from aws_tui.vm.glue.jobs_vm import GlueJobsVM
+from tests.pager_helpers import assert_pager_disposed, assert_pager_live
 from tests.unit.vm.glue._fake_glue import InMemoryGlue, seeded_glue
 
 
@@ -116,12 +117,12 @@ async def test_job_run_filter_replaces_pager_and_resets_token_lineage() -> None:
     await vm.setup()
     await vm.select_job("nightly")
     old_pager = vm._run_pager  # type: ignore[attr-defined]
+    assert_pager_live(old_pager)
     await vm.load_more_runs()
 
     await vm.set_run_state_filter(frozenset({"RUNNING"}))
 
-    assert old_pager._disposed  # type: ignore[attr-defined]
-    assert old_pager.load_more_command._disposed  # type: ignore[attr-defined]
+    assert_pager_disposed(old_pager)
     assert vm.run_state_filter == frozenset({"RUNNING"})
     assert [run.state for run in vm.runs] == ["RUNNING"]
     assert fake.run_requests[-1] == ("nightly", None, ("RUNNING",))
@@ -232,6 +233,8 @@ async def test_jobs_dispose_invalidates_blocked_load_without_notifications() -> 
 def test_jobs_dispose_reaches_both_pagers_once(monkeypatch: pytest.MonkeyPatch) -> None:
     vm = make_jobs_vm(seeded_glue())
     pagers = [vm._job_pager, vm._run_pager]  # type: ignore[attr-defined]
+    for pager in pagers:
+        assert_pager_live(pager)
     calls = {id(pager): 0 for pager in pagers}
     for pager in pagers:
         original = pager.dispose
@@ -250,8 +253,8 @@ def test_jobs_dispose_reaches_both_pagers_once(monkeypatch: pytest.MonkeyPatch) 
     vm.dispose()
 
     assert set(calls.values()) == {1}
-    assert all(pager.load_more_command._disposed for pager in pagers)  # type: ignore[attr-defined]
-    assert all(pager.refresh_command._disposed for pager in pagers)  # type: ignore[attr-defined]
+    for pager in pagers:
+        assert_pager_disposed(pager)
 
 
 def test_jobs_vm_is_a_component_vm_with_its_own_lifecycle() -> None:

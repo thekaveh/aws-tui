@@ -8,7 +8,7 @@ from dataclasses import replace
 import pytest
 from rich.cells import cell_len
 from textual.widgets import Static
-from vmx import PropertyChangedMessage
+from vmx import ConstructionStatus, PropertyChangedMessage
 
 from aws_tui import composition
 from aws_tui.app import AwsTuiApp
@@ -244,7 +244,7 @@ async def test_open_finishes_actual_publication_after_cancellation(
                 assert views[0].vm is candidate
                 assert all(node.display for node in views[0].ancestors_with_self)
                 assert candidate._navigation_adopted
-                assert not candidate._disposed
+                assert candidate.status is not ConstructionStatus.DISPOSED
                 assert not app.crash_report
             finally:
                 subscription.dispose()
@@ -286,7 +286,7 @@ async def test_keyboard_open_failed_destination_keeps_usable_live_screen(
             await pilot.press("enter")
             await drain_workers(app)
             assert ctx.root_vm.content_host.current is original
-            assert not original._disposed
+            assert original.status is not ConstructionStatus.DISPOSED
             assert len(app.screen_stack) == 1
             assert ctx.root_vm.chrome.toast_stack.toasts
             assert not app.crash_report
@@ -332,7 +332,7 @@ async def test_invalid_library_is_visible_preserved_and_leaves_keyboard_usable(
             await pilot.press("escape")
             await wait_until(lambda: len(app.screen_stack) == 1, what="usable unchanged screen")
             assert ctx.root_vm.content_host.current is original
-            assert not original._disposed
+            assert original.status is not ConstructionStatus.DISPOSED
             before = original.focused
             await pilot.press("tab")
             assert original.focused != before
@@ -407,7 +407,7 @@ async def test_open_does_not_overwrite_pane_navigation_aba(tmp_path, monkeypatch
             release.set()
             await task
             assert ctx.root_vm.content_host.current is original
-            assert not original._disposed
+            assert original.status is not ConstructionStatus.DISPOSED
             assert not app.crash_report
     finally:
         release.set()
@@ -527,7 +527,7 @@ async def test_claimed_workspace_swap_pauses_input_and_finishes_before_cancel(
             assert current is not None
             assert current is not original
             assert current._navigation_adopted
-            assert not current._disposed
+            assert current.status is not ConstructionStatus.DISPOSED
             views = list(app.query(DualPane))
             assert len(views) == 1
             assert views[0].vm is current
@@ -582,9 +582,9 @@ async def test_accepted_source_key_supersedes_workspace_before_worker_runs(tmp_p
             assert app.service_navigation.generation > generation
             with contextlib.suppress(asyncio.CancelledError):
                 await task
-            assert candidate._disposed
+            assert candidate.status is ConstructionStatus.DISPOSED
             assert ctx.root_vm.content_host.current is original
-            assert not original._disposed
+            assert original.status is not ConstructionStatus.DISPOSED
             allow_source.set()
             await drain_workers(app)
             assert original.left.current_connection_key is None
