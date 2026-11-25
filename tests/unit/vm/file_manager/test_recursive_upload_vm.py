@@ -4,7 +4,7 @@ import asyncio
 from dataclasses import replace
 
 import pytest
-from vmx import NULL_DISPATCHER, MessageHub
+from vmx import NULL_DISPATCHER, ComponentVM, ConstructionStatus, MessageHub, PropertyChangedMessage
 
 from aws_tui.demo.in_memory_fs import InMemoryFS
 from aws_tui.domain.cross_fs import ConflictResolution
@@ -62,7 +62,7 @@ async def context(tmp_path):
     )
     from aws_tui.vm.file_manager.recursive_upload_vm import RecursiveUploadVM
 
-    vm = RecursiveUploadVM(source=source, destination=target, hub=hub)
+    vm = RecursiveUploadVM(source=source, destination=target, hub=hub, dispatcher=NULL_DISPATCHER)
     vm.construct()
     runtime = TransferRuntime(TransferJournal(base_dir=tmp_path / "journal"), hub)
     try:
@@ -278,7 +278,9 @@ async def test_protection_enabled_after_review_blocks_all_upload_requests(contex
         GuardedRemote(destination, check), path_protocol="s3:", connection_key=("aws", "fixture")
     )
     await target.navigate_to(PathRef(("bucket", "prefix")))
-    vm = type(existing)(source=source, destination=target, hub=existing._hub)
+    vm = type(existing)(
+        source=source, destination=target, hub=existing._hub, dispatcher=NULL_DISPATCHER
+    )
     vm.construct()
     try:
         await vm.load()
@@ -294,3 +296,51 @@ async def test_protection_enabled_after_review_blocks_all_upload_requests(contex
     finally:
         await vm.shutdown()
         vm.dispose()
+
+
+async def test_upload_vm_is_a_component_vm_with_a_lifecycle(context) -> None:
+    vm, *_ = context
+    assert isinstance(vm, ComponentVM)
+    assert vm.status is ConstructionStatus.CONSTRUCTED
+    vm.dispose()
+    assert vm.status is ConstructionStatus.DISPOSED
+
+
+async def test_dispose_publishes_the_closed_state_once(context) -> None:
+    vm, *_ = context
+    names: list[str] = []
+    sub = vm.on_property_changed.subscribe(names.append)
+    vm.dispose()
+    sub.dispose()
+    assert names.count("state") == 1
+    assert vm.state == "closed"
+
+
+async def test_hub_message_names_the_vm_as_sender(context) -> None:
+    vm, *_ = context
+    seen: list[object] = []
+    sub = vm.hub.messages.subscribe(seen.append)
+    vm.set_policy(ConflictResolution.OVERWRITE)
+    sub.dispose()
+    states = [
+        m
+        for m in seen
+        if isinstance(m, PropertyChangedMessage) and m.sender is vm and m.property_name == "state"
+    ]
+    assert states
+    assert all(m.sender_name == "s3.upload" for m in states)
+
+
+async def test_raising_subscriber_does_not_stop_later_subscribers(context) -> None:
+    vm, *_ = context
+    seen: list[str] = []
+
+    def boom(_name: str) -> None:
+        raise RuntimeError("subscriber failed")
+
+    first = vm.on_property_changed.subscribe(boom)
+    second = vm.on_property_changed.subscribe(seen.append)
+    vm.set_policy(ConflictResolution.OVERWRITE)
+    first.dispose()
+    second.dispose()
+    assert "state" in seen
