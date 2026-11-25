@@ -1,7 +1,7 @@
 """Deterministic Carbon listing with a closed filter editor."""
 
 from textual.app import App, ComposeResult
-from vmx import MessageHub, RxDispatcher
+from vmx import NULL_DISPATCHER, MessageHub
 
 from aws_tui.demo.in_memory_fs import InMemoryFS
 from aws_tui.domain.filesystem import EntryKind, FileEntry, PathRef
@@ -27,7 +27,7 @@ class ListingApp(App):
             provider=FixedFS(),
             initial_path=PathRef(("loaded",)),
             hub=self.hub,
-            dispatcher=RxDispatcher.immediate(),
+            dispatcher=NULL_DISPATCHER,
             id_prefix="listing",
         )
         self.filter_query = query

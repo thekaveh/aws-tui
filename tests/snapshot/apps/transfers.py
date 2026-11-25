@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from textual.app import App, ComposeResult
 from textual.widgets import Static
-from vmx import MessageHub, RxDispatcher
+from vmx import NULL_DISPATCHER, MessageHub
 
 from aws_tui.infra.theme_store import ThemeStore
 from aws_tui.ui.widgets.transfers_overlay import TransfersOverlay
@@ -39,7 +39,7 @@ class TransfersSnapshotApp(App[None]):
         self.CSS = ThemeStore().load(theme)
         self._theme = theme
         self._hub: MessageHub = MessageHub()
-        self._dispatcher = RxDispatcher.immediate()
+        self._dispatcher = NULL_DISPATCHER
         self._transfers = TransfersVM(hub=self._hub, dispatcher=self._dispatcher)
         # Inject a fake clock so speed/eta render deterministically in the
         # snapshot. Two samples 1s apart with 700_000 vs 1_240_000 bytes ->

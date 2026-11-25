@@ -15,7 +15,7 @@ from __future__ import annotations
 from collections.abc import AsyncIterator
 
 import pytest
-from vmx import NULL_DISPATCHER, MessageHub, RxDispatcher
+from vmx import NULL_DISPATCHER, MessageHub
 
 from aws_tui.demo.in_memory_fs import InMemoryFS
 from aws_tui.domain.filesystem import PathRef
@@ -38,7 +38,7 @@ async def _seed() -> InMemoryFS:
 @pytest.mark.asyncio
 async def test_border_title_is_path_with_protocol() -> None:
     hub: MessageHub = MessageHub()
-    dispatcher = RxDispatcher.immediate()
+    dispatcher = NULL_DISPATCHER
     fs = await _seed()
     vm = PaneVM(
         provider=fs,
@@ -67,7 +67,7 @@ async def test_border_title_no_protocol_for_local() -> None:
     """Local pane uses ``path_protocol=""`` so the border shows
     ``/path`` instead of ``s3://path``."""
     hub: MessageHub = MessageHub()
-    dispatcher = RxDispatcher.immediate()
+    dispatcher = NULL_DISPATCHER
     fs = await _seed()
     vm = PaneVM(
         provider=fs,
@@ -90,7 +90,7 @@ async def test_border_title_no_protocol_for_local() -> None:
 @pytest.mark.asyncio
 async def test_swap_provider_replaces_source_and_resets_root() -> None:
     hub: MessageHub = MessageHub()
-    dispatcher = RxDispatcher.immediate()
+    dispatcher = NULL_DISPATCHER
     fs_a = await _seed()
     fs_b = InMemoryFS()
     await fs_b.write_stream(PathRef(("only-in-b.txt",)), _stream(b"hello"))
@@ -132,7 +132,7 @@ async def test_mark_at_is_idempotent_set_not_toggle() -> None:
     second call must be a no-op, not a flip.
     """
     hub: MessageHub = MessageHub()
-    dispatcher = RxDispatcher.immediate()
+    dispatcher = NULL_DISPATCHER
     fs = await _seed()
     vm = PaneVM(provider=fs, hub=hub, dispatcher=dispatcher)
     vm.construct()
@@ -165,7 +165,7 @@ async def test_mark_at_is_idempotent_set_not_toggle() -> None:
 @pytest.mark.asyncio
 async def test_toggle_mark_at_updates_summary() -> None:
     hub: MessageHub = MessageHub()
-    dispatcher = RxDispatcher.immediate()
+    dispatcher = NULL_DISPATCHER
     fs = await _seed()
     vm = PaneVM(provider=fs, hub=hub, dispatcher=dispatcher)
     vm.construct()
@@ -190,7 +190,7 @@ async def test_toggle_mark_at_updates_summary() -> None:
 @pytest.mark.asyncio
 async def test_summary_with_no_marks_shows_total() -> None:
     hub: MessageHub = MessageHub()
-    dispatcher = RxDispatcher.immediate()
+    dispatcher = NULL_DISPATCHER
     fs = await _seed()
     vm = PaneVM(provider=fs, hub=hub, dispatcher=dispatcher)
     vm.construct()
@@ -207,7 +207,7 @@ async def test_summary_with_no_marks_shows_total() -> None:
 @pytest.mark.asyncio
 async def test_move_cursor_to_clamps_and_updates_index() -> None:
     hub: MessageHub = MessageHub()
-    dispatcher = RxDispatcher.immediate()
+    dispatcher = NULL_DISPATCHER
     fs = await _seed()
     vm = PaneVM(provider=fs, hub=hub, dispatcher=dispatcher)
     vm.construct()
@@ -231,7 +231,7 @@ async def test_move_cursor_to_clamps_and_updates_index() -> None:
 @pytest.mark.asyncio
 async def test_activate_descends_into_directory() -> None:
     hub: MessageHub = MessageHub()
-    dispatcher = RxDispatcher.immediate()
+    dispatcher = NULL_DISPATCHER
     fs = await _seed()
     vm = PaneVM(provider=fs, hub=hub, dispatcher=dispatcher)
     vm.construct()
@@ -249,7 +249,7 @@ async def test_activate_descends_into_directory() -> None:
 async def test_placeholder_text_in_idle_state() -> None:
     """When IDLE with entries, placeholder_text should be None."""
     hub: MessageHub = MessageHub()
-    dispatcher = RxDispatcher.immediate()
+    dispatcher = NULL_DISPATCHER
     fs = await _seed()
     vm = PaneVM(provider=fs, hub=hub, dispatcher=dispatcher)
     vm.construct()

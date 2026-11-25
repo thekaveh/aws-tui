@@ -9,7 +9,7 @@ from collections.abc import AsyncIterator
 import pytest
 from textual.app import App, ComposeResult
 from textual.containers import Vertical
-from vmx import MessageHub, RxDispatcher
+from vmx import NULL_DISPATCHER, MessageHub
 
 from aws_tui.infra.keymap_store import KeymapStore
 from aws_tui.infra.theme_store import ThemeStore
@@ -37,7 +37,7 @@ from tests.helpers import wait_until
 @pytest.mark.asyncio
 async def test_command_palette_renders_entries() -> None:
     hub: MessageHub = MessageHub()
-    dispatcher = RxDispatcher.immediate()
+    dispatcher = NULL_DISPATCHER
     vm = CommandPaletteVM(hub=hub, dispatcher=dispatcher)
     vm.construct()
     captured: list[str] = []
@@ -104,7 +104,7 @@ async def test_confirm_modal_reflex_enter_routes_to_the_safe_side(
     is intentionally invisible here.
     """
     hub: MessageHub = MessageHub()
-    dispatcher = RxDispatcher.immediate()
+    dispatcher = NULL_DISPATCHER
     vm = ConfirmationVM(hub=hub, dispatcher=dispatcher)
     vm.construct()
     try:
@@ -146,7 +146,7 @@ async def test_confirm_modal_reflex_enter_routes_to_the_safe_side(
 
 async def test_confirm_modal_renders_request() -> None:
     hub: MessageHub = MessageHub()
-    dispatcher = RxDispatcher.immediate()
+    dispatcher = NULL_DISPATCHER
     vm = ConfirmationVM(hub=hub, dispatcher=dispatcher)
     vm.construct()
     try:
@@ -180,7 +180,7 @@ async def test_dialog_mount_cancellation_preserves_caller_cancelled_error(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     hub: MessageHub = MessageHub()
-    vm = ConfirmationVM(hub=hub, dispatcher=RxDispatcher.immediate())
+    vm = ConfirmationVM(hub=hub, dispatcher=NULL_DISPATCHER)
     vm.construct()
     app: App[None] = App()
     original_mount = ConfirmModal.on_mount
@@ -213,7 +213,7 @@ async def test_dialog_mount_cancellation_preserves_caller_cancelled_error(
 @pytest.mark.asyncio
 async def test_ask_confirmation_returns_the_ask_coroutine_itself() -> None:
     hub: MessageHub = MessageHub()
-    vm = ConfirmationVM(hub=hub, dispatcher=RxDispatcher.immediate())
+    vm = ConfirmationVM(hub=hub, dispatcher=NULL_DISPATCHER)
     vm.construct()
     try:
         coroutine = ask_confirmation(App(), vm, ConfirmRequest("Confirm"), hub=hub)
@@ -228,7 +228,7 @@ async def test_scratch_confirmation_uses_a_one_shot_vm_and_disposes_it(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     hub: MessageHub = MessageHub()
-    app_wide = ConfirmationVM(hub=hub, dispatcher=RxDispatcher.immediate())
+    app_wide = ConfirmationVM(hub=hub, dispatcher=NULL_DISPATCHER)
     app_wide.construct()
     disposed: list[ConfirmationVM] = []
     original_dispose = ConfirmationVM.dispose
@@ -246,7 +246,7 @@ async def test_scratch_confirmation_uses_a_one_shot_vm_and_disposes_it(
                     app,
                     ConfirmRequest("Confirm"),
                     hub=hub,
-                    dispatcher=RxDispatcher.immediate(),
+                    dispatcher=NULL_DISPATCHER,
                 )
             )
             await wait_until(
@@ -351,7 +351,7 @@ async def _bytes_iter(data: bytes) -> AsyncIterator[bytes]:
 @pytest.mark.asyncio
 async def test_quick_look_streams_content() -> None:
     hub: MessageHub = MessageHub()
-    dispatcher = RxDispatcher.immediate()
+    dispatcher = NULL_DISPATCHER
     vm = QuickLookVM(hub=hub, dispatcher=dispatcher)
     vm.construct()
     content = QuickLookContent(

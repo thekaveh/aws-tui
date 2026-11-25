@@ -16,7 +16,7 @@ from textual.content import Content
 from textual.pilot import Pilot
 from textual.screen import Screen
 from textual.widgets import Static, Tooltip
-from vmx import Message, MessageHub, RxDispatcher
+from vmx import NULL_DISPATCHER, Message, MessageHub
 
 from aws_tui.demo.in_memory_fs import InMemoryFS
 from aws_tui.domain.filesystem import EntryKind, FileEntry, PathRef
@@ -54,7 +54,7 @@ def test_filename_rows_keep_metadata_in_fixed_terminal_columns(name: str, trunca
     vm = EntryVM(
         entry=FileEntry(name=name, kind=EntryKind.FILE, size=1, modified=None),
         hub=hub,
-        dispatcher=RxDispatcher.immediate(),
+        dispatcher=NULL_DISPATCHER,
     )
     vm.construct()
     try:
@@ -76,7 +76,7 @@ def test_filename_rows_keep_metadata_in_fixed_terminal_columns(name: str, trunca
 @pytest.mark.asyncio
 async def test_pane_mounts_and_populates_rows() -> None:
     hub: MessageHub[Message] = MessageHub()
-    dispatcher = RxDispatcher.immediate()
+    dispatcher = NULL_DISPATCHER
     fs = await _seed()
     vm = PaneVM(provider=fs, hub=hub, dispatcher=dispatcher, id_prefix="pane.test")
     vm.construct()
@@ -103,7 +103,7 @@ async def test_pane_mounts_and_populates_rows() -> None:
 @pytest.mark.asyncio
 async def test_pane_footer_reacts_to_post_mount_viewmodel_change() -> None:
     hub: MessageHub[Message] = MessageHub()
-    dispatcher = RxDispatcher.immediate()
+    dispatcher = NULL_DISPATCHER
     vm = PaneVM(
         provider=await _seed(),
         hub=hub,
@@ -141,7 +141,7 @@ async def test_pane_footer_reacts_to_post_mount_viewmodel_change() -> None:
 @pytest.mark.asyncio
 async def test_pane_reconciles_viewmodel_change_between_compose_and_mount() -> None:
     hub: MessageHub[Message] = MessageHub()
-    dispatcher = RxDispatcher.immediate()
+    dispatcher = NULL_DISPATCHER
     vm = PaneVM(
         provider=await _seed(),
         hub=hub,
@@ -182,7 +182,7 @@ async def test_pane_reconciles_viewmodel_change_between_compose_and_mount() -> N
 async def test_pane_renders_loading_placeholder_for_state() -> None:
     """Asserts the empty-state placeholder lands when the pane has no entries."""
     hub: MessageHub[Message] = MessageHub()
-    dispatcher = RxDispatcher.immediate()
+    dispatcher = NULL_DISPATCHER
     fs = InMemoryFS()  # empty
     vm = PaneVM(provider=fs, hub=hub, dispatcher=dispatcher, id_prefix="pane.test")
     vm.construct()
@@ -293,7 +293,7 @@ async def test_pane_dynamic_mount_with_unreachable_state_does_not_crash() -> Non
             raise ProviderUnreachableError("Could not connect")
 
     hub: MessageHub[Message] = MessageHub()
-    dispatcher = RxDispatcher.immediate()
+    dispatcher = NULL_DISPATCHER
     left_vm = PaneVM(
         provider=_UnreachableProvider(),
         hub=hub,
@@ -363,7 +363,7 @@ async def test_pane_dynamic_mount_with_unreachable_state_does_not_crash() -> Non
 @pytest.mark.asyncio
 async def test_pane_set_focused_adds_class() -> None:
     hub: MessageHub[Message] = MessageHub()
-    dispatcher = RxDispatcher.immediate()
+    dispatcher = NULL_DISPATCHER
     fs = await _seed()
     vm = PaneVM(provider=fs, hub=hub, dispatcher=dispatcher, id_prefix="pane.test")
     vm.construct()
@@ -390,7 +390,7 @@ async def test_pane_set_focused_adds_class() -> None:
 @pytest.mark.asyncio
 async def test_dual_pane_mounts_with_two_panes(tmp_path: Path) -> None:
     hub: MessageHub[Message] = MessageHub()
-    dispatcher = RxDispatcher.immediate()
+    dispatcher = NULL_DISPATCHER
     left_fs = await _seed()
     right_fs = InMemoryFS()
     left = PaneVM(provider=left_fs, hub=hub, dispatcher=dispatcher, id_prefix="left")
@@ -447,7 +447,7 @@ async def test_rendered_tooltips_preserve_brackets_in_file_and_path_names(target
     name = "a-long-prefix-[bold]report.csv"
     await fs.mkdir(PathRef((folder,)))
     await fs.write_stream(PathRef((folder, name)), _astream(b"x"))
-    vm = PaneVM(provider=fs, hub=hub, dispatcher=RxDispatcher.immediate(), id_prefix="pane.test")
+    vm = PaneVM(provider=fs, hub=hub, dispatcher=NULL_DISPATCHER, id_prefix="pane.test")
     vm.construct()
     await vm.setup()
     try:
@@ -498,7 +498,7 @@ async def test_truncated_names_get_a_tooltip_and_short_ones_do_not() -> None:
     model.
     """
     hub: MessageHub[Message] = MessageHub()
-    dispatcher = RxDispatcher.immediate()
+    dispatcher = NULL_DISPATCHER
     fs = InMemoryFS()
     long_name = "an-extremely-long-file-name-that-cannot-fit-the-column.txt"
     await fs.write_stream(PathRef((long_name,)), _astream(b"x"))
@@ -558,7 +558,7 @@ async def test_border_row_hover_offers_the_path_and_click_copies_it() -> None:
     anywhere over the pane.
     """
     hub: MessageHub[Message] = MessageHub()
-    dispatcher = RxDispatcher.immediate()
+    dispatcher = NULL_DISPATCHER
     vm = PaneVM(provider=await _seed(), hub=hub, dispatcher=dispatcher, id_prefix="pane.test")
     vm.construct()
     await vm.setup()
@@ -632,7 +632,7 @@ async def test_a_bracketed_path_still_renders_literally_in_the_border() -> None:
     invalid markup and survives verbatim either way.
     """
     hub: MessageHub[Message] = MessageHub()
-    dispatcher = RxDispatcher.immediate()
+    dispatcher = NULL_DISPATCHER
     fs = InMemoryFS()
     await fs.mkdir(PathRef(("[draft]",)))
     await fs.write_stream(PathRef(("[draft]", "notes.txt")), _astream(b"n"))
@@ -677,7 +677,7 @@ async def test_clicking_a_row_selects_it_rather_than_copying() -> None:
     """EntryRow delegates its click to the pane with a ROW-relative offset,
     where ``y`` is also 0 -- so the border check must not fire for row clicks."""
     hub: MessageHub[Message] = MessageHub()
-    dispatcher = RxDispatcher.immediate()
+    dispatcher = NULL_DISPATCHER
     vm = PaneVM(provider=await _seed(), hub=hub, dispatcher=dispatcher, id_prefix="pane.test")
     vm.construct()
     await vm.setup()
@@ -724,7 +724,7 @@ async def test_border_click_never_writes_the_clipboard_from_the_pane() -> None:
     it comes back.
     """
     hub: MessageHub[Message] = MessageHub()
-    dispatcher = RxDispatcher.immediate()
+    dispatcher = NULL_DISPATCHER
     vm = PaneVM(provider=await _seed(), hub=hub, dispatcher=dispatcher, id_prefix="pane.test")
     vm.construct()
     await vm.setup()
@@ -800,9 +800,7 @@ async def pane_row_click(
     monkeypatch: pytest.MonkeyPatch,
 ) -> AsyncIterator[tuple[PaneVM, Pilot[None], EntryRow, list[int]]]:
     hub: MessageHub[Message] = MessageHub()
-    vm = PaneVM(
-        provider=await _seed(), hub=hub, dispatcher=RxDispatcher.immediate(), id_prefix="pane.test"
-    )
+    vm = PaneVM(provider=await _seed(), hub=hub, dispatcher=NULL_DISPATCHER, id_prefix="pane.test")
     vm.construct()
     activations: list[int] = []
 
@@ -886,7 +884,7 @@ async def test_the_view_layer_binds_per_view_model_and_never_to_the_hub() -> Non
     entry_observers: dict[int, int] = {}
     for row_count in (5, 200):
         hub: MessageHub[Message] = MessageHub()
-        dispatcher = RxDispatcher.immediate()
+        dispatcher = NULL_DISPATCHER
         vm = PaneVM(
             provider=await _seed_n(row_count),
             hub=hub,
@@ -955,7 +953,7 @@ async def test_a_row_repaints_from_its_own_view_model_with_no_help_from_the_pane
     the binding: it is the only remaining path to the paint.
     """
     hub: MessageHub[Message] = MessageHub()
-    dispatcher = RxDispatcher.immediate()
+    dispatcher = NULL_DISPATCHER
     vm = PaneVM(provider=await _seed(), hub=hub, dispatcher=dispatcher, id_prefix="pane.test")
     vm.construct()
     await vm.setup()
@@ -1034,7 +1032,7 @@ async def test_a_row_releases_its_binding_when_it_unmounts(
     passing because the binding broke everywhere.
     """
     hub: MessageHub[Message] = MessageHub()
-    dispatcher = RxDispatcher.immediate()
+    dispatcher = NULL_DISPATCHER
     vm = PaneVM(provider=await _seed(), hub=hub, dispatcher=dispatcher, id_prefix="pane.test")
     vm.construct()
     await vm.setup()
@@ -1117,7 +1115,7 @@ async def test_the_pane_releases_its_binding_when_it_unmounts(
     the start could not produce this result.
     """
     hub: MessageHub[Message] = MessageHub()
-    dispatcher = RxDispatcher.immediate()
+    dispatcher = NULL_DISPATCHER
     fs = await _seed()
     await fs.write_stream(PathRef(("data", "one.txt")), _astream(b"1"))
     vm = PaneVM(provider=fs, hub=hub, dispatcher=dispatcher, id_prefix="pane.test")
@@ -1222,7 +1220,7 @@ async def test_cursor_move_flips_selected_and_repaints_the_cursor_glyph() -> Non
     proves the repaint actually happened.
     """
     hub: MessageHub[Message] = MessageHub()
-    dispatcher = RxDispatcher.immediate()
+    dispatcher = NULL_DISPATCHER
     vm = PaneVM(provider=await _seed(), hub=hub, dispatcher=dispatcher, id_prefix="pane.test")
     vm.construct()
     await vm.setup()
@@ -1273,7 +1271,7 @@ async def test_cursor_move_flips_selected_and_repaints_the_cursor_glyph() -> Non
 async def test_marking_an_entry_flips_marked_and_repaints_the_mark_glyph() -> None:
     """Same contract as the cursor for the multi-select ``*`` glyph."""
     hub: MessageHub[Message] = MessageHub()
-    dispatcher = RxDispatcher.immediate()
+    dispatcher = NULL_DISPATCHER
     vm = PaneVM(provider=await _seed(), hub=hub, dispatcher=dispatcher, id_prefix="pane.test")
     vm.construct()
     await vm.setup()
@@ -1344,7 +1342,7 @@ async def test_cursor_move_repaints_only_the_two_affected_rows(
     ``Pane._apply_cursor`` handles the scrolling pinned by the test below.
     """
     hub: MessageHub[Message] = MessageHub()
-    dispatcher = RxDispatcher.immediate()
+    dispatcher = NULL_DISPATCHER
     vm = PaneVM(provider=await _seed_n(60), hub=hub, dispatcher=dispatcher, id_prefix="pane.test")
     vm.construct()
     await vm.setup()
@@ -1477,7 +1475,7 @@ async def test_cursor_move_keeps_the_cursor_row_scrolled_into_view() -> None:
     turning this into a tautology.
     """
     hub: MessageHub[Message] = MessageHub()
-    dispatcher = RxDispatcher.immediate()
+    dispatcher = NULL_DISPATCHER
     vm = PaneVM(provider=await _seed_n(60), hub=hub, dispatcher=dispatcher, id_prefix="pane.test")
     vm.construct()
     await vm.setup()
@@ -1536,7 +1534,7 @@ async def test_cursor_fallback_mark_repaints_the_row_during_a_transfer() -> None
     ``*`` glyph comes from ``render()``.
     """
     hub: MessageHub[Message] = MessageHub()
-    dispatcher = RxDispatcher.immediate()
+    dispatcher = NULL_DISPATCHER
     vm = PaneVM(provider=await _seed(), hub=hub, dispatcher=dispatcher, id_prefix="pane.test")
     vm.construct()
     await vm.setup()
@@ -1597,7 +1595,7 @@ async def test_rerendering_the_body_keeps_the_row_list_mirroring_the_dom() -> No
     rather than replace it fails the identity assertion below.
     """
     hub: MessageHub[Message] = MessageHub()
-    dispatcher = RxDispatcher.immediate()
+    dispatcher = NULL_DISPATCHER
     vm = PaneVM(provider=await _seed(), hub=hub, dispatcher=dispatcher, id_prefix="pane.test")
     vm.construct()
     await vm.setup()
@@ -1721,7 +1719,7 @@ async def test_one_navigation_renders_the_listing_exactly_once() -> None:
     Measured on this fixture: 4 renders before the latch, 2 after.
     """
     hub: MessageHub[Message] = MessageHub()
-    dispatcher = RxDispatcher.immediate()
+    dispatcher = NULL_DISPATCHER
     fs = await _seed()
     # Populate the subdirectory so the post-navigation listing is
     # distinguishable from both the root listing and an empty one.
@@ -1818,7 +1816,7 @@ async def test_every_other_row_carries_the_zebra_class() -> None:
     it.
     """
     hub: MessageHub[Message] = MessageHub()
-    dispatcher = RxDispatcher.immediate()
+    dispatcher = NULL_DISPATCHER
     vm = PaneVM(provider=await _seed(), hub=hub, dispatcher=dispatcher, id_prefix="pane.test")
     vm.construct()
     await vm.setup()
@@ -1898,7 +1896,7 @@ async def test_cursor_bar_beats_the_stripe_on_a_striped_row() -> None:
     assert bg_alt != bg_sel
 
     hub: MessageHub[Message] = MessageHub()
-    dispatcher = RxDispatcher.immediate()
+    dispatcher = NULL_DISPATCHER
     vm = PaneVM(provider=await _seed(), hub=hub, dispatcher=dispatcher, id_prefix="pane.test")
     vm.construct()
     await vm.setup()

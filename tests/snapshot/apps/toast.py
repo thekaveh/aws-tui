@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from textual.app import App, ComposeResult
 from textual.widgets import Static
-from vmx import MessageHub, RxDispatcher
+from vmx import NULL_DISPATCHER, MessageHub
 
 from aws_tui.infra.theme_store import ThemeStore
 from aws_tui.ui.widgets.toast import ToastStack
@@ -22,7 +22,7 @@ class ToastSnapshotApp(App[None]):
         self.CSS = ThemeStore().load(theme)
         self._theme = theme
         self._hub: MessageHub = MessageHub()
-        self._dispatcher = RxDispatcher.immediate()
+        self._dispatcher = NULL_DISPATCHER
         self._stack = ToastStackVM(hub=self._hub, dispatcher=self._dispatcher)
         self._stack.construct()
         # Two toasts: one INFO (theme-change-like) and one ERROR with

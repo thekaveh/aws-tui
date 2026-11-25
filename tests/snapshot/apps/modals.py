@@ -13,7 +13,7 @@ from pathlib import Path
 
 from textual.app import App, ComposeResult
 from textual.widgets import Static
-from vmx import MessageHub, RxDispatcher
+from vmx import NULL_DISPATCHER, MessageHub
 
 from aws_tui.domain.preview import (
     PreviewCell,
@@ -45,7 +45,7 @@ class CommandPaletteApp(App[None]):
         super().__init__()
         self.CSS = _load_css(theme)
         self._hub: MessageHub = MessageHub()
-        self._dispatcher = RxDispatcher.immediate()
+        self._dispatcher = NULL_DISPATCHER
         self._vm = CommandPaletteVM(hub=self._hub, dispatcher=self._dispatcher)
 
     def compose(self) -> ComposeResult:
@@ -78,7 +78,7 @@ class ConfirmModalApp(App[None]):
         super().__init__()
         self.CSS = _load_css(theme)
         self._hub: MessageHub = MessageHub()
-        self._dispatcher = RxDispatcher.immediate()
+        self._dispatcher = NULL_DISPATCHER
         self._vm = ConfirmationVM(hub=self._hub, dispatcher=self._dispatcher)
 
     def compose(self) -> ComposeResult:
@@ -104,7 +104,7 @@ class CopyConfirmModalApp(App[None]):
         super().__init__()
         self.CSS = _load_css(theme)
         self._hub: MessageHub = MessageHub()
-        self._dispatcher = RxDispatcher.immediate()
+        self._dispatcher = NULL_DISPATCHER
         self._vm = ConfirmationVM(hub=self._hub, dispatcher=self._dispatcher)
 
     def compose(self) -> ComposeResult:
@@ -137,7 +137,7 @@ class QuickLookApp(App[None]):
         self._structured = structured
         self.CSS = _load_css(theme)
         self._hub: MessageHub = MessageHub()
-        self._dispatcher = RxDispatcher.immediate()
+        self._dispatcher = NULL_DISPATCHER
         self._vm = QuickLookVM(hub=self._hub, dispatcher=self._dispatcher)
 
     def compose(self) -> ComposeResult:
@@ -190,7 +190,7 @@ class CrashModalApp(App[None]):
         super().__init__()
         self.CSS = _load_css(theme)
         self._hub: MessageHub = MessageHub()
-        self._dispatcher = RxDispatcher.immediate()
+        self._dispatcher = NULL_DISPATCHER
         report = CrashReport(
             timestamp=datetime(2026, 6, 14, 12, 0, 0, tzinfo=UTC),
             exception_type="TypeError",
