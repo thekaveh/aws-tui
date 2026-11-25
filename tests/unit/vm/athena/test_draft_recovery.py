@@ -515,7 +515,7 @@ async def test_lifecycle_changes_while_restore_waits_for_guard_are_refused(tmp_p
         return await original(*args, **kwargs)
 
     monkeypatch.setattr(client, "list_databases_page", databases)
-    await page.query._lifecycle_lock.acquire()
+    await page.query._transition_lock.acquire()
     restore = asyncio.create_task(page.restore_draft(saved.id, yes))
     await entered.wait()
     # Queue an actual committed lifecycle transition ahead of restore's guard.
@@ -523,7 +523,7 @@ async def test_lifecycle_changes_while_restore_waits_for_guard_are_refused(tmp_p
     await asyncio.sleep(0)
     release.set()
     await asyncio.sleep(0)
-    page.query._lifecycle_lock.release()
+    page.query._transition_lock.release()
     await change
     assert not await restore
     assert page.query.sql == ""

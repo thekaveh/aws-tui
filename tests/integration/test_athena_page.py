@@ -386,8 +386,8 @@ async def test_athena_command_hints_follow_live_command_and_pager_state(
         )
         vm.query._busy = True  # type: ignore[attr-defined]
         vm.query._owns_active_query = True  # type: ignore[attr-defined]
-        vm.query._notify("is_executing")  # type: ignore[attr-defined]
-        vm.query._notify("owns_active_query")  # type: ignore[attr-defined]
+        vm.query._publish("is_executing")  # type: ignore[attr-defined]
+        vm.query._publish("owns_active_query")  # type: ignore[attr-defined]
         await wait_until(
             lambda: (not hint_enabled("athena.execute")) and (hint_enabled("athena.cancel")),
             what="query execution hints to reflect the running query",
@@ -398,7 +398,7 @@ async def test_athena_command_hints_follow_live_command_and_pager_state(
         vm.query._busy = False  # type: ignore[attr-defined]
         vm.query._owns_active_query = False  # type: ignore[attr-defined]
         vm.query._execution_ref = None  # type: ignore[attr-defined]
-        vm.query._notify("is_executing")  # type: ignore[attr-defined]
+        vm.query._publish("is_executing")  # type: ignore[attr-defined]
         await wait_until(
             lambda: not hint_enabled("athena.cancel"),
             what="query cancel hint to disable after execution ends",

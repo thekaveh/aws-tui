@@ -5,14 +5,10 @@ from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import Any, TypeVar
 
-import reactivex as rx
 from vmx import (
-    ComponentVM,
-    ConstructionStatus,
     Dispatcher,
     Message,
     MessageHub,
-    PropertyChangedMessage,
 )
 
 from aws_tui.domain.filesystem import ProviderError
@@ -22,7 +18,7 @@ from aws_tui.domain.query import (
     PreparedStatement,
     PreparedStatementSummary,
 )
-from aws_tui.vm._observable import ObserverSafeSubject, send_value_free
+from aws_tui.vm._component import IsolatedComponentVM
 from aws_tui.vm.athena._domain_validation import (
     optional_exact_string,
     optional_non_empty_exact_string,
@@ -85,7 +81,7 @@ class _SavedWorker(PagerWorker[T]):
     )
 
 
-class AthenaSavedVM:
+class AthenaSavedVM(IsolatedComponentVM):
     @property
     def selection_revision(self) -> int:
         """Fence a selected query even after an A-to-B-to-A selection change."""
@@ -99,10 +95,10 @@ class AthenaSavedVM:
         hub: MessageHub[Message],
         dispatcher: Dispatcher,
     ) -> None:
+        super().__init__(name="athena.saved", hub=hub, dispatcher=dispatcher)
         self._client = client
-        self._hub = hub
+        self._hub: MessageHub[Message] = hub
         self._workgroup = workgroup
-        self._disposed = False
         self._shutdown_started = False
         self._shutdown_complete = False
         self._context_generation = 0
@@ -124,10 +120,6 @@ class AthenaSavedVM:
         self._loading_more_named_worker: _SavedWorker[NamedQuerySummary] | None = None
         self._loading_more_prepared_worker: _SavedWorker[PreparedStatementSummary] | None = None
         self._detail_tasks: set[asyncio.Task[Any]] = set()
-        self._on_property_changed = ObserverSafeSubject[str]()
-        self._inner: ComponentVM = (
-            ComponentVM.builder().name("athena.saved").services(hub, dispatcher).build()
-        )
         self._workers: set[_SavedWorker[Any]] = set()
         self._named_worker = self._make_named_worker()
         self._prepared_worker = self._make_prepared_worker()
@@ -210,19 +202,8 @@ class AthenaSavedVM:
     def is_loading_more_prepared_statements(self) -> bool:
         return self._is_loading_more_prepared_statements
 
-    @property
-    def status(self) -> ConstructionStatus:
-        return self._inner.status
-
-    @property
-    def on_property_changed(self) -> rx.Observable[str]:
-        return self._on_property_changed.observable
-
-    def construct(self) -> None:
-        self._inner.construct()
-
     async def setup(self) -> None:
-        if self._disposed or self._shutdown_started:
+        if self._is_disposed() or self._shutdown_started:
             return
         await asyncio.gather(
             self.refresh_named_queries(),
@@ -230,7 +211,7 @@ class AthenaSavedVM:
         )
 
     async def refresh_named_queries(self) -> None:
-        if self._disposed or self._shutdown_started:
+        if self._is_disposed() or self._shutdown_started:
             return
         self._named_generation += 1
         worker = self._replace_named_worker()
@@ -243,7 +224,7 @@ class AthenaSavedVM:
         await self._run_named_pager(worker, refresh=True)
 
     async def refresh_prepared_statements(self) -> None:
-        if self._disposed or self._shutdown_started:
+        if self._is_disposed() or self._shutdown_started:
             return
         self._prepared_generation += 1
         worker = self._replace_prepared_worker()
@@ -274,7 +255,7 @@ class AthenaSavedVM:
                 self._finish_loading_more_prepared(worker)
 
     async def select_named_query(self, query_id: str) -> None:
-        if self._disposed or self._shutdown_started:
+        if self._is_disposed() or self._shutdown_started:
             return
         query = next(
             (candidate for candidate in self.named_queries if candidate.query_id == query_id),
@@ -298,7 +279,7 @@ class AthenaSavedVM:
         self._notify_selection()
 
     async def select_prepared_statement(self, name: str) -> None:
-        if self._disposed or self._shutdown_started:
+        if self._is_disposed() or self._shutdown_started:
             return
         if not any(summary.name == name for summary in self.prepared_statements):
             return
@@ -327,8 +308,8 @@ class AthenaSavedVM:
                     exc,
                     fallback=_PREPARED_ERROR,
                 )
-                self._notify("detail_state")
-                self._notify("detail_error_text")
+                self._publish("detail_state")
+                self._publish("detail_error_text")
             return
         except Exception as exc:
             if self._is_current_detail(generation, context_generation, name):
@@ -341,8 +322,8 @@ class AthenaSavedVM:
                 self._detail_state, self._detail_error_text = map_unexpected_error(
                     fallback=_PREPARED_ERROR,
                 )
-                self._notify("detail_state")
-                self._notify("detail_error_text")
+                self._publish("detail_state")
+                self._publish("detail_error_text")
             return
         finally:
             self._detail_tasks.discard(task)
@@ -351,13 +332,13 @@ class AthenaSavedVM:
         if detail.name != name or detail.workgroup != workgroup:
             self._detail_state = PaneState.ERROR
             self._detail_error_text = _PREPARED_ERROR
-            self._notify("detail_state")
-            self._notify("detail_error_text")
+            self._publish("detail_state")
+            self._publish("detail_error_text")
             return
         self._selected_prepared_statement = detail
         self._detail_state = PaneState.IDLE
-        self._notify("selected_prepared_statement")
-        self._notify("detail_state")
+        self._publish("selected_prepared_statement")
+        self._publish("detail_state")
 
     def selected_sql(self) -> str | None:
         if self._selected_kind is SavedQueryKind.NAMED:
@@ -370,7 +351,7 @@ class AthenaSavedVM:
 
     def export_snapshot(self) -> AthenaSavedSnapshot:
         if (
-            self._disposed
+            self._is_disposed()
             or self._shutdown_started
             or self._named_state is PaneState.LOADING
             or self._prepared_state is PaneState.LOADING
@@ -411,7 +392,7 @@ class AthenaSavedVM:
         return snapshot
 
     def restore_snapshot(self, snapshot: AthenaSavedSnapshot) -> None:
-        if self._disposed or self._shutdown_started:
+        if self._is_disposed() or self._shutdown_started:
             raise ValueError("Athena saved queries are unavailable")
         if not self.snapshot_is_valid(snapshot):
             raise ValueError("Athena saved query snapshot is invalid")
@@ -598,7 +579,7 @@ class AthenaSavedVM:
         return not (snapshot.prepared_state is PaneState.IDLE and not snapshot.prepared_statements)
 
     def replace_workgroup(self, workgroup: str) -> None:
-        if self._disposed or self._shutdown_started:
+        if self._is_disposed() or self._shutdown_started:
             return
         self._context_generation += 1
         self._named_generation += 1
@@ -646,18 +627,12 @@ class AthenaSavedVM:
         self._prepared_pager = prepared.pager
         self._shutdown_complete = True
 
-    def dispose(self) -> None:
-        if self._disposed:
-            return
-        self._disposed = True
+    def _on_dispose(self) -> None:
         self._context_generation += 1
         self._detail_generation += 1
         self._cancel_detail_tasks()
         for worker in tuple(self._workers):
             self._retire_worker(worker)
-        self._on_property_changed.on_completed()
-        self._on_property_changed.dispose()
-        self._inner.dispose()
 
     async def _run_named_pager(
         self,
@@ -678,9 +653,9 @@ class AthenaSavedVM:
                     if query_id in accepted_ids
                 }
                 self._named_error_text = None
-                self._notify("named_queries")
-                self._notify("has_more_named_queries")
-                self._notify("named_error_text")
+                self._publish("named_queries")
+                self._publish("has_more_named_queries")
+                self._publish("named_error_text")
                 self._set_named_state(PaneState.IDLE if self.named_queries else PaneState.EMPTY)
             return
         except ProviderError as exc:
@@ -689,8 +664,8 @@ class AthenaSavedVM:
                     exc,
                     fallback=_SAVED_ERROR,
                 )
-                self._notify("named_state")
-                self._notify("named_error_text")
+                self._publish("named_state")
+                self._publish("named_error_text")
             return
         except Exception as exc:
             if self._is_current_named(worker):
@@ -700,16 +675,16 @@ class AthenaSavedVM:
                 self._named_state, self._named_error_text = map_unexpected_error(
                     fallback=_SAVED_ERROR,
                 )
-                self._notify("named_state")
-                self._notify("named_error_text")
+                self._publish("named_state")
+                self._publish("named_error_text")
             return
         finally:
             self._untrack_task(worker, task)
         if self._is_current_named(worker):
             self._named_error_text = None
-            self._notify("named_queries")
-            self._notify("has_more_named_queries")
-            self._notify("named_error_text")
+            self._publish("named_queries")
+            self._publish("has_more_named_queries")
+            self._publish("named_error_text")
             self._set_named_state(PaneState.IDLE if self.named_queries else PaneState.EMPTY)
 
     async def _run_prepared_pager(
@@ -725,9 +700,9 @@ class AthenaSavedVM:
         except PagerCollectionLimitError:
             if self._is_current_prepared(worker):
                 self._prepared_error_text = None
-                self._notify("prepared_statements")
-                self._notify("has_more_prepared_statements")
-                self._notify("prepared_error_text")
+                self._publish("prepared_statements")
+                self._publish("has_more_prepared_statements")
+                self._publish("prepared_error_text")
                 self._set_prepared_state(
                     PaneState.IDLE if self.prepared_statements else PaneState.EMPTY
                 )
@@ -738,8 +713,8 @@ class AthenaSavedVM:
                     exc,
                     fallback=_PREPARED_ERROR,
                 )
-                self._notify("prepared_state")
-                self._notify("prepared_error_text")
+                self._publish("prepared_state")
+                self._publish("prepared_error_text")
             return
         except Exception as exc:
             if self._is_current_prepared(worker):
@@ -752,16 +727,16 @@ class AthenaSavedVM:
                 self._prepared_state, self._prepared_error_text = map_unexpected_error(
                     fallback=_PREPARED_ERROR,
                 )
-                self._notify("prepared_state")
-                self._notify("prepared_error_text")
+                self._publish("prepared_state")
+                self._publish("prepared_error_text")
             return
         finally:
             self._untrack_task(worker, task)
         if self._is_current_prepared(worker):
             self._prepared_error_text = None
-            self._notify("prepared_statements")
-            self._notify("has_more_prepared_statements")
-            self._notify("prepared_error_text")
+            self._publish("prepared_statements")
+            self._publish("has_more_prepared_statements")
+            self._publish("prepared_error_text")
             self._set_prepared_state(
                 PaneState.IDLE if self.prepared_statements else PaneState.EMPTY
             )
@@ -894,7 +869,7 @@ class AthenaSavedVM:
             and worker.generation == self._named_generation
             and (context_generation is None or context_generation == self._context_generation)
             and not worker.retired
-            and not self._disposed
+            and not self._is_disposed()
             and not self._shutdown_started
         )
 
@@ -908,7 +883,7 @@ class AthenaSavedVM:
             and worker.generation == self._prepared_generation
             and (context_generation is None or context_generation == self._context_generation)
             and not worker.retired
-            and not self._disposed
+            and not self._is_disposed()
             and not self._shutdown_started
         )
 
@@ -923,7 +898,7 @@ class AthenaSavedVM:
             and context_generation == self._context_generation
             and self._selected_kind is SavedQueryKind.PREPARED
             and self._selected_query_id == name
-            and not self._disposed
+            and not self._is_disposed()
             and not self._shutdown_started
         )
 
@@ -937,45 +912,43 @@ class AthenaSavedVM:
         self._detail_error_text = None
 
     def _notify_saved(self) -> None:
-        for property_name in (
+        self._publish(
             "named_queries",
             "prepared_statements",
             "has_more_named_queries",
             "has_more_prepared_statements",
             "named_state",
             "prepared_state",
-        ):
-            self._notify(property_name)
+        )
         self._notify_selection()
 
     def _notify_selection(self) -> None:
-        for property_name in (
+        self._publish(
             "selected_kind",
             "selected_query_id",
             "selected_named_query",
             "selected_prepared_statement",
             "detail_state",
             "detail_error_text",
-        ):
-            self._notify(property_name)
+        )
 
     def _notify_all(self) -> None:
-        self._notify("workgroup")
+        self._publish("workgroup")
         self._notify_saved()
-        self._notify("named_error_text")
-        self._notify("prepared_error_text")
+        self._publish("named_error_text")
+        self._publish("prepared_error_text")
 
     def _set_named_state(self, state: PaneState) -> None:
         if self._named_state == state:
             return
         self._named_state = state
-        self._notify("named_state")
+        self._publish("named_state")
 
     def _set_prepared_state(self, state: PaneState) -> None:
         if self._prepared_state == state:
             return
         self._prepared_state = state
-        self._notify("prepared_state")
+        self._publish("prepared_state")
 
     def _begin_loading_more_named(
         self,
@@ -984,7 +957,7 @@ class AthenaSavedVM:
         self._loading_more_named_worker = worker
         if not self._is_loading_more_named_queries:
             self._is_loading_more_named_queries = True
-            self._notify("is_loading_more_named_queries")
+            self._publish("is_loading_more_named_queries")
 
     def _finish_loading_more_named(
         self,
@@ -995,7 +968,7 @@ class AthenaSavedVM:
         self._loading_more_named_worker = None
         if self._is_loading_more_named_queries:
             self._is_loading_more_named_queries = False
-            self._notify("is_loading_more_named_queries")
+            self._publish("is_loading_more_named_queries")
 
     def _begin_loading_more_prepared(
         self,
@@ -1004,7 +977,7 @@ class AthenaSavedVM:
         self._loading_more_prepared_worker = worker
         if not self._is_loading_more_prepared_statements:
             self._is_loading_more_prepared_statements = True
-            self._notify("is_loading_more_prepared_statements")
+            self._publish("is_loading_more_prepared_statements")
 
     def _finish_loading_more_prepared(
         self,
@@ -1015,20 +988,7 @@ class AthenaSavedVM:
         self._loading_more_prepared_worker = None
         if self._is_loading_more_prepared_statements:
             self._is_loading_more_prepared_statements = False
-            self._notify("is_loading_more_prepared_statements")
-
-    def _notify(self, property_name: str) -> None:
-        if self._disposed:
-            return
-        send_value_free(
-            self._hub,
-            PropertyChangedMessage.create(
-                self,
-                "athena.saved",
-                property_name,
-            ),
-        )
-        self._on_property_changed.on_next(property_name)
+            self._publish("is_loading_more_prepared_statements")
 
 
 def _named_query_summary(query: NamedQuery) -> NamedQuerySummary:

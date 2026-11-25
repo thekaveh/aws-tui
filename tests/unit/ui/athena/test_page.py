@@ -449,7 +449,7 @@ async def test_saved_refresh_uses_current_ring_forward_tie_for_disappearing_cont
         await pilot.pause()
 
         vm.saved._named_pager._current_token = None  # type: ignore[attr-defined]
-        vm.saved._notify("has_more_named_queries")  # type: ignore[attr-defined]
+        vm.saved._publish("has_more_named_queries")  # type: ignore[attr-defined]
         await wait_until(
             lambda: (
                 load_more.disabled
@@ -1537,7 +1537,7 @@ async def test_query_buttons_follow_vmx_command_state() -> None:
 
         vm.query._busy = True  # type: ignore[attr-defined]
         vm.query._is_submitting = True  # type: ignore[attr-defined]
-        vm.query._notify("is_submitting")  # type: ignore[attr-defined]
+        vm.query._publish("is_submitting")  # type: ignore[attr-defined]
         for _ in range(10):
             await pilot.pause(0.01)
             if execute.disabled and not cancel.disabled:
