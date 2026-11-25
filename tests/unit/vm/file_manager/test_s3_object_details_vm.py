@@ -11,7 +11,14 @@ from datetime import UTC, datetime
 from typing import Any, cast
 
 import pytest
-from vmx import NULL_DISPATCHER, Message, MessageHub, PropertyChangedMessage
+from vmx import (
+    NULL_DISPATCHER,
+    ComponentVM,
+    ConstructionStatus,
+    Message,
+    MessageHub,
+    PropertyChangedMessage,
+)
 
 from aws_tui.demo.in_memory_fs import InMemoryFS
 from aws_tui.domain.filesystem import PathRef
@@ -671,3 +678,32 @@ async def test_synchronous_observer_destruct_at_publication_invalidates_ready(
     finally:
         subscription.dispose()
         witness.dispose()
+
+
+def _status(vm: ComponentVM) -> ConstructionStatus:
+    # A call result is not narrowed by an earlier ``is`` assertion.
+    return vm.status
+
+
+async def test_details_vm_is_a_component_vm(context: Context) -> None:
+    _, _, vm = context
+    assert isinstance(vm, ComponentVM)
+    assert _status(vm) is ConstructionStatus.CONSTRUCTED
+    vm.dispose()
+    assert _status(vm) is ConstructionStatus.DISPOSED
+
+
+async def test_details_raising_subscriber_does_not_stop_later_subscribers(context: Context) -> None:
+    fs, _, vm = context
+    seen: list[str] = []
+
+    def boom(_name: str) -> None:
+        raise RuntimeError("subscriber failed")
+
+    first = vm.on_property_changed.subscribe(boom)
+    second = vm.on_property_changed.subscribe(seen.append)
+    fs.queue_details(details())
+    await load(vm)
+    first.dispose()
+    second.dispose()
+    assert "state" in seen
