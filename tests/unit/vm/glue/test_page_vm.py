@@ -195,7 +195,7 @@ async def test_catalog_query_in_athena_sends_selected_table_identity() -> None:
     page = make_page_vm(seeded_glue())
     await page.setup()
     messages: list[OpenAthenaTableRequest] = []
-    subscription = page._hub.messages.subscribe(  # type: ignore[attr-defined]
+    subscription = page.hub.messages.subscribe(
         on_next=lambda message: (
             messages.append(message) if isinstance(message, OpenAthenaTableRequest) else None
         )

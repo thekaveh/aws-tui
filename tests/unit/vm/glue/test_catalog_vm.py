@@ -1470,7 +1470,7 @@ async def test_catalog_rejects_invalid_s3_locations_without_publishing(
         storage=replace(detail.storage, location=location),
     )
     published: list[Message] = []
-    subscription = vm._hub.messages.subscribe(on_next=published.append)  # type: ignore[attr-defined]
+    subscription = vm.hub.messages.subscribe(on_next=published.append)
 
     try:
         assert not vm.open_s3_location()
@@ -1493,7 +1493,7 @@ async def test_catalog_publishes_valid_dotted_hyphenated_s3_prefix() -> None:
         storage=replace(detail.storage, location=location),
     )
     published: list[Message] = []
-    subscription = vm._hub.messages.subscribe(on_next=published.append)  # type: ignore[attr-defined]
+    subscription = vm.hub.messages.subscribe(on_next=published.append)
 
     try:
         assert vm.open_s3_location(preferred_pane="right")

@@ -205,7 +205,7 @@ async def test_result_handoff_only_reports_unexpected_client_failures(
     vm = make_results_vm(client)
     await vm.load("q-1")
     messages: list[Message] = []
-    subscription = vm._hub.messages.subscribe(messages.append)  # type: ignore[attr-defined]
+    subscription = vm.hub.messages.subscribe(messages.append)
     try:
         assert not await vm.open_s3_location()
     finally:
@@ -1067,7 +1067,7 @@ def test_results_vm_publishes_names_on_hub_and_stream() -> None:
     stream: list[str] = []
     hub_messages: list[PropertyChangedMessage[object]] = []
     vm.on_property_changed.subscribe(stream.append)
-    vm._hub.messages.subscribe(
+    vm.hub.messages.subscribe(
         lambda message: (
             hub_messages.append(message)
             if isinstance(message, PropertyChangedMessage) and message.sender is vm

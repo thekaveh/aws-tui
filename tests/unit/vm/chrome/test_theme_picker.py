@@ -74,7 +74,7 @@ def test_set_active_updates_options_and_emits_property_changed() -> None:
             if name == "active_theme":
                 seen.append(str(getattr(msg, "sender_name", "")))
 
-        sub = vm._hub.messages.subscribe(on_next=_on_message)  # type: ignore[attr-defined]
+        sub = vm.hub.messages.subscribe(on_next=_on_message)
         try:
             vm.set_active("voidline")
             assert vm.active_theme == "voidline"
@@ -93,7 +93,7 @@ def test_set_active_is_idempotent() -> None:
     vm = _build(active="carbon")
     try:
         emitted: list[object] = []
-        sub = vm._hub.messages.subscribe(  # type: ignore[attr-defined]
+        sub = vm.hub.messages.subscribe(
             on_next=lambda m: (
                 emitted.append(m) if getattr(m, "property_name", None) == "active_theme" else None
             )

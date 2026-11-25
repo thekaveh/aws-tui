@@ -74,7 +74,7 @@ async def test_select_publishes_property_changed() -> None:
     fake.add_application(app_id="a1", name="etl")
     await vm.refresh()
     notified: list[str] = []
-    sub = vm._hub.messages.subscribe(  # type: ignore[attr-defined]
+    sub = vm.hub.messages.subscribe(
         on_next=lambda m: notified.append(getattr(m, "property_name", ""))
     )
     try:
@@ -138,7 +138,7 @@ async def test_refresh_is_no_op_when_application_list_unchanged() -> None:
     await vm.refresh()  # First load — sets up the cache.
 
     notified: list[str] = []
-    sub = vm._hub.messages.subscribe(  # type: ignore[attr-defined]
+    sub = vm.hub.messages.subscribe(
         on_next=lambda m: notified.append(getattr(m, "property_name", ""))
     )
     try:
@@ -229,7 +229,7 @@ async def test_reselecting_same_app_is_idempotent() -> None:
     await vm.refresh()
     vm.select_by_id("a1")
     notified: list[str] = []
-    sub = vm._hub.messages.subscribe(  # type: ignore[attr-defined]
+    sub = vm.hub.messages.subscribe(
         on_next=lambda m: notified.append(getattr(m, "property_name", ""))
     )
     try:
@@ -247,7 +247,7 @@ async def test_refresh_with_changed_list_emits_applications_event() -> None:
     fake.add_application(app_id="a1", name="etl")
     await vm.refresh()
     notified: list[str] = []
-    sub = vm._hub.messages.subscribe(  # type: ignore[attr-defined]
+    sub = vm.hub.messages.subscribe(
         on_next=lambda m: notified.append(getattr(m, "property_name", ""))
     )
     try:
@@ -471,7 +471,7 @@ async def test_on_property_changed_isolates_cross_vm_state_events() -> None:
     by per-VM Subject."""
     vm1, _ = _make()
     fake2 = _make()[1]
-    hub: MessageHub[Message] = vm1._hub  # type: ignore[attr-defined]
+    hub: MessageHub[Message] = vm1.hub
     vm2 = ApplicationsVM(client=fake2, hub=hub, dispatcher=NULL_DISPATCHER)
     vm2.construct()
     events_on_vm1: list[str] = []
