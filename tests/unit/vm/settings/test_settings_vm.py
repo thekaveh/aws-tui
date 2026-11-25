@@ -3,25 +3,20 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import cast
 
 import pytest
-from vmx import NULL_DISPATCHER, ComponentVM, MessageHub
+from vmx import NULL_DISPATCHER, ComponentVM
 from vmx.lifecycle.status import ConstructionStatus
-from vmx.messages.protocols import Message
 
 from aws_tui.infra.config_store import ConfigStore
 from aws_tui.infra.connection_resolver import ConnectionResolver
 from aws_tui.vm.settings.s3_connections_vm import S3ConnectionsVM
 from aws_tui.vm.settings.settings_vm import SettingsVM
-
-
-def _hub() -> MessageHub[Message]:
-    return cast("MessageHub[Message]", MessageHub())
+from tests.helpers import new_hub
 
 
 def _make_vm(tmp_path: Path) -> tuple[SettingsVM, S3ConnectionsVM]:
-    hub = _hub()
+    hub = new_hub()
     store = ConfigStore(path=tmp_path / "config.toml")
     resolver = ConnectionResolver(config_store=store)
     s3 = S3ConnectionsVM(resolver=resolver, config_store=store, hub=hub, dispatcher=NULL_DISPATCHER)
@@ -79,7 +74,7 @@ def test_settings_dispose_does_not_dispose_shared_draft_owner(tmp_path):
 
     owner, _ = runtime_at(tmp_path, enabled=False)
     vm, s3 = _make_vm(tmp_path)
-    shared = SettingsVM(s3=s3, athena_drafts=owner, hub=_hub(), dispatcher=NULL_DISPATCHER)
+    shared = SettingsVM(s3=s3, athena_drafts=owner, hub=new_hub(), dispatcher=NULL_DISPATCHER)
     assert shared.athena_drafts is owner
     shared.dispose()
     assert not owner._disposed

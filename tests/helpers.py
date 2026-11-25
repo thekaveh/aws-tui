@@ -10,6 +10,8 @@ import asyncio
 import sys
 from typing import TYPE_CHECKING, Any
 
+from vmx import Message, MessageHub
+
 if TYPE_CHECKING:
     from collections.abc import Callable
 
@@ -18,6 +20,12 @@ if TYPE_CHECKING:
     from textual.widgets import TextArea
 
 DEFAULT_DRAIN_TIMEOUT_SECONDS = 30.0
+
+
+def new_hub() -> MessageHub[Message]:
+    """Return a fresh message hub for one test."""
+    hub: MessageHub[Message] = MessageHub()
+    return hub
 
 
 def local_transfer_filename(*, platform: str = sys.platform) -> str:

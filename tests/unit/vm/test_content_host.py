@@ -7,16 +7,12 @@ from types import SimpleNamespace
 from typing import cast
 
 import pytest
-from vmx import NULL_DISPATCHER, ComponentVM, MessageHub
+from vmx import NULL_DISPATCHER, ComponentVM
 from vmx.lifecycle.status import ConstructionStatus
-from vmx.messages.protocols import Message
 
 from aws_tui.vm._component import IsolatedComponentVM
 from aws_tui.vm.content_host_vm import ContentHostVM
-
-
-def _hub() -> MessageHub[Message]:
-    return cast("MessageHub[Message]", MessageHub())
+from tests.helpers import new_hub
 
 
 def _component() -> ComponentVM:
@@ -24,7 +20,7 @@ def _component() -> ComponentVM:
 
 
 def _build() -> ContentHostVM:
-    vm = ContentHostVM(hub=_hub(), dispatcher=NULL_DISPATCHER)
+    vm = ContentHostVM(hub=new_hub(), dispatcher=NULL_DISPATCHER)
     vm.construct()
     return vm
 
@@ -413,7 +409,7 @@ async def test_setup_failure_is_reported() -> None:
             self.status = ConstructionStatus.DISPOSED
 
     host = ContentHostVM(
-        hub=_hub(),
+        hub=new_hub(),
         dispatcher=NULL_DISPATCHER,
         on_setup_error=reported.append,
     )

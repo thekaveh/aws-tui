@@ -21,19 +21,14 @@ The three contracts mirror the structural interfaces in
 from __future__ import annotations
 
 from collections.abc import AsyncIterator
-from typing import cast
 
 import pytest
-from vmx import NULL_DISPATCHER, MessageHub
-from vmx.messages.protocols import Message
+from vmx import NULL_DISPATCHER
 
 from aws_tui.demo.in_memory_fs import InMemoryFS
 from aws_tui.domain.filesystem import FileEntry, PathRef, PermissionDeniedError
 from aws_tui.vm.file_manager.pane_vm import PaneState, PaneVM
-
-
-def _hub() -> MessageHub[Message]:
-    return cast("MessageHub[Message]", MessageHub())
+from tests.helpers import new_hub
 
 
 async def _astream(payload: bytes) -> AsyncIterator[bytes]:
@@ -50,7 +45,7 @@ async def _wide_fs() -> InMemoryFS:
 
 async def _make_pane() -> PaneVM:
     fs = await _wide_fs()
-    pane = PaneVM(provider=fs, hub=_hub(), dispatcher=NULL_DISPATCHER)
+    pane = PaneVM(provider=fs, hub=new_hub(), dispatcher=NULL_DISPATCHER)
     pane.construct()
     await pane.setup()
     return pane

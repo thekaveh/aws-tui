@@ -2,11 +2,8 @@
 
 from __future__ import annotations
 
-from typing import cast
-
 import pytest
-from vmx import NULL_DISPATCHER, MessageHub
-from vmx.messages.protocols import Message
+from vmx import NULL_DISPATCHER
 
 from aws_tui.infra.connection_resolver import Connection
 from aws_tui.vm.nav_menu_vm import NavMenuVM as ServicesMenuVM
@@ -16,10 +13,7 @@ from aws_tui.vm.services_protocol import (
     ServiceNotFound,
     ServiceRegistry,
 )
-
-
-def _hub() -> MessageHub[Message]:
-    return cast("MessageHub[Message]", MessageHub())
+from tests.helpers import new_hub
 
 
 def _aws_conn(name: str = "kaveh-dev") -> Connection:
@@ -104,7 +98,7 @@ def test_service_descriptor_is_frozen() -> None:
 
 
 def _menu(registry: ServiceRegistry) -> ServicesMenuVM:
-    vm = ServicesMenuVM(registry=registry, hub=_hub(), dispatcher=NULL_DISPATCHER)
+    vm = ServicesMenuVM(registry=registry, hub=new_hub(), dispatcher=NULL_DISPATCHER)
     vm.construct()
     return vm
 
@@ -205,7 +199,7 @@ def test_nav_menu_always_includes_settings_item_last() -> None:
 
     reg = ServiceRegistry()
     reg.register(FakeService("s3", "S3", accepts_aws=True, accepts_s3_compat=True))
-    hub = _hub()
+    hub = new_hub()
     vm = NavMenuVM(registry=reg, hub=hub, dispatcher=NULL_DISPATCHER)
     vm.construct()
     try:
@@ -294,7 +288,7 @@ def test_switching_to_already_selected_service_is_idempotent() -> None:
     PropertyChanged and leaves composite.current unchanged."""
     reg = ServiceRegistry()
     reg.register(FakeService("s3", "S3", accepts_aws=True, accepts_s3_compat=True))
-    hub = _hub()
+    hub = new_hub()
     menu = ServicesMenuVM(registry=reg, hub=hub, dispatcher=NULL_DISPATCHER)
     menu.construct()
     try:
@@ -337,7 +331,7 @@ def test_rebuild_dropping_selected_service_clears_selection_and_emits() -> None:
     reg = ServiceRegistry()
     reg.register(FakeService("s3", "S3", accepts_aws=True, accepts_s3_compat=True))
     reg.register(FakeService("ec2", "EC2", accepts_aws=True, accepts_s3_compat=False))
-    hub = _hub()
+    hub = new_hub()
     menu = ServicesMenuVM(registry=reg, hub=hub, dispatcher=NULL_DISPATCHER)
     menu.construct()
     try:
@@ -386,7 +380,7 @@ def test_nav_menu_vm_refreshes_on_connection_list_change() -> None:
 
     from aws_tui.vm.messages import ConnectionListChangedMessage
 
-    hub = _hub()
+    hub = new_hub()
     # Use a MagicMock registry so we can observe re-filter calls.
     registry = MagicMock()
     registry.all.return_value = ()

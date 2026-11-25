@@ -3,17 +3,11 @@ theme list and the currently-active theme."""
 
 from __future__ import annotations
 
-from typing import cast
-
 from vmx import NULL_DISPATCHER, ConstructionStatus, MessageHub
-from vmx.messages.protocols import Message
 
 from aws_tui.vm._component import IsolatedComponentVM
 from aws_tui.vm.chrome.theme_picker_vm import ThemePickerVM, next_theme_name
-
-
-def _hub() -> MessageHub[Message]:
-    return cast("MessageHub[Message]", MessageHub())
+from tests.helpers import new_hub
 
 
 def _build(active: str = "carbon") -> ThemePickerVM:
@@ -27,7 +21,7 @@ def _build(active: str = "carbon") -> ThemePickerVM:
         themes=("carbon", "voidline", "lattice", "amber"),
         active_theme=active,
         on_pick=_record_pick,
-        hub=_hub(),
+        hub=new_hub(),
         dispatcher=NULL_DISPATCHER,
     )
     vm.construct()
@@ -139,7 +133,7 @@ def test_pick_theme_command_keeps_active_theme_when_callback_rejects() -> None:
         themes=("carbon", "broken"),
         active_theme="carbon",
         on_pick=lambda _name: False,
-        hub=_hub(),
+        hub=new_hub(),
         dispatcher=NULL_DISPATCHER,
     )
     vm.construct()

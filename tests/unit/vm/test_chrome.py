@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from typing import cast
-
 from vmx import NULL_DISPATCHER, MessageHub
 from vmx.lifecycle.status import ConstructionStatus
 from vmx.messages.protocols import Message
@@ -11,14 +9,11 @@ from vmx.messages.protocols import Message
 from aws_tui.infra.keymap_store import KeymapStore
 from aws_tui.vm._component import IsolatedComponentVM
 from aws_tui.vm.chrome.chrome_vm import ChromeVM
-
-
-def _hub() -> MessageHub[Message]:
-    return cast("MessageHub[Message]", MessageHub())
+from tests.helpers import new_hub
 
 
 def _build() -> tuple[ChromeVM, MessageHub[Message]]:
-    hub = _hub()
+    hub = new_hub()
     chrome = ChromeVM(hub=hub, dispatcher=NULL_DISPATCHER, keymap=KeymapStore())
     chrome.construct()
     return chrome, hub

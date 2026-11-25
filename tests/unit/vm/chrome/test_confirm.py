@@ -3,30 +3,24 @@
 from __future__ import annotations
 
 import asyncio
-from typing import cast
 
 import pytest
 from vmx import (
     NULL_DISPATCHER,
     ConstructionStatus,
     DialogService,
-    MessageHub,
     ModalVM,
     NotificationSeverity,
 )
 from vmx.dialogs.dialog_service import FileFilter
-from vmx.messages.protocols import Message
 
 from aws_tui.vm._component import IsolatedComponentVM
 from aws_tui.vm.chrome.confirm_vm import ConfirmationVM, ConfirmRequest
-
-
-def _hub() -> MessageHub[Message]:
-    return cast("MessageHub[Message]", MessageHub())
+from tests.helpers import new_hub
 
 
 def _build() -> ConfirmationVM:
-    vm = ConfirmationVM(hub=_hub(), dispatcher=NULL_DISPATCHER)
+    vm = ConfirmationVM(hub=new_hub(), dispatcher=NULL_DISPATCHER)
     vm.construct()
     return vm
 

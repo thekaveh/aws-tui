@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import ClassVar, cast
+from typing import ClassVar
 
 import pytest
 from rich.text import Text
@@ -12,7 +12,7 @@ from textual.binding import Binding, BindingType
 from textual.containers import Horizontal
 from textual.widget import Widget
 from textual.widgets import Input, Static
-from vmx import NULL_DISPATCHER, Message, MessageHub
+from vmx import NULL_DISPATCHER
 
 from aws_tui.demo.connections import DemoConnectionResolver
 from aws_tui.infra.config_store import ConfigStore, ConnectionEntry
@@ -28,10 +28,7 @@ from aws_tui.ui.widgets.settings.connection_form import (
 )
 from aws_tui.vm.nav_menu_vm import NavMenuVM
 from aws_tui.vm.services_protocol import ServiceRegistry
-
-
-def _hub() -> MessageHub[Message]:
-    return cast("MessageHub[Message]", MessageHub())
+from tests.helpers import new_hub
 
 
 def _connection(name: str = "[bold]literal[/]", source: str = "auto-aws-profile") -> Connection:
@@ -359,7 +356,7 @@ async def test_busy_blocks_actions_and_pending_form_rejects_cancel_and_duplicate
 
 @pytest.mark.asyncio
 async def test_rail_width_origins_arrows_and_overflow_keyboard(tmp_path: Path) -> None:
-    hub = _hub()
+    hub = new_hub()
     vm = NavMenuVM(registry=ServiceRegistry(), hub=hub, dispatcher=NULL_DISPATCHER)
     vm.construct()
     nav = NavMenu(vm=vm, hub=hub)
@@ -428,7 +425,7 @@ async def test_real_snapshots_render_all_origins_and_literal_names_in_themes(
     )
     snapshot = resolver.discover()
     demo_snapshot = DemoConnectionResolver().discover()
-    hub = _hub()
+    hub = new_hub()
     vm = NavMenuVM(registry=ServiceRegistry(), hub=hub, dispatcher=NULL_DISPATCHER)
     vm.construct()
     nav = NavMenu(vm=vm, hub=hub)
@@ -476,7 +473,7 @@ async def test_long_wide_name_keeps_origin_visible_and_selects_exact_identity(
 ) -> None:
     name = "[bold]" + "界" * 45 + "[/]"
     connection = _connection(name=name)
-    hub = _hub()
+    hub = new_hub()
     vm = NavMenuVM(registry=ServiceRegistry(), hub=hub, dispatcher=NULL_DISPATCHER)
     vm.construct()
     nav = NavMenu(vm=vm, hub=hub)
@@ -518,7 +515,7 @@ async def test_accepted_multiline_name_keeps_origin_visible_and_exact_selection(
     )
     snapshot = resolver.discover()
     assert snapshot.connections[0].name == name
-    hub = _hub()
+    hub = new_hub()
     vm = NavMenuVM(registry=ServiceRegistry(), hub=hub, dispatcher=NULL_DISPATCHER)
     vm.construct()
     nav = NavMenu(vm=vm, hub=hub)

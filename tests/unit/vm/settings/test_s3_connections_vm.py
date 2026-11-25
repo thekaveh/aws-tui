@@ -5,7 +5,6 @@ from __future__ import annotations
 import threading
 from dataclasses import replace
 from pathlib import Path
-from typing import cast
 
 import pytest
 from vmx import NULL_DISPATCHER, ComponentVM, MessageHub
@@ -20,6 +19,7 @@ from aws_tui.infra.keychain import (
 )
 from aws_tui.vm.messages import ConnectionListChangedMessage
 from aws_tui.vm.settings.s3_connections_vm import S3ConnectionsVM
+from tests.helpers import new_hub
 
 
 class _FailingKeychain(InMemoryKeychain):
@@ -59,10 +59,6 @@ class _PartiallyDeletingKeychain(InMemoryKeychain):
             raise RuntimeError("keychain delete failed")
 
 
-def _hub() -> MessageHub[Message]:
-    return cast("MessageHub[Message]", MessageHub())
-
-
 def _entry(name: str = "minio-local", region: str = "us-east-1") -> ConnectionEntry:
     return ConnectionEntry(
         name=name,
@@ -78,7 +74,7 @@ def _entry(name: str = "minio-local", region: str = "us-east-1") -> ConnectionEn
 
 
 def _make_vm(tmp_path: Path) -> tuple[S3ConnectionsVM, MessageHub[Message], ConfigStore]:
-    hub = _hub()
+    hub = new_hub()
     store = ConfigStore(path=tmp_path / "config.toml")
     resolver = ConnectionResolver(config_store=store)
     vm = S3ConnectionsVM(resolver=resolver, config_store=store, hub=hub, dispatcher=NULL_DISPATCHER)
@@ -132,7 +128,7 @@ def test_update_persists_and_publishes(tmp_path: Path) -> None:
 
 
 def test_successful_keychain_update_persists_revision_reference(tmp_path: Path) -> None:
-    hub = _hub()
+    hub = new_hub()
     store = ConfigStore(path=tmp_path / "config.toml")
     keychain = InMemoryKeychain()
     resolver = ConnectionResolver(config_store=store, keychain=keychain)
@@ -184,7 +180,7 @@ def test_update_migrates_legacy_keychain_reference_to_bounded_namespace(tmp_path
         resolver=resolver,
         config_store=store,
         keychain=keychain,
-        hub=_hub(),
+        hub=new_hub(),
         dispatcher=NULL_DISPATCHER,
     )
     vm.construct()
@@ -219,7 +215,7 @@ def test_legacy_service_is_kept_until_all_colliding_references_migrate(tmp_path:
         resolver=resolver,
         config_store=store,
         keychain=keychain,
-        hub=_hub(),
+        hub=new_hub(),
         dispatcher=NULL_DISPATCHER,
     )
     vm.construct()
@@ -242,7 +238,7 @@ def test_update_refuses_to_reuse_a_revision_shared_by_another_connection(
     store = ConfigStore(path=tmp_path / "config.toml")
     keychain = InMemoryKeychain()
     resolver = ConnectionResolver(config_store=store, keychain=keychain)
-    hub = _hub()
+    hub = new_hub()
     vm = S3ConnectionsVM(
         resolver=resolver,
         config_store=store,
@@ -294,7 +290,7 @@ def test_add_refuses_to_reuse_a_primary_service_shared_by_another_connection(
     store = ConfigStore(path=tmp_path / "config.toml")
     keychain = InMemoryKeychain()
     resolver = ConnectionResolver(config_store=store, keychain=keychain)
-    hub = _hub()
+    hub = new_hub()
     vm = S3ConnectionsVM(
         resolver=resolver,
         config_store=store,
@@ -329,7 +325,7 @@ def test_add_refuses_to_reuse_a_primary_service_shared_by_another_connection(
 
 
 def test_keychain_updates_reuse_two_bounded_revision_slots(tmp_path: Path) -> None:
-    hub = _hub()
+    hub = new_hub()
     store = ConfigStore(path=tmp_path / "config.toml")
     keychain = InMemoryKeychain()
     resolver = ConnectionResolver(config_store=store, keychain=keychain)
@@ -365,14 +361,14 @@ def test_concurrent_vm_update_reloads_active_revision_inside_transaction(tmp_pat
         resolver=ConnectionResolver(config_store=first_store, keychain=keychain),
         config_store=first_store,
         keychain=keychain,
-        hub=_hub(),
+        hub=new_hub(),
         dispatcher=NULL_DISPATCHER,
     )
     second = S3ConnectionsVM(
         resolver=ConnectionResolver(config_store=second_store, keychain=keychain),
         config_store=second_store,
         keychain=keychain,
-        hub=_hub(),
+        hub=new_hub(),
         dispatcher=NULL_DISPATCHER,
     )
     first.construct()
@@ -419,7 +415,7 @@ def test_concurrent_vm_add_revalidates_name_inside_transaction(tmp_path: Path) -
         resolver=ConnectionResolver(config_store=second_store, keychain=keychain),
         config_store=second_store,
         keychain=keychain,
-        hub=_hub(),
+        hub=new_hub(),
         dispatcher=NULL_DISPATCHER,
     )
     second.construct()
@@ -528,7 +524,7 @@ def test_entry_from_form_round_trip(tmp_path: Path) -> None:
 
 
 def test_production_keychain_path_keeps_secrets_out_of_toml(tmp_path: Path) -> None:
-    hub = _hub()
+    hub = new_hub()
     store = ConfigStore(path=tmp_path / "config.toml")
     keychain = InMemoryKeychain()
     resolver = ConnectionResolver(config_store=store, keychain=keychain)
@@ -556,7 +552,7 @@ def test_production_keychain_path_keeps_secrets_out_of_toml(tmp_path: Path) -> N
 
 
 def test_removing_keychain_connection_deletes_its_secrets(tmp_path: Path) -> None:
-    hub = _hub()
+    hub = new_hub()
     store = ConfigStore(path=tmp_path / "config.toml")
     keychain = InMemoryKeychain()
     resolver = ConnectionResolver(config_store=store, keychain=keychain)
@@ -578,7 +574,7 @@ def test_removing_keychain_connection_deletes_its_secrets(tmp_path: Path) -> Non
 
 
 def test_remove_rollback_restores_config_and_partially_deleted_secrets(tmp_path: Path) -> None:
-    hub = _hub()
+    hub = new_hub()
     store = ConfigStore(path=tmp_path / "config.toml")
     keychain = _PartiallyDeletingKeychain()
     resolver = ConnectionResolver(config_store=store, keychain=keychain)
@@ -607,7 +603,7 @@ def test_update_keeps_staged_credentials_when_config_rollback_fails(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    hub = _hub()
+    hub = new_hub()
     store = ConfigStore(path=tmp_path / "config.toml")
     keychain = _PartiallyDeletingKeychain()
     resolver = ConnectionResolver(config_store=store, keychain=keychain)
@@ -648,7 +644,7 @@ def test_remove_restores_credentials_even_when_config_rollback_fails(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    hub = _hub()
+    hub = new_hub()
     store = ConfigStore(path=tmp_path / "config.toml")
     keychain = _PartiallyDeletingKeychain()
     vm = S3ConnectionsVM(
@@ -676,7 +672,7 @@ def test_remove_restores_credentials_even_when_config_rollback_fails(
 
 
 def test_add_rolls_back_partial_keychain_write(tmp_path: Path) -> None:
-    hub = _hub()
+    hub = new_hub()
     store = ConfigStore(path=tmp_path / "config.toml")
     keychain = _FailingKeychain(fail_key="secret_access_key")
     vm = S3ConnectionsVM(
@@ -707,7 +703,7 @@ def test_add_failure_restores_orphaned_keychain_values(tmp_path: Path) -> None:
         resolver=ConnectionResolver(config_store=store, keychain=keychain),
         config_store=store,
         keychain=keychain,
-        hub=_hub(),
+        hub=new_hub(),
         dispatcher=NULL_DISPATCHER,
     )
     vm.construct()
@@ -722,7 +718,7 @@ def test_add_failure_restores_orphaned_keychain_values(tmp_path: Path) -> None:
 
 
 def test_update_failure_preserves_active_keychain_credentials(tmp_path: Path) -> None:
-    hub = _hub()
+    hub = new_hub()
     store = ConfigStore(path=tmp_path / "config.toml")
     keychain = _ServiceFailingKeychain()
     resolver = ConnectionResolver(config_store=store, keychain=keychain)
@@ -747,7 +743,7 @@ def test_update_failure_preserves_active_keychain_credentials(tmp_path: Path) ->
 
 
 def test_update_surfaces_failed_staged_keychain_cleanup(tmp_path: Path) -> None:
-    hub = _hub()
+    hub = new_hub()
     store = ConfigStore(path=tmp_path / "config.toml")
     keychain = _StagedWriteAndCleanupFailingKeychain()
     resolver = ConnectionResolver(config_store=store, keychain=keychain)
@@ -803,7 +799,7 @@ def test_read_only_mutations_reject_without_keychain_or_message_side_effects(
     writable.add_connection(_entry("secure"))
     store = ConfigStore(path=path, read_only=True)
     keychain = InMemoryKeychain()
-    hub = _hub()
+    hub = new_hub()
     received: list[ConnectionListChangedMessage] = []
     hub.messages.subscribe(
         on_next=lambda message: (
@@ -857,7 +853,7 @@ async def test_async_writes_keep_blocking_credential_io_off_the_event_loop(
             seen.append(threading.get_ident())
             super().set(service, key, value)
 
-    hub = _hub()
+    hub = new_hub()
     store = ConfigStore(path=tmp_path / "config.toml")
     keychain = _ThreadRecordingKeychain()
     resolver = ConnectionResolver(config_store=store, keychain=keychain)
@@ -911,7 +907,7 @@ async def test_update_async_and_remove_async_are_the_shipping_write_paths(
             seen.append(threading.get_ident())
             super().delete(service, key)
 
-    hub = _hub()
+    hub = new_hub()
     store = ConfigStore(path=tmp_path / "config.toml")
     keychain = _ThreadRecordingKeychain()
     resolver = ConnectionResolver(config_store=store, keychain=keychain)
