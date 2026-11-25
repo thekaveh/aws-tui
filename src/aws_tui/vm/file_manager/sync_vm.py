@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass, replace
 from typing import cast
 
-from vmx import Message, MessageHub
+from vmx import Dispatcher, Message, MessageHub
 
 from aws_tui.domain.cross_fs import ConflictResolution
 from aws_tui.domain.filesystem import ConflictError, PathRef
@@ -39,8 +39,15 @@ class SyncViewRow:
 
 
 class SyncVM(RecursiveUploadVM):
-    def __init__(self, *, source: PaneVM, destination: PaneVM, hub: MessageHub[Message]):
-        super().__init__(source=source, destination=destination, hub=hub)
+    def __init__(
+        self,
+        *,
+        source: PaneVM,
+        destination: PaneVM,
+        hub: MessageHub[Message],
+        dispatcher: Dispatcher,
+    ) -> None:
+        super().__init__(source=source, destination=destination, hub=hub, dispatcher=dispatcher)
         self.policy = ConflictResolution.OVERWRITE
         self.settings = SyncSettings()
         self.review: SyncPlan | None = None
