@@ -280,7 +280,7 @@ class S3VersionsModal(DeferredWorkerMixin, ModalScreen[None]):
 
     def on_data_table_row_highlighted(self, event: DataTable.RowHighlighted) -> None:
         if not self._dismiss_requested:
-            self.vm.select(event.cursor_row)
+            self.vm.select_version(event.cursor_row)
 
     def _schedule_load(self) -> None:
         if not self._dismiss_requested:

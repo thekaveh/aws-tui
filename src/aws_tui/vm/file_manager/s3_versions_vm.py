@@ -8,10 +8,8 @@ from dataclasses import dataclass
 from typing import Any, Literal, TypeVar
 from urllib.parse import quote, urlencode
 
-from reactivex import Observable
 from reactivex.abc import DisposableBase
 from vmx import (
-    ComponentVM,
     ConstructionStatus,
     Dispatcher,
     Message,
@@ -34,7 +32,8 @@ from aws_tui.domain.s3_versions import (
     S3VersionProvider,
 )
 from aws_tui.infra.redaction import redact_text
-from aws_tui.vm._observable import ObserverSafeSubject, send_value_free
+from aws_tui.vm._component import IsolatedComponentVM
+from aws_tui.vm._observable import send_value_free
 from aws_tui.vm.file_manager.pane_vm import PaneState, PaneVM
 from aws_tui.vm.operation_owner import OperationOwner, OperationSuperseded
 
@@ -93,16 +92,16 @@ class PreparedVersionTransfer:
     destination_binding: tuple[object, ...] | None = None
 
 
-class S3VersionsVM:
+class S3VersionsVM(IsolatedComponentVM):
     def __init__(self, *, pane: PaneVM, hub: MessageHub[Message], dispatcher: Dispatcher) -> None:
         provider = pane.provider
         if not isinstance(provider, S3VersionProvider):
             raise ProviderError("This source does not support exact S3 versions")
         provider.version_location(pane.path)  # Service root without a bucket is ineligible.
-        self._pane, self._provider, self._hub = pane, provider, hub
+        super().__init__(name="s3.versions", hub=hub, dispatcher=dispatcher)
+        self._pane, self._provider = pane, provider
         self._binding = _binding(pane)
         self._prefix = pane.path
-        self._inner = ComponentVM.builder().name("s3.versions").services(hub, dispatcher).build()
         entry = pane.selected_entry
         self._key = (
             entry.name
@@ -110,10 +109,9 @@ class S3VersionsVM:
             else ""
         )
         self._owner = OperationOwner()
-        self._changes = ObserverSafeSubject[str]()
         self._subscription: DisposableBase | None = None
         self._generation = 0
-        self._closed = self._disposed = self._busy = False
+        self._closed = self._busy = False
         self._state = "idle"
         self.listing: S3VersionListing | None = None
         self.selected: S3ObjectVersion | None = None
@@ -139,14 +137,10 @@ class S3VersionsVM:
     def busy(self) -> bool:
         return self._busy
 
-    @property
-    def on_property_changed(self) -> Observable[str]:
-        return self._changes
-
     def construct(self) -> None:
-        if self._closed or self._inner.is_constructed:
+        if self._closed or self.is_constructed:
             return
-        self._inner.construct()
+        super().construct()
         self._subscription = self._pane.on_property_changed.subscribe(
             self._pane_changed, on_completed=self.close
         )
@@ -165,17 +159,17 @@ class S3VersionsVM:
         return not self._closed
 
     def _current(self, generation: int) -> bool:
-        return self._reconcile() and self._inner.is_constructed and generation == self._generation
+        return self._reconcile() and self.is_constructed and generation == self._generation
 
     def _notify(self) -> None:
-        if self._disposed:
+        if self._is_disposed():
             return
         generation = self._generation
-        send_value_free(self._hub, PropertyChangedMessage.create(self, "s3.versions", "state"))
+        send_value_free(self.hub, PropertyChangedMessage.create(self, self.name, "state"))
         if not self._closed:
             self._reconcile()
-        if generation == self._generation and not self._disposed:
-            self._changes.on_next("state")
+        if generation == self._generation and not self._is_disposed():
+            self._raise_property_changed("state")
             if not self._closed:
                 self._reconcile()
 
@@ -248,7 +242,7 @@ class S3VersionsVM:
             self._state = "ready" if result.versions else "empty"
         self._notify()
 
-    def select(self, index: int) -> None:
+    def select_version(self, index: int) -> None:
         if (
             not self._reconcile()
             or self.listing is None
@@ -361,12 +355,9 @@ class S3VersionsVM:
         await self._owner.cancel_and_drain()
 
     def dispose(self) -> None:
-        if self._disposed:
+        if self._is_disposed():
             return
         self.close()
-        self._disposed = True
         if self._subscription is not None:
             self._subscription.dispose()
-        self._changes.on_completed()
-        self._changes.dispose()
-        self._inner.dispose()
+        super().dispose()

@@ -4,7 +4,7 @@ import asyncio
 from collections.abc import AsyncIterator
 
 import pytest
-from vmx import NULL_DISPATCHER, MessageHub
+from vmx import NULL_DISPATCHER, ComponentVM, ConstructionStatus, MessageHub
 
 from aws_tui.domain.filesystem import ConflictError, PathRef
 from aws_tui.vm.file_manager.pane_vm import PaneVM
@@ -61,7 +61,7 @@ async def test_selected_key_lists_history_and_inspects_only_explicit_selected_ve
     assert vm.state == "ready"
     assert fs.reads == [("list", PathRef(("bucket", "prefix", "a.txt")))]
     assert vm.selected.is_delete_marker
-    vm.select(1)
+    vm.select_version(1)
     await vm.inspect()
     assert vm.details.version_id == "old +/="
     assert fs.reads[-1] == ("details", vm.selected)
@@ -94,11 +94,11 @@ async def test_key_change_retires_a_cancellation_resistant_listing(context):
 async def test_selection_change_retires_late_detail(context):
     fs, _, vm = browser(context)
     await vm.load()
-    vm.select(1)
+    vm.select_version(1)
     gate = fs.detail_gate = ReadGate(resistant=True)
     task = asyncio.create_task(vm.inspect())
     await asyncio.wait_for(gate.entered.wait(), 1)
-    vm.select(0)
+    vm.select_version(0)
     gate.release.set()
     await task
     assert vm.selected.is_delete_marker
@@ -130,7 +130,7 @@ async def test_marker_cannot_prepare_content_transfer(context):
 async def test_prepared_recovery_is_bound_to_key_selection_and_generation(context):
     _, _, vm = browser(context)
     await vm.load()
-    vm.select(1)
+    vm.select_version(1)
     prepared = await vm.prepare_recovery("new//../key")
     assert vm.accepts(prepared)
     assert prepared.request.destination_path == PathRef(
@@ -173,7 +173,7 @@ async def test_cancelled_read_releases_controls_without_closing_browser(context,
         work = vm.load()
     else:
         await vm.load()
-        vm.select(1)
+        vm.select_version(1)
         fs.detail_gate = gate
         work = vm.inspect() if operation == "inspect" else vm.prepare_recovery("new-key")
     task = asyncio.create_task(work)
@@ -188,3 +188,31 @@ async def test_cancelled_read_releases_controls_without_closing_browser(context,
     fs.list_gate = fs.detail_gate = None
     await vm.load()
     assert vm.state == "ready"
+
+
+def _status(vm: ComponentVM) -> ConstructionStatus:
+    # A call result is not narrowed by an earlier ``is`` assertion.
+    return vm.status
+
+
+async def test_versions_vm_is_a_component_vm(context) -> None:
+    _, _, vm = browser(context)
+    assert isinstance(vm, ComponentVM)
+    assert _status(vm) is ConstructionStatus.CONSTRUCTED
+    vm.dispose()
+    assert _status(vm) is ConstructionStatus.DISPOSED
+
+
+async def test_versions_raising_subscriber_does_not_stop_later_subscribers(context) -> None:
+    _, _, vm = browser(context)
+    seen: list[str] = []
+
+    def boom(_name: str) -> None:
+        raise RuntimeError("subscriber failed")
+
+    first = vm.on_property_changed.subscribe(boom)
+    second = vm.on_property_changed.subscribe(seen.append)
+    vm.set_key("another")
+    first.dispose()
+    second.dispose()
+    assert "state" in seen

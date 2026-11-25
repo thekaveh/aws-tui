@@ -7,10 +7,8 @@ import json
 from dataclasses import dataclass
 from enum import StrEnum
 
-import reactivex as rx
 from reactivex.abc import DisposableBase
 from vmx import (
-    ComponentVM,
     ConstructionStatus,
     Dispatcher,
     Message,
@@ -21,7 +19,8 @@ from vmx import (
 from aws_tui.domain.filesystem import EntryKind, PathRef
 from aws_tui.domain.s3_object_details import S3ObjectDetails, S3ObjectDetailsProvider
 from aws_tui.infra.redaction import redact_text
-from aws_tui.vm._observable import ObserverSafeSubject, send_value_free
+from aws_tui.vm._component import IsolatedComponentVM
+from aws_tui.vm._observable import send_value_free
 from aws_tui.vm.file_manager.pane_vm import PaneState, PaneVM
 from aws_tui.vm.operation_owner import OperationOwner, OperationSuperseded
 
@@ -102,15 +101,11 @@ def _project(details: S3ObjectDetails) -> tuple[ObjectDetailField, ...]:
     )
 
 
-class S3ObjectDetailsVM:
+class S3ObjectDetailsVM(IsolatedComponentVM):
     def __init__(self, *, pane: PaneVM, hub: MessageHub[Message], dispatcher: Dispatcher) -> None:
+        super().__init__(name="s3.object_details", hub=hub, dispatcher=dispatcher)
         self._pane = pane
-        self._hub = hub
-        self._inner = (
-            ComponentVM.builder().name("s3.object_details").services(hub, dispatcher).build()
-        )
         self._owner = OperationOwner()
-        self._on_property_changed = ObserverSafeSubject[str]()
         self._subscription: DisposableBase | None = None
         self._selection: _Selection | None = None
         self._generation = 0
@@ -119,7 +114,6 @@ class S3ObjectDetailsVM:
         self._title = "S3 object details"
         self._fields: tuple[ObjectDetailField, ...] = ()
         self._closed = False
-        self._disposed = False
 
     @property
     def request_generation(self) -> int:
@@ -137,17 +131,13 @@ class S3ObjectDetailsVM:
     def fields(self) -> tuple[ObjectDetailField, ...]:
         return self._fields
 
-    @property
-    def on_property_changed(self) -> rx.Observable[str]:
-        return self._on_property_changed
-
     def construct(self) -> None:
-        if self._closed or self._inner.is_constructed:
+        if self._closed or self.is_constructed:
             return
         if self._pane.status is ConstructionStatus.DISPOSED:
             self.close()
             return
-        self._inner.construct()
+        super().construct()
         if self._closed:
             return
         subscription = self._pane.on_property_changed.subscribe(
@@ -188,7 +178,7 @@ class S3ObjectDetailsVM:
         )
 
     def _reconcile(self) -> None:
-        if self._closed or not self._inner.is_constructed:
+        if self._closed or not self.is_constructed:
             return
         selection = self._snapshot()
         if selection.status is ConstructionStatus.DISPOSED:
@@ -220,7 +210,7 @@ class S3ObjectDetailsVM:
         self._reconcile()
         return (
             not self._closed
-            and self._inner.is_constructed
+            and self.is_constructed
             and generation == self._generation
             and selection == self._selection
             and selection == self._snapshot()
@@ -277,12 +267,12 @@ class S3ObjectDetailsVM:
         # Pane lifecycle transitions need not emit pane-property events.
         # Check the actual snapshot at every synchronous publication boundary.
         self._reconcile()
-        if self._closed or self._disposed or generation != self._generation:
+        if self._closed or self._is_disposed() or generation != self._generation:
             return
-        send_value_free(self._hub, PropertyChangedMessage.create(self, self._inner.name, prop))
+        send_value_free(self.hub, PropertyChangedMessage.create(self, self.name, prop))
         self._reconcile()
-        if not self._closed and not self._disposed and generation == self._generation:
-            self._on_property_changed.on_next(prop)
+        if not self._closed and not self._is_disposed() and generation == self._generation:
+            self._raise_property_changed(prop)
             self._reconcile()
 
     def close(self) -> None:
@@ -300,24 +290,21 @@ class S3ObjectDetailsVM:
         # A terminal transition is observable once. Reads and pane callbacks
         # cannot publish after this transition, including reentrant observers.
         for prop in ("fields", "state"):
-            if self._disposed:
+            if self._is_disposed():
                 break
-            send_value_free(self._hub, PropertyChangedMessage.create(self, self._inner.name, prop))
-            if not self._disposed:
-                self._on_property_changed.on_next(prop)
+            send_value_free(self.hub, PropertyChangedMessage.create(self, self.name, prop))
+            if not self._is_disposed():
+                self._raise_property_changed(prop)
 
     async def shutdown(self) -> None:
         self.close()
         await self._owner.cancel_and_drain()
 
     def dispose(self) -> None:
-        if self._disposed:
+        if self._is_disposed():
             return
         self.close()
-        self._disposed = True
-        self._on_property_changed.on_completed()
-        self._on_property_changed.dispose()
-        self._inner.dispose()
+        super().dispose()
 
 
 __all__ = ["ObjectDetailField", "S3ObjectDetailsState", "S3ObjectDetailsVM"]
