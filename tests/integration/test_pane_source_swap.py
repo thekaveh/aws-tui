@@ -14,7 +14,7 @@ from collections.abc import AsyncIterator
 from pathlib import Path
 
 import pytest
-from vmx import MessageHub, RxDispatcher
+from vmx import NULL_DISPATCHER, MessageHub
 
 from aws_tui.demo.in_memory_fs import InMemoryFS
 from aws_tui.domain.filesystem import PathRef
@@ -37,7 +37,7 @@ async def _seed_fs(label: str) -> InMemoryFS:
 async def test_pane_vm_swap_provider_replaces_source_and_resets() -> None:
     """Direct PaneVM contract — used by the app-level action."""
     hub: MessageHub = MessageHub()
-    dispatcher = RxDispatcher.immediate()
+    dispatcher = NULL_DISPATCHER
     fs_a = await _seed_fs("a")
     fs_b = await _seed_fs("b")
     vm = PaneVM(
@@ -71,7 +71,7 @@ async def test_unfocused_pane_unaffected_by_vm_swap() -> None:
     binding path requires a real AWS session for the local→S3 swap
     direction (out of scope for unit testing)."""
     hub: MessageHub = MessageHub()
-    dispatcher = RxDispatcher.immediate()
+    dispatcher = NULL_DISPATCHER
     fs_left = await _seed_fs("left")
     fs_right = await _seed_fs("right")
     fs_replacement = await _seed_fs("rep")

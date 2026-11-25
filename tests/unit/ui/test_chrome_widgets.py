@@ -18,7 +18,7 @@ from textual.events import Click, Mount, Resize
 from textual.geometry import Size
 from textual.widget import Widget
 from textual.widgets import Static
-from vmx import MessageHub, RxDispatcher
+from vmx import NULL_DISPATCHER, MessageHub
 
 from aws_tui.infra.connection_resolver import Connection
 from aws_tui.infra.keymap_store import KeymapStore
@@ -69,7 +69,7 @@ def _make_connection(kind: str = "aws") -> Connection:
 @pytest.mark.asyncio
 async def test_hint_legend_renders_service_actions() -> None:
     hub: MessageHub = MessageHub()
-    dispatcher = RxDispatcher.immediate()
+    dispatcher = NULL_DISPATCHER
     keymap = KeymapStore()
     vm = HintLegendVM(hub=hub, dispatcher=dispatcher, keymap=keymap)
     vm.set_current_service("s3")
@@ -106,7 +106,7 @@ async def test_hint_legend_renders_service_actions() -> None:
 
 def _athena_hint_vm() -> tuple[HintLegendVM, MessageHub]:
     hub: MessageHub = MessageHub()
-    vm = HintLegendVM(hub=hub, dispatcher=RxDispatcher.immediate(), keymap=KeymapStore())
+    vm = HintLegendVM(hub=hub, dispatcher=NULL_DISPATCHER, keymap=KeymapStore())
     vm.set_current_service("athena")
     vm.construct()
     return vm, hub
@@ -949,7 +949,7 @@ async def test_hint_legend_refits_after_resize_and_vm_action_change(
 @pytest.mark.asyncio
 async def test_toast_stack_renders_three_toasts_with_levels() -> None:
     hub: MessageHub = MessageHub()
-    dispatcher = RxDispatcher.immediate()
+    dispatcher = NULL_DISPATCHER
     vm = ToastStackVM(hub=hub, dispatcher=dispatcher)
     vm.construct()
     try:
@@ -1017,7 +1017,7 @@ async def test_toast_stack_renders_three_toasts_with_levels() -> None:
 @pytest.mark.asyncio
 async def test_services_menu_renders_items_and_marks_selected() -> None:
     hub: MessageHub = MessageHub()
-    dispatcher = RxDispatcher.immediate()
+    dispatcher = NULL_DISPATCHER
     registry = ServiceRegistry()
     registry.register(_S3Stub())
     registry.register(_EC2Stub())

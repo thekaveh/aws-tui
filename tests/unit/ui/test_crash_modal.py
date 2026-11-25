@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 from textual.app import App, ComposeResult
-from vmx import MessageHub, RxDispatcher
+from vmx import NULL_DISPATCHER, MessageHub
 
 from aws_tui.ui.widgets.crash_modal import CrashChoice, CrashModal
 from aws_tui.ui.widgets.modal_button import ModalButton
@@ -41,7 +41,7 @@ async def test_crash_modal_keyboard_cannot_continue_after_an_unsafe_crash(key: s
     coroutine, since the modal that offered ``q`` was gone.
     """
     hub: MessageHub = MessageHub()
-    dispatcher = RxDispatcher.immediate()
+    dispatcher = NULL_DISPATCHER
     vm = CrashVM(_report(can_continue=False), hub=hub, dispatcher=dispatcher)
     vm.construct()
     try:
@@ -78,7 +78,7 @@ async def test_crash_modal_keyboard_cannot_continue_after_an_unsafe_crash(key: s
 @pytest.mark.asyncio
 async def test_crash_modal_continue_button_disabled_when_unsafe() -> None:
     hub: MessageHub = MessageHub()
-    dispatcher = RxDispatcher.immediate()
+    dispatcher = NULL_DISPATCHER
     vm = CrashVM(_report(can_continue=False), hub=hub, dispatcher=dispatcher)
     vm.construct()
     try:
@@ -109,7 +109,7 @@ async def test_crash_modal_continue_button_disabled_when_unsafe() -> None:
 @pytest.mark.asyncio
 async def test_crash_modal_continue_button_enabled_when_safe() -> None:
     hub: MessageHub = MessageHub()
-    dispatcher = RxDispatcher.immediate()
+    dispatcher = NULL_DISPATCHER
     vm = CrashVM(_report(can_continue=True), hub=hub, dispatcher=dispatcher)
     vm.construct()
     try:

@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from textual.app import App, ComposeResult
 from textual.containers import Container, Horizontal
-from vmx import MessageHub, RxDispatcher
+from vmx import NULL_DISPATCHER, MessageHub
 
 from aws_tui.domain.transfer_journal import TransferJournal
 from aws_tui.infra.connection_resolver import Connection
@@ -102,7 +102,7 @@ class MainScreenApp(App[None]):
 
         # VM tree
         self._hub: MessageHub = MessageHub()
-        self._dispatcher = RxDispatcher.immediate()
+        self._dispatcher = NULL_DISPATCHER
         self._keymap = KeymapStore()
 
         self._hint_vm = HintLegendVM(
