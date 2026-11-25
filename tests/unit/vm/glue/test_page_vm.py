@@ -5,7 +5,7 @@ import contextlib
 from dataclasses import replace
 
 import pytest
-from vmx import NULL_DISPATCHER, MessageHub, PropertyChangedMessage
+from vmx import NULL_DISPATCHER, ComponentVM, MessageHub, PropertyChangedMessage
 from vmx.lifecycle.status import ConstructionStatus
 from vmx.messages.protocols import Message
 
@@ -1101,7 +1101,7 @@ def test_dispose_cascades_once_without_disposing_service_store(
 
     assert set(calls.values()) == {1}
     assert store.dispose_calls == 0
-    assert page._inner.status is ConstructionStatus.DISPOSED  # type: ignore[attr-defined]
+    assert page.status is ConstructionStatus.DISPOSED
 
 
 def _seeded_iceberg_glue() -> InMemoryGlue:
@@ -1421,3 +1421,67 @@ async def test_exact_table_handoff_cannot_commit_after_same_name_database_switch
         with contextlib.suppress(ValueError):
             await opening
         await page.shutdown()
+
+
+def _status(vm: ComponentVM) -> ConstructionStatus:
+    # A call result is not narrowed by an earlier ``is`` assertion.
+    return vm.status
+
+
+def test_page_vm_derives_from_component_vm_and_reaches_disposed() -> None:
+    page = make_page_vm(seeded_glue())
+    assert isinstance(page, ComponentVM)
+    assert page.name == "glue.page"
+    page.construct()
+    assert _status(page) is ConstructionStatus.CONSTRUCTED
+    page.dispose()
+    assert _status(page) is ConstructionStatus.DISPOSED
+
+
+def test_page_dispose_releases_children_newest_first(monkeypatch: pytest.MonkeyPatch) -> None:
+    page = make_page_vm(seeded_glue())
+    page.construct()
+    order: list[str] = []
+    for name in ("catalog", "jobs", "crawlers"):
+        child = getattr(page, name)
+        original = child.dispose
+
+        def recorder(*, label: str = name, dispose: object = original) -> None:
+            order.append(label)
+            dispose()  # type: ignore[operator]
+
+        monkeypatch.setattr(child, "dispose", recorder)
+    page.dispose()
+    assert order == ["crawlers", "jobs", "catalog"]
+
+
+def test_page_dispose_continues_after_a_child_dispose_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    page = make_page_vm(seeded_glue())
+    page.construct()
+
+    def fail() -> None:
+        raise RuntimeError("crawlers failed")
+
+    monkeypatch.setattr(page.crawlers, "dispose", fail)
+    page.dispose()
+    assert page.jobs.status is ConstructionStatus.DISPOSED
+    assert page.catalog.status is ConstructionStatus.DISPOSED
+
+
+def test_page_construct_after_dispose_is_a_silent_no_op() -> None:
+    page = make_page_vm(seeded_glue())
+    page.dispose()
+    page.construct()
+    assert _status(page) is ConstructionStatus.DISPOSED
+
+
+def test_page_destruct_then_construct_returns_to_constructed() -> None:
+    page = make_page_vm(seeded_glue())
+    page.construct()
+    page.destruct()
+    assert _status(page) is ConstructionStatus.DESTRUCTED
+    page.construct()
+    assert _status(page) is ConstructionStatus.CONSTRUCTED
+    page.dispose()
