@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 from textual.app import App, ComposeResult
-from vmx import NULL_DISPATCHER
+from vmx import NULL_DISPATCHER, Message, MessageHub
 
 from aws_tui.infra.config_store import ConfigStore
 from aws_tui.infra.connection_resolver import ConnectionResolver
@@ -22,7 +22,7 @@ def test_settings_view_does_not_import_textual_private_widgets() -> None:
     assert "textual.widgets._collapsible" not in source
 
 
-def _make_vm(tmp_path: Path) -> tuple[SettingsVM, S3ConnectionsVM]:
+def _make_vm(tmp_path: Path) -> tuple[SettingsVM, S3ConnectionsVM, MessageHub[Message]]:
     hub = new_hub()
     store = ConfigStore(path=tmp_path / "config.toml")
     resolver = ConnectionResolver(config_store=store)
@@ -30,13 +30,13 @@ def _make_vm(tmp_path: Path) -> tuple[SettingsVM, S3ConnectionsVM]:
     s3.construct()
     vm = SettingsVM(s3=s3, hub=hub, dispatcher=NULL_DISPATCHER)
     vm.construct()
-    return vm, s3
+    return vm, s3, hub
 
 
 def test_settings_view_can_be_constructed(tmp_path: Path) -> None:
-    vm, s3 = _make_vm(tmp_path)
+    vm, s3, hub = _make_vm(tmp_path)
     try:
-        view = SettingsView(vm=vm, hub=new_hub())
+        view = SettingsView(vm=vm, hub=hub)
         # The widget exposes its VM via the public ``vm`` property
         # (used by inline-form submitters to read s3 state). Locking
         # the identity here means a refactor that swaps the VM
@@ -46,11 +46,12 @@ def test_settings_view_can_be_constructed(tmp_path: Path) -> None:
     finally:
         vm.dispose()
         s3.dispose()
+        hub.dispose()
 
 
 @pytest.mark.asyncio
 async def test_settings_view_shows_connections_section_expanded_by_default(tmp_path: Path) -> None:
-    vm, s3 = _make_vm(tmp_path)
+    vm, s3, hub = _make_vm(tmp_path)
 
     class _Host(App[None]):
         def __init__(self, w: SettingsView) -> None:
@@ -60,7 +61,7 @@ async def test_settings_view_shows_connections_section_expanded_by_default(tmp_p
         def compose(self) -> ComposeResult:
             yield self._w
 
-    view = SettingsView(vm=vm, hub=new_hub())
+    view = SettingsView(vm=vm, hub=hub)
     app = _Host(view)
     try:
         async with app.run_test() as pilot:
@@ -76,6 +77,7 @@ async def test_settings_view_shows_connections_section_expanded_by_default(tmp_p
     finally:
         vm.dispose()
         s3.dispose()
+        hub.dispose()
 
 
 @pytest.mark.parametrize(
@@ -97,7 +99,7 @@ async def test_deferred_mount_focus_preserves_selected_settings_control(
     from tests.athena_drafts_helpers import runtime_at
     from tests.helpers import focus_and_settle, wait_until
 
-    vm, s3 = _make_vm(tmp_path)
+    vm, s3, hub = _make_vm(tmp_path)
     drafts, _ = runtime_at(tmp_path, enabled=False)
     vm._athena_drafts = drafts
     pending = []
@@ -111,7 +113,7 @@ async def test_deferred_mount_focus_preserves_selected_settings_control(
 
     class Host(App[None]):
         def compose(self):
-            yield SettingsView(vm=vm, hub=new_hub())
+            yield SettingsView(vm=vm, hub=hub)
 
     app = Host()
     try:
@@ -174,6 +176,7 @@ async def test_deferred_mount_focus_preserves_selected_settings_control(
         s3.dispose()
         await drafts.shutdown()
         drafts.dispose()
+        hub.dispose()
 
 
 async def test_drafts_section_keyboard_reentry_and_real_path(tmp_path):
@@ -182,13 +185,13 @@ async def test_drafts_section_keyboard_reentry_and_real_path(tmp_path):
     from tests.athena_drafts_helpers import runtime_at
     from tests.helpers import drain_workers, focus_and_settle
 
-    vm, s3 = _make_vm(tmp_path)
+    vm, s3, hub = _make_vm(tmp_path)
     drafts, _ = runtime_at(tmp_path, enabled=False)
     vm._athena_drafts = drafts
 
     class Host(App[None]):
         def compose(self):
-            yield SettingsView(vm=vm, hub=new_hub())
+            yield SettingsView(vm=vm, hub=hub)
 
     app = Host()
     try:
@@ -227,6 +230,7 @@ async def test_drafts_section_keyboard_reentry_and_real_path(tmp_path):
         s3.dispose()
         await drafts.shutdown()
         drafts.dispose()
+        hub.dispose()
 
 
 @pytest.mark.parametrize("read_only", [False, True])
@@ -235,14 +239,14 @@ async def test_drafts_initial_mount_hides_cleanup_and_disables_demo(tmp_path, re
 
     from tests.athena_drafts_helpers import runtime_at
 
-    vm, s3 = _make_vm(tmp_path)
+    vm, s3, hub = _make_vm(tmp_path)
     drafts, _ = runtime_at(tmp_path, enabled=False)
     drafts._read_only = read_only
     vm._athena_drafts = drafts
 
     class Host(App[None]):
         def compose(self):
-            yield SettingsView(vm=vm, hub=new_hub())
+            yield SettingsView(vm=vm, hub=hub)
 
     app = Host()
     try:
@@ -258,6 +262,7 @@ async def test_drafts_initial_mount_hides_cleanup_and_disables_demo(tmp_path, re
         s3.dispose()
         await drafts.shutdown()
         drafts.dispose()
+        hub.dispose()
 
 
 async def test_disabled_cleanup_failure_offers_retry_without_enable(tmp_path, monkeypatch):
@@ -267,7 +272,7 @@ async def test_disabled_cleanup_failure_offers_retry_without_enable(tmp_path, mo
     from tests.athena_drafts_helpers import runtime_at
     from tests.helpers import drain_workers, focus_and_settle
 
-    vm, s3 = _make_vm(tmp_path)
+    vm, s3, hub = _make_vm(tmp_path)
     drafts, store = runtime_at(tmp_path)
     original = store.set_enabled
     monkeypatch.setattr(
@@ -280,7 +285,7 @@ async def test_disabled_cleanup_failure_offers_retry_without_enable(tmp_path, mo
 
     class Host(App[None]):
         def compose(self):
-            yield SettingsView(vm=vm, hub=new_hub())
+            yield SettingsView(vm=vm, hub=hub)
 
     app = Host()
     try:
@@ -301,6 +306,7 @@ async def test_disabled_cleanup_failure_offers_retry_without_enable(tmp_path, mo
         s3.dispose()
         await drafts.shutdown()
         drafts.dispose()
+        hub.dispose()
 
 
 @pytest.mark.parametrize(

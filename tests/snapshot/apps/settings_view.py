@@ -41,7 +41,7 @@ def _seed_entry(name: str, region: str = "us-east-1") -> ConnectionEntry:
 
 def _build(
     seed_count: int,
-) -> tuple[SettingsVM, S3ConnectionsVM, Path]:
+) -> tuple[SettingsVM, S3ConnectionsVM, MessageHub[Message], Path]:
     hub: MessageHub[Message] = MessageHub()
     tmp = Path(tempfile.mkdtemp(prefix="settingsview-"))
     store = ConfigStore(path=tmp / "config.toml")
@@ -65,7 +65,7 @@ def _build(
     )
     vm = SettingsVM(s3=s3, athena_drafts=drafts, hub=hub, dispatcher=NULL_DISPATCHER)
     vm.construct()
-    return vm, s3, tmp
+    return vm, s3, hub, tmp
 
 
 class _SettingsSnapshotApp(App[None]):
@@ -75,6 +75,7 @@ class _SettingsSnapshotApp(App[None]):
             self._vm.athena_drafts.dispose()
         self._vm.dispose()
         self._s3.dispose()
+        self._hub.dispose()
         shutil.rmtree(self._tmp)
 
 
@@ -82,30 +83,30 @@ class SettingsViewEmptyApp(_SettingsSnapshotApp):
     def __init__(self, *, theme: str = "carbon") -> None:
         super().__init__()
         self.CSS = _load_css(theme)
-        self._vm, self._s3, self._tmp = _build(seed_count=0)
+        self._vm, self._s3, self._hub, self._tmp = _build(seed_count=0)
 
     def compose(self) -> ComposeResult:
-        yield SettingsView(vm=self._vm, hub=MessageHub())
+        yield SettingsView(vm=self._vm, hub=self._hub)
 
 
 class SettingsViewPopulatedApp(_SettingsSnapshotApp):
     def __init__(self, *, theme: str = "carbon") -> None:
         super().__init__()
         self.CSS = _load_css(theme)
-        self._vm, self._s3, self._tmp = _build(seed_count=2)
+        self._vm, self._s3, self._hub, self._tmp = _build(seed_count=2)
 
     def compose(self) -> ComposeResult:
-        yield SettingsView(vm=self._vm, hub=MessageHub())
+        yield SettingsView(vm=self._vm, hub=self._hub)
 
 
 class SettingsViewFormOpenApp(_SettingsSnapshotApp):
     def __init__(self, *, theme: str = "carbon") -> None:
         super().__init__()
         self.CSS = _load_css(theme)
-        self._vm, self._s3, self._tmp = _build(seed_count=1)
+        self._vm, self._s3, self._hub, self._tmp = _build(seed_count=1)
 
     def compose(self) -> ComposeResult:
-        yield SettingsView(vm=self._vm, hub=MessageHub())
+        yield SettingsView(vm=self._vm, hub=self._hub)
 
     async def on_mount(self) -> None:
         # Open the inline form so the snapshot captures it visible.
