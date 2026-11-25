@@ -7,7 +7,7 @@ the test focuses on the state body rendering and not the dual-pane layout.
 from __future__ import annotations
 
 from textual.app import App, ComposeResult
-from vmx import MessageHub, RxDispatcher
+from vmx import NULL_DISPATCHER, MessageHub
 
 from aws_tui.demo.in_memory_fs import InMemoryFS
 from aws_tui.domain.filesystem import PathRef
@@ -25,7 +25,7 @@ class _PaneStateApp(App[None]):
         super().__init__()
         self.CSS = _load_css(theme)
         self._hub: MessageHub = MessageHub()
-        self._dispatcher = RxDispatcher.immediate()
+        self._dispatcher = NULL_DISPATCHER
         self._fs = InMemoryFS()
         self._vm = PaneVM(
             provider=self._fs,

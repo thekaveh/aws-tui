@@ -4,7 +4,7 @@ from pathlib import Path
 
 from textual.app import App, ComposeResult
 from textual.containers import Container, Horizontal
-from vmx import MessageHub, RxDispatcher
+from vmx import NULL_DISPATCHER, MessageHub
 
 from aws_tui.infra.connection_resolver import Connection, ConnectionDiscovery
 from aws_tui.infra.keymap_store import KeymapStore
@@ -28,7 +28,7 @@ class FirstRunApp(App[None]):
         self.open_form = case == "form"
         self.case = case
         self.hub = MessageHub()
-        dispatcher = RxDispatcher.immediate()
+        dispatcher = NULL_DISPATCHER
         self.menu = NavMenuVM(registry=ServiceRegistry(), hub=self.hub, dispatcher=dispatcher)
         self.hints = HintLegendVM(hub=self.hub, dispatcher=dispatcher, keymap=KeymapStore())
 
