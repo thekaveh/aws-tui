@@ -4,15 +4,11 @@ import asyncio
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
-import reactivex as rx
 from vmx import (
     AsyncRelayCommand,
-    ComponentVM,
-    ConstructionStatus,
     Dispatcher,
     Message,
     MessageHub,
-    PropertyChangedMessage,
 )
 
 from aws_tui.domain.filesystem import ProviderError
@@ -24,7 +20,7 @@ from aws_tui.domain.query import (
     ResultPage,
 )
 from aws_tui.domain.s3_uri import parse_s3_uri
-from aws_tui.vm._observable import ObserverSafeSubject, send_value_free
+from aws_tui.vm._component import IsolatedComponentVM
 from aws_tui.vm.athena._domain_validation import (
     optional_exact_string,
     optional_non_empty_exact_string,
@@ -98,7 +94,7 @@ class _PagerGeneration(PagerWorker[ResultRow]):
         super()._dispose_resources()
 
 
-class AthenaResultsVM:
+class AthenaResultsVM(IsolatedComponentVM):
     def __init__(
         self,
         *,
@@ -107,16 +103,12 @@ class AthenaResultsVM:
         hub: MessageHub[Message],
         dispatcher: Dispatcher,
     ) -> None:
+        super().__init__(name="athena.results", hub=hub, dispatcher=dispatcher)
         self._client = client
         self._context = context
-        self._hub = hub
-        self._disposed = False
+        self._hub: MessageHub[Message] = hub
         self._shutdown_started = False
         self._shutdown_complete = False
-        self._on_property_changed = ObserverSafeSubject[str]()
-        self._inner: ComponentVM = (
-            ComponentVM.builder().name("athena.results").services(hub, dispatcher).build()
-        )
         self._generation = 0
         self._execution_id: str | None = None
         self._from_history = False
@@ -178,7 +170,7 @@ class AthenaResultsVM:
 
     @property
     def selection(self) -> tuple[int, int] | None:
-        if self._selection is None or self._disposed or self._shutdown_started:
+        if self._selection is None or self._is_disposed() or self._shutdown_started:
             return None
         row, column = self._selection
         rows = self.rows
@@ -208,14 +200,14 @@ class AthenaResultsVM:
         return None if selection is None else self.rows[selection[0]]
 
     def set_filter(self, text: str) -> None:
-        if self._disposed or self._shutdown_started:
+        if self._is_disposed() or self._shutdown_started:
             return
         self._filter_text = text
         self._selection = self.selection
         self._notify_projection()
 
     def set_sort(self, column: int | None, direction: SortDirection = "ascending") -> bool:
-        if self._disposed or self._shutdown_started:
+        if self._is_disposed() or self._shutdown_started:
             return False
         if column is not None and not 0 <= column < len(self._columns):
             return False
@@ -233,7 +225,7 @@ class AthenaResultsVM:
         generation: int | None = None,
     ) -> bool:
         if (
-            self._disposed
+            self._is_disposed()
             or self._shutdown_started
             or (generation is not None and generation != self._generation)
         ):
@@ -249,7 +241,7 @@ class AthenaResultsVM:
         return True
 
     def reset_projection(self) -> None:
-        if self._disposed or self._shutdown_started:
+        if self._is_disposed() or self._shutdown_started:
             return
         self._filter_text = ""
         self._sort_column = None
@@ -294,19 +286,8 @@ class AthenaResultsVM:
     def load_more_command(self) -> AsyncRelayCommand:
         return self._worker.load_more_command
 
-    @property
-    def status(self) -> ConstructionStatus:
-        return self._inner.status
-
-    @property
-    def on_property_changed(self) -> rx.Observable[str]:
-        return self._on_property_changed.observable
-
-    def construct(self) -> None:
-        self._inner.construct()
-
     async def load(self, execution_id: str, *, from_history: bool = False) -> None:
-        if self._disposed or self._shutdown_started:
+        if self._is_disposed() or self._shutdown_started:
             return
         self._generation += 1
         generation = self._generation
@@ -321,31 +302,31 @@ class AthenaResultsVM:
         try:
             await worker.pager.refresh_command.execute_async()
         except _ResultColumnsChangedError:
-            if not self._is_current(worker):
+            if not self._is_current_worker(worker):
                 return
             self._error_text = _COLUMN_ERROR
             self._set_state(PaneState.ERROR)
-            self._notify("error_text")
+            self._publish("error_text")
             return
         except PagerCollectionLimitError:
-            if not self._is_current(worker):
+            if not self._is_current_worker(worker):
                 return
             self._error_text = _RESULTS_LIMIT_ERROR
             self._set_state(PaneState.ERROR)
-            self._notify("error_text")
+            self._publish("error_text")
             return
         except ProviderError as exc:
-            if not self._is_current(worker):
+            if not self._is_current_worker(worker):
                 return
             self._state, self._error_text = map_provider_error(
                 exc,
                 fallback=_RESULTS_ERROR,
             )
-            self._notify("state")
-            self._notify("error_text")
+            self._publish("state")
+            self._publish("error_text")
             return
         except Exception as exc:
-            if not self._is_current(worker):
+            if not self._is_current_worker(worker):
                 return
             report_unexpected_service_error(
                 self._hub, service="athena", operation="get_query_results", error=exc
@@ -353,12 +334,12 @@ class AthenaResultsVM:
             self._state, self._error_text = map_unexpected_error(
                 fallback=_RESULTS_ERROR,
             )
-            self._notify("state")
-            self._notify("error_text")
+            self._publish("state")
+            self._publish("error_text")
             return
         finally:
             self._untrack_task(worker, task)
-        if self._is_current(worker):
+        if self._is_current_worker(worker):
             self._notify_all()
             self._set_state(PaneState.IDLE if self.rows else PaneState.EMPTY)
 
@@ -366,7 +347,7 @@ class AthenaResultsVM:
         await self._worker.load_more_command.execute_async()
 
     def export_snapshot(self) -> AthenaResultsSnapshot:
-        if self._disposed or self._shutdown_started:
+        if self._is_disposed() or self._shutdown_started:
             raise ValueError("Athena results are unavailable")
         if self._snapshot_export_is_busy():
             raise ValueError("Athena results are busy")
@@ -388,7 +369,7 @@ class AthenaResultsVM:
     async def restore_snapshot(self, snapshot: AthenaResultsSnapshot) -> None:
         prepared = _prepare_results_snapshot(snapshot)
         del snapshot
-        if self._disposed or self._shutdown_started:
+        if self._is_disposed() or self._shutdown_started:
             raise ValueError("Athena results are unavailable")
         if prepared is None:
             raise ValueError(_SNAPSHOT_ERROR)
@@ -428,9 +409,9 @@ class AthenaResultsVM:
         # subscribers; publish only these new dependencies to keep the shared
         # snapshot notification batch bounded.
         self._notify_all(include_projection=False)
-        self._notify("is_loading_more")
-        self._notify("visible_rows")
-        self._notify("selection")
+        self._publish("is_loading_more")
+        self._publish("visible_rows")
+        self._publish("selection")
 
     @staticmethod
     def snapshot_is_valid(snapshot: object) -> bool:
@@ -497,7 +478,7 @@ class AthenaResultsVM:
         preferred_pane: Literal["left", "right"] = "left",
     ) -> bool:
         """Reload execution metadata and publish its authoritative S3 URI."""
-        if self._disposed or self._shutdown_started or self._execution_id is None:
+        if self._is_disposed() or self._shutdown_started or self._execution_id is None:
             return False
         generation = self._generation
         execution_id = self._execution_id
@@ -514,7 +495,7 @@ class AthenaResultsVM:
             )
             return False
         if (
-            self._disposed
+            self._is_disposed()
             or self._shutdown_started
             or generation != self._generation
             or execution_id != self._execution_id
@@ -538,13 +519,13 @@ class AthenaResultsVM:
         return True
 
     def set_context(self, context: QueryContext) -> None:
-        if self._disposed or self._shutdown_started or context == self._context:
+        if self._is_disposed() or self._shutdown_started or context == self._context:
             return
         self.clear()
         self._context = context
 
     def clear(self) -> None:
-        if self._disposed or self._shutdown_started:
+        if self._is_disposed() or self._shutdown_started:
             return
         self._generation += 1
         self._execution_id = None
@@ -574,10 +555,7 @@ class AthenaResultsVM:
         self._pager = current.pager
         self._shutdown_complete = True
 
-    def dispose(self) -> None:
-        if self._disposed:
-            return
-        self._disposed = True
+    def _on_dispose(self) -> None:
         self._generation += 1
         if not self._shutdown_started:
             self._execution_id = None
@@ -589,9 +567,6 @@ class AthenaResultsVM:
             self._pager = current.pager
         for worker in tuple(self._workers):
             self._retire_worker(worker)
-        self._on_property_changed.on_completed()
-        self._on_property_changed.dispose()
-        self._inner.dispose()
 
     async def _load_more(self, worker: _PagerGeneration) -> None:
         if not self._can_load_more(worker):
@@ -601,31 +576,31 @@ class AthenaResultsVM:
         try:
             await worker.pager.load_more_command.execute_async()
         except _ResultColumnsChangedError:
-            if not self._is_current(worker):
+            if not self._is_current_worker(worker):
                 return
             self._error_text = _COLUMN_ERROR
             self._set_state(PaneState.ERROR)
-            self._notify("error_text")
+            self._publish("error_text")
             return
         except PagerCollectionLimitError:
-            if not self._is_current(worker):
+            if not self._is_current_worker(worker):
                 return
             self._error_text = _RESULTS_LIMIT_ERROR
             self._set_state(PaneState.ERROR)
-            self._notify("error_text")
+            self._publish("error_text")
             return
         except ProviderError as exc:
-            if not self._is_current(worker):
+            if not self._is_current_worker(worker):
                 return
             self._state, self._error_text = map_provider_error(
                 exc,
                 fallback=_RESULTS_ERROR,
             )
-            self._notify("state")
-            self._notify("error_text")
+            self._publish("state")
+            self._publish("error_text")
             return
         except Exception as exc:
-            if not self._is_current(worker):
+            if not self._is_current_worker(worker):
                 return
             report_unexpected_service_error(
                 self._hub, service="athena", operation="get_query_results", error=exc
@@ -633,27 +608,27 @@ class AthenaResultsVM:
             self._state, self._error_text = map_unexpected_error(
                 fallback=_RESULTS_ERROR,
             )
-            self._notify("state")
-            self._notify("error_text")
+            self._publish("state")
+            self._publish("error_text")
             return
         finally:
             self._untrack_task(worker, task)
             self._finish_loading_more(worker)
-        if not self._is_current(worker):
+        if not self._is_current_worker(worker):
             return
         self._error_text = None
-        self._notify("error_text")
-        self._notify("rows")
-        self._notify("rendered_rows")
+        self._publish("error_text")
+        self._publish("rows")
+        self._publish("rendered_rows")
         self._notify_projection()
-        self._notify("has_more")
+        self._publish("has_more")
         self._set_state(PaneState.IDLE if self.rows else PaneState.EMPTY)
 
     def _can_load_more(self, worker: _PagerGeneration) -> bool:
         return (
-            not self._disposed
+            not self._is_disposed()
             and not self._shutdown_started
-            and self._is_current(worker)
+            and self._is_current_worker(worker)
             and worker.execution_id is not None
             and worker.pager.current_token is not None
         )
@@ -662,7 +637,7 @@ class AthenaResultsVM:
         self._loading_more_worker = worker
         if not self._is_loading_more:
             self._is_loading_more = True
-            self._notify("is_loading_more")
+            self._publish("is_loading_more")
 
     def _finish_loading_more(self, worker: _PagerGeneration) -> None:
         if self._loading_more_worker is not worker:
@@ -670,7 +645,7 @@ class AthenaResultsVM:
         self._loading_more_worker = None
         if self._is_loading_more:
             self._is_loading_more = False
-            self._notify("is_loading_more")
+            self._publish("is_loading_more")
 
     def _make_worker(
         self,
@@ -695,7 +670,7 @@ class AthenaResultsVM:
                         execution_id,
                         start_token=token,
                     )
-                if not self._is_current(worker):
+                if not self._is_current_worker(worker):
                     return [], None
                 if token is None:
                     worker.columns = page.columns
@@ -710,7 +685,7 @@ class AthenaResultsVM:
         worker.load_more_command = (
             AsyncRelayCommand.builder()
             .predicate(lambda: self._can_load_more(worker))
-            .triggers(self._on_property_changed)
+            .triggers(self.on_property_changed)
             .task(lambda: self._load_more(worker))
             .build()
         )
@@ -756,17 +731,17 @@ class AthenaResultsVM:
     async def _drain_workers(self) -> None:
         await drain_worker_tasks(self._workers)
 
-    def _is_current(self, worker: _PagerGeneration) -> bool:
+    def _is_current_worker(self, worker: _PagerGeneration) -> bool:
         return (
             worker is self._worker
             and worker.generation == self._generation
             and not worker.retired
-            and not self._disposed
+            and not self._is_disposed()
             and not self._shutdown_started
         )
 
     def _notify_all(self, *, include_projection: bool = True) -> None:
-        for property_name in (
+        self._publish(
             "execution_id",
             "columns",
             "rows",
@@ -774,46 +749,31 @@ class AthenaResultsVM:
             "has_more",
             "state",
             "error_text",
-        ):
-            self._notify(property_name)
+        )
 
         if include_projection:
             self._notify_projection()
 
     def _notify_projection(self) -> None:
-        for property_name in (
+        self._publish(
             "filter_text",
             "sort_column",
             "sort_direction",
             "visible_row_indices",
             "visible_rows",
             "projection_generation",
-        ):
-            self._notify(property_name)
+        )
         self._notify_selection()
 
     def _notify_selection(self) -> None:
         for property_name in ("selection", "selected_cell", "selected_row"):
-            self._notify(property_name)
+            self._publish(property_name)
 
     def _set_state(self, state: PaneState) -> None:
         if self._state == state:
             return
         self._state = state
-        self._notify("state")
-
-    def _notify(self, property_name: str) -> None:
-        if self._disposed:
-            return
-        send_value_free(
-            self._hub,
-            PropertyChangedMessage.create(
-                self,
-                "athena.results",
-                property_name,
-            ),
-        )
-        self._on_property_changed.on_next(property_name)
+        self._publish("state")
 
 
 __all__ = ["AthenaResultsSnapshot", "AthenaResultsVM", "RenderedResultCell"]

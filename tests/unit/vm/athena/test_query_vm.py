@@ -10,7 +10,13 @@ from pathlib import Path
 from uuid import UUID
 
 import pytest
-from vmx import NULL_DISPATCHER, AsyncRelayCommand, MessageHub
+from vmx import (
+    NULL_DISPATCHER,
+    AsyncRelayCommand,
+    ConstructionStatus,
+    MessageHub,
+    PropertyChangedMessage,
+)
 from vmx.messages.protocols import Message
 
 from aws_tui.domain.athena import (
@@ -33,6 +39,7 @@ from aws_tui.domain.query import (
 )
 from aws_tui.domain.sql_policy import ReadOnlySqlPolicy
 from aws_tui.infra.crash_dump import CrashDump
+from aws_tui.vm._component import IsolatedComponentVM
 from aws_tui.vm.athena.query_vm import AthenaQueryVM
 from aws_tui.vm.file_manager.pane_vm import PaneState
 
@@ -775,7 +782,7 @@ async def test_dispose_retains_detached_submission_until_silent_remote_stop() ->
     assert fake.start_accepted.is_set()
     assert not fake.start_cancelled.is_set()
     assert fake.stop_calls == ["q-app-1"]
-    assert notifications == []
+    assert [name for name in notifications if name not in {"status", "is_constructed"}] == []
     assert not vm.execute_command.can_execute()
     assert not vm.cancel_command.can_execute()
     subscription.dispose()
@@ -1935,3 +1942,42 @@ async def test_cancelled_query_cancel_drains_retained_stop_and_releases_handoff(
         await vm.shutdown()
         await asyncio.gather(execution, return_exceptions=True)
         vm.dispose()
+
+
+def test_query_vm_is_a_component_with_a_full_lifecycle() -> None:
+    vm = make_query_vm(InMemoryAthena())
+    assert isinstance(vm, IsolatedComponentVM)
+    assert vm.status is ConstructionStatus.CONSTRUCTED
+    vm.destruct()
+    assert vm.status is ConstructionStatus.DESTRUCTED
+    vm.construct()
+    vm.dispose()
+    assert vm.status is ConstructionStatus.DISPOSED
+
+
+def test_query_vm_publishes_names_on_hub_and_stream() -> None:
+    vm = make_query_vm(InMemoryAthena())
+    stream: list[str] = []
+    hub_messages: list[PropertyChangedMessage[object]] = []
+    vm.on_property_changed.subscribe(stream.append)
+    vm._hub.messages.subscribe(
+        lambda message: (
+            hub_messages.append(message)
+            if isinstance(message, PropertyChangedMessage) and message.sender is vm
+            else None
+        )
+    )
+    vm._publish("state")
+    assert stream == ["state"]
+    assert [(m.sender_name, m.property_name) for m in hub_messages] == [("athena.query", "state")]
+    vm.dispose()
+
+
+def test_query_vm_publishes_nothing_after_dispose() -> None:
+    vm = make_query_vm(InMemoryAthena())
+    stream: list[str] = []
+    vm.on_property_changed.subscribe(stream.append)
+    vm.dispose()
+    stream.clear()
+    vm._publish("state")
+    assert stream == []

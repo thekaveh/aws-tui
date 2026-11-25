@@ -5,11 +5,12 @@ from dataclasses import replace
 from datetime import UTC, datetime
 
 import pytest
-from vmx import NULL_DISPATCHER, MessageHub
+from vmx import NULL_DISPATCHER, ConstructionStatus, MessageHub, PropertyChangedMessage
 from vmx.messages.protocols import Message
 
 from aws_tui.domain.filesystem import ProviderError
 from aws_tui.domain.query import NamedQuery, PreparedStatement, PreparedStatementSummary
+from aws_tui.vm._component import IsolatedComponentVM
 from aws_tui.vm.athena._pager_compat import SnapshotTokenPager, seed_token_pager
 from aws_tui.vm.athena.saved_vm import AthenaSavedVM, SavedQueryKind
 from aws_tui.vm.file_manager.pane_vm import PaneState
@@ -587,3 +588,42 @@ async def test_saved_snapshot_relational_invariants_reject_atomically_without_ca
     vm.restore_snapshot(retryable)
     assert vm.export_snapshot() == retryable
     assert vm.has_more_named_queries
+
+
+def test_saved_vm_is_a_component_with_a_full_lifecycle() -> None:
+    vm = make_saved_vm(_seeded_client())
+    assert isinstance(vm, IsolatedComponentVM)
+    assert vm.status is ConstructionStatus.CONSTRUCTED
+    vm.destruct()
+    assert vm.status is ConstructionStatus.DESTRUCTED
+    vm.construct()
+    vm.dispose()
+    assert vm.status is ConstructionStatus.DISPOSED
+
+
+def test_saved_vm_publishes_names_on_hub_and_stream() -> None:
+    vm = make_saved_vm(_seeded_client())
+    stream: list[str] = []
+    hub_messages: list[PropertyChangedMessage[object]] = []
+    vm.on_property_changed.subscribe(stream.append)
+    vm._hub.messages.subscribe(
+        lambda message: (
+            hub_messages.append(message)
+            if isinstance(message, PropertyChangedMessage) and message.sender is vm
+            else None
+        )
+    )
+    vm._publish("state")
+    assert stream == ["state"]
+    assert [(m.sender_name, m.property_name) for m in hub_messages] == [("athena.saved", "state")]
+    vm.dispose()
+
+
+def test_saved_vm_publishes_nothing_after_dispose() -> None:
+    vm = make_saved_vm(_seeded_client())
+    stream: list[str] = []
+    vm.on_property_changed.subscribe(stream.append)
+    vm.dispose()
+    stream.clear()
+    vm._publish("state")
+    assert stream == []

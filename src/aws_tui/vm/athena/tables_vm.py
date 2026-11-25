@@ -5,13 +5,12 @@ from __future__ import annotations
 import asyncio
 from typing import Any
 
-import reactivex as rx
-from vmx import Message, MessageHub, PropertyChangedMessage
+from vmx import Dispatcher, Message, MessageHub
 
 from aws_tui.domain.data_catalog import TableSummary
 from aws_tui.domain.filesystem import ProviderError
 from aws_tui.domain.query import QueryContext
-from aws_tui.vm._observable import ObserverSafeSubject, send_value_free
+from aws_tui.vm._component import IsolatedComponentVM
 from aws_tui.vm.athena._domain_validation import (
     optional_exact_datetime,
     optional_exact_string,
@@ -28,12 +27,19 @@ _TABLES_ERROR = "Athena tables request failed"
 _MAX_TABLES = 1_000
 
 
-class AthenaTablesVM:
-    def __init__(self, *, client: Any, context: QueryContext, hub: MessageHub[Message]) -> None:
+class AthenaTablesVM(IsolatedComponentVM):
+    def __init__(
+        self,
+        *,
+        client: Any,
+        context: QueryContext,
+        hub: MessageHub[Message],
+        dispatcher: Dispatcher,
+    ) -> None:
+        super().__init__(name="athena.tables", hub=hub, dispatcher=dispatcher)
         self._client = client
         self._context = context
-        self._hub = hub
-        self._disposed = False
+        self._hub: MessageHub[Message] = hub
         self._shutdown_started = False
         self._generation = 0
         self._context_revision = 0
@@ -42,7 +48,6 @@ class AthenaTablesVM:
         self._is_loading_more = False
         self._tasks: set[asyncio.Task[Any]] = set()
         self._request_task: asyncio.Task[None] | None = None
-        self._on_property_changed = ObserverSafeSubject[str]()
         self._pager = self._make_pager(context, self._generation)
 
     @property
@@ -87,10 +92,6 @@ class AthenaTablesVM:
     def is_loading_more(self) -> bool:
         return self._is_loading_more
 
-    @property
-    def on_property_changed(self) -> rx.Observable[str]:
-        return self._on_property_changed.observable
-
     def report_incomplete_discovery(self) -> None:
         """Expose bounded discovery without claiming that a table is absent."""
         if not self._ready():
@@ -100,7 +101,7 @@ class AthenaTablesVM:
         self._notify_all()
 
     async def refresh(self) -> None:
-        if self._disposed or self._shutdown_started:
+        if self._is_disposed() or self._shutdown_started:
             return
         self._replace_pager(self._context)
         if not self._ready():
@@ -114,11 +115,11 @@ class AthenaTablesVM:
         if not self.has_more or self._request_task is not None:
             return
         self._is_loading_more = True
-        self._notify("is_loading_more")
+        self._publish("is_loading_more")
         await self._request(refresh=False)
 
     def replace_context(self, context: QueryContext, *, notify: bool = True) -> None:
-        if self._disposed or self._shutdown_started:
+        if self._is_disposed() or self._shutdown_started:
             return
         self._context_revision += 1
         self._replace_pager(context)
@@ -128,7 +129,7 @@ class AthenaTablesVM:
     async def shutdown(self) -> None:
         if not self._shutdown_started:
             self._shutdown_started = True
-            if not self._disposed:
+            if not self._is_disposed():
                 self._replace_pager(self._context)
                 self._notify_all()
         current = asyncio.current_task()
@@ -138,19 +139,14 @@ class AthenaTablesVM:
         if tasks:
             await asyncio.gather(*tasks, return_exceptions=True)
 
-    def dispose(self) -> None:
-        if self._disposed:
-            return
-        self._disposed = True
+    def _on_dispose(self) -> None:
         self._pager.dispose()
         for task in tuple(self._tasks):
             task.cancel()
-        self._on_property_changed.on_completed()
-        self._on_property_changed.dispose()
 
     def _ready(self) -> bool:
         return (
-            not self._disposed
+            not self._is_disposed()
             and not self._shutdown_started
             and valid_query_context(self._context)
             and all(self._context.cache_key)
@@ -267,7 +263,7 @@ class AthenaTablesVM:
                 self._request_task = None
 
     def _notify_all(self) -> None:
-        for name in (
+        self._publish(
             "context",
             "items",
             "state",
@@ -275,14 +271,7 @@ class AthenaTablesVM:
             "has_more",
             "limit_reached",
             "is_loading_more",
-        ):
-            self._notify(name)
-
-    def _notify(self, name: str) -> None:
-        if self._disposed:
-            return
-        send_value_free(self._hub, PropertyChangedMessage.create(self, "athena.tables", name))
-        self._on_property_changed.on_next(name)
+        )
 
 
 __all__ = ["AthenaTablesVM"]

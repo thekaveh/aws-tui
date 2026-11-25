@@ -7,12 +7,13 @@ from dataclasses import replace
 from pathlib import Path
 
 import pytest
-from vmx import NULL_DISPATCHER, MessageHub
+from vmx import NULL_DISPATCHER, ConstructionStatus, MessageHub, PropertyChangedMessage
 from vmx.messages.protocols import Message
 
 from aws_tui.domain.filesystem import ProviderError
 from aws_tui.domain.query import QueryContext, ResultColumn, ResultPage
 from aws_tui.infra.crash_dump import CrashDump
+from aws_tui.vm._component import IsolatedComponentVM
 from aws_tui.vm.athena._pager_compat import SnapshotTokenPager
 from aws_tui.vm.athena.results_vm import AthenaResultsSnapshot, AthenaResultsVM
 from aws_tui.vm.file_manager.pane_vm import PaneState
@@ -757,7 +758,7 @@ async def test_dispose_invalidates_blocked_result_load_and_all_commands() -> Non
     client.release_fetch.set()
     await load
 
-    assert notifications == []
+    assert [name for name in notifications if name not in {"status", "is_constructed"}] == []
     assert pager._disposed  # type: ignore[attr-defined]
     assert pager.load_more_command._disposed  # type: ignore[attr-defined]
     assert pager.refresh_command._disposed  # type: ignore[attr-defined]
@@ -1048,3 +1049,42 @@ async def test_projection_retired_continuation_cannot_restore_values_or_selectio
     assert vm.selection == (0, 0)
     assert vm.selected_cell == "new"
     assert client.calls == [("q-old", None), ("q-old", "old-next"), ("q-new", None)]
+
+
+def test_results_vm_is_a_component_with_a_full_lifecycle() -> None:
+    vm = make_results_vm(ResultClient({}))
+    assert isinstance(vm, IsolatedComponentVM)
+    assert vm.status is ConstructionStatus.CONSTRUCTED
+    vm.destruct()
+    assert vm.status is ConstructionStatus.DESTRUCTED
+    vm.construct()
+    vm.dispose()
+    assert vm.status is ConstructionStatus.DISPOSED
+
+
+def test_results_vm_publishes_names_on_hub_and_stream() -> None:
+    vm = make_results_vm(ResultClient({}))
+    stream: list[str] = []
+    hub_messages: list[PropertyChangedMessage[object]] = []
+    vm.on_property_changed.subscribe(stream.append)
+    vm._hub.messages.subscribe(
+        lambda message: (
+            hub_messages.append(message)
+            if isinstance(message, PropertyChangedMessage) and message.sender is vm
+            else None
+        )
+    )
+    vm._publish("state")
+    assert stream == ["state"]
+    assert [(m.sender_name, m.property_name) for m in hub_messages] == [("athena.results", "state")]
+    vm.dispose()
+
+
+def test_results_vm_publishes_nothing_after_dispose() -> None:
+    vm = make_results_vm(ResultClient({}))
+    stream: list[str] = []
+    vm.on_property_changed.subscribe(stream.append)
+    vm.dispose()
+    stream.clear()
+    vm._publish("state")
+    assert stream == []
