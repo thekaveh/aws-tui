@@ -11,7 +11,7 @@ from aws_tui.infra.sql_snippet_store import SqlSnippetStore
 from aws_tui.vm.athena.authoring_vm import AuthoringDocumentSnapshot
 from aws_tui.vm.athena.saved_vm import SavedQueryKind
 from tests.athena_drafts_helpers import runtime_at
-from tests.helpers import wait_until
+from tests.helpers import record_properties, wait_until
 from tests.unit.vm.athena.test_authoring_vm import GatedFiles, yes
 from tests.unit.vm.athena.test_page_vm import PageClient, make_page_vm
 
@@ -102,17 +102,13 @@ async def test_invalid_document_snapshot_rejected_before_any_state_change(tmp_pa
         forged = replace(original, document=bad)
         before = page.export_snapshot()
         revision = page.query.editor_revision
-        changes = []
-        sub = page.on_property_changed.subscribe(changes.append)
-        try:
+        with record_properties(page) as changes:
             if fallback:
                 with pytest.raises(ValueError, match=r"unavailable|invalid"):
                     page.install_editor_snapshot(forged)
             else:
                 with pytest.raises(ValueError, match=r"unavailable|invalid"):
                     await page.restore_snapshot(forged)
-        finally:
-            sub.dispose()
         assert page.export_snapshot() == before
         assert page.query.editor_revision == revision
         assert not changes

@@ -8,13 +8,15 @@ from __future__ import annotations
 
 import asyncio
 import sys
-from typing import TYPE_CHECKING, Any
+from contextlib import contextmanager
+from typing import TYPE_CHECKING, Any, Protocol
 
 from vmx import Message, MessageHub
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
+    from collections.abc import Callable, Iterator
 
+    from reactivex import Observable
     from textual.app import App
     from textual.widget import Widget
     from textual.widgets import TextArea
@@ -26,6 +28,33 @@ def new_hub() -> MessageHub[Message]:
     """Return a fresh message hub for one test."""
     hub: MessageHub[Message] = MessageHub()
     return hub
+
+
+class HasPropertyChanged(Protocol):
+    @property
+    def on_property_changed(self) -> Observable[str]: ...
+
+
+@contextmanager
+def record_hub(hub: MessageHub[Message]) -> Iterator[list[Message]]:
+    """Collect every hub message sent inside the ``with`` block."""
+    seen: list[Message] = []
+    subscription = hub.messages.subscribe(on_next=seen.append)
+    try:
+        yield seen
+    finally:
+        subscription.dispose()
+
+
+@contextmanager
+def record_properties(vm: HasPropertyChanged) -> Iterator[list[str]]:
+    """Collect every property name ``vm`` publishes inside the ``with`` block."""
+    seen: list[str] = []
+    subscription = vm.on_property_changed.subscribe(on_next=seen.append)
+    try:
+        yield seen
+    finally:
+        subscription.dispose()
 
 
 def local_transfer_filename(*, platform: str = sys.platform) -> str:

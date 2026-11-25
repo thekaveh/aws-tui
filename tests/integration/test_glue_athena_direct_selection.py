@@ -24,7 +24,7 @@ from aws_tui.ui.widgets.toast import Toast
 from aws_tui.vm.athena.page_vm import AthenaPageVM
 from aws_tui.vm.glue.page_vm import GluePageVM
 from aws_tui.vm.messages import OpenAthenaTableRequest
-from tests.helpers import drain_workers, wait_until
+from tests.helpers import drain_workers, record_properties, wait_until
 from tests.integration.test_glue_athena_navigation import _athena_client, _open_service
 
 
@@ -345,9 +345,7 @@ async def test_athena_pending_nondefault_database_survives_slow_metadata_refresh
                 return await original(start_token=start_token)
 
             monkeypatch.setattr(client, "list_workgroups_page", delayed_workgroups)
-            notifications: list[str] = []
-            subscription = athena.on_property_changed.subscribe(notifications.append)
-            try:
+            with record_properties(athena) as notifications:
                 picker = app.query_one("#athena-database", ContextPicker)
                 assert await pilot.click(picker)
                 await wait_until(
@@ -398,8 +396,6 @@ async def test_athena_pending_nondefault_database_survives_slow_metadata_refresh
                 assert editor.text == expected
                 assert athena.query.execution_ref is None
                 assert not any(call.method == "start_query" for call in client.calls)
-            finally:
-                subscription.dispose()
     finally:
         release.set()
         if metadata_task is not None:
