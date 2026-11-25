@@ -19,17 +19,15 @@ from pathlib import Path
 from typing import Final
 
 from vmx import (
-    ComponentVM,
     ConstructionStatus,
     Dispatcher,
     Message,
     MessageHub,
     ModalVM,
-    PropertyChangedMessage,
     RelayCommand,
 )
 
-from aws_tui.vm._observable import send_value_free
+from aws_tui.vm._component import IsolatedComponentVM
 
 
 class CrashChoice(StrEnum):
@@ -128,7 +126,7 @@ class CrashReport:
         return last_action_id in SAFE_CONTINUE_ACTIONS
 
 
-class CrashVM:
+class CrashVM(IsolatedComponentVM):
     """Async ``ask`` facade returning a :class:`CrashChoice`.
 
     Properties: :attr:`report`, :attr:`is_open`, :attr:`can_continue`.
@@ -143,16 +141,11 @@ class CrashVM:
         hub: MessageHub[Message],
         dispatcher: Dispatcher,
     ) -> None:
-        self._hub: MessageHub[Message] = hub
+        super().__init__(name="crash", hub=hub, dispatcher=dispatcher)
 
         self._report: CrashReport = report
         self._is_open: bool = False
         self._modal: ModalVM[CrashChoice] | None = None
-        self._disposed: bool = False
-
-        self._inner: ComponentVM = (
-            ComponentVM.builder().name("crash").services(hub, dispatcher).build()
-        )
 
         self._continue_command: RelayCommand = (
             RelayCommand.builder()
@@ -160,18 +153,21 @@ class CrashVM:
             .task(lambda: self._resolve(CrashChoice.CONTINUE))
             .build()
         )
+        self._own(self._continue_command)
         self._view_trace_command: RelayCommand = (
             RelayCommand.builder()
             .predicate(lambda: self._is_open)
             .task(lambda: self._resolve(CrashChoice.VIEW_TRACE))
             .build()
         )
+        self._own(self._view_trace_command)
         self._quit_command: RelayCommand = (
             RelayCommand.builder()
             .predicate(lambda: self._is_open)
             .task(lambda: self._resolve(CrashChoice.QUIT))
             .build()
         )
+        self._own(self._quit_command)
 
     # ── Properties ──────────────────────────────────────────────────────────
 
@@ -199,32 +195,11 @@ class CrashVM:
     def quit_command(self) -> RelayCommand:
         return self._quit_command
 
-    @property
-    def status(self) -> ConstructionStatus:
-        return self._inner.status
-
-    @property
-    def name(self) -> str:
-        return self._inner.name
-
     # ── Lifecycle ───────────────────────────────────────────────────────────
 
-    def construct(self) -> None:
-        self._inner.construct()
-
-    def destruct(self) -> None:
-        self._inner.destruct()
-
-    def dispose(self) -> None:
-        if self._disposed:
-            return
-        self._disposed = True
+    def _on_dispose(self) -> None:
         if self._modal is not None:
             self._modal.dispose()
-        self._continue_command.dispose()
-        self._view_trace_command.dispose()
-        self._quit_command.dispose()
-        self._inner.dispose()
 
     # ── Async API ──────────────────────────────────────────────────────────
 
@@ -232,7 +207,7 @@ class CrashVM:
         """Open the crash modal and await the user's choice."""
         if self._is_open or self._modal is not None:
             raise RuntimeError("crash modal is already open")
-        if self._disposed:
+        if self.status is ConstructionStatus.DISPOSED:
             raise RuntimeError("crash modal has been disposed")
         self._modal = ModalVM(CrashChoice.QUIT)
         self._set_open(True)
@@ -253,7 +228,7 @@ class CrashVM:
         if self._is_open == value:
             return
         self._is_open = value
-        send_value_free(self._hub, PropertyChangedMessage.create(self, self.name, "is_open"))
+        self._publish("is_open")
 
 
 __all__ = ["SAFE_CONTINUE_ACTIONS", "CrashChoice", "CrashReport", "CrashVM"]
