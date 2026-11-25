@@ -7,7 +7,7 @@ import hashlib
 from dataclasses import replace
 
 import pytest
-from vmx import NULL_DISPATCHER, MessageHub
+from vmx import NULL_DISPATCHER, ComponentVM, MessageHub
 
 from aws_tui.domain.filesystem import ConflictError, PathRef, ProviderError
 from aws_tui.domain.local_fs import LocalFS
@@ -68,7 +68,7 @@ async def context(tmp_path):
     source.move_cursor_to(
         next(i for i, row in enumerate(source.filtered_entries) if row.name == "tree")
     )
-    vm = SyncVM(source=source, destination=target, hub=hub)
+    vm = SyncVM(source=source, destination=target, hub=hub, dispatcher=NULL_DISPATCHER)
     vm.construct()
     runtime = TransferRuntime(TransferJournal(base_dir=tmp_path / "journal"), hub)
     try:
@@ -340,7 +340,9 @@ async def test_protection_enabled_after_review_blocks_all_upload_requests(contex
         GuardedRemote(destination, check), path_protocol="s3:", connection_key=("aws", "fixture")
     )
     await target.navigate_to(PathRef(("bucket", "prefix")))
-    vm = type(existing)(source=source, destination=target, hub=existing._hub)
+    vm = type(existing)(
+        source=source, destination=target, hub=existing._hub, dispatcher=NULL_DISPATCHER
+    )
     vm.construct()
     try:
         await vm.load()
@@ -356,3 +358,8 @@ async def test_protection_enabled_after_review_blocks_all_upload_requests(contex
     finally:
         await vm.shutdown()
         vm.dispose()
+
+
+async def test_sync_vm_is_a_component_vm(context) -> None:
+    vm, *_ = context
+    assert isinstance(vm, ComponentVM)

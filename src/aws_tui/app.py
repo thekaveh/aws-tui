@@ -3467,7 +3467,12 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
         ctx = self._app_ctx
         self.record_action("pane.sync_folder" if sync else "pane.upload_folder")
         vm_type = SyncVM if sync else RecursiveUploadVM
-        vm = vm_type(source=origin.source, destination=origin.destination, hub=ctx.hub)
+        vm = vm_type(
+            source=origin.source,
+            destination=origin.destination,
+            hub=ctx.hub,
+            dispatcher=ctx.dispatcher,
+        )
         vm.construct()
         screen: RecursiveUploadModal
 

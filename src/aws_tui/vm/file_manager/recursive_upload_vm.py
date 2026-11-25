@@ -6,9 +6,7 @@ import asyncio
 from dataclasses import dataclass
 from typing import cast
 
-from reactivex import Observable
-from reactivex.abc import DisposableBase
-from vmx import ConstructionStatus, Message, MessageHub, PropertyChangedMessage
+from vmx import ConstructionStatus, Dispatcher, Message, MessageHub, PropertyChangedMessage
 
 from aws_tui.domain.cross_fs import ConflictResolution
 from aws_tui.domain.filesystem import ConflictError, EntryKind, PathRef
@@ -21,7 +19,8 @@ from aws_tui.domain.upload_batch import (
     replan_failed,
 )
 from aws_tui.infra.redaction import redact_text
-from aws_tui.vm._observable import ObserverSafeSubject, send_value_free
+from aws_tui.vm._component import IsolatedComponentVM
+from aws_tui.vm._observable import send_value_free
 from aws_tui.vm.file_manager.pane_vm import PaneState, PaneVM
 from aws_tui.vm.file_manager.recursive_upload_transfer import execute_upload_transfer
 from aws_tui.vm.file_manager.transfer_runtime import TransferRuntime
@@ -38,8 +37,15 @@ class PreparedUpload:
     generation: int
 
 
-class RecursiveUploadVM:
-    def __init__(self, *, source: PaneVM, destination: PaneVM, hub: MessageHub[Message]):
+class RecursiveUploadVM(IsolatedComponentVM):
+    def __init__(
+        self,
+        *,
+        source: PaneVM,
+        destination: PaneVM,
+        hub: MessageHub[Message],
+        dispatcher: Dispatcher,
+    ) -> None:
         entry = source.selected_entry
         if (
             source.path_protocol not in {"", "file:", "local:"}
@@ -63,6 +69,7 @@ class RecursiveUploadVM:
         ):
             if any(not callable(getattr(provider, method, None)) for method in methods):
                 raise ConflictError("These providers do not support reviewed recursive uploads")
+        super().__init__(name="s3.upload", hub=hub, dispatcher=dispatcher)
         self.source_pane, self.destination_pane = source, destination
         self._source, self._destination = source.provider, destination.provider
         self._bindings = _binding(source), _binding(destination)
@@ -79,12 +86,9 @@ class RecursiveUploadVM:
             self.destination_prefix
         )
         self.destination_label = f"s3://{bucket}/{key}/"
-        self._hub, self._owner = hub, OperationOwner()
-        self._changes = ObserverSafeSubject[str]()
-        self._subscriptions: list[DisposableBase] = []
+        self._owner = OperationOwner()
         self._generation = 0
-        self._closed = self._disposed = self._busy = self._ever_accepted = False
-        self._constructed = False
+        self._closed = self._busy = self._ever_accepted = False
         self._state = "idle"
         self.policy = ConflictResolution.ERROR
         self.plan: UploadPlan | None = None
@@ -98,10 +102,6 @@ class RecursiveUploadVM:
         self.error_text = ""
 
     @property
-    def on_property_changed(self) -> Observable[str]:
-        return self._changes
-
-    @property
     def state(self) -> str:
         self._reconcile()
         return self._state
@@ -111,11 +111,11 @@ class RecursiveUploadVM:
         return self._busy or self._accepted is not None
 
     def construct(self) -> None:
-        if self._constructed or self._closed:
+        if self.is_constructed or self._closed:
             return
-        self._constructed = True
+        super().construct()
         for pane in (self.source_pane, self.destination_pane):
-            self._subscriptions.append(
+            self._own(
                 pane.on_property_changed.subscribe(self._pane_changed, on_completed=self.close)
             )
         self._reconcile()
@@ -164,16 +164,16 @@ class RecursiveUploadVM:
         return not self._closed
 
     def _current(self, generation: int) -> bool:
-        return self._reconcile() and self._constructed and generation == self._generation
+        return self._reconcile() and self.is_constructed and generation == self._generation
 
     def _notify(self) -> None:
-        if self._disposed:
+        if self._is_disposed():
             return
         generation = self._generation
-        send_value_free(self._hub, PropertyChangedMessage.create(self, "s3.upload", "state"))
+        send_value_free(self.hub, PropertyChangedMessage.create(self, self.name, "state"))
         self._reconcile()
-        if generation == self._generation and not self._disposed:
-            self._changes.on_next("state")
+        if generation == self._generation and not self._is_disposed():
+            self._raise_property_changed("state")
             self._reconcile()
 
     def _retire(self) -> None:
@@ -380,11 +380,7 @@ class RecursiveUploadVM:
         await self._owner.cancel_and_drain()
 
     def dispose(self) -> None:
-        if self._disposed:
+        if self._is_disposed():
             return
         self.close()
-        self._disposed = True
-        for subscription in self._subscriptions:
-            subscription.dispose()
-        self._changes.on_completed()
-        self._changes.dispose()
+        super().dispose()
