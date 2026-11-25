@@ -12,18 +12,16 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from vmx import (
-    ComponentVM,
     ConstructionStatus,
     DialogService,
     Dispatcher,
     Message,
     MessageHub,
     ModalVM,
-    PropertyChangedMessage,
     RelayCommand,
 )
 
-from aws_tui.vm._observable import send_value_free
+from aws_tui.vm._component import IsolatedComponentVM
 
 
 @dataclass(frozen=True, slots=True)
@@ -51,7 +49,7 @@ class ConfirmRequest:
     danger: bool = False
 
 
-class ConfirmationVM:
+class ConfirmationVM(IsolatedComponentVM):
     """Single-modal confirm overlay.
 
     Properties: :attr:`is_open`, :attr:`request`.
@@ -65,28 +63,25 @@ class ConfirmationVM:
         hub: MessageHub[Message],
         dispatcher: Dispatcher,
     ) -> None:
-        self._hub: MessageHub[Message] = hub
+        super().__init__(name="confirmation", hub=hub, dispatcher=dispatcher)
 
         self._request: ConfirmRequest | None = None
         self._is_open: bool = False
         self._modal: ModalVM[bool] | None = None
-        self._disposed: bool = False
-
-        self._inner: ComponentVM = (
-            ComponentVM.builder().name("confirmation").services(hub, dispatcher).build()
-        )
         self._confirm_command: RelayCommand = (
             RelayCommand.builder()
             .predicate(lambda: self._is_open)
             .task(lambda: self._resolve(True))
             .build()
         )
+        self._own(self._confirm_command)
         self._cancel_command: RelayCommand = (
             RelayCommand.builder()
             .predicate(lambda: self._is_open)
             .task(lambda: self._resolve(False))
             .build()
         )
+        self._own(self._cancel_command)
 
     # ── Properties ──────────────────────────────────────────────────────────
 
@@ -106,31 +101,11 @@ class ConfirmationVM:
     def cancel_command(self) -> RelayCommand:
         return self._cancel_command
 
-    @property
-    def status(self) -> ConstructionStatus:
-        return self._inner.status
-
-    @property
-    def name(self) -> str:
-        return self._inner.name
-
     # ── Lifecycle ───────────────────────────────────────────────────────────
 
-    def construct(self) -> None:
-        self._inner.construct()
-
-    def destruct(self) -> None:
-        self._inner.destruct()
-
-    def dispose(self) -> None:
-        if self._disposed:
-            return
-        self._disposed = True
+    def _on_dispose(self) -> None:
         if self._modal is not None:
             self._modal.dispose()
-        self._confirm_command.dispose()
-        self._cancel_command.dispose()
-        self._inner.dispose()
 
     # ── Async API ──────────────────────────────────────────────────────────
 
@@ -143,7 +118,7 @@ class ConfirmationVM:
         """Open the modal with ``request`` and await the user's choice."""
         if self._is_open or self._modal is not None:
             raise RuntimeError("confirmation is already open")
-        if self._disposed:
+        if self.status is ConstructionStatus.DISPOSED:
             raise RuntimeError("confirmation has been disposed")
         self._modal = ModalVM(False)
         self._set_request(request)
@@ -170,13 +145,13 @@ class ConfirmationVM:
         if self._is_open == value:
             return
         self._is_open = value
-        send_value_free(self._hub, PropertyChangedMessage.create(self, self.name, "is_open"))
+        self._publish("is_open")
 
     def _set_request(self, value: ConfirmRequest | None) -> None:
         if self._request is value:
             return
         self._request = value
-        send_value_free(self._hub, PropertyChangedMessage.create(self, self.name, "request"))
+        self._publish("request")
 
 
 __all__ = ["ConfirmPath", "ConfirmRequest", "ConfirmationVM"]

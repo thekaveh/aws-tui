@@ -12,18 +12,15 @@ from collections.abc import AsyncIterator, Awaitable, Callable
 from dataclasses import dataclass
 
 from vmx import (
-    ComponentVM,
-    ConstructionStatus,
     Dispatcher,
     Message,
     MessageHub,
-    PropertyChangedMessage,
     RelayCommand,
     RelayCommandOf,
 )
 
 from aws_tui.domain.preview import PreviewResult
-from aws_tui.vm._observable import send_value_free
+from aws_tui.vm._component import IsolatedComponentVM
 
 
 @dataclass(frozen=True, slots=True)
@@ -42,7 +39,7 @@ class QuickLookContent:
     load_preview: Callable[[], Awaitable[PreviewResult]] | None = None
 
 
-class QuickLookVM:
+class QuickLookVM(IsolatedComponentVM):
     """Reactive Quick Look viewmodel."""
 
     def __init__(
@@ -51,16 +48,12 @@ class QuickLookVM:
         hub: MessageHub[Message],
         dispatcher: Dispatcher,
     ) -> None:
-        self._hub: MessageHub[Message] = hub
+        super().__init__(name="quick_look", hub=hub, dispatcher=dispatcher)
 
         self._content: QuickLookContent | None = None
         self._is_open: bool = False
         self._scroll_offset: int = 0
         self._find_query: str = ""
-
-        self._inner: ComponentVM = (
-            ComponentVM.builder().name("quick_look").services(hub, dispatcher).build()
-        )
 
         self._open_command: RelayCommandOf[QuickLookContent] = (
             RelayCommandOf[QuickLookContent]
@@ -69,9 +62,11 @@ class QuickLookVM:
             .task(self._open)
             .build()
         )
+        self._own(self._open_command)
         self._close_command: RelayCommand = (
             RelayCommand.builder().predicate(lambda: self._is_open).task(self._close).build()
         )
+        self._own(self._close_command)
         self._scroll_command: RelayCommandOf[int] = (
             RelayCommandOf[int]
             .builder()
@@ -79,6 +74,7 @@ class QuickLookVM:
             .task(self._scroll)
             .build()
         )
+        self._own(self._scroll_command)
         self._find_command: RelayCommandOf[str] = (
             RelayCommandOf[str]
             .builder()
@@ -86,6 +82,7 @@ class QuickLookVM:
             .task(self._find)
             .build()
         )
+        self._own(self._find_command)
 
     # ── Properties ──────────────────────────────────────────────────────────
 
@@ -121,29 +118,6 @@ class QuickLookVM:
     def find_command(self) -> RelayCommandOf[str]:
         return self._find_command
 
-    @property
-    def status(self) -> ConstructionStatus:
-        return self._inner.status
-
-    @property
-    def name(self) -> str:
-        return self._inner.name
-
-    # ── Lifecycle ───────────────────────────────────────────────────────────
-
-    def construct(self) -> None:
-        self._inner.construct()
-
-    def destruct(self) -> None:
-        self._inner.destruct()
-
-    def dispose(self) -> None:
-        self._open_command.dispose()
-        self._close_command.dispose()
-        self._scroll_command.dispose()
-        self._find_command.dispose()
-        self._inner.dispose()
-
     # ── Command implementations ────────────────────────────────────────────
 
     def _open(self, content: QuickLookContent | None) -> None:
@@ -178,25 +152,25 @@ class QuickLookVM:
         if self._is_open == value:
             return
         self._is_open = value
-        send_value_free(self._hub, PropertyChangedMessage.create(self, self.name, "is_open"))
+        self._publish("is_open")
 
     def _set_content(self, value: QuickLookContent | None) -> None:
         if self._content is value:
             return
         self._content = value
-        send_value_free(self._hub, PropertyChangedMessage.create(self, self.name, "content"))
+        self._publish("content")
 
     def _set_scroll(self, value: int) -> None:
         if self._scroll_offset == value:
             return
         self._scroll_offset = value
-        send_value_free(self._hub, PropertyChangedMessage.create(self, self.name, "scroll_offset"))
+        self._publish("scroll_offset")
 
     def _set_find_query(self, value: str) -> None:
         if self._find_query == value:
             return
         self._find_query = value
-        send_value_free(self._hub, PropertyChangedMessage.create(self, self.name, "find_query"))
+        self._publish("find_query")
 
 
 __all__ = ["QuickLookContent", "QuickLookVM"]

@@ -23,23 +23,24 @@ def _hub() -> MessageHub[Message]:
 # -------------------- Chrome VMs --------------------
 
 
-def test_confirmation_vm_composes_componentvm_internally() -> None:
+def test_confirmation_vm_is_an_isolated_component() -> None:
+    from aws_tui.vm._component import IsolatedComponentVM
     from aws_tui.vm.chrome.confirm_vm import ConfirmationVM
 
     vm = ConfirmationVM(hub=_hub(), dispatcher=NULL_DISPATCHER)
-    # _inner is the composed VMx primitive (ComponentVM).
-    assert hasattr(vm, "_inner")
-    # Public surface exposes a status/name proxy, NOT the inner VM
-    # itself.
+    # The view-model is the VMx component itself; there is no inner handle.
+    assert isinstance(vm, IsolatedComponentVM)
+    assert not hasattr(vm, "_inner")
     assert hasattr(vm, "status")
     assert not any("inner" in name for name in dir(vm) if not name.startswith("_"))
     vm.dispose()
 
 
-def test_crash_vm_composes_componentvm_internally() -> None:
+def test_crash_vm_is_an_isolated_component() -> None:
     from datetime import datetime
     from pathlib import Path
 
+    from aws_tui.vm._component import IsolatedComponentVM
     from aws_tui.vm.chrome.crash_vm import CrashReport, CrashVM
 
     report = CrashReport(
@@ -51,7 +52,8 @@ def test_crash_vm_composes_componentvm_internally() -> None:
         can_continue=False,
     )
     vm = CrashVM(report=report, hub=_hub(), dispatcher=NULL_DISPATCHER)
-    assert hasattr(vm, "_inner")
+    assert isinstance(vm, IsolatedComponentVM)
+    assert not hasattr(vm, "_inner")
     assert not any("inner" in name for name in dir(vm) if not name.startswith("_"))
     vm.dispose()
 
@@ -66,12 +68,14 @@ def test_toast_stack_vm_composes_compositevm_internally() -> None:
     vm.dispose()
 
 
-def test_focus_coordinator_vm_composes_componentvm_internally() -> None:
+def test_focus_coordinator_vm_is_an_isolated_component() -> None:
+    from aws_tui.vm._component import IsolatedComponentVM
     from aws_tui.vm.chrome.focus_coordinator_vm import FocusCoordinatorVM
 
     vm = FocusCoordinatorVM(hub=_hub(), dispatcher=NULL_DISPATCHER)
     vm.construct()
-    assert hasattr(vm, "_inner")
+    assert isinstance(vm, IsolatedComponentVM)
+    assert not hasattr(vm, "_inner")
     assert not any("inner" in name for name in dir(vm) if not name.startswith("_"))
     vm.dispose()
 

@@ -6,10 +6,18 @@ import asyncio
 from typing import cast
 
 import pytest
-from vmx import NULL_DISPATCHER, DialogService, MessageHub, ModalVM, NotificationSeverity
+from vmx import (
+    NULL_DISPATCHER,
+    ConstructionStatus,
+    DialogService,
+    MessageHub,
+    ModalVM,
+    NotificationSeverity,
+)
 from vmx.dialogs.dialog_service import FileFilter
 from vmx.messages.protocols import Message
 
+from aws_tui.vm._component import IsolatedComponentVM
 from aws_tui.vm.chrome.confirm_vm import ConfirmationVM, ConfirmRequest
 
 
@@ -177,3 +185,22 @@ async def test_consecutive_asks_work() -> None:
     vm.cancel_command.execute()
     assert await task2 is False
     vm.dispose()
+
+
+async def test_confirmation_isolated_component_publishes_property_names() -> None:
+    vm = _build()
+    names: list[str] = []
+    sub = vm.on_property_changed.subscribe(names.append)
+    try:
+        assert isinstance(vm, IsolatedComponentVM)
+        task = asyncio.create_task(vm.ask(_req()))
+        await asyncio.sleep(0)
+        vm.confirm_command.execute()
+        assert await task is True
+        assert names == ["request", "is_open", "is_open", "request"]
+    finally:
+        sub.dispose()
+        vm.dispose()
+    assert vm.status is ConstructionStatus.DISPOSED
+    with pytest.raises(RuntimeError):
+        await vm.ask(_req())

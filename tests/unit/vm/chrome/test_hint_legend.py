@@ -5,10 +5,11 @@ from __future__ import annotations
 from typing import cast
 
 import pytest
-from vmx import NULL_DISPATCHER, MessageHub
+from vmx import NULL_DISPATCHER, ConstructionStatus, MessageHub
 from vmx.messages.protocols import Message
 
 from aws_tui.infra.keymap_store import KeymapStore
+from aws_tui.vm._component import IsolatedComponentVM
 from aws_tui.vm.chrome.hint_legend_vm import (
     _ACTION_EFFECTS,
     _ACTION_LABELS,
@@ -357,3 +358,17 @@ def test_athena_service_chips_include_views_execution_and_source() -> None:
     assert "pane.refresh" in chips
     assert "app.swap_source" in chips
     legend.dispose()
+
+
+def test_hint_legend_isolated_component_publishes_property_names() -> None:
+    legend, _hub = _build()
+    names: list[str] = []
+    sub = legend.on_property_changed.subscribe(names.append)
+    try:
+        assert isinstance(legend, IsolatedComponentVM)
+        legend.set_current_service("emr-serverless")
+        assert names == ["actions"]
+    finally:
+        sub.dispose()
+        legend.dispose()
+    assert legend.status is ConstructionStatus.DISPOSED

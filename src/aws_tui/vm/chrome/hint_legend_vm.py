@@ -10,16 +10,13 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from vmx import (
-    ComponentVM,
-    ConstructionStatus,
     Dispatcher,
     Message,
     MessageHub,
-    PropertyChangedMessage,
 )
 
 from aws_tui.infra.keymap_store import KeymapStore, UnknownAction
-from aws_tui.vm._observable import send_value_free
+from aws_tui.vm._component import IsolatedComponentVM
 
 # Always-visible global chips follow the service-specific commands.
 _GLOBAL_ACTIONS: tuple[str, ...] = (
@@ -299,7 +296,7 @@ class HintAction:
     enabled: bool = True
 
 
-class HintLegendVM:
+class HintLegendVM(IsolatedComponentVM):
     """Reactive service-level hint-legend viewmodel."""
 
     def __init__(
@@ -309,7 +306,7 @@ class HintLegendVM:
         dispatcher: Dispatcher,
         keymap: KeymapStore,
     ) -> None:
-        self._hub: MessageHub[Message] = hub
+        super().__init__(name="hint_legend", hub=hub, dispatcher=dispatcher)
         self._keymap: KeymapStore = keymap
 
         self._current_service_id: str | None = None
@@ -321,10 +318,6 @@ class HintLegendVM:
         # render greyed-out; the actual key binding is not
         # suppressed but the app-level handler short-circuits.
         self._disabled_actions: frozenset[str] = frozenset()
-
-        self._inner: ComponentVM = (
-            ComponentVM.builder().name("hint_legend").services(hub, dispatcher).build()
-        )
 
     # ── Properties ──────────────────────────────────────────────────────────
 
@@ -365,25 +358,11 @@ class HintLegendVM:
         self._disabled_actions = action_ids
         self._rebuild_actions()
 
-    @property
-    def status(self) -> ConstructionStatus:
-        return self._inner.status
-
-    @property
-    def name(self) -> str:
-        return self._inner.name
-
     # ── Lifecycle ───────────────────────────────────────────────────────────
 
     def construct(self) -> None:
-        self._inner.construct()
+        super().construct()
         self._rebuild_actions()
-
-    def destruct(self) -> None:
-        self._inner.destruct()
-
-    def dispose(self) -> None:
-        self._inner.dispose()
 
     # ── Internal ────────────────────────────────────────────────────────────
 
@@ -422,7 +401,7 @@ class HintLegendVM:
             self._global_actions = new_globals
             changed = True
         if changed:
-            send_value_free(self._hub, PropertyChangedMessage.create(self, self.name, "actions"))
+            self._publish("actions")
 
     def _resolve(self, action_id: str) -> HintAction | None:
         try:
