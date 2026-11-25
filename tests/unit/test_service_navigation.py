@@ -300,12 +300,6 @@ async def test_restoration_uses_real_menu_and_suppresses_its_own_selection(curre
         suppressed = []
 
         def selected(message):
-            if (
-                not isinstance(message, PropertyChangedMessage)
-                or message.sender_object is not menu
-                or message.property_name != "selected_id"
-            ):
-                return
             if menu.selected_id is None:
                 return
             consumed = nav.consume_selection(menu.selected_id, message)
@@ -313,7 +307,7 @@ async def test_restoration_uses_real_menu_and_suppresses_its_own_selection(curre
             if not consumed:
                 nav.supersede()
 
-        subscription = hub.messages.subscribe(on_next=selected)
+        subscription = when_property_changed(hub, menu, "selected_id").subscribe(on_next=selected)
         root = SimpleNamespace(
             content_host=SimpleNamespace(current_id=current_id),
             services_menu=menu,
