@@ -4,14 +4,11 @@ import asyncio
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
-import reactivex as rx
 from vmx import (
-    ComponentVM,
     ConstructionStatus,
     Dispatcher,
     Message,
     MessageHub,
-    PropertyChangedMessage,
 )
 
 from aws_tui.domain.filesystem import ProviderError
@@ -23,7 +20,7 @@ from aws_tui.domain.query import (
     QueryState,
 )
 from aws_tui.domain.s3_uri import parse_s3_uri
-from aws_tui.vm._observable import ObserverSafeSubject, send_value_free
+from aws_tui.vm._component import IsolatedComponentVM
 from aws_tui.vm.athena._domain_validation import (
     optional_exact_string,
     optional_non_empty_exact_string,
@@ -65,7 +62,7 @@ class _HistoryWorker(PagerWorker[QueryExecutionSummary]):
     details: dict[str, QueryExecutionDetail] = field(default_factory=dict, repr=False)
 
 
-class AthenaHistoryVM:
+class AthenaHistoryVM(IsolatedComponentVM):
     def __init__(
         self,
         *,
@@ -74,11 +71,11 @@ class AthenaHistoryVM:
         hub: MessageHub[Message],
         dispatcher: Dispatcher,
     ) -> None:
+        super().__init__(name="athena.history", hub=hub, dispatcher=dispatcher)
         self._client = client
-        self._hub = hub
+        self._hub: MessageHub[Message] = hub
         self._context = context
         self._workgroup = context.workgroup
-        self._disposed = False
         self._shutdown_started = False
         self._shutdown_complete = False
         self._generation = 0
@@ -88,10 +85,6 @@ class AthenaHistoryVM:
         self._error_text: str | None = None
         self._is_loading_more = False
         self._loading_more_worker: _HistoryWorker | None = None
-        self._on_property_changed = ObserverSafeSubject[str]()
-        self._inner: ComponentVM = (
-            ComponentVM.builder().name("athena.history").services(hub, dispatcher).build()
-        )
         self._workers: set[_HistoryWorker] = set()
         self._worker = self._make_worker(context.workgroup, self._generation)
         self._pager = self._worker.pager
@@ -133,15 +126,8 @@ class AthenaHistoryVM:
         return self._is_loading_more
 
     @property
-    def status(self) -> ConstructionStatus:
-        return self._inner.status
-
-    @property
-    def on_property_changed(self) -> rx.Observable[str]:
-        return self._on_property_changed.observable
-
-    def construct(self) -> None:
-        self._inner.construct()
+    def _disposed(self) -> bool:
+        return self.status is ConstructionStatus.DISPOSED
 
     async def setup(self) -> None:
         await self.refresh()
@@ -185,8 +171,8 @@ class AthenaHistoryVM:
             return
         self._selected_execution_id = execution_id
         self._detail = detail
-        self._notify("selected_execution_id")
-        self._notify("detail")
+        self._publish("selected_execution_id")
+        self._publish("detail")
 
     def export_snapshot(self) -> AthenaHistorySnapshot:
         if (
@@ -250,7 +236,7 @@ class AthenaHistoryVM:
 
     def _notify_snapshot_restored(self) -> None:
         self._notify_all()
-        self._notify("is_loading_more")
+        self._publish("is_loading_more")
 
     @staticmethod
     def snapshot_is_valid(snapshot: object) -> bool:
@@ -375,16 +361,10 @@ class AthenaHistoryVM:
         self._pager = current.pager
         self._shutdown_complete = True
 
-    def dispose(self) -> None:
-        if self._disposed:
-            return
-        self._disposed = True
+    def _on_dispose(self) -> None:
         self._generation += 1
         for worker in tuple(self._workers):
             self._retire_worker(worker)
-        self._on_property_changed.on_completed()
-        self._on_property_changed.dispose()
-        self._inner.dispose()
 
     async def _run_pager(self, worker: _HistoryWorker, *, refresh: bool) -> None:
         task = worker.track_current_task()
@@ -392,7 +372,7 @@ class AthenaHistoryVM:
             command = worker.pager.refresh_command if refresh else worker.pager.load_more_command
             await command.execute_async()
         except PagerCollectionLimitError:
-            if self._is_current(worker):
+            if self._worker_is_current(worker):
                 accepted_ids = {row.ref.execution_id for row in worker.pager.items}
                 worker.details = {
                     execution_id: detail
@@ -400,22 +380,22 @@ class AthenaHistoryVM:
                     if execution_id in accepted_ids
                 }
                 self._error_text = None
-                self._notify("items")
-                self._notify("has_more")
-                self._notify("error_text")
+                self._publish("items")
+                self._publish("has_more")
+                self._publish("error_text")
                 self._set_state(PaneState.IDLE if self.items else PaneState.EMPTY)
             return
         except ProviderError as exc:
-            if self._is_current(worker):
+            if self._worker_is_current(worker):
                 self._state, self._error_text = map_provider_error(
                     exc,
                     fallback=_HISTORY_ERROR,
                 )
-                self._notify("state")
-                self._notify("error_text")
+                self._publish("state")
+                self._publish("error_text")
             return
         except Exception as exc:
-            if self._is_current(worker):
+            if self._worker_is_current(worker):
                 report_unexpected_service_error(
                     self._hub,
                     service="athena",
@@ -425,17 +405,17 @@ class AthenaHistoryVM:
                 self._state, self._error_text = map_unexpected_error(
                     fallback=_HISTORY_ERROR,
                 )
-                self._notify("state")
-                self._notify("error_text")
+                self._publish("state")
+                self._publish("error_text")
             return
         finally:
             self._untrack_task(worker, task)
-        if not self._is_current(worker):
+        if not self._worker_is_current(worker):
             return
         self._error_text = None
-        self._notify("items")
-        self._notify("has_more")
-        self._notify("error_text")
+        self._publish("items")
+        self._publish("has_more")
+        self._publish("error_text")
         self._set_state(PaneState.IDLE if self.items else PaneState.EMPTY)
 
     def _make_worker(self, workgroup: str, generation: int) -> _HistoryWorker:
@@ -450,10 +430,10 @@ class AthenaHistoryVM:
                 workgroup,
                 start_token=token,
             )
-            if not self._is_current(worker):
+            if not self._worker_is_current(worker):
                 return [], None
             details = await self._hydrate_details(worker, refs)
-            if not self._is_current(worker):
+            if not self._worker_is_current(worker):
                 return [], None
             for ref, detail in zip(refs, details, strict=True):
                 if detail.summary.ref != ref or ref.workgroup != workgroup:
@@ -499,9 +479,9 @@ class AthenaHistoryVM:
         await drain_worker_tasks(self._workers)
 
     def _can_load_more(self, worker: _HistoryWorker) -> bool:
-        return self._is_current(worker) and bool(worker.workgroup) and worker.pager.has_more
+        return self._worker_is_current(worker) and bool(worker.workgroup) and worker.pager.has_more
 
-    def _is_current(self, worker: _HistoryWorker) -> bool:
+    def _worker_is_current(self, worker: _HistoryWorker) -> bool:
         return (
             worker is self._worker
             and worker.generation == self._generation
@@ -524,19 +504,19 @@ class AthenaHistoryVM:
             "state",
             "error_text",
         ):
-            self._notify(property_name)
+            self._publish(property_name)
 
     def _set_state(self, state: PaneState) -> None:
         if self._state == state:
             return
         self._state = state
-        self._notify("state")
+        self._publish("state")
 
     def _begin_loading_more(self, worker: _HistoryWorker) -> None:
         self._loading_more_worker = worker
         if not self._is_loading_more:
             self._is_loading_more = True
-            self._notify("is_loading_more")
+            self._publish("is_loading_more")
 
     def _finish_loading_more(self, worker: _HistoryWorker) -> None:
         if self._loading_more_worker is not worker:
@@ -544,20 +524,7 @@ class AthenaHistoryVM:
         self._loading_more_worker = None
         if self._is_loading_more:
             self._is_loading_more = False
-            self._notify("is_loading_more")
-
-    def _notify(self, property_name: str) -> None:
-        if self._disposed:
-            return
-        send_value_free(
-            self._hub,
-            PropertyChangedMessage.create(
-                self,
-                "athena.history",
-                property_name,
-            ),
-        )
-        self._on_property_changed.on_next(property_name)
+            self._publish("is_loading_more")
 
 
 __all__ = ["AthenaHistorySnapshot", "AthenaHistoryVM"]

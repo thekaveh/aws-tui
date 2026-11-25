@@ -8,8 +8,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
-from vmx import NULL_DISPATCHER, MessageHub
-from vmx.lifecycle.status import ConstructionStatus
+from vmx import NULL_DISPATCHER, ConstructionStatus, MessageHub
 from vmx.messages.protocols import Message
 
 from aws_tui.domain.athena import (
@@ -42,6 +41,7 @@ from aws_tui.infra.connection_resolver import Connection
 from aws_tui.infra.crash_dump import CrashDump
 from aws_tui.infra.sql_authoring_store import SqlFileStore
 from aws_tui.infra.sql_snippet_store import SqlSnippetStore
+from aws_tui.vm._component import IsolatedComponentVM
 from aws_tui.vm.athena._pager_compat import SnapshotTokenPager, seed_token_pager
 from aws_tui.vm.athena.drafts_vm import AthenaDraftsVM
 from aws_tui.vm.athena.page_vm import AthenaPageVM
@@ -2979,7 +2979,7 @@ async def test_shutdown_and_dispose_cascade_once_without_owning_store(
     assert set(shutdown_calls.values()) == {1}
     assert set(dispose_calls.values()) == {1}
     assert store.dispose_calls == 0
-    assert page._inner.status is ConstructionStatus.DISPOSED  # type: ignore[attr-defined]
+    assert page.status is ConstructionStatus.DISPOSED  # type: ignore[attr-defined]
 
 
 async def test_history_results_do_not_break_the_snapshot_export() -> None:
@@ -3108,4 +3108,47 @@ def test_set_list_error_changes_only_its_own_kind(kind: str) -> None:
     assert getattr(page, f"{kind}_error_text") == "failed"
     for name in others:
         assert (getattr(page, f"{name}_state"), getattr(page, f"{name}_error_text")) == before[name]
+    page.dispose()
+
+
+def test_athena_page_vm_component_base() -> None:
+    assert issubclass(AthenaPageVM, IsolatedComponentVM)
+
+
+def test_athena_page_vm_lifecycle() -> None:
+    page = make_page_vm(PageClient())
+    page.construct()
+    assert page.status is ConstructionStatus.CONSTRUCTED
+    page.dispose()
+    assert page.status is ConstructionStatus.DISPOSED
+    page.dispose()
+    assert page.status is ConstructionStatus.DISPOSED
+
+
+def test_athena_page_vm_dispose_releases_all_after_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    page = make_page_vm(PageClient())
+    page.construct()
+
+    def fail() -> None:
+        raise RuntimeError("saved failed")
+
+    monkeypatch.setattr(page.saved, "dispose", fail)
+    page.dispose()
+    assert page.history.status is ConstructionStatus.DISPOSED
+    assert page.query.status is ConstructionStatus.DISPOSED
+
+
+def test_athena_page_vm_raising_subscriber() -> None:
+    page = make_page_vm(PageClient())
+    seen: list[str] = []
+
+    def boom(_name: str) -> None:
+        raise RuntimeError("subscriber failed")
+
+    page.on_property_changed.subscribe(on_next=boom)
+    page.on_property_changed.subscribe(on_next=seen.append)
+    page._notify("context")
+    assert "context" in seen
     page.dispose()
