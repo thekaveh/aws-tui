@@ -501,7 +501,7 @@ async def test_windows_compatible_fixture_branch_runs_localfs_lifecycle(
 
 async def test_recheck_keeps_outcome_unknown_and_retry_creates_new_progress_id(tmp_path):
     vm, dual, tid, _, destination, _, resolutions = await history_case(tmp_path, attempted=True)
-    transfers = TransfersVM(hub=dual._hub, dispatcher=NULL_DISPATCHER)
+    transfers = TransfersVM(hub=dual.hub, dispatcher=NULL_DISPATCHER)
     transfers.construct()
     try:
         from aws_tui.vm.file_manager.transfer_history_vm import RecoveryRefused

@@ -85,7 +85,7 @@ async def test_select_routes_change_notification() -> None:
     vm.set_application("a1")
     await vm.refresh()
     notified: list[str] = []
-    sub = vm._hub.messages.subscribe(  # type: ignore[attr-defined]
+    sub = vm.hub.messages.subscribe(
         on_next=lambda m: notified.append(getattr(m, "property_name", ""))
     )
     try:
@@ -579,7 +579,7 @@ async def test_reselecting_same_run_id_is_idempotent() -> None:
     await vm.refresh()
     vm.select_by_id("r2")
     notified: list[str] = []
-    sub = vm._hub.messages.subscribe(  # type: ignore[attr-defined]
+    sub = vm.hub.messages.subscribe(
         on_next=lambda m: notified.append(getattr(m, "property_name", ""))
     )
     try:
@@ -750,7 +750,7 @@ async def test_on_property_changed_isolates_cross_vm_state_events() -> None:
     vm1, _ = _make()
     fake2 = _InMemoryEmr()
     fake2.add_application(app_id="b1", name="other")
-    hub: MessageHub[Message] = vm1._hub  # type: ignore[attr-defined]
+    hub: MessageHub[Message] = vm1.hub
     vm2 = JobRunsVM(client=fake2, hub=hub, dispatcher=NULL_DISPATCHER)
     vm2.construct()
     events_on_vm1: list[str] = []

@@ -774,7 +774,7 @@ async def test_open_table_in_glue_requires_one_visible_unambiguous_table() -> No
     page = make_page_vm(PageClient())
     await page.setup()
     messages: list[OpenGlueTableRequest] = []
-    subscription = page._hub.messages.subscribe(  # type: ignore[attr-defined]
+    subscription = page.hub.messages.subscribe(
         on_next=lambda message: (
             messages.append(message) if isinstance(message, OpenGlueTableRequest) else None
         )

@@ -348,7 +348,7 @@ async def test_synchronous_observer_selection_change_at_publication(
     if channel == "subject":
         subscription = vm.on_property_changed.subscribe(mutate)
     else:
-        subscription = vm._hub.messages.subscribe(
+        subscription = vm.hub.messages.subscribe(
             lambda msg: (
                 mutate(msg.property_name)
                 if isinstance(msg, PropertyChangedMessage) and msg.sender_object is vm
@@ -505,7 +505,7 @@ async def test_all_returned_fields_are_literal_and_copyable(context: Context) ->
 async def test_notifications_carry_only_property_names(context: Context) -> None:
     fs, _, vm = context
     messages: list[PropertyChangedMessage[S3ObjectDetailsVM]] = []
-    sub = vm._hub.messages.subscribe(
+    sub = vm.hub.messages.subscribe(
         lambda msg: (
             messages.append(msg)
             if isinstance(msg, PropertyChangedMessage) and msg.sender_object is vm
@@ -533,7 +533,7 @@ async def test_construct_after_pane_disposal_closes_without_subscription(
     _, pane, vm = context
     vm.dispose()
     pane.dispose()
-    closed = S3ObjectDetailsVM(pane=pane, hub=vm._hub, dispatcher=NULL_DISPATCHER)
+    closed = S3ObjectDetailsVM(pane=pane, hub=vm.hub, dispatcher=NULL_DISPATCHER)
     closed.construct()
     assert closed.state is S3ObjectDetailsState.CLOSED
     await load(closed)
@@ -647,7 +647,7 @@ async def test_synchronous_observer_destruct_at_publication_invalidates_ready(
     if channel == "subject":
         subscription = vm.on_property_changed.subscribe(destruct)
     else:
-        subscription = vm._hub.messages.subscribe(
+        subscription = vm.hub.messages.subscribe(
             lambda message: (
                 destruct(message.property_name)
                 if isinstance(message, PropertyChangedMessage) and message.sender_object is vm

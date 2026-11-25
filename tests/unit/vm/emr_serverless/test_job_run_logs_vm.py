@@ -76,9 +76,7 @@ def test_set_target_to_none_returns_to_empty_target() -> None:
 def test_set_filter_emits_property_change() -> None:
     vm = _make()
     changes: list[str] = []
-    vm._hub.messages.subscribe(  # type: ignore[attr-defined]
-        on_next=lambda m: changes.append(getattr(m, "property_name", ""))
-    )
+    vm.hub.messages.subscribe(on_next=lambda m: changes.append(getattr(m, "property_name", "")))
     new_filter = DEFAULT_LOG_FILTER.with_(patterns=("FATAL",))
     vm.set_filter(new_filter)
     assert "filter" in changes
@@ -1138,7 +1136,7 @@ async def test_cloudwatch_errors_are_typed_and_payload_free(monkeypatch, caplog,
         "unexpected": RuntimeError,
     }
     messages = []
-    subscription = vm._hub.messages.subscribe(messages.append)
+    subscription = vm.hub.messages.subscribe(messages.append)
 
     async def fail(**kwargs):
         try:
@@ -1511,7 +1509,7 @@ async def test_stale_cloudwatch_failure_has_no_diagnostics_or_finally_writes(mon
     vm, fake, _ = _cw_vm(monkeypatch)
     entered, release = asyncio.Event(), asyncio.Event()
     messages = []
-    sub = vm._hub.messages.subscribe(messages.append)
+    sub = vm.hub.messages.subscribe(messages.append)
 
     async def read(**_kwargs):
         entered.set()
