@@ -16,6 +16,7 @@ from aws_tui.domain.filesystem import ProviderError
 from aws_tui.vm._component import IsolatedComponentVM
 from aws_tui.vm.emr_serverless.job_runs_vm import _ACTIVE_STATES, JobRunsVM
 from aws_tui.vm.file_manager.pane_vm import PaneState
+from tests.helpers import record_properties
 
 
 def _seed_runs(fake: _InMemoryEmr, app: str) -> None:
@@ -733,14 +734,10 @@ async def test_on_property_changed_fires_per_vm_instance() -> None:
     vm, fake = _make()
     _seed_runs(fake, "a1")
     vm.set_application("a1")
-    events: list[str] = []
-    sub = vm.on_property_changed.subscribe(on_next=events.append)
-    try:
+    with record_properties(vm) as events:
         await vm.refresh()
         assert "state" in events
         assert "runs" in events
-    finally:
-        sub.dispose()
 
 
 @pytest.mark.asyncio

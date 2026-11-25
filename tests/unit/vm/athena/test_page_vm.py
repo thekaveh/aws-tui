@@ -49,6 +49,7 @@ from aws_tui.vm.athena.saved_vm import SavedQueryKind
 from aws_tui.vm.file_manager.pane_vm import PaneState
 from aws_tui.vm.messages import OpenGlueTableRequest, ServiceOperationFailedMessage
 from aws_tui.vm.service_source_vm import SelectionScope, ServiceSelectionStore
+from tests.helpers import record_hub
 
 _STATS = QueryStatistics(1, 1, 1, 1, 0, False)
 _COLUMN = ResultColumn("value", "integer", "NULLABLE")
@@ -1826,13 +1827,11 @@ async def test_page_snapshot_preflight_reports_unexpected_context_failure() -> N
     client.workgroup_error = RuntimeError(  # type: ignore[assignment]
         "Authorization: Bearer SNAPSHOT_CONTEXT_SECRET"
     )
-    messages: list[Message] = []
-    subscription = hub.messages.subscribe(messages.append)
-    try:
-        with pytest.raises(ValueError, match=r"^Athena snapshot context is unavailable$"):
-            await destination.restore_snapshot(snapshot)
-    finally:
-        subscription.dispose()
+    with (
+        record_hub(hub) as messages,
+        pytest.raises(ValueError, match=r"^Athena snapshot context is unavailable$"),
+    ):
+        await destination.restore_snapshot(snapshot)
 
     diagnostics = [
         message for message in messages if isinstance(message, ServiceOperationFailedMessage)
@@ -1858,13 +1857,11 @@ async def test_page_snapshot_preflight_forwards_staged_child_diagnostic() -> Non
     client.history_error = RuntimeError(  # type: ignore[assignment]
         "Authorization: Bearer SNAPSHOT_CHILD_SECRET"
     )
-    messages: list[Message] = []
-    subscription = hub.messages.subscribe(messages.append)
-    try:
-        with pytest.raises(ValueError, match=r"^Athena snapshot context is unavailable$"):
-            await destination.restore_snapshot(snapshot)
-    finally:
-        subscription.dispose()
+    with (
+        record_hub(hub) as messages,
+        pytest.raises(ValueError, match=r"^Athena snapshot context is unavailable$"),
+    ):
+        await destination.restore_snapshot(snapshot)
 
     diagnostics = [
         message for message in messages if isinstance(message, ServiceOperationFailedMessage)
