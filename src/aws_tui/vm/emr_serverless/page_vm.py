@@ -12,7 +12,8 @@ from collections.abc import Awaitable, Callable, Coroutine
 from dataclasses import dataclass
 from typing import Any, Literal
 
-from vmx import ComponentVM, Dispatcher, Message, MessageHub, PropertyChangedMessage
+from vmx import Dispatcher, Message, MessageHub
+from vmx.lifecycle.status import ConstructionStatus
 
 from aws_tui.domain.emr_cloudwatch_logs import cloudwatch_location
 from aws_tui.domain.emr_logs import EmrServerlessLogsClientProtocol, LogFilter
@@ -31,7 +32,7 @@ from aws_tui.domain.filesystem import (
     ValidationError,
 )
 from aws_tui.infra.connection_resolver import Connection
-from aws_tui.vm._observable import send_value_free
+from aws_tui.vm._component import IsolatedComponentVM
 from aws_tui.vm.chrome.confirm_vm import ConfirmPath, ConfirmRequest
 from aws_tui.vm.emr_serverless.applications_vm import ApplicationsVM
 from aws_tui.vm.emr_serverless.dashboard_vm import DashboardTarget, DashboardVM
@@ -87,7 +88,7 @@ class _CancelTarget:
     state: JobRunState
 
 
-class EmrServerlessPageVM:
+class EmrServerlessPageVM(IsolatedComponentVM):
     def __init__(
         self,
         *,
@@ -98,6 +99,7 @@ class EmrServerlessPageVM:
         connection: Connection,
         selection_store: ServiceSelectionStore | None = None,
     ) -> None:
+        super().__init__(name="emr.page", hub=hub, dispatcher=dispatcher)
         self._client = client
         self._hub: MessageHub[Message] = hub
         self._dispatcher: Dispatcher = dispatcher
@@ -107,25 +109,25 @@ class EmrServerlessPageVM:
             "emr-serverless", self._source.connection_name, self._source.region
         )
         self._selection_store = selection_store or ServiceSelectionStore()
-        self._disposed: bool = False
         self._shutdown_started: bool = False
         self._operations = OperationOwner()
         self._cancel_busy = False
-        self._inner: ComponentVM = (
-            ComponentVM.builder().name("emr.page").services(hub, dispatcher).build()
-        )
         self.applications: ApplicationsVM = ApplicationsVM(
             client=client, hub=hub, dispatcher=dispatcher
         )
+        self._own(self.applications)
         self.job_runs: JobRunsVM = JobRunsVM(client=client, hub=hub, dispatcher=dispatcher)
+        self._own(self.job_runs)
         self.job_run_detail: JobRunDetailVM = JobRunDetailVM(
             client=client, hub=hub, dispatcher=dispatcher
         )
+        self._own(self.job_run_detail)
         self.job_run_logs: JobRunLogsVM = JobRunLogsVM(
             client=logs_client,
             hub=hub,
             dispatcher=dispatcher,
         )
+        self._own(self.job_run_logs)
         self._dashboard_revision = 0
         self._dashboard_accepting = True
         self._dashboard_selection = self._dashboard_selection_key()
@@ -135,10 +137,14 @@ class EmrServerlessPageVM:
             hub=hub,
             dispatcher=dispatcher,
         )
+        self._own(self.dashboards)
         self._dashboard_subscriptions = (
             self.applications.on_property_changed.subscribe(self._dashboard_selection_changed),
             self.job_runs.on_property_changed.subscribe(self._dashboard_selection_changed),
         )
+        # Subscriptions are registered last, so the base disposes them first.
+        for subscription in self._dashboard_subscriptions:
+            self._own(subscription)
 
     def _dashboard_selection_key(self) -> tuple[str | None, str | None, str | None]:
         return (
@@ -352,9 +358,7 @@ class EmrServerlessPageVM:
 
     def _notify_cancel_busy(self) -> None:
         if not self._disposed:
-            send_value_free(
-                self._hub, PropertyChangedMessage.create(self, "emr.page", "cancel_busy")
-            )
+            self._publish("cancel_busy")
 
     @staticmethod
     def _cancel_error_result(error: Exception) -> CancelJobRunResult:
@@ -421,28 +425,32 @@ class EmrServerlessPageVM:
 
     # ── Lifecycle ───────────────────────────────────────────────────────────
 
-    def construct(self) -> None:
-        self._inner.construct()
-        self.applications.construct()
-        self.job_runs.construct()
-        self.job_run_detail.construct()
-        self.job_run_logs.construct()
-        self.dashboards.construct()
+    @property
+    def _disposed(self) -> bool:
+        return self.status is ConstructionStatus.DISPOSED
 
-    def dispose(self) -> None:
-        if self._disposed:
-            return
-        self._disposed = True
+    def _on_construct(self) -> None:
+        super()._on_construct()
+        self._complete_lifecycle_hook_after(
+            self._transition_children(
+                (self.applications, self.job_runs, self.job_run_logs, self.dashboards),
+                construct=True,
+                after=self.job_run_detail.construct,
+            )
+        )
+
+    def _on_destruct(self) -> None:
+        super()._on_destruct()
+        self._complete_lifecycle_hook_after(
+            self._transition_children(
+                (self.dashboards, self.job_run_logs, self.job_runs, self.applications),
+                construct=False,
+            )
+        )
+
+    def _on_dispose(self) -> None:
         self._operations.close()
         self.close_dashboard_intake()
-        for subscription in self._dashboard_subscriptions:
-            subscription.dispose()
-        self.dashboards.dispose()
-        self.job_run_logs.dispose()
-        self.job_run_detail.dispose()
-        self.job_runs.dispose()
-        self.applications.dispose()
-        self._inner.dispose()
 
     async def shutdown(self) -> None:
         self._shutdown_started = True
@@ -496,7 +504,7 @@ class EmrServerlessPageVM:
     async def select_application(self, app_id: str) -> None:
         if self._disposed or self._shutdown_started:
             return
-        self.applications.select(app_id)
+        self.applications.select_by_id(app_id)
         if self.applications.selected_id != app_id:
             return
         self._selection_store.set(self._selection_scope, "application_id", app_id)
@@ -550,7 +558,7 @@ class EmrServerlessPageVM:
     async def select_job_run(self, run_id: str) -> None:
         if self._disposed or self._shutdown_started:
             return
-        self.job_runs.select(run_id)
+        self.job_runs.select_by_id(run_id)
         if self.job_runs.selected_id != run_id:
             return
         application_id = self.applications.selected_id

@@ -27,7 +27,7 @@ async def test_successful_filtered_refresh_preserves_loaded_provider_state(state
         fake.add_job_run(application_id="filtered", job_run_id="retained", state=state)
         vm.set_application("filtered")
         await vm.refresh()
-        vm.select("retained")
+        vm.select_by_id("retained")
         vm.toggle_state_filter(state)
         if changed:
             fake.add_job_run(

@@ -22,8 +22,8 @@ from enum import StrEnum
 from time import monotonic
 from typing import Literal, cast
 
-import reactivex as rx
-from vmx import ComponentVM, Dispatcher, Message, MessageHub, PropertyChangedMessage
+from vmx import Dispatcher, Message, MessageHub
+from vmx.lifecycle.status import ConstructionStatus
 
 from aws_tui.domain.emr_cloudwatch_logs import (
     CloudWatchLogEvent,
@@ -54,7 +54,7 @@ from aws_tui.domain.filesystem import (
     ValidationError,
 )
 from aws_tui.infra.redaction import redact_text
-from aws_tui.vm._observable import ObserverSafeSubject, send_value_free
+from aws_tui.vm._component import IsolatedComponentVM
 from aws_tui.vm.emr_serverless._errors import map_provider_error
 from aws_tui.vm.file_manager.pane_vm import PaneState
 from aws_tui.vm.operation_owner import OperationOwner, OperationSuperseded
@@ -144,7 +144,7 @@ _MAX_MATCHED_LINES: int = 5000
 _CACHE_MAX_ENTRIES: int = 5
 
 
-class JobRunLogsVM:
+class JobRunLogsVM(IsolatedComponentVM):
     """Reactive VM for the EMR job-run logs pane."""
 
     def __init__(
@@ -154,11 +154,9 @@ class JobRunLogsVM:
         hub: MessageHub[Message],
         dispatcher: Dispatcher,
     ) -> None:
+        super().__init__(name="emr.job_run_logs", hub=hub, dispatcher=dispatcher)
         self._client: EmrServerlessLogsClientProtocol = client
         self._hub: MessageHub[Message] = hub
-        self._inner: ComponentVM = (
-            ComponentVM.builder().name("emr.job_run_logs").services(hub, dispatcher).build()
-        )
         # Target identity
         self._application_id: str | None = None
         self._job_run_id: str | None = None
@@ -191,14 +189,7 @@ class JobRunLogsVM:
         # gave a wrong answer to the question the user's filter asked.
         self._matched_count: int = 0
         self._filter: LogFilter = DEFAULT_LOG_FILTER
-        self._disposed: bool = False
         self._operations = OperationOwner()
-        # Per-VM Observable (round-3 §9.bis.11 / PR #103 retirement
-        # path): fires the name of the property that just changed,
-        # scoped to THIS VM instance. The logs-pane view subscribes
-        # here instead of filtering shared MessageHub events by
-        # ``sender_object``.
-        self._on_property_changed = ObserverSafeSubject[str]()
         # LRU response cache: key=(app_id, run_id, bucket, file_key, size, patterns,
         # mode, case_insensitive); value=(lines, truncated, bytes_read,
         # lines_scanned). Use the
@@ -274,13 +265,6 @@ class JobRunLogsVM:
     @property
     def application_id(self) -> str | None:
         return self._application_id
-
-    @property
-    def on_property_changed(self) -> rx.Observable[str]:
-        """Per-VM-instance Observable scoped to THIS logs VM. PR
-        #103 retirement path — Views subscribing here are immune to
-        cross-VM `state` collisions on the shared hub."""
-        return self._on_property_changed
 
     @property
     def job_run_id(self) -> str | None:
@@ -1014,23 +998,18 @@ class JobRunLogsVM:
 
     # ── Lifecycle ──────────────────────────────────────────────────────────
 
-    def construct(self) -> None:
-        self._inner.construct()
+    @property
+    def _disposed(self) -> bool:
+        return self.status is ConstructionStatus.DISPOSED
 
-    def dispose(self) -> None:
-        if self._disposed:
-            return
+    def _on_dispose(self) -> None:
         self._invalidate()
-        self._disposed = True
         self._operations.close()
         # Drop the response cache so a recycled VM (e.g. test
         # harnesses or future content-host reuse) doesn't carry
         # stale entries forward. Owned operations are cancelled above;
         # shutdown awaits their cleanup before connection replacement.
         self._cache.clear()
-        self._on_property_changed.on_completed()
-        self._on_property_changed.dispose()
-        self._inner.dispose()
 
     async def shutdown(self) -> None:
         self._invalidate()
@@ -1046,16 +1025,7 @@ class JobRunLogsVM:
         self._notify("state")
 
     def _notify(self, prop: str) -> None:
-        """Emit a PropertyChanged event on BOTH the shared hub AND
-        the per-VM-instance Observable (round-3 / PR #103 retirement
-        path)."""
-        if self._disposed:
-            # The Athena and Glue VMs have always guarded this; these four
-            # did not, so a late callback could publish a property change
-            # for a disposed view model.
-            return
-        send_value_free(self._hub, PropertyChangedMessage.create(self, "emr.job_run_logs", prop))
-        self._on_property_changed.on_next(prop)
+        self._publish(prop)
 
     def _notify_all(self) -> None:
         for prop in (

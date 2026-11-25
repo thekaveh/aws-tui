@@ -5,6 +5,7 @@ from typing import cast
 
 import pytest
 from vmx import NULL_DISPATCHER, MessageHub
+from vmx.lifecycle.status import ConstructionStatus
 from vmx.messages.protocols import Message
 
 from aws_tui.domain.emr_logs import (
@@ -19,6 +20,7 @@ from aws_tui.domain.filesystem import (
     PermissionDeniedError,
     ProviderUnreachableError,
 )
+from aws_tui.vm._component import IsolatedComponentVM
 from aws_tui.vm.emr_serverless.job_run_logs_vm import JobRunLogsVM, LogsState
 from aws_tui.vm.file_manager.pane_vm import PaneState
 
@@ -1728,3 +1730,16 @@ async def test_cloudwatch_filter_deadline_failure_preserves_body_and_reset_recov
     assert len(fake.calls) == calls
     await vm.shutdown()
     vm.dispose()
+
+
+def test_job_run_logs_vm_isolated_component_publishes_and_completes() -> None:
+    vm = _make()
+    assert isinstance(vm, IsolatedComponentVM)
+    names: list[str] = []
+    completed: list[bool] = []
+    vm.on_property_changed.subscribe(names.append, on_completed=lambda: completed.append(True))
+    vm._notify("lines")
+    assert names == ["lines"]
+    vm.dispose()
+    assert vm.status is ConstructionStatus.DISPOSED
+    assert completed == [True]

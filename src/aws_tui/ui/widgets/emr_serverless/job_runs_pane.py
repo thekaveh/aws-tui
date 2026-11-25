@@ -265,7 +265,7 @@ class JobRunsPane(Widget, can_focus=True):
         # Round-3 directive §9.bis.11: the View no longer holds a
         # hand-rolled cursor index. The position is derived on demand
         # from ``vm.selected_id`` (the VM-owned canonical slot).
-        # Arrow / click handlers call ``vm.select(next_id)`` which
+        # Arrow / click handlers call ``vm.select_by_id(next_id)`` which
         # mutates the composite's ``current`` slot; the resulting
         # `selected_id` event drives the same `_repaint_selection`
         # path, plus we paint synchronously in the handler to avoid
@@ -359,7 +359,7 @@ class JobRunsPane(Widget, can_focus=True):
         # in from below" effect on a stale-selection list.
         if not self._cursor_is_on_visible_row():
             target_id = runs[-1].job_run_id
-            self._vm.select(target_id)
+            self._vm.select_by_id(target_id)
             self._repaint_selection()
             self._post_run_selected_for_cursor()
             return
@@ -372,7 +372,7 @@ class JobRunsPane(Widget, can_focus=True):
         # id from the VM. Same lightweight class-flip repaint, same
         # master-detail RunSelected post — only the cursor source of
         # truth moved.
-        self._vm.select(target_id)
+        self._vm.select_by_id(target_id)
         self._repaint_selection()
         self._post_run_selected_for_cursor()
 
@@ -384,7 +384,7 @@ class JobRunsPane(Widget, can_focus=True):
         # to the first visible row so Down works symmetrically.
         if not self._cursor_is_on_visible_row():
             target_id = runs[0].job_run_id
-            self._vm.select(target_id)
+            self._vm.select_by_id(target_id)
             self._repaint_selection()
             self._post_run_selected_for_cursor()
             return
@@ -392,7 +392,7 @@ class JobRunsPane(Widget, can_focus=True):
         if cur + 1 >= len(runs):
             return
         target_id = runs[cur + 1].job_run_id
-        self._vm.select(target_id)
+        self._vm.select_by_id(target_id)
         self._repaint_selection()
         self._post_run_selected_for_cursor()
 
@@ -440,9 +440,9 @@ class JobRunsPane(Widget, can_focus=True):
                 return
             if isinstance(target, _JobRunRow):
                 # Click → cursor moves to that run via the VM's
-                # canonical select() slot; same downstream paint +
+                # canonical select_by_id() slot; same downstream paint +
                 # post as the arrow path.
-                self._vm.select(target.run_id)
+                self._vm.select_by_id(target.run_id)
                 self._repaint_selection()
                 self.post_message(self.RunSelected(target.run_id))
                 return

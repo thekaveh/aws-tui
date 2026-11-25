@@ -20,6 +20,7 @@ from aws_tui.domain.emr_serverless import (
 from aws_tui.domain.filesystem import ProviderUnreachableError
 from aws_tui.infra.connection_resolver import Connection
 from aws_tui.services.emr_serverless.service import EmrServerlessService
+from aws_tui.vm._component import IsolatedComponentVM
 from aws_tui.vm.emr_serverless.job_run_logs_vm import LogsState
 from aws_tui.vm.emr_serverless.page_vm import EmrServerlessPageVM
 from aws_tui.vm.file_manager.pane_vm import PaneState
@@ -418,7 +419,7 @@ async def test_dispose_cascades_to_children() -> None:
     assert page.applications.status is ConstructionStatus.DISPOSED
     assert page.job_runs.status is ConstructionStatus.DISPOSED
     assert page.job_run_detail._inner.status is ConstructionStatus.DISPOSED  # type: ignore[attr-defined]
-    assert page.job_run_logs._inner.status is ConstructionStatus.DISPOSED  # type: ignore[attr-defined]
+    assert page.job_run_logs.status is ConstructionStatus.DISPOSED
     page.dispose()  # idempotent
 
 
@@ -904,3 +905,18 @@ def test_page_disposal_throwing_terminal_leaves_dashboard_disposed(
 
     assert page.dashboards.status is ConstructionStatus.DISPOSED
     assert marker not in caplog.text
+
+
+def test_page_destruct_cascades_in_reverse_and_dispose_reaches_members() -> None:
+    page, _ = _make()
+    assert isinstance(page, IsolatedComponentVM)
+    assert page.status is ConstructionStatus.CONSTRUCTED
+    page.destruct()
+    assert page.job_run_logs.status is ConstructionStatus.DESTRUCTED
+    assert page.job_runs.status is ConstructionStatus.DESTRUCTED
+    assert page.applications.status is ConstructionStatus.DESTRUCTED
+    page.dispose()
+    assert page.status is ConstructionStatus.DISPOSED
+    assert page.applications.status is ConstructionStatus.DISPOSED
+    assert page.job_runs.status is ConstructionStatus.DISPOSED
+    assert page.job_run_logs.status is ConstructionStatus.DISPOSED

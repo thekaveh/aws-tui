@@ -92,7 +92,7 @@ async def test_trigger_label_select_application_when_selection_stale() -> None:
     fake.add_application(app_id="a1", name="etl")
     vm, hub = _make_vm(fake)
     await vm.refresh()
-    vm.select("ghost")  # not in the application list
+    vm.select_by_id("ghost")  # not in the application list
     async with _PickerApp(vm, hub).run_test() as pilot:
         await pilot.pause()
         picker = pilot.app.query_one(ApplicationPicker)
@@ -108,7 +108,7 @@ async def test_trigger_label_shows_name_and_colored_glyph_when_selected() -> Non
     fake.add_application(app_id="a1", name="etl", state=ApplicationState.STARTED)
     vm, hub = _make_vm(fake)
     await vm.refresh()
-    vm.select("a1")
+    vm.select_by_id("a1")
     async with _PickerApp(vm, hub).run_test() as pilot:
         await pilot.pause()
         picker = pilot.app.query_one(ApplicationPicker)
@@ -130,12 +130,12 @@ async def test_created_and_stopped_use_distinct_glyphs_and_textual_tooltips() ->
         picker = pilot.app.query_one(ApplicationPicker)
         await pilot.pause()
 
-        vm.select("created")
+        vm.select_by_id("created")
         await pilot.pause()
         created_marker, _ = picker._trigger_fragments()  # type: ignore[attr-defined]
         assert picker.tooltip == "ready · CREATED"
 
-        vm.select("stopped")
+        vm.select_by_id("stopped")
         await pilot.pause()
         stopped_marker, _ = picker._trigger_fragments()  # type: ignore[attr-defined]
         assert picker.tooltip == "quiet · STOPPED"
@@ -366,7 +366,7 @@ async def test_application_picker_refresh_is_safe_after_child_teardown() -> None
         )
 
 
-# ── action_commit (highlighted option → vm.select) ────────────────────────────
+# ── action_commit (highlighted option → vm.select_by_id) ────────────────────────────
 
 
 async def test_action_commit_with_highlighted_option_closes_dropdown(
@@ -401,13 +401,13 @@ async def test_action_commit_with_highlighted_option_closes_dropdown(
         opts.highlighted = 0
         await pilot.pause()
 
-        original_select = vm.select
+        original_select = vm.select_by_id
 
         def select_after_close(app_id: str) -> None:
             assert not picker.is_open
             original_select(app_id)
 
-        monkeypatch.setattr(vm, "select", select_after_close)
+        monkeypatch.setattr(vm, "select_by_id", select_after_close)
         picker.action_commit()
         await wait_until(
             lambda: not picker.has_class("-open") and vm.selected_id is not None,
@@ -667,7 +667,7 @@ async def test_open_application_picker_retains_pending_identity_across_poll(remo
     fake.add_application(app_id="b", name="second", state=ApplicationState.STARTED)
     vm, hub = _make_vm(fake)
     await vm.refresh()
-    vm.select("a")
+    vm.select_by_id("a")
     async with _PickerApp(vm, hub).run_test() as pilot:
         picker = pilot.app.query_one(ApplicationPicker)
         picker.open()
