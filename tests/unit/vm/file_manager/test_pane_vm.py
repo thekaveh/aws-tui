@@ -24,6 +24,7 @@ from aws_tui.domain.filesystem import (
     ProviderUnreachableError,
     ThrottledError,
 )
+from aws_tui.vm._component import IsolatedComponentVM
 from aws_tui.vm.file_manager.entry_vm import EntryVM
 from aws_tui.vm.file_manager.pane_vm import PaneSortField, PaneState, PaneVM
 
@@ -1363,3 +1364,40 @@ async def test_listed_rows_are_constructed_by_the_constructed_pane() -> None:
         assert all(row.is_constructed for row in rows)
     finally:
         pane.dispose()
+
+
+def _status_of(vm: IsolatedComponentVM) -> ConstructionStatus:
+    # A call result is not narrowed by an earlier ``is`` assertion.
+    return vm.status
+
+
+@pytest.mark.asyncio
+async def test_pane_vm_isolated_component_lifecycle() -> None:
+    pane = await _make_pane(await _seed_fs())
+    assert isinstance(pane, IsolatedComponentVM)
+    assert pane.status is ConstructionStatus.CONSTRUCTED
+    rows = list(pane._inner)
+    assert rows
+    assert all(row.is_constructed for row in rows)
+    completed: list[bool] = []
+    pane.on_property_changed.subscribe(on_completed=lambda: completed.append(True))
+    pane.dispose()
+    assert _status_of(pane) is ConstructionStatus.DISPOSED
+    assert all(row.status is ConstructionStatus.DISPOSED for row in rows)
+    assert not pane.set_filter_command.can_execute("x")
+    assert completed == [True]
+
+
+@pytest.mark.asyncio
+async def test_pane_vm_isolated_component_raising_subscriber_stops_nothing() -> None:
+    pane = await _make_pane(await _seed_fs())
+    seen: list[str] = []
+
+    def boom(_name: str) -> None:
+        raise RuntimeError("subscriber failed")
+
+    pane.on_property_changed.subscribe(boom)
+    pane.on_property_changed.subscribe(seen.append)
+    pane.set_filter_command.execute("a")
+    assert "filter_text" in seen
+    pane.dispose()
