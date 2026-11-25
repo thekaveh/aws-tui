@@ -63,3 +63,8 @@ class FirstRunApp(App[None]):
             self.query_one(ConnectionFormInline).open_for_add()
         else:
             self.call_after_refresh(view.focus_default)
+
+    async def on_unmount(self) -> None:
+        self.hints.dispose()
+        self.menu.dispose()
+        self.hub.dispose()

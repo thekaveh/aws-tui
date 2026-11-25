@@ -52,6 +52,10 @@ class _PaneStateApp(App[None]):
         pane.set_focused(True)
         pane._render_body()
 
+    async def on_unmount(self) -> None:
+        self._vm.dispose()
+        self._hub.dispose()
+
 
 def make_loading_app(theme: str) -> _PaneStateApp:
     return _PaneStateApp(theme=theme, state=PaneState.LOADING)

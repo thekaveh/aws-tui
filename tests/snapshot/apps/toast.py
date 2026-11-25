@@ -54,5 +54,9 @@ class ToastSnapshotApp(App[None]):
         yield Static("aws-tui (behind toasts)", id="placeholder")
         yield ToastStack(self._stack)
 
+    async def on_unmount(self) -> None:
+        self._stack.dispose()
+        self._hub.dispose()
+
 
 __all__ = ["ToastSnapshotApp"]

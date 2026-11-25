@@ -110,5 +110,9 @@ class TransfersSnapshotApp(App[None]):
         yield Static("aws-tui (behind transfers overlay)", id="placeholder")
         yield TransfersOverlay(self._transfers, hub=self._hub)
 
+    async def on_unmount(self) -> None:
+        self._transfers.dispose()
+        self._hub.dispose()
+
 
 __all__ = ["TransfersSnapshotApp"]

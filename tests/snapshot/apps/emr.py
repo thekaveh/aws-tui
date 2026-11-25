@@ -94,7 +94,18 @@ def _build_page_vm(client: _InMemoryEmr) -> EmrServerlessPageVM:
     return page
 
 
-class EmrPageApp(App[None]):
+class _EmrPageTeardown:
+    """Drain and dispose the page view model and its hub when the app exits."""
+
+    _page_vm: EmrServerlessPageVM
+
+    async def on_unmount(self) -> None:
+        await self._page_vm.shutdown()
+        self._page_vm.dispose()
+        self._page_vm.hub.dispose()
+
+
+class EmrPageApp(_EmrPageTeardown, App[None]):
     """Renders the populated EMR page (1 app, 2 runs, detail visible)."""
 
     def __init__(self, theme: str) -> None:
@@ -119,7 +130,7 @@ class EmrPageApp(App[None]):
         await host.mount(page)
 
 
-class EmrPageEmptyApp(App[None]):
+class EmrPageEmptyApp(_EmrPageTeardown, App[None]):
     """Renders the empty state (no applications seeded)."""
 
     def __init__(self, theme: str) -> None:
