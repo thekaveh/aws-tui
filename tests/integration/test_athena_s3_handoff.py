@@ -253,7 +253,7 @@ async def test_pruning_history_view_ignores_queued_refresh(
 
             monkeypatch.setattr(history, "_refresh", observe_pruned_refresh)
             removal = option_list.remove()
-            history._vm._notify("items")
+            history._vm._publish("items")
             await removal
             await wait_until(
                 lambda: refreshes == 1,

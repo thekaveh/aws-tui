@@ -7,14 +7,11 @@ from dataclasses import dataclass, field, replace
 from typing import Any, Generic, Literal, TypeAlias, TypeVar, cast
 
 import anyio
-import reactivex as rx
 from vmx import (
-    ComponentVM,
     ConstructionStatus,
     Dispatcher,
     Message,
     MessageHub,
-    PropertyChangedMessage,
 )
 
 from aws_tui.domain.athena import (
@@ -31,7 +28,7 @@ from aws_tui.infra.athena_draft_store import SqlDraft
 from aws_tui.infra.connection_resolver import Connection
 from aws_tui.infra.sql_authoring_store import SqlFileStore
 from aws_tui.infra.sql_snippet_store import SqlSnippetStore
-from aws_tui.vm._observable import ObserverSafeSubject, send_value_free
+from aws_tui.vm._component import IsolatedComponentVM
 from aws_tui.vm.athena._domain_validation import (
     optional_exact_string,
     optional_non_empty_exact_string,
@@ -174,7 +171,7 @@ async def _decline_sql_replace(_message: str) -> bool:
     return False
 
 
-class AthenaPageVM:
+class AthenaPageVM(IsolatedComponentVM):
     def __init__(
         self,
         *,
@@ -192,6 +189,7 @@ class AthenaPageVM:
         sql_files: SqlFileStore | None = None,
         sql_snippets: SqlSnippetStore | None = None,
     ) -> None:
+        super().__init__(name="athena.page", hub=hub, dispatcher=dispatcher)
         self._drafts = drafts
         self._draft_session = drafts.open_session(active=drafts_active) if drafts else None
         self._source_is_current = source_is_current or _unverified_source
@@ -201,8 +199,7 @@ class AthenaPageVM:
         self._client = client
         self._policy = policy
         self._connection = connection
-        self._hub = hub
-        self._dispatcher = dispatcher
+        self._hub: MessageHub[Message] = hub
         self._source = ServiceSourceContext.from_connection(connection)
         self._selection_scope = SelectionScope(
             "athena",
@@ -210,7 +207,6 @@ class AthenaPageVM:
             connection.region,
         )
         self._selection_store = selection_store or ServiceSelectionStore()
-        self._disposed = False
         self._shutdown_started = False
         self._input_admission_closed = False
         self._shutdown_complete = False
@@ -235,10 +231,6 @@ class AthenaPageVM:
         self._workgroup_detail: AthenaWorkgroupDetail | None = None
         self._workgroup_detail_state = PaneState.EMPTY
         self._workgroup_detail_error_text: str | None = None
-        self._on_property_changed = ObserverSafeSubject[str]()
-        self._inner: ComponentVM = (
-            ComponentVM.builder().name("athena.page").services(hub, dispatcher).build()
-        )
         self._workgroup_list.worker = self._make_workgroup_worker()
         self._catalog_list.worker = self._make_catalog_worker("")
         self._database_list.worker = self._make_database_worker("", "")
@@ -310,6 +302,17 @@ class AthenaPageVM:
             context_revision=lambda: self._context_choice_revision,
             results_view_active=lambda: self._active_view == "results",
         )
+        # Owned members, registered in the reverse of the old dispose order: released newest-first.
+        self._own(lambda: self.query.dispose())
+        self._own(lambda: self.history.dispose())
+        self._own(lambda: self.tables.dispose())
+        self._own(lambda: self.saved.dispose())
+        self._own(lambda: self._database_pager.dispose())
+        self._own(lambda: self._catalog_pager.dispose())
+        self._own(lambda: self._workgroup_pager.dispose())
+        self._own(lambda: self.authoring.dispose())
+        self._own(lambda: self.completion.dispose())
+        self._own(lambda: self.exports.dispose())
 
     @property
     def selected_table_ref(self) -> TableRef | None:
@@ -652,17 +655,13 @@ class AthenaPageVM:
         return self._database_list.error_text
 
     @property
-    def status(self) -> ConstructionStatus:
-        return self._inner.status
-
-    @property
-    def on_property_changed(self) -> rx.Observable[str]:
-        return self._on_property_changed.observable
+    def _disposed(self) -> bool:
+        return self.status is ConstructionStatus.DISPOSED
 
     def construct(self) -> None:
         if not self._is_alive():
             return
-        self._inner.construct()
+        super().construct()
         self.query.construct()
         self.history.construct()
         self.saved.construct()
@@ -2316,28 +2315,11 @@ class AthenaPageVM:
             await self._drain_page_tasks()
             self._shutdown_complete = True
 
-    def dispose(self) -> None:
-        if self._disposed:
-            return
+    def _on_dispose(self) -> None:
         if not self._input_admission_closed:
             self.close_input_admission()
-        self._disposed = True
-        # Newest collaborator first: each one is retired before the page members it reads.
-        self.exports.dispose()
-        self.completion.dispose()
-        self.authoring.dispose()
         self._lifecycle_generation += 1
         self._context_generation += 1
-        self._workgroup_pager.dispose()
-        self._catalog_pager.dispose()
-        self._database_pager.dispose()
-        self.saved.dispose()
-        self.tables.dispose()
-        self.history.dispose()
-        self.query.dispose()
-        self._on_property_changed.on_completed()
-        self._on_property_changed.dispose()
-        self._inner.dispose()
 
     async def _select_workgroup(
         self,
@@ -3123,15 +3105,7 @@ class AthenaPageVM:
             return
         if hasattr(self, "exports"):
             self.exports.invalidate()
-        send_value_free(
-            self._hub,
-            PropertyChangedMessage.create(
-                self,
-                "athena.page",
-                property_name,
-            ),
-        )
-        self._on_property_changed.on_next(property_name)
+        self._publish(property_name)
 
 
 def _prepare_page_snapshot(
