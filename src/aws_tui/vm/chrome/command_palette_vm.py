@@ -21,20 +21,17 @@ import inspect
 from collections.abc import Awaitable, Callable
 
 from vmx import (
-    ComponentVM,
     ComponentVMOf,
     CompositeVM,
-    ConstructionStatus,
     Dispatcher,
     Message,
     MessageHub,
-    PropertyChangedMessage,
     RelayCommand,
     RelayCommandOf,
     ScoredFilteredCompositeVM,
 )
 
-from aws_tui.vm._observable import send_value_free
+from aws_tui.vm._component import IsolatedComponentVM
 from aws_tui.vm.chrome.action_catalog import ActionPresentation
 from aws_tui.vm.messages import PaletteActionFailedMessage
 
@@ -100,7 +97,7 @@ def _score(entry: PaletteEntry, query: str) -> int | None:
     return None
 
 
-class CommandPaletteVM:
+class CommandPaletteVM(IsolatedComponentVM):
     """Reactive command-palette viewmodel."""
 
     def __init__(
@@ -109,6 +106,7 @@ class CommandPaletteVM:
         hub: MessageHub[Message],
         dispatcher: Dispatcher,
     ) -> None:
+        super().__init__(name="command_palette", hub=hub, dispatcher=dispatcher)
         self._hub: MessageHub[Message] = hub
         self._dispatcher: Dispatcher = dispatcher
 
@@ -127,31 +125,34 @@ class CommandPaletteVM:
             .auto_construct_on_add(True)
             .build()
         )
+        self._own(self._inner_registry)
 
         self._filter_text: str = ""
         self._active_service_id: str | None = None
         self._scored_filter: ScoredFilteredCompositeVM[ComponentVMOf[PaletteEntry]] = (
             ScoredFilteredCompositeVM(self._inner_registry, scorer=self._score_for_vmx)
         )
+        # Newest first: the filter is disposed before the registry it subscribes
+        # to, so its subscription unwinds against a live source.
+        self._own(self._scored_filter)
         self._is_open: bool = False
         self._pending_tasks: dict[asyncio.Future[None], str] = {}
-
-        self._inner: ComponentVM = (
-            ComponentVM.builder().name("command_palette").services(hub, dispatcher).build()
-        )
 
         self._open_command: RelayCommand = (
             RelayCommand.builder().predicate(lambda: not self._is_open).task(self._open).build()
         )
+        self._own(self._open_command)
         self._close_command: RelayCommand = (
             RelayCommand.builder().predicate(lambda: self._is_open).task(self._close).build()
         )
+        self._own(self._close_command)
         self._execute_selected_command: RelayCommand = (
             RelayCommand.builder()
             .predicate(lambda: self._is_open and self._scored_filter.visible_count > 0)
             .task(self._execute_selected)
             .build()
         )
+        self._own(self._execute_selected_command)
         self._move_selection_command: RelayCommandOf[int] = (
             RelayCommandOf[int]
             .builder()
@@ -159,6 +160,7 @@ class CommandPaletteVM:
             .task(self._move_selection)
             .build()
         )
+        self._own(self._move_selection_command)
         self._published_entries: tuple[PaletteEntry, ...] = self.filtered_entries
         self._published_index: int = self.selected_index
         # One subscription publishes both names for every change of the view,
@@ -182,7 +184,7 @@ class CommandPaletteVM:
         if self._filter_text == value:
             return
         self._filter_text = value
-        self._notify("filter_text")
+        self._publish("filter_text")
         self._scored_filter.refresh_scores()
         self._select_first()
 
@@ -194,7 +196,7 @@ class CommandPaletteVM:
         if self._active_service_id == service_id:
             return
         self._active_service_id = service_id
-        self._notify("active_service_id")
+        self._publish("active_service_id")
         self._scored_filter.refresh_scores()
         self._select_first()
 
@@ -223,23 +225,19 @@ class CommandPaletteVM:
     def move_selection_command(self) -> RelayCommandOf[int]:
         return self._move_selection_command
 
-    @property
-    def status(self) -> ConstructionStatus:
-        return self._inner.status
-
-    @property
-    def name(self) -> str:
-        return self._inner.name
-
     # ── Lifecycle ───────────────────────────────────────────────────────────
 
-    def construct(self) -> None:
-        self._inner.construct()
-        self._inner_registry.construct()
+    def _on_construct(self) -> None:
+        super()._on_construct()
+        self._complete_lifecycle_hook_after(
+            self._transition_children((self._inner_registry,), construct=True)
+        )
 
-    def destruct(self) -> None:
-        self._inner_registry.destruct()
-        self._inner.destruct()
+    def _on_destruct(self) -> None:
+        super()._on_destruct()
+        self._complete_lifecycle_hook_after(
+            self._transition_children((self._inner_registry,), construct=False)
+        )
 
     async def shutdown(self) -> None:
         """Cancel and drain every asynchronous palette action."""
@@ -252,7 +250,9 @@ class CommandPaletteVM:
         for task in tasks:
             self._pending_tasks.pop(task, None)
 
-    def dispose(self) -> None:
+    def _on_dispose(self) -> None:
+        # End the view subscription first, so teardown publishes no projection.
+        self._view_sub.dispose()
         for task in list(self._pending_tasks):
             if not task.done():
                 task.cancel()
@@ -261,21 +261,6 @@ class CommandPaletteVM:
             item.dispose()
         self._items.clear()
         self._actions.clear()
-        self._open_command.dispose()
-        self._close_command.dispose()
-        self._execute_selected_command.dispose()
-        self._move_selection_command.dispose()
-        # End the view subscription first, so teardown publishes no projection.
-        self._view_sub.dispose()
-        # Dispose the scored filter BEFORE the registry it subscribes to, so
-        # its subscription unwinds against a live source. `PaneVM.dispose`
-        # documents the same ordering for its `FilteredCompositeVM`; this
-        # class had drifted and left the filter — and therefore a live rx
-        # subscription onto the disposed registry plus strong references to
-        # every disposed entry — alive for the process lifetime.
-        self._scored_filter.dispose()
-        self._inner_registry.dispose()
-        self._inner.dispose()
 
     # ── Registry API ───────────────────────────────────────────────────────
 
@@ -318,7 +303,7 @@ class CommandPaletteVM:
         self._set_open(True)
         if self._filter_text != "":
             self._filter_text = ""
-            self._notify("filter_text")
+            self._publish("filter_text")
         self._scored_filter.refresh_scores()
         self._select_first()
 
@@ -329,7 +314,7 @@ class CommandPaletteVM:
         if self._is_open == value:
             return
         self._is_open = value
-        self._notify("is_open")
+        self._publish("is_open")
 
     def _execute_selected(self) -> None:
         current = self._scored_filter.current
@@ -416,17 +401,14 @@ class CommandPaletteVM:
         visible = self._scored_filter.visible
         self._scored_filter.set_current(visible[0] if visible else None)
 
-    def _notify(self, name: str) -> None:
-        send_value_free(self._hub, PropertyChangedMessage.create(self, self.name, name))
-
     def _publish_projection(self) -> None:
         entries, index = self.filtered_entries, self.selected_index
         if entries != self._published_entries:
             self._published_entries = entries
-            self._notify("filtered_entries")
+            self._publish("filtered_entries")
         if index != self._published_index:
             self._published_index = index
-            self._notify("selected_index")
+            self._publish("selected_index")
 
 
 __all__ = ["CommandPaletteVM", "PaletteAction", "PaletteEntry"]

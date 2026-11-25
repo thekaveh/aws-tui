@@ -26,18 +26,15 @@ from collections.abc import Callable
 from typing import Any
 
 from vmx import (
-    ComponentVM,
-    ConstructionStatus,
     Dispatcher,
     Message,
     MessageHub,
-    PropertyChangedMessage,
 )
 
-from aws_tui.vm._observable import send_value_free
+from aws_tui.vm._component import IsolatedComponentVM
 
 
-class ContentHostVM:
+class ContentHostVM(IsolatedComponentVM):
     """Owns the currently active service VM and orchestrates the swap."""
 
     def __init__(
@@ -48,7 +45,7 @@ class ContentHostVM:
         on_setup_error: Callable[[BaseException], None] | None = None,
         on_retire: Callable[[str | None, object], None] | None = None,
     ) -> None:
-        self._hub: MessageHub[Message] = hub
+        super().__init__(name="content_host", hub=hub, dispatcher=dispatcher)
 
         self._current: Any | None = None
         self._current_id: str | None = None
@@ -60,10 +57,6 @@ class ContentHostVM:
         self._on_retire = on_retire
         self._swap_lock = asyncio.Lock()
 
-        self._inner: ComponentVM = (
-            ComponentVM.builder().name("content_host").services(hub, dispatcher).build()
-        )
-
     # ── Properties ──────────────────────────────────────────────────────────
 
     @property
@@ -74,24 +67,10 @@ class ContentHostVM:
     def current_id(self) -> str | None:
         return self._current_id
 
-    @property
-    def status(self) -> ConstructionStatus:
-        return self._inner.status
-
-    @property
-    def is_constructed(self) -> bool:
-        return self._inner.is_constructed
-
-    @property
-    def name(self) -> str:
-        return self._inner.name
-
     # ── Lifecycle ───────────────────────────────────────────────────────────
 
-    def construct(self) -> None:
-        self._inner.construct()
-
-    def destruct(self) -> None:
+    def _on_destruct(self) -> None:
+        super()._on_destruct()
         self._cancel_pending_setup()
         # Only DualPaneVM implements destruct; the EMR, Glue and Athena page VMs
         # expose construct/setup/shutdown/dispose and no destruct. Calling it
@@ -102,12 +81,10 @@ class ContentHostVM:
         destruct = getattr(self._current, "destruct", None)
         if callable(destruct):
             destruct()
-        self._inner.destruct()
 
-    def dispose(self) -> None:
+    def _on_dispose(self) -> None:
         self._cancel_pending_setup()
         self._dispose_current()
-        self._inner.dispose()
 
     def _dispose_current(self) -> None:
         if self._current is not None:
@@ -215,15 +192,15 @@ class ContentHostVM:
                 raise
 
         if shutdown_cancelled:
-            send_value_free(self._hub, PropertyChangedMessage.create(self, self.name, "current"))
+            self._publish("current")
             raise asyncio.CancelledError
 
         if ownership_is_current is not None and not ownership_is_current():
-            send_value_free(self._hub, PropertyChangedMessage.create(self, self.name, "current"))
+            self._publish("current")
             return False
 
         if vm is None:
-            send_value_free(self._hub, PropertyChangedMessage.create(self, self.name, "current"))
+            self._publish("current")
             return True
 
         # Adopt the already-constructed candidate before driving setup. Adopting
@@ -236,7 +213,7 @@ class ContentHostVM:
         self._current_id = service_id
         if before_publish is not None:
             before_publish()
-        send_value_free(self._hub, PropertyChangedMessage.create(self, self.name, "current"))
+        self._publish("current")
 
         setup = None if already_prepared else getattr(vm, "setup", None)
         if callable(setup):

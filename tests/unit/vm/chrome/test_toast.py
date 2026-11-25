@@ -11,6 +11,7 @@ from vmx import NULL_DISPATCHER, MessageHub
 from vmx.lifecycle.status import ConstructionStatus
 from vmx.messages.protocols import Message
 
+from aws_tui.vm._component import IsolatedComponentVM
 from aws_tui.vm.chrome.toast_stack_vm import ToastStackVM
 from aws_tui.vm.chrome.toast_vm import ToastLevel, ToastModel, ToastVM
 
@@ -256,3 +257,18 @@ def test_raised_toast_is_constructed_by_the_constructed_stack() -> None:
     assert rows
     assert all(row.is_constructed for row in rows)
     stack.dispose()
+
+
+def test_toast_stack_lifecycle_drives_members() -> None:
+    stack = _stack()
+    assert isinstance(stack, IsolatedComponentVM)
+    stack.construct()
+    assert stack.status is ConstructionStatus.CONSTRUCTED
+    assert stack._inner.status is ConstructionStatus.CONSTRUCTED
+    stack.destruct()
+    assert stack.status is ConstructionStatus.DESTRUCTED
+    assert stack._inner.status is ConstructionStatus.DESTRUCTED
+    stack.construct()
+    stack.dispose()
+    assert stack.status is ConstructionStatus.DISPOSED
+    assert stack._inner.status is ConstructionStatus.DISPOSED

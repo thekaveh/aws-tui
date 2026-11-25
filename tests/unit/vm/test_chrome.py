@@ -9,6 +9,7 @@ from vmx.lifecycle.status import ConstructionStatus
 from vmx.messages.protocols import Message
 
 from aws_tui.infra.keymap_store import KeymapStore
+from aws_tui.vm._component import IsolatedComponentVM
 from aws_tui.vm.chrome.chrome_vm import ChromeVM
 
 
@@ -48,3 +49,20 @@ def test_chrome_hint_legend_starts_with_global_help_and_theme_controls() -> None
     assert "app.help" in global_ids
     assert "app.command_palette" in global_ids
     chrome.dispose()
+
+
+def test_chrome_lifecycle_drives_members() -> None:
+    chrome, _hub = _build()
+    assert isinstance(chrome, IsolatedComponentVM)
+    assert chrome.status is ConstructionStatus.CONSTRUCTED
+    assert chrome.hint_legend.status is ConstructionStatus.CONSTRUCTED
+    assert chrome.toast_stack.status is ConstructionStatus.CONSTRUCTED
+    chrome.destruct()
+    assert chrome.status is ConstructionStatus.DESTRUCTED
+    assert chrome.hint_legend.status is ConstructionStatus.DESTRUCTED
+    assert chrome.toast_stack.status is ConstructionStatus.DESTRUCTED
+    chrome.construct()
+    chrome.dispose()
+    assert chrome.status is ConstructionStatus.DISPOSED
+    assert chrome.hint_legend.status is ConstructionStatus.DISPOSED
+    assert chrome.toast_stack.status is ConstructionStatus.DISPOSED

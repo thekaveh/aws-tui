@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from types import SimpleNamespace
 from typing import cast
 
 import pytest
@@ -10,6 +11,7 @@ from vmx import NULL_DISPATCHER, ComponentVM, MessageHub
 from vmx.lifecycle.status import ConstructionStatus
 from vmx.messages.protocols import Message
 
+from aws_tui.vm._component import IsolatedComponentVM
 from aws_tui.vm.content_host_vm import ContentHostVM
 
 
@@ -875,3 +877,28 @@ async def test_destruct_tolerates_a_hosted_vm_without_destruct() -> None:
 
     host.dispose()
     assert vm.disposed
+
+
+async def test_content_host_lifecycle_drives_members() -> None:
+    host = _build()
+    assert isinstance(host, IsolatedComponentVM)
+    hosted = _component()
+    await host.set_content(hosted, service_id="ec2")
+    assert hosted.status is ConstructionStatus.CONSTRUCTED
+    host.destruct()
+    assert host.status is ConstructionStatus.DESTRUCTED
+    assert hosted.status is ConstructionStatus.DESTRUCTED
+    host.construct()
+    host.dispose()
+    assert host.status is ConstructionStatus.DISPOSED
+    assert hosted.status is ConstructionStatus.DISPOSED
+
+    # A hosted VM without ``destruct`` (the EMR, Glue and Athena pages) must not
+    # make the host's destruct raise.
+    bare = _build()
+    await bare.set_content(
+        SimpleNamespace(construct=lambda: None, dispose=lambda: None), service_id="emr"
+    )
+    bare.destruct()
+    assert bare.status is ConstructionStatus.DESTRUCTED
+    bare.dispose()
