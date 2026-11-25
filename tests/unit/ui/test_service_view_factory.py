@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterator
+from contextlib import ExitStack
 from pathlib import Path
 
 import pytest
@@ -30,6 +32,13 @@ _SOURCE_CANDIDATES = (
 )
 
 
+@pytest.fixture
+def cleanup() -> Iterator[ExitStack]:
+    """Run registered callbacks in reverse order after the test."""
+    with ExitStack() as stack:
+        yield stack
+
+
 def _build_dual_pane_vm(tmp_path: Path, hub: MessageHub[Message]) -> DualPaneVM:
     left = PaneVM(
         provider=InMemoryFS(),
@@ -54,10 +63,13 @@ def _build_dual_pane_vm(tmp_path: Path, hub: MessageHub[Message]) -> DualPaneVM:
     return vm
 
 
-def test_factory_builds_dual_pane_for_s3(tmp_path: Path) -> None:
+def test_factory_builds_dual_pane_for_s3(tmp_path: Path, cleanup: ExitStack) -> None:
     hub: MessageHub[Message] = MessageHub()
+    cleanup.callback(hub.dispose)
     focus_coordinator = FocusCoordinatorVM(hub=hub, dispatcher=NULL_DISPATCHER)
+    cleanup.callback(focus_coordinator.dispose)
     dual_pane_vm = _build_dual_pane_vm(tmp_path, hub)
+    cleanup.callback(dual_pane_vm.dispose)
 
     view = build_service_view(
         "s3",
@@ -70,10 +82,13 @@ def test_factory_builds_dual_pane_for_s3(tmp_path: Path) -> None:
     assert view.id == "content-dual-pane"
 
 
-def test_factory_builds_emr_page() -> None:
+def test_factory_builds_emr_page(cleanup: ExitStack) -> None:
     _emr_page, emr_page_vm, _fake = _build_page()
     hub = emr_page_vm.hub
+    cleanup.callback(hub.dispose)
+    cleanup.callback(emr_page_vm.dispose)
     focus_coordinator = FocusCoordinatorVM(hub=hub, dispatcher=NULL_DISPATCHER)
+    cleanup.callback(focus_coordinator.dispose)
 
     view = build_service_view(
         "emr-serverless",
@@ -88,10 +103,13 @@ def test_factory_builds_emr_page() -> None:
     assert view._source_candidates == _SOURCE_CANDIDATES  # type: ignore[attr-defined]
 
 
-def test_factory_builds_glue_page() -> None:
+def test_factory_builds_glue_page(cleanup: ExitStack) -> None:
     glue_page_vm, _fake = _build_glue_vm()
     hub = glue_page_vm.hub
+    cleanup.callback(hub.dispose)
+    cleanup.callback(glue_page_vm.dispose)
     focus_coordinator = FocusCoordinatorVM(hub=hub, dispatcher=NULL_DISPATCHER)
+    cleanup.callback(focus_coordinator.dispose)
 
     view = build_service_view(
         "glue",
@@ -106,10 +124,13 @@ def test_factory_builds_glue_page() -> None:
     assert view._source_candidates == _SOURCE_CANDIDATES  # type: ignore[attr-defined]
 
 
-def test_factory_threads_keymap_to_glue_page() -> None:
+def test_factory_threads_keymap_to_glue_page(cleanup: ExitStack) -> None:
     glue_page_vm, _fake = _build_glue_vm()
     hub = glue_page_vm.hub
+    cleanup.callback(hub.dispose)
+    cleanup.callback(glue_page_vm.dispose)
     focus_coordinator = FocusCoordinatorVM(hub=hub, dispatcher=NULL_DISPATCHER)
+    cleanup.callback(focus_coordinator.dispose)
     keymap = KeymapStore(overlay={"glue.jobs": "8"})
 
     view = build_service_view(
@@ -124,10 +145,13 @@ def test_factory_threads_keymap_to_glue_page() -> None:
     assert view._keymap is keymap  # type: ignore[attr-defined]
 
 
-def test_factory_builds_athena_page() -> None:
+def test_factory_builds_athena_page(cleanup: ExitStack) -> None:
     athena_page_vm, _fake = _build_athena_vm()
     hub = athena_page_vm.hub
+    cleanup.callback(hub.dispose)
+    cleanup.callback(athena_page_vm.dispose)
     focus_coordinator = FocusCoordinatorVM(hub=hub, dispatcher=NULL_DISPATCHER)
+    cleanup.callback(focus_coordinator.dispose)
 
     view = build_service_view(
         "athena",
@@ -142,9 +166,11 @@ def test_factory_builds_athena_page() -> None:
     assert view._source_candidates == _SOURCE_CANDIDATES  # type: ignore[attr-defined]
 
 
-def test_factory_rejects_unknown_service() -> None:
+def test_factory_rejects_unknown_service(cleanup: ExitStack) -> None:
     hub: MessageHub[Message] = MessageHub()
+    cleanup.callback(hub.dispose)
     focus_coordinator = FocusCoordinatorVM(hub=hub, dispatcher=NULL_DISPATCHER)
+    cleanup.callback(focus_coordinator.dispose)
 
     with pytest.raises(ValueError, match="unknown service view"):
         build_service_view("unknown", object(), hub=hub, focus_coordinator=focus_coordinator)

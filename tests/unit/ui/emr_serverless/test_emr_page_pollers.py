@@ -15,6 +15,7 @@ can observe whether ``run_worker`` would have been dispatched.
 from __future__ import annotations
 
 import contextlib
+from collections.abc import Callable, Iterator
 from typing import Any
 
 import pytest
@@ -56,6 +57,25 @@ def _build_page() -> tuple[EmrServerlessPage, EmrServerlessPageVM, _InMemoryEmr]
     return page, vm, fake
 
 
+_PageBuilder = Callable[[], tuple[EmrServerlessPage, EmrServerlessPageVM, _InMemoryEmr]]
+
+
+@pytest.fixture
+def build_page() -> Iterator[_PageBuilder]:
+    """Build pages with ``_build_page`` and dispose their VMs and hubs after the test."""
+    built: list[EmrServerlessPageVM] = []
+
+    def build() -> tuple[EmrServerlessPage, EmrServerlessPageVM, _InMemoryEmr]:
+        page, vm, fake = _build_page()
+        built.append(vm)
+        return page, vm, fake
+
+    yield build
+    for vm in reversed(built):
+        vm.dispose()
+        vm.hub.dispose()
+
+
 def _capture_workers(page: EmrServerlessPage) -> list[str]:
     """Replace ``run_worker`` with a capture list so tick methods can
     be observed without an event loop."""
@@ -75,25 +95,25 @@ def _capture_workers(page: EmrServerlessPage) -> list[str]:
 # ── _poll_runs_decay (pure counter % 6) ──────────────────────────────────────
 
 
-def test_poll_runs_decay_first_five_calls_return_true() -> None:
+def test_poll_runs_decay_first_five_calls_return_true(build_page: _PageBuilder) -> None:
     """Counter starts at 0 → first call increments to 1 (% 6 != 0 → skip)."""
-    page, _vm, _fake = _build_page()
+    page, _vm, _fake = build_page()
     assert [page._poll_runs_decay() for _ in range(5)] == [True, True, True, True, True]
 
 
-def test_poll_runs_decay_sixth_call_returns_false_then_repeats() -> None:
+def test_poll_runs_decay_sixth_call_returns_false_then_repeats(build_page: _PageBuilder) -> None:
     """Every 6th call lands on counter==0 — must NOT skip (decay False)."""
-    page, _vm, _fake = _build_page()
+    page, _vm, _fake = build_page()
     results = [page._poll_runs_decay() for _ in range(12)]
     # Pattern: 5 True (skips) then 1 False (refresh) -- twice.
     assert results == [True, True, True, True, True, False] * 2
 
 
-def test_poll_runs_decay_counter_is_independent_per_widget() -> None:
+def test_poll_runs_decay_counter_is_independent_per_widget(build_page: _PageBuilder) -> None:
     """Two widgets must not share counter state — the counter lives on
     the instance, not the class."""
-    page_a, _vm_a, _fake_a = _build_page()
-    page_b, _vm_b, _fake_b = _build_page()
+    page_a, _vm_a, _fake_a = build_page()
+    page_b, _vm_b, _fake_b = build_page()
     # Advance A to 5. The counts must be chosen so the two hypotheses DIVERGE:
     # this test used to advance A by 3 and then compare a 4th A-call against a
     # 1st B-call, which is True under either hypothesis (4 and 1 are both
@@ -110,10 +130,10 @@ def test_poll_runs_decay_counter_is_independent_per_widget() -> None:
 # ── _tick_runs (skip when no active runs AND decay says skip) ────────────────
 
 
-def test_tick_runs_dispatches_when_active_runs_present() -> None:
+def test_tick_runs_dispatches_when_active_runs_present(build_page: _PageBuilder) -> None:
     """When the VM reports ``has_active_runs() == True``, every tick
     must dispatch — no decay."""
-    page, vm, _fake = _build_page()
+    page, vm, _fake = build_page()
     captured = _capture_workers(page)
     # Force has_active_runs to True without seeding real data.
     vm.job_runs.has_active_runs = lambda: True  # type: ignore[method-assign]
@@ -123,10 +143,10 @@ def test_tick_runs_dispatches_when_active_runs_present() -> None:
     assert captured == ["emr-poll-runs"] * 7
 
 
-def test_tick_runs_skips_5_of_6_when_no_active_runs() -> None:
+def test_tick_runs_skips_5_of_6_when_no_active_runs(build_page: _PageBuilder) -> None:
     """No active runs → decay kicks in. Out of 6 consecutive ticks,
     exactly one (the 6th) should dispatch."""
-    page, vm, _fake = _build_page()
+    page, vm, _fake = build_page()
     captured = _capture_workers(page)
     vm.job_runs.has_active_runs = lambda: False  # type: ignore[method-assign]
     for _ in range(6):
@@ -136,11 +156,11 @@ def test_tick_runs_skips_5_of_6_when_no_active_runs() -> None:
     )
 
 
-def test_tick_runs_skips_with_empty_in_memory_client() -> None:
+def test_tick_runs_skips_with_empty_in_memory_client(build_page: _PageBuilder) -> None:
     """Integration smoke: drive several ticks while the VM holds no
     runs at all. ``has_active_runs()`` returns False → 5-of-6 skip
     pattern stands."""
-    page, _vm, _fake = _build_page()
+    page, _vm, _fake = build_page()
     captured = _capture_workers(page)
     # _vm.job_runs has an empty _runs_cache → has_active_runs is False.
     for _ in range(12):
@@ -152,9 +172,9 @@ def test_tick_runs_skips_with_empty_in_memory_client() -> None:
 # ── _tick_detail (suppress when terminal) ─────────────────────────────────────
 
 
-def test_tick_detail_suppressed_when_in_terminal_state() -> None:
+def test_tick_detail_suppressed_when_in_terminal_state(build_page: _PageBuilder) -> None:
     """When the detail VM reports terminal, every tick must be a no-op."""
-    page, vm, _fake = _build_page()
+    page, vm, _fake = build_page()
     captured = _capture_workers(page)
     vm.job_run_detail.is_terminal_state = lambda: True  # type: ignore[method-assign]
     for _ in range(5):
@@ -162,10 +182,10 @@ def test_tick_detail_suppressed_when_in_terminal_state() -> None:
     assert captured == []
 
 
-def test_tick_detail_dispatches_when_not_terminal() -> None:
+def test_tick_detail_dispatches_when_not_terminal(build_page: _PageBuilder) -> None:
     """When the run is still pre-terminal, every tick must dispatch
     a refresh worker."""
-    page, vm, _fake = _build_page()
+    page, vm, _fake = build_page()
     captured = _capture_workers(page)
     vm.job_run_detail.is_terminal_state = lambda: False  # type: ignore[method-assign]
     for _ in range(3):
@@ -173,10 +193,10 @@ def test_tick_detail_dispatches_when_not_terminal() -> None:
     assert captured == ["emr-poll-detail", "emr-poll-detail", "emr-poll-detail"]
 
 
-def test_tick_applications_always_dispatches() -> None:
+def test_tick_applications_always_dispatches(build_page: _PageBuilder) -> None:
     """Applications poller has no decay nor terminal gate — every
     tick must dispatch."""
-    page, _vm, _fake = _build_page()
+    page, _vm, _fake = build_page()
     captured = _capture_workers(page)
     for _ in range(4):
         page._tick_applications()
@@ -184,8 +204,8 @@ def test_tick_applications_always_dispatches() -> None:
 
 
 @pytest.mark.asyncio
-async def test_explicit_log_refresh_bypasses_vm_cache() -> None:
-    page, vm, _fake = _build_page()
+async def test_explicit_log_refresh_bypasses_vm_cache(build_page: _PageBuilder) -> None:
+    page, vm, _fake = build_page()
     captured: list[bool] = []
     workers: list[Any] = []
 
