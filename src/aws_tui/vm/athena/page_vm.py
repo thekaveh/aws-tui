@@ -260,7 +260,9 @@ class AthenaPageVM(IsolatedComponentVM):
             hub=hub,
             dispatcher=dispatcher,
         )
-        self.tables = AthenaTablesVM(client=client, context=self._context, hub=hub)
+        self.tables = AthenaTablesVM(
+            client=client, context=self._context, hub=hub, dispatcher=dispatcher
+        )
         self._selected_table_ref: TableRef | None = None
         self._context_table_selection_revision: int | None = None
         self._context_table_listing_revision: int | None = None
@@ -665,6 +667,7 @@ class AthenaPageVM(IsolatedComponentVM):
         self.query.construct()
         self.history.construct()
         self.saved.construct()
+        self.tables.construct()
         self.authoring.construct()
         self.completion.construct()
         self.exports.construct()

@@ -10,15 +10,11 @@ from typing import Any, Final
 from uuid import uuid4
 
 import anyio
-import reactivex as rx
 from vmx import (
     AsyncRelayCommand,
-    ComponentVM,
-    ConstructionStatus,
     Dispatcher,
     Message,
     MessageHub,
-    PropertyChangedMessage,
 )
 
 from aws_tui.domain.athena_runner import AthenaQueryRunner
@@ -37,7 +33,7 @@ from aws_tui.domain.query import (
 )
 from aws_tui.domain.sql_policy import QueryRejectedError, ReadOnlySqlPolicy
 from aws_tui.infra.athena_draft_store import SqlDraft
-from aws_tui.vm._observable import ObserverSafeSubject, send_value_free
+from aws_tui.vm._component import IsolatedComponentVM
 from aws_tui.vm.athena._domain_validation import (
     optional_exact_string,
     valid_athena_query_error,
@@ -113,7 +109,7 @@ class AthenaQuerySnapshot:
     draft_recovery_guard: bool = field(default=False, repr=False)
 
 
-class AthenaQueryVM:
+class AthenaQueryVM(IsolatedComponentVM):
     def __init__(
         self,
         *,
@@ -130,6 +126,7 @@ class AthenaQueryVM:
         execution_context_available: Callable[[], bool] | None = None,
         reuse_unavailable_reason: Callable[[], str | None] | None = None,
     ) -> None:
+        super().__init__(name="athena.query", hub=hub, dispatcher=dispatcher)
         self._draft_session = draft_session
         self._draft_recovery_guard = False
         self._draft_recovery_guard_revision = 0
@@ -150,17 +147,12 @@ class AthenaQueryVM:
             sleep=sleep,
         )
         self._context = context
-        self._hub = hub
-        self._disposed = False
+        self._hub: MessageHub[Message] = hub
         self._shutdown_started = False
         self._input_admission_closed = False
         self._shutdown_complete = False
         self._lifecycle_transition = False
-        self._lifecycle_lock = asyncio.Lock()
-        self._on_property_changed = ObserverSafeSubject[str]()
-        self._inner: ComponentVM = (
-            ComponentVM.builder().name("athena.query").services(hub, dispatcher).build()
-        )
+        self._transition_lock = asyncio.Lock()
         self._results = AthenaResultsVM(
             client=client,
             context=context,
@@ -191,14 +183,14 @@ class AthenaQueryVM:
         self._execute_command: AsyncRelayCommand = (
             AsyncRelayCommand.builder()
             .predicate(self._can_execute)
-            .triggers(self._on_property_changed)
+            .triggers(self.on_property_changed)
             .task(self._run_execution)
             .build()
         )
         self._cancel_command: AsyncRelayCommand = (
             AsyncRelayCommand.builder()
             .predicate(self._can_interrupt)
-            .triggers(self._on_property_changed)
+            .triggers(self.on_property_changed)
             .task(self._cancel_active)
             .build()
         )
@@ -210,8 +202,7 @@ class AthenaQueryVM:
         )
 
     def _draft_changed(self, _property_name: str) -> None:
-        for name in ("draft_state", "draft_error_text", "draft_execution_blocked"):
-            self._notify(name)
+        self._publish("draft_state", "draft_error_text", "draft_execution_blocked")
 
     @property
     def draft_state(self) -> DraftState:
@@ -228,7 +219,7 @@ class AthenaQueryVM:
     def set_draft_recovery_guard(self, blocked: bool) -> None:
         self._draft_recovery_guard = blocked
         self._draft_recovery_guard_revision += 1
-        self._notify("draft_execution_blocked")
+        self._publish("draft_execution_blocked")
 
     @property
     def draft_execution_blocked(self) -> bool:
@@ -247,7 +238,7 @@ class AthenaQueryVM:
     def install_draft_sql(self, record: SqlDraft) -> None:
         # Caller owns the lifecycle guard; recovery acknowledges SQL without an edit/save.
         if (
-            self._disposed
+            self._is_disposed()
             or self._shutdown_started
             or self._input_admission_closed
             or self._draft_session is None
@@ -258,14 +249,14 @@ class AthenaQueryVM:
         self._editor_revision += 1
         self._validation_error = None
         self._draft_session.recovered(record)
-        self._notify("sql")
-        self._notify("validation_error")
-        self._notify("draft_state")
+        self._publish("sql")
+        self._publish("validation_error")
+        self._publish("draft_state")
 
     def stage_table_document(self, sql: str) -> None:
         """Publish accepted table SQL without saving it under an unresolved origin."""
         if (
-            self._disposed
+            self._is_disposed()
             or self._shutdown_started
             or self._input_admission_closed
             or self._snapshot_export_is_busy()
@@ -276,8 +267,8 @@ class AthenaQueryVM:
         self._validation_error = None
         if self._draft_session is not None:
             self._draft_session.replace_document(sql, self._context, pending=True)
-        self._notify("sql")
-        self._notify("validation_error")
+        self._publish("sql")
+        self._publish("validation_error")
 
     def bind_table_document(
         self, *, expected_sql: str, expected_context: QueryContext, expected_editor_revision: int
@@ -287,7 +278,7 @@ class AthenaQueryVM:
         def current() -> bool:
             task = asyncio.current_task()
             return (
-                not self._disposed
+                not self._is_disposed()
                 and not self._shutdown_started
                 and not self._input_admission_closed
                 and not self._snapshot_export_is_busy()
@@ -320,7 +311,7 @@ class AthenaQueryVM:
         return self._reuse_unavailable_reason()
 
     def set_reuse_options(self, *, enabled: bool, max_age_minutes: int) -> None:
-        if self._disposed or self._shutdown_started or self._input_admission_closed:
+        if self._is_disposed() or self._shutdown_started or self._input_admission_closed:
             raise ValidationError("Query options are unavailable")
         if type(enabled) is not bool:
             raise ValidationError("Result reuse must be enabled or disabled")
@@ -334,7 +325,7 @@ class AthenaQueryVM:
         self._reuse_enabled = enabled
         self._reuse_max_age_minutes = max_age_minutes
         self._forget_request_intent()
-        self._notify("reuse_options")
+        self._publish("reuse_options")
 
     def _forget_request_intent(self) -> None:
         self._request_intent_key = None
@@ -346,7 +337,7 @@ class AthenaQueryVM:
         self._reuse_max_age_minutes = 60
         self._forget_request_intent()
         if changed and notify:
-            self._notify("reuse_options")
+            self._publish("reuse_options")
         return changed
 
     @property
@@ -425,17 +416,17 @@ class AthenaQueryVM:
     def cancel_command(self) -> AsyncRelayCommand:
         return self._cancel_command
 
-    @property
-    def status(self) -> ConstructionStatus:
-        return self._inner.status
+    def _on_construct(self) -> None:
+        super()._on_construct()
+        self._complete_lifecycle_hook_after(
+            self._transition_children((self._results,), construct=True)
+        )
 
-    @property
-    def on_property_changed(self) -> rx.Observable[str]:
-        return self._on_property_changed.observable
-
-    def construct(self) -> None:
-        self._inner.construct()
-        self._results.construct()
+    def _on_destruct(self) -> None:
+        super()._on_destruct()
+        self._complete_lifecycle_hook_after(
+            self._transition_children((self._results,), construct=False)
+        )
 
     @property
     def editor_revision(self) -> int:
@@ -444,7 +435,7 @@ class AthenaQueryVM:
 
     def set_sql(self, sql: str) -> None:
         if (
-            self._disposed
+            self._is_disposed()
             or self._shutdown_started
             or self._input_admission_closed
             or sql == self._sql
@@ -455,8 +446,8 @@ class AthenaQueryVM:
         self._validation_error = None
         if self._draft_session is not None:
             self._draft_session.edited(sql, self._context)
-        self._notify("sql")
-        self._notify("validation_error")
+        self._publish("sql")
+        self._publish("validation_error")
 
     def close_input_admission(self) -> None:
         """Close editor intake synchronously before outgoing shutdown can yield."""
@@ -464,23 +455,23 @@ class AthenaQueryVM:
 
     def begin_context_resolution(self) -> None:
         if (
-            self._disposed
+            self._is_disposed()
             or self._shutdown_started
             or self._input_admission_closed
             or self._is_context_resolving
         ):
             return
         self._is_context_resolving = True
-        self._notify("is_context_resolving")
+        self._publish("is_context_resolving")
 
     def end_context_resolution(self) -> None:
         if not self._is_context_resolving:
             return
         self._is_context_resolving = False
-        self._notify("is_context_resolving")
+        self._publish("is_context_resolving")
 
     def export_snapshot(self) -> AthenaQuerySnapshot:
-        if self._disposed or self._shutdown_started or self._input_admission_closed:
+        if self._is_disposed() or self._shutdown_started or self._input_admission_closed:
             raise ValueError("Athena query is unavailable")
         if self._snapshot_export_is_busy():
             raise ValueError("Athena query is busy")
@@ -507,7 +498,7 @@ class AthenaQueryVM:
 
     def export_editor_snapshot(self) -> AthenaEditorSnapshot:
         if (
-            self._disposed
+            self._is_disposed()
             or self._shutdown_started
             or self._input_admission_closed
             or self._snapshot_export_is_busy()
@@ -524,7 +515,7 @@ class AthenaQueryVM:
         self, snapshot: AthenaEditorSnapshot, *, notify: bool = True
     ) -> None:
         if (
-            self._disposed
+            self._is_disposed()
             or self._shutdown_started
             or self._input_admission_closed
             or self._snapshot_export_is_busy()
@@ -535,7 +526,7 @@ class AthenaQueryVM:
             raise ValueError("Athena editor provenance is unavailable")
         self._install_editor(snapshot)
         if notify:
-            self._notify("sql")
+            self._publish("sql")
             self._draft_changed("")
 
     def _install_editor(self, snapshot: AthenaEditorSnapshot) -> None:
@@ -556,7 +547,7 @@ class AthenaQueryVM:
     async def restore_snapshot(self, snapshot: AthenaQuerySnapshot) -> None:
         prepared = _prepare_query_snapshot(snapshot, self._context)
         del snapshot
-        if self._disposed or self._shutdown_started or self._input_admission_closed:
+        if self._is_disposed() or self._shutdown_started or self._input_admission_closed:
             raise ValueError("Athena query is unavailable")
         if prepared is None:
             raise ValueError(_SNAPSHOT_ERROR)
@@ -575,9 +566,9 @@ class AthenaQueryVM:
 
     @asynccontextmanager
     async def snapshot_restore_guard(self, expected_generation: int) -> AsyncIterator[None]:
-        async with self._lifecycle_lock:
+        async with self._transition_lock:
             if (
-                self._disposed
+                self._is_disposed()
                 or self._shutdown_started
                 or self._input_admission_closed
                 or expected_generation != self._generation
@@ -619,12 +610,12 @@ class AthenaQueryVM:
         reuse_changed = self._snapshot_reuse_options_changed
         self._snapshot_reuse_options_changed = False
         self._results._notify_snapshot_restored()
-        self._notify("sql")
-        self._notify("validation_error")
+        self._publish("sql")
+        self._publish("validation_error")
         self._notify_execution()
-        self._notify("is_executing")
+        self._publish("is_executing")
         if reuse_changed:
-            self._notify("reuse_options")
+            self._publish("reuse_options")
         if self._draft_session is not None or self._draft_recovery_guard:
             self._draft_changed("")
 
@@ -744,15 +735,15 @@ class AthenaQueryVM:
 
     async def set_context(self, context: QueryContext) -> None:
         if (
-            self._disposed
+            self._is_disposed()
             or self._shutdown_started
             or self._input_admission_closed
             or context == self._context
         ):
             return
-        async with self._lifecycle_lock:
+        async with self._transition_lock:
             if (
-                self._disposed
+                self._is_disposed()
                 or self._shutdown_started
                 or self._input_admission_closed
                 or context == self._context
@@ -769,7 +760,7 @@ class AthenaQueryVM:
                 self._draft_session.context_changed(context)
             self._results.set_context(context)
             self._reset_execution_state()
-            self._notify("context")
+            self._publish("context")
             self._execute_command.cancel()
             cancelled = False
             cleanup = asyncio.create_task(
@@ -785,14 +776,14 @@ class AthenaQueryVM:
                 cleanup.result()
             finally:
                 self._lifecycle_transition = False
-                self._notify("is_executing")
+                self._publish("is_executing")
             if cancelled:
                 raise asyncio.CancelledError
 
     async def execute(self) -> None:
         if (
             not self._execute_command.can_execute()
-            and not self._disposed
+            and not self._is_disposed()
             and not self._shutdown_started
             and not self._input_admission_closed
             and not self._busy
@@ -802,7 +793,7 @@ class AthenaQueryVM:
                 self._validate()
             except QueryRejectedError as exc:
                 self._validation_error = str(exc)
-                self._notify("validation_error")
+                self._publish("validation_error")
             return
         await self._execute_command.execute_async()
 
@@ -811,7 +802,7 @@ class AthenaQueryVM:
             await self._cancel_command.execute_async()
 
     async def shutdown(self) -> None:
-        async with self._lifecycle_lock:
+        async with self._transition_lock:
             if self._shutdown_complete:
                 return
             self._shutdown_started = True
@@ -822,7 +813,7 @@ class AthenaQueryVM:
             if self._owns_active_query and ref is not None:
                 self._retain_cleanup(ref)
             self._owns_active_query = False
-            self._notify("owns_active_query")
+            self._publish("owns_active_query")
             self._execute_command.cancel()
             await self._drain_execution_task()
             await self._drain_submission_finalizers()
@@ -834,13 +825,10 @@ class AthenaQueryVM:
                     deadline=asyncio.get_running_loop().time() + SHUTDOWN_SECONDS
                 )
             self._shutdown_complete = True
-            self._notify("is_executing")
-            self._notify("is_submitting")
+            self._publish("is_executing")
+            self._publish("is_submitting")
 
-    def dispose(self) -> None:
-        if self._disposed:
-            return
-        self._disposed = True
+    def _on_dispose(self) -> None:
         self._generation += 1
         if self._draft_subscription is not None:
             self._draft_subscription.dispose()
@@ -849,9 +837,6 @@ class AthenaQueryVM:
         self._cancel_command.dispose()
         self._execute_command.dispose()
         self._results.dispose()
-        self._on_property_changed.on_completed()
-        self._on_property_changed.dispose()
-        self._inner.dispose()
 
     async def _draft_preflight(self, generation: int) -> bool:
         if not self._drafts_enabled():
@@ -873,7 +858,7 @@ class AthenaQueryVM:
             allowed
             and self._drafts_enabled()
             and generation == self._generation
-            and not self._disposed
+            and not self._is_disposed()
             and not self._shutdown_started
             and not self._input_admission_closed
             and captured_context == self._context
@@ -882,7 +867,7 @@ class AthenaQueryVM:
         )
 
     async def _run_execution(self) -> None:
-        if self._disposed or self._shutdown_started or self._input_admission_closed:
+        if self._is_disposed() or self._shutdown_started or self._input_admission_closed:
             return
         task = asyncio.current_task()
         if task is None:
@@ -895,14 +880,14 @@ class AthenaQueryVM:
             if not await self._draft_preflight(generation):
                 if generation == self._generation:
                     self._validation_error = "Draft context is unavailable or changed."
-                    self._notify("validation_error")
+                    self._publish("validation_error")
                 return
             try:
                 normalized_sql = self._validate()
             except QueryRejectedError as exc:
                 if generation == self._generation:
                     self._validation_error = str(exc)
-                    self._notify("validation_error")
+                    self._publish("validation_error")
                 return
             submission_context = self._context
             reuse_age = self._reuse_max_age_minutes if self._reuse_enabled else None
@@ -921,9 +906,9 @@ class AthenaQueryVM:
             self._validation_error = None
             self._is_submitting = True
             self._pane_state = PaneState.LOADING
-            self._notify("validation_error")
-            self._notify("is_submitting")
-            self._notify("pane_state")
+            self._publish("validation_error")
+            self._publish("is_submitting")
+            self._publish("pane_state")
 
             async def submit_current_query() -> QueryExecutionRef:
                 # Context/shutdown can acquire the retirement lock before this
@@ -969,10 +954,10 @@ class AthenaQueryVM:
             finally:
                 if generation == self._generation:
                     self._is_submitting = False
-                    self._notify("is_submitting")
+                    self._publish("is_submitting")
                 if self._submission_task is submission_task:
                     self._submission_task = None
-            if generation != self._generation or self._disposed:
+            if generation != self._generation or self._is_disposed():
                 await self._stop_stale_submission(ref)
                 return
             if self._request_intent_token == request_token:
@@ -1011,7 +996,7 @@ class AthenaQueryVM:
             and not self._cancel_command.is_executing
             and self._execution_task is not None
             and not self._execution_task.cancelling()
-            and not self._disposed
+            and not self._is_disposed()
             and not self._shutdown_started
             and not self._input_admission_closed
             and not self._lifecycle_transition
@@ -1023,7 +1008,7 @@ class AthenaQueryVM:
     async def _retire_owned_query_before_run(self, generation: int) -> bool:
         # A failed status read does not settle the remote execution. Serialize
         # replacement with Stop/context/shutdown rather than resetting its ID.
-        async with self._lifecycle_lock:
+        async with self._transition_lock:
             if not self._execution_request_is_current(generation):
                 return False
             ref = self._execution_ref
@@ -1043,11 +1028,11 @@ class AthenaQueryVM:
         if self._reuse_enabled and reason is not None:
             self._reuse_enabled = False
             self._forget_request_intent()
-            self._notify("reuse_options")
+            self._publish("reuse_options")
         available = self._execution_context_available()
         if available != self._last_execution_available:
             self._last_execution_available = available
-            self._notify("execution_context_available")
+            self._publish("execution_context_available")
 
     def _validate(self) -> str:
         if not self._execution_context_available():
@@ -1059,28 +1044,28 @@ class AthenaQueryVM:
 
     async def _poll(self, ref: QueryExecutionRef, generation: int) -> None:
         delay = 0.25
-        while generation == self._generation and not self._disposed:
+        while generation == self._generation and not self._is_disposed():
             detail = await self._runner.detail(ref, self._context)
-            if generation != self._generation or self._disposed:
+            if generation != self._generation or self._is_disposed():
                 return
             if not self._detail_matches_context(detail, ref):
                 raise _QueryContextMismatchError
             self._apply_detail(detail)
             if detail.summary.state in _TERMINAL_QUERY_STATES:
                 self._owns_active_query = False
-                self._notify("owns_active_query")
+                self._publish("owns_active_query")
                 if detail.summary.state is QueryState.SUCCEEDED:
                     await self._results.load(ref.execution_id)
-                    if generation != self._generation or self._disposed:
+                    if generation != self._generation or self._is_disposed():
                         return
                 return
             await self._runner.pause(delay)
-            if generation != self._generation or self._disposed:
+            if generation != self._generation or self._is_disposed():
                 return
             delay = min(delay * 2, 5.0)
 
     async def _cancel_active(self) -> None:
-        async with self._lifecycle_lock:
+        async with self._transition_lock:
             if not self._can_interrupt():
                 return
             ref = self._execution_ref
@@ -1098,10 +1083,10 @@ class AthenaQueryVM:
                 # pane. Leaving it LOADING showed an indefinite spinner for a
                 # finished operation and made the snapshot unexportable.
                 self._pane_state = PaneState.EMPTY
-                self._notify("pane_state")
-            self._notify("owns_active_query")
-            self._notify("state")
-            self._notify("is_submitting")
+                self._publish("pane_state")
+            self._publish("owns_active_query")
+            self._publish("state")
+            self._publish("is_submitting")
             self._execute_command.cancel()
             cleanup = asyncio.create_task(
                 self._finish_cancel_transition(), name="athena-cancel-transition-cleanup"
@@ -1116,7 +1101,7 @@ class AthenaQueryVM:
                 cleanup.result()
             finally:
                 self._lifecycle_transition = False
-                self._notify("is_executing")
+                self._publish("is_executing")
             if cancelled:
                 raise asyncio.CancelledError
 
@@ -1179,7 +1164,7 @@ class AthenaQueryVM:
 
     async def _stop_stale_submission(self, ref: QueryExecutionRef) -> None:
         self._retain_cleanup(ref)
-        if self._lifecycle_transition and not self._disposed:
+        if self._lifecycle_transition and not self._is_disposed():
             return
         await self._stop_retained_ref(ref, report_error=False)
 
@@ -1268,7 +1253,7 @@ class AthenaQueryVM:
         # authoritative; a mid-flight one says nothing about a failed stop.
         if detail.summary.state in _TERMINAL_QUERY_STATES:
             self._error_text = None
-        for property_name in (
+        self._publish(
             "state",
             "statistics",
             "query_error",
@@ -1277,8 +1262,7 @@ class AthenaQueryVM:
             "engine_version",
             "pane_state",
             "error_text",
-        ):
-            self._notify(property_name)
+        )
 
     async def _reject_out_of_context(
         self,
@@ -1287,7 +1271,7 @@ class AthenaQueryVM:
     ) -> None:
         self._retain_cleanup(ref)
         stopped = await self._stop_retained_ref(ref, report_error=False)
-        if generation != self._generation or self._disposed:
+        if generation != self._generation or self._is_disposed():
             return
         self._apply_context_error(None if stopped else ref)
 
@@ -1328,16 +1312,16 @@ class AthenaQueryVM:
             exc,
             fallback=_QUERY_ERROR,
         )
-        self._notify("pane_state")
-        self._notify("error_text")
+        self._publish("pane_state")
+        self._publish("error_text")
 
     def _apply_unexpected_error(self, operation: str, exc: BaseException) -> None:
         report_unexpected_service_error(self._hub, service="athena", operation=operation, error=exc)
         self._pane_state, self._error_text = map_unexpected_error(
             fallback=_QUERY_ERROR,
         )
-        self._notify("pane_state")
-        self._notify("error_text")
+        self._publish("pane_state")
+        self._publish("error_text")
 
     def _reset_execution_state(self) -> None:
         self._execution_ref = None
@@ -1355,7 +1339,7 @@ class AthenaQueryVM:
         self._notify_execution()
 
     def _notify_execution(self) -> None:
-        for property_name in (
+        self._publish(
             "execution_ref",
             "owns_active_query",
             "state",
@@ -1367,18 +1351,17 @@ class AthenaQueryVM:
             "is_submitting",
             "pane_state",
             "error_text",
-        ):
-            self._notify(property_name)
+        )
 
     def _set_busy(self, value: bool) -> None:
         if self._busy == value:
             return
         self._busy = value
-        self._notify("is_executing")
+        self._publish("is_executing")
 
     def _can_execute(self) -> bool:
         if (
-            self._disposed
+            self._is_disposed()
             or self._shutdown_started
             or self._input_admission_closed
             or self._lifecycle_transition
@@ -1396,7 +1379,7 @@ class AthenaQueryVM:
 
     def _can_interrupt(self) -> bool:
         return (
-            not self._disposed
+            not self._is_disposed()
             and not self._shutdown_started
             and (
                 self._is_submitting or (self._owns_active_query and self._execution_ref is not None)
@@ -1420,19 +1403,6 @@ class AthenaQueryVM:
         ref: QueryExecutionRef,
     ) -> bool:
         return detail.summary.ref == ref and detail.context.cache_key == self._context.cache_key
-
-    def _notify(self, property_name: str) -> None:
-        if self._disposed:
-            return
-        send_value_free(
-            self._hub,
-            PropertyChangedMessage.create(
-                self,
-                "athena.query",
-                property_name,
-            ),
-        )
-        self._on_property_changed.on_next(property_name)
 
 
 def _prepare_query_snapshot(
