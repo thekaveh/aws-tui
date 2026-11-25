@@ -5,14 +5,11 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import Any, Literal, cast
 
-import reactivex as rx
 from vmx import (
-    ComponentVM,
     ConstructionStatus,
     Dispatcher,
     Message,
     MessageHub,
-    PropertyChangedMessage,
 )
 
 from aws_tui.domain.data_catalog import (
@@ -27,7 +24,7 @@ from aws_tui.domain.data_catalog import (
 from aws_tui.domain.filesystem import ProviderError
 from aws_tui.domain.s3_uri import parse_s3_uri
 from aws_tui.infra.duckdb import DuckDbPort
-from aws_tui.vm._observable import ObserverSafeSubject, send_value_free
+from aws_tui.vm._component import IsolatedComponentVM
 from aws_tui.vm.file_manager.pane_vm import PaneState
 from aws_tui.vm.glue._guarded import guarded
 from aws_tui.vm.glue._lifecycle import GlueOperationOwner, GlueOperationSuperseded
@@ -81,7 +78,7 @@ class _PendingEmptyDatabaseClear:
     committed_identity: _CommittedSelectionIdentity
 
 
-class GlueCatalogVM:
+class GlueCatalogVM(IsolatedComponentVM):
     def __init__(
         self,
         *,
@@ -93,18 +90,14 @@ class GlueCatalogVM:
         duckdb_port: DuckDbPort | None = None,
         _operations: GlueOperationOwner | None = None,
     ) -> None:
+        super().__init__(name="glue.catalog", hub=hub, dispatcher=dispatcher)
         self._client = client
-        self._hub = hub
-        self._disposed = False
+        self._hub: MessageHub[Message] = hub
         self._shutdown_started = False
         self._shutdown_complete = False
         self._shutdown_lock = asyncio.Lock()
         self._operations = _operations or GlueOperationOwner()
         self._owns_operations = _operations is None
-        self._on_property_changed = ObserverSafeSubject[str]()
-        self._inner: ComponentVM = (
-            ComponentVM.builder().name("glue.catalog").services(hub, dispatcher).build()
-        )
         self.iceberg = GlueIcebergVM(
             inspector=iceberg_inspector or UnavailableIcebergInspector(),
             hub=hub,
@@ -112,6 +105,7 @@ class GlueCatalogVM:
             aws_profile=aws_profile,
             duckdb_port=duckdb_port,
         )
+        self._own(self.iceberg)
 
         self._database_generation = 0
         self._selection_request_epoch = 0
@@ -121,6 +115,7 @@ class GlueCatalogVM:
         self._database_pager = self._make_database_pager()
         self._table_pager = self._make_table_pager(None)
         self._partition_pager = self._make_partition_pager(None)
+        self._own(self._dispose_pagers)
 
         self._selected_database_name: str | None = None
         self._selected_table_name: str | None = None
@@ -238,34 +233,21 @@ class GlueCatalogVM:
     def statistics_error_text(self) -> str | None:
         return self._statistics_error_text
 
-    @property
-    def status(self) -> ConstructionStatus:
-        return self._inner.status
-
-    @property
-    def on_property_changed(self) -> rx.Observable[str]:
-        return self._on_property_changed
-
     def construct(self) -> None:
         if not self._is_alive():
             return
-        self._inner.construct()
+        super().construct()
         self.iceberg.construct()
 
-    def dispose(self) -> None:
-        if self._disposed:
-            return
-        self._disposed = True
+    def _on_dispose(self) -> None:
         if self._owns_operations:
             self._operations.close()
         self._invalidate_operations()
-        self._partition_pager.dispose()
-        self._table_pager.dispose()
-        self._database_pager.dispose()
-        self.iceberg.dispose()
-        self._on_property_changed.on_completed()
-        self._on_property_changed.dispose()
-        self._inner.dispose()
+
+    def _dispose_pagers(self) -> None:
+        # Read at disposal time: the VM replaces its pagers while it lives.
+        for pager in (self._partition_pager, self._table_pager, self._database_pager):
+            pager.dispose()
 
     async def shutdown(self) -> None:
         self._begin_shutdown()
@@ -951,15 +933,16 @@ class GlueCatalogVM:
         )
 
     def _is_alive(self) -> bool:
-        return not self._disposed and not self._shutdown_started and self._operations.accepting
+        return (
+            self.status is not ConstructionStatus.DISPOSED
+            and not self._shutdown_started
+            and self._operations.accepting
+        )
 
     def _notify(self, property_name: str) -> None:
         if not self._is_alive():
             return
-        send_value_free(
-            self._hub, PropertyChangedMessage.create(self, "glue.catalog", property_name)
-        )
-        self._on_property_changed.on_next(property_name)
+        self._publish(property_name)
 
 
 __all__ = ["GlueCatalogVM", "GlueSelectionSuperseded"]

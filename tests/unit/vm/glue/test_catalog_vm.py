@@ -8,7 +8,7 @@ from datetime import UTC, datetime
 from typing import Any, TypeVar
 
 import pytest
-from vmx import NULL_DISPATCHER, MessageHub, TokenPagedComposition
+from vmx import NULL_DISPATCHER, ComponentVM, ConstructionStatus, MessageHub, TokenPagedComposition
 from vmx.messages.protocols import Message
 
 from aws_tui.domain.data_catalog import TableFormat, TableRef
@@ -1532,7 +1532,7 @@ async def test_catalog_dispose_invalidates_blocked_load_without_notifications() 
     fake.release_tables("analytics")
     await selection
 
-    assert notifications == []
+    assert [name for name in notifications if name not in {"status", "is_constructed"}] == []
     assert (
         vm._database_generation,  # type: ignore[attr-defined]
         vm._table_generation,  # type: ignore[attr-defined]
@@ -1589,3 +1589,37 @@ def test_catalog_dispose_reaches_every_pager_and_command_exactly_once(
         assert pager._disposed  # type: ignore[attr-defined]
         assert pager.load_more_command._disposed  # type: ignore[attr-defined]
         assert pager.refresh_command._disposed  # type: ignore[attr-defined]
+
+
+def _status(vm: ComponentVM) -> ConstructionStatus:
+    # A call result is not narrowed by an earlier ``is`` assertion.
+    return vm.status
+
+
+def test_catalog_vm_is_a_component_vm_with_owned_members() -> None:
+    vm = make_catalog_vm(seeded_glue())
+    assert isinstance(vm, ComponentVM)
+    vm.construct()
+    assert _status(vm) is ConstructionStatus.CONSTRUCTED
+    assert vm.iceberg.status is ConstructionStatus.CONSTRUCTED
+    pagers = (vm._database_pager, vm._table_pager, vm._partition_pager)
+    vm.dispose()
+    assert _status(vm) is ConstructionStatus.DISPOSED
+    assert vm.iceberg.status is ConstructionStatus.DISPOSED
+    assert all(pager._disposed for pager in pagers)  # type: ignore[attr-defined]
+
+
+async def test_catalog_vm_disposes_replaced_pager_that_is_current() -> None:
+    vm = make_catalog_vm(seeded_glue())
+    vm.construct()
+    await vm.select_database("analytics")
+    current = vm._table_pager
+    vm.dispose()
+    assert current._disposed  # type: ignore[attr-defined]
+
+
+def test_construct_after_dispose_is_a_silent_no_op() -> None:
+    vm = make_catalog_vm(seeded_glue())
+    vm.dispose()
+    vm.construct()
+    assert _status(vm) is ConstructionStatus.DISPOSED
