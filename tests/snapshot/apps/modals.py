@@ -10,6 +10,7 @@ from __future__ import annotations
 from collections.abc import AsyncIterator
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any
 
 from textual.app import App, ComposeResult
 from textual.widgets import Static
@@ -38,6 +39,17 @@ def _load_css(theme: str) -> str:
 
 
 # ── Command palette ─────────────────────────────────────────────────────────
+
+
+class _VmAndHubTeardown:
+    """Dispose the app's view model, then its hub, when the app exits."""
+
+    _vm: Any
+    _hub: MessageHub
+
+    async def on_unmount(self) -> None:
+        self._vm.dispose()
+        self._hub.dispose()
 
 
 class CommandPaletteApp(App[None]):
@@ -69,11 +81,16 @@ class CommandPaletteApp(App[None]):
         self._vm.open_command.execute()
         await self.push_screen(CommandPalette(self._vm, hub=self._hub))
 
+    async def on_unmount(self) -> None:
+        await self._vm.shutdown()
+        self._vm.dispose()
+        self._hub.dispose()
+
 
 # ── Confirm modal ──────────────────────────────────────────────────────────
 
 
-class ConfirmModalApp(App[None]):
+class ConfirmModalApp(_VmAndHubTeardown, App[None]):
     def __init__(self, *, theme: str = "carbon") -> None:
         super().__init__()
         self.CSS = _load_css(theme)
@@ -97,7 +114,7 @@ class ConfirmModalApp(App[None]):
         await self.push_screen(ConfirmModal(self._vm, request, hub=self._hub))
 
 
-class CopyConfirmModalApp(App[None]):
+class CopyConfirmModalApp(_VmAndHubTeardown, App[None]):
     """Confirm modal exercising the From/To path block layout."""
 
     def __init__(self, *, theme: str = "carbon") -> None:
@@ -131,7 +148,7 @@ async def _bytes_iter(data: bytes) -> AsyncIterator[bytes]:
     yield data
 
 
-class QuickLookApp(App[None]):
+class QuickLookApp(_VmAndHubTeardown, App[None]):
     def __init__(self, *, theme: str = "carbon", structured: bool = False) -> None:
         super().__init__()
         self._structured = structured
@@ -185,7 +202,7 @@ class QuickLookApp(App[None]):
 # ── Crash modal ────────────────────────────────────────────────────────────
 
 
-class CrashModalApp(App[None]):
+class CrashModalApp(_VmAndHubTeardown, App[None]):
     def __init__(self, *, theme: str = "carbon") -> None:
         super().__init__()
         self.CSS = _load_css(theme)

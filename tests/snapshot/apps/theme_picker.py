@@ -49,5 +49,9 @@ class ThemePickerSnapshotApp(App[None]):
         modal.action_move_down()
         modal.action_move_down()
 
+    async def on_unmount(self) -> None:
+        self._picker.dispose()
+        self._hub.dispose()
+
 
 __all__ = ["ThemePickerSnapshotApp"]

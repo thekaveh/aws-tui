@@ -244,5 +244,12 @@ class GluePageApp(App[None]):
                 "app.quit",
             }
 
+    async def on_unmount(self) -> None:
+        if self._hint_vm is not None:
+            self._hint_vm.dispose()
+        await self._vm.shutdown()
+        self._vm.dispose()
+        self._hub.dispose()
+
 
 __all__ = ["GluePageApp"]

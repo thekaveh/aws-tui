@@ -97,5 +97,9 @@ class NavMenuApp(_UnfocusedMixin, App[None]):
     def compose(self) -> ComposeResult:
         yield NavMenu(vm=self._vm, hub=self._hub)
 
+    async def on_unmount(self) -> None:
+        self._vm.dispose()
+        self._hub.dispose()
+
 
 __all__ = ["NavMenuApp"]
