@@ -367,7 +367,7 @@ async def test_cloudwatch_literal_caption_selectors_freshness_and_clicks(monkeyp
 
     vm, _fake, names = _cw_vm(monkeypatch)
     await vm.load()
-    app = _PaneApp(vm, vm._hub)
+    app = _PaneApp(vm, vm.hub)
     async with app.run_test(size=(80, 24)) as pilot:
         await pilot.pause()
         pane = app.query_one(JobRunLogsPane)

@@ -532,7 +532,7 @@ async def test_history_rejects_coherent_detail_owned_by_another_profile() -> Non
     client.pages[("analysts", None)] = ([foreign_ref], None)
     vm = make_history_vm(client)
     published: list[object] = []
-    subscription = vm._hub.messages.subscribe(published.append)  # type: ignore[attr-defined]
+    subscription = vm.hub.messages.subscribe(published.append)
     try:
         await vm.setup()
         await vm.select_execution("q-2")
@@ -621,7 +621,7 @@ async def test_open_s3_location_requires_a_succeeded_execution(state: QueryState
     client.details["q-2"] = replace(detail, summary=replace(detail.summary, state=state))
     vm = make_history_vm(client)
     published: list[object] = []
-    subscription = vm._hub.messages.subscribe(published.append)  # type: ignore[attr-defined]
+    subscription = vm.hub.messages.subscribe(published.append)
     try:
         await vm.setup()
         await vm.select_execution("q-2")
@@ -639,7 +639,7 @@ async def test_open_s3_location_succeeds_for_a_succeeded_execution() -> None:
     client = _seeded_client()
     vm = make_history_vm(client)
     published: list[object] = []
-    subscription = vm._hub.messages.subscribe(published.append)  # type: ignore[attr-defined]
+    subscription = vm.hub.messages.subscribe(published.append)
     try:
         await vm.setup()
         await vm.select_execution("q-2")

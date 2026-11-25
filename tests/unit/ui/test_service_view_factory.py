@@ -71,8 +71,8 @@ def test_factory_builds_dual_pane_for_s3(tmp_path: Path) -> None:
 
 
 def test_factory_builds_emr_page() -> None:
-    emr_page, emr_page_vm, _fake = _build_page()
-    hub = emr_page._hub  # type: ignore[attr-defined]
+    _emr_page, emr_page_vm, _fake = _build_page()
+    hub = emr_page_vm.hub
     focus_coordinator = FocusCoordinatorVM(hub=hub, dispatcher=NULL_DISPATCHER)
 
     view = build_service_view(
@@ -126,7 +126,7 @@ def test_factory_threads_keymap_to_glue_page() -> None:
 
 def test_factory_builds_athena_page() -> None:
     athena_page_vm, _fake = _build_athena_vm()
-    hub = athena_page_vm._hub  # type: ignore[attr-defined]
+    hub = athena_page_vm.hub
     focus_coordinator = FocusCoordinatorVM(hub=hub, dispatcher=NULL_DISPATCHER)
 
     view = build_service_view(

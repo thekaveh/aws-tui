@@ -279,7 +279,7 @@ async def test_protection_enabled_after_review_blocks_all_upload_requests(contex
     )
     await target.navigate_to(PathRef(("bucket", "prefix")))
     vm = type(existing)(
-        source=source, destination=target, hub=existing._hub, dispatcher=NULL_DISPATCHER
+        source=source, destination=target, hub=existing.hub, dispatcher=NULL_DISPATCHER
     )
     vm.construct()
     try:

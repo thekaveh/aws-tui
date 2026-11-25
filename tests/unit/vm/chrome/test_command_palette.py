@@ -169,7 +169,7 @@ def test_context_change_selects_top_match_while_selection_stays_visible() -> Non
 def test_property_notifications_match_each_operation() -> None:
     vm = _build()
     names: list[str] = []
-    subscription = vm._hub.messages.subscribe(
+    subscription = vm.hub.messages.subscribe(
         on_next=lambda message: (
             names.append(message.property_name)
             if isinstance(message, PropertyChangedMessage) and message.sender_object is vm
@@ -552,7 +552,7 @@ def test_equal_registration_preserves_child_and_refreshes_callback():
     vm = _build()
     calls = []
     names: list[str] = []
-    subscription = vm._hub.messages.subscribe(
+    subscription = vm.hub.messages.subscribe(
         on_next=lambda message: (
             names.append(message.property_name)
             if isinstance(message, PropertyChangedMessage) and message.sender_object is vm
@@ -642,7 +642,7 @@ def test_unavailable_entries_are_excluded_before_fuzzy_scoring():
 def test_cursor_move_outside_the_vm_methods_is_published() -> None:
     vm = _build()
     names: list[str] = []
-    subscription = vm._hub.messages.subscribe(
+    subscription = vm.hub.messages.subscribe(
         on_next=lambda message: (
             names.append(message.property_name)
             if isinstance(message, PropertyChangedMessage) and message.sender_object is vm
@@ -665,7 +665,7 @@ def test_cursor_move_outside_the_vm_methods_is_published() -> None:
 def test_dispose_publishes_no_projection_names() -> None:
     vm = _build()
     names: list[str] = []
-    subscription = vm._hub.messages.subscribe(
+    subscription = vm.hub.messages.subscribe(
         on_next=lambda message: (
             names.append(message.property_name)
             if isinstance(message, PropertyChangedMessage) and message.sender_object is vm
