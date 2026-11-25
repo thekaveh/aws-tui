@@ -8,6 +8,7 @@ from pathlib import Path
 
 import pytest
 from textual.containers import VerticalScroll
+from vmx import ConstructionStatus
 
 from aws_tui.app import AwsTuiApp
 from aws_tui.composition import AppContext
@@ -367,7 +368,7 @@ async def test_source_or_service_swap_drains_interactive_listing_cleanup(
             switch_press = asyncio.create_task(pilot.press(switch_key))
             await asyncio.wait_for(provider.list_cancelled.wait(), timeout=2.0)
             assert pane.vm.provider is provider
-            assert not dual._disposed
+            assert dual.status is not ConstructionStatus.DISPOSED
             assert dual._refresh_tasks
         finally:
             provider.release_listing.set()
@@ -377,4 +378,6 @@ async def test_source_or_service_swap_drains_interactive_listing_cleanup(
         if switch_key == "S":
             assert pane.vm.provider is not provider
         else:
-            await wait_until(lambda: dual._disposed, what="old S3 view disposed")
+            await wait_until(
+                lambda: dual.status is ConstructionStatus.DISPOSED, what="old S3 view disposed"
+            )

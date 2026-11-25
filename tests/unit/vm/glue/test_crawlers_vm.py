@@ -17,6 +17,7 @@ from aws_tui.domain.filesystem import PermissionDeniedError, ProviderError
 from aws_tui.vm.file_manager.pane_vm import PaneState
 from aws_tui.vm.glue.crawlers_vm import GlueCrawlersVM
 from aws_tui.vm.service_diagnostics import capture_service_diagnostics
+from tests.pager_helpers import assert_pager_disposed, assert_pager_live
 from tests.unit.vm.glue._fake_glue import InMemoryGlue, seeded_glue
 
 
@@ -81,12 +82,12 @@ async def test_crawler_filter_replaces_pager_and_drops_old_token() -> None:
     vm = make_crawlers_vm(fake)
     await vm.setup()
     old_pager = vm._crawler_pager  # type: ignore[attr-defined]
+    assert_pager_live(old_pager)
     await vm.load_more_crawlers()
 
     await vm.set_state_filter("RUNNING")
 
-    assert old_pager._disposed  # type: ignore[attr-defined]
-    assert old_pager.refresh_command._disposed  # type: ignore[attr-defined]
+    assert_pager_disposed(old_pager)
     assert vm.state_filter == "RUNNING"
     assert [crawler.state for crawler in vm.crawlers] == ["RUNNING"]
     assert fake.crawler_requests[-1] == (None, "RUNNING")
@@ -198,6 +199,7 @@ def test_crawlers_dispose_reaches_pager_commands_once(
 ) -> None:
     vm = make_crawlers_vm(seeded_glue())
     pager = vm._crawler_pager  # type: ignore[attr-defined]
+    assert_pager_live(pager)
     calls = 0
     original = pager.dispose
 
@@ -211,9 +213,7 @@ def test_crawlers_dispose_reaches_pager_commands_once(
     vm.dispose()
 
     assert calls == 1
-    assert pager._disposed  # type: ignore[attr-defined]
-    assert pager.load_more_command._disposed  # type: ignore[attr-defined]
-    assert pager.refresh_command._disposed  # type: ignore[attr-defined]
+    assert_pager_disposed(pager)
 
 
 def test_crawlers_vm_is_a_component_vm_with_its_own_lifecycle() -> None:
