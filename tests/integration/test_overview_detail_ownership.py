@@ -190,7 +190,7 @@ async def test_dirty_editor_decline_never_prepares_or_retires(tmp_path, monkeypa
 
 @pytest.mark.parametrize("change", ["missing", "canceled-provider", "cancel-after-publication"])
 async def test_cleanup_and_acknowledgement(tmp_path, monkeypatch, change):
-    from vmx import PropertyChangedMessage
+    from vmx import when_property_changed
 
     from aws_tui.ui.widgets.glue.page import GluePage
 
@@ -232,17 +232,13 @@ async def test_cleanup_and_acknowledgement(tmp_path, monkeypatch, change):
                 monkeypatch.setattr(glue, "list_job_runs_page", resistant)
             else:
 
-                def published(message):
-                    if (
-                        isinstance(message, PropertyChangedMessage)
-                        and message.sender_object is ctx.root_vm.content_host
-                        and message.property_name == "current"
-                        and candidates
-                        and ctx.root_vm.content_host.current is candidates[-1]
-                    ):
+                def published(_message: object) -> None:
+                    if candidates and ctx.root_vm.content_host.current is candidates[-1]:
                         task.cancel()
 
-                subscription = ctx.hub.messages.subscribe(published)
+                subscription = when_property_changed(
+                    ctx.hub, ctx.root_vm.content_host, "current"
+                ).subscribe(published)
             task = asyncio.create_task(app._open_overview_entry(vm, entry))
             if change == "canceled-provider":
                 await wait_until(started.is_set, what="actual provider read")
