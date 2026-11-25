@@ -3,11 +3,10 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, cast
+from typing import Any
 
 import pytest
-from vmx import NULL_DISPATCHER, MessageHub
-from vmx.messages.protocols import Message
+from vmx import NULL_DISPATCHER
 
 from aws_tui.demo.in_memory_fs import InMemoryFS
 from aws_tui.domain.filesystem import AuthRequiredError
@@ -19,10 +18,7 @@ from aws_tui.services.s3 import service as s3_service_module
 from aws_tui.services.s3.service import _aioboto3_session_for
 from aws_tui.vm.file_manager.dual_pane_vm import DualPaneVM
 from aws_tui.vm.services_protocol import Service
-
-
-def _hub() -> MessageHub[Message]:
-    return cast("MessageHub[Message]", MessageHub())
+from tests.helpers import new_hub
 
 
 def _aws_conn() -> Connection:
@@ -53,7 +49,7 @@ def _minio_conn() -> Connection:
 def _service(tmp_path: Path) -> S3Service:
     return S3Service(
         transfer_journal=TransferJournal(base_dir=tmp_path / "journal"),
-        hub=_hub(),
+        hub=new_hub(),
         dispatcher=NULL_DISPATCHER,
         local_root=tmp_path / "local",
         s3_fs_factory=lambda _conn: InMemoryFS(),
@@ -105,7 +101,7 @@ def test_s3_service_provider_threads_verify_tls(
     monkeypatch.setattr(s3_service_module, "S3FS", RecordingS3FS)
     svc = S3Service(
         transfer_journal=TransferJournal(base_dir=tmp_path / "journal"),
-        hub=_hub(),
+        hub=new_hub(),
         dispatcher=NULL_DISPATCHER,
         local_root=tmp_path / "local",
     )
@@ -120,7 +116,7 @@ def test_s3_service_exposes_app_orchestration_dependencies(tmp_path: Path) -> No
     journal = TransferJournal(base_dir=tmp_path / "journal")
     svc = S3Service(
         transfer_journal=journal,
-        hub=_hub(),
+        hub=new_hub(),
         dispatcher=NULL_DISPATCHER,
         local_root=tmp_path / "local",
         s3_fs_factory=lambda _conn: InMemoryFS(),

@@ -5,11 +5,9 @@ from __future__ import annotations
 import asyncio
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import cast
 
 import pytest
-from vmx import NULL_DISPATCHER, ConstructionStatus, MessageHub
-from vmx.messages.protocols import Message
+from vmx import NULL_DISPATCHER, ConstructionStatus
 
 from aws_tui.vm._component import IsolatedComponentVM
 from aws_tui.vm.chrome.crash_vm import (
@@ -18,10 +16,7 @@ from aws_tui.vm.chrome.crash_vm import (
     CrashReport,
     CrashVM,
 )
-
-
-def _hub() -> MessageHub[Message]:
-    return cast("MessageHub[Message]", MessageHub())
+from tests.helpers import new_hub
 
 
 def _report(*, can_continue: bool = True, last_action_id: str | None = None) -> CrashReport:
@@ -37,7 +32,7 @@ def _report(*, can_continue: bool = True, last_action_id: str | None = None) -> 
 
 
 def _build(report: CrashReport | None = None) -> CrashVM:
-    vm = CrashVM(report or _report(), hub=_hub(), dispatcher=NULL_DISPATCHER)
+    vm = CrashVM(report or _report(), hub=new_hub(), dispatcher=NULL_DISPATCHER)
     vm.construct()
     return vm
 

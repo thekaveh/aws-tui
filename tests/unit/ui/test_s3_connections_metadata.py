@@ -16,8 +16,14 @@ from aws_tui.infra.keychain import InMemoryKeychain
 from aws_tui.ui.widgets.settings.connection_form import ConnectionFormInline
 from aws_tui.ui.widgets.settings.s3_connections_panel import S3ConnectionsPanel
 from aws_tui.vm.settings.s3_connections_vm import S3ConnectionsVM
-from tests.helpers import WAIT_UNTIL_TIMEOUT_SECONDS, drain_workers, focus_and_settle, wait_until
-from tests.unit.ui.test_s3_connections_panel import _hub, _PanelHost
+from tests.helpers import (
+    WAIT_UNTIL_TIMEOUT_SECONDS,
+    drain_workers,
+    focus_and_settle,
+    new_hub,
+    wait_until,
+)
+from tests.unit.ui.test_s3_connections_panel import _PanelHost
 
 
 class _RecordingKeychain(InMemoryKeychain):
@@ -62,7 +68,7 @@ def _panel(tmp_path):
         aws_config_path=tmp_path / "missing-aws-config",
         aws_credentials_path=tmp_path / "missing-aws-credentials",
     )
-    hub = _hub()
+    hub = new_hub()
     vm = S3ConnectionsVM(
         resolver=resolver,
         config_store=store,
@@ -310,7 +316,7 @@ async def test_queued_action_from_retired_row_cannot_target_the_reused_slot(tmp_
 
 @pytest.mark.asyncio
 async def test_demo_resolver_supports_metadata_rows_and_selected_edit(tmp_path):
-    hub = _hub()
+    hub = new_hub()
     vm = S3ConnectionsVM(
         resolver=DemoConnectionResolver(),
         config_store=ConfigStore(path=tmp_path / "demo.toml", read_only=True),

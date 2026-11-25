@@ -4,9 +4,8 @@ import asyncio
 from typing import cast
 
 import pytest
-from vmx import NULL_DISPATCHER, MessageHub
+from vmx import NULL_DISPATCHER
 from vmx.lifecycle.status import ConstructionStatus
-from vmx.messages.protocols import Message
 
 from aws_tui.domain.emr_logs import (
     DEFAULT_LOG_FILTER,
@@ -23,14 +22,11 @@ from aws_tui.domain.filesystem import (
 from aws_tui.vm._component import IsolatedComponentVM
 from aws_tui.vm.emr_serverless.job_run_logs_vm import JobRunLogsVM, LogsState
 from aws_tui.vm.file_manager.pane_vm import PaneState
-
-
-def _hub() -> MessageHub[Message]:
-    return cast("MessageHub[Message]", MessageHub())
+from tests.helpers import new_hub
 
 
 def _make() -> JobRunLogsVM:
-    hub = _hub()
+    hub = new_hub()
     # Create a stub client with a dummy session (not used by set_target paths).
     stub_client = EmrServerlessLogsClient(
         session=cast("object", None),
@@ -962,7 +958,7 @@ def _cw_vm(monkeypatch, *, config=None, uri=None, empty=False):
                 ),
                 events=(CloudWatchLogEvent(str(i), 1000, 1001, f"ERROR CloudWatch {i}"),),
             )
-    vm = JobRunLogsVM(client=fake, hub=_hub(), dispatcher=NULL_DISPATCHER)
+    vm = JobRunLogsVM(client=fake, hub=new_hub(), dispatcher=NULL_DISPATCHER)
     vm.construct()
     vm.set_target("a", "r", uri, cloudwatch=cfg, run_created_at_ms=1000)
     return vm, fake, names

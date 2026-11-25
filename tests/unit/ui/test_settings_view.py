@@ -3,18 +3,17 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import cast
 
 import pytest
 from textual.app import App, ComposeResult
-from vmx import NULL_DISPATCHER, MessageHub
-from vmx.messages.protocols import Message
+from vmx import NULL_DISPATCHER
 
 from aws_tui.infra.config_store import ConfigStore
 from aws_tui.infra.connection_resolver import ConnectionResolver
 from aws_tui.ui.widgets.settings_view import SettingsView
 from aws_tui.vm.settings.s3_connections_vm import S3ConnectionsVM
 from aws_tui.vm.settings.settings_vm import SettingsVM
+from tests.helpers import new_hub
 
 
 def test_settings_view_does_not_import_textual_private_widgets() -> None:
@@ -23,12 +22,8 @@ def test_settings_view_does_not_import_textual_private_widgets() -> None:
     assert "textual.widgets._collapsible" not in source
 
 
-def _hub() -> MessageHub[Message]:
-    return cast("MessageHub[Message]", MessageHub())
-
-
 def _make_vm(tmp_path: Path) -> tuple[SettingsVM, S3ConnectionsVM]:
-    hub = _hub()
+    hub = new_hub()
     store = ConfigStore(path=tmp_path / "config.toml")
     resolver = ConnectionResolver(config_store=store)
     s3 = S3ConnectionsVM(resolver=resolver, config_store=store, hub=hub, dispatcher=NULL_DISPATCHER)
@@ -41,7 +36,7 @@ def _make_vm(tmp_path: Path) -> tuple[SettingsVM, S3ConnectionsVM]:
 def test_settings_view_can_be_constructed(tmp_path: Path) -> None:
     vm, s3 = _make_vm(tmp_path)
     try:
-        view = SettingsView(vm=vm, hub=_hub())
+        view = SettingsView(vm=vm, hub=new_hub())
         # The widget exposes its VM via the public ``vm`` property
         # (used by inline-form submitters to read s3 state). Locking
         # the identity here means a refactor that swaps the VM
@@ -65,7 +60,7 @@ async def test_settings_view_shows_connections_section_expanded_by_default(tmp_p
         def compose(self) -> ComposeResult:
             yield self._w
 
-    view = SettingsView(vm=vm, hub=_hub())
+    view = SettingsView(vm=vm, hub=new_hub())
     app = _Host(view)
     try:
         async with app.run_test() as pilot:
@@ -116,7 +111,7 @@ async def test_deferred_mount_focus_preserves_selected_settings_control(
 
     class Host(App[None]):
         def compose(self):
-            yield SettingsView(vm=vm, hub=_hub())
+            yield SettingsView(vm=vm, hub=new_hub())
 
     app = Host()
     try:
@@ -193,7 +188,7 @@ async def test_drafts_section_keyboard_reentry_and_real_path(tmp_path):
 
     class Host(App[None]):
         def compose(self):
-            yield SettingsView(vm=vm, hub=_hub())
+            yield SettingsView(vm=vm, hub=new_hub())
 
     app = Host()
     try:
@@ -247,7 +242,7 @@ async def test_drafts_initial_mount_hides_cleanup_and_disables_demo(tmp_path, re
 
     class Host(App[None]):
         def compose(self):
-            yield SettingsView(vm=vm, hub=_hub())
+            yield SettingsView(vm=vm, hub=new_hub())
 
     app = Host()
     try:
@@ -285,7 +280,7 @@ async def test_disabled_cleanup_failure_offers_retry_without_enable(tmp_path, mo
 
     class Host(App[None]):
         def compose(self):
-            yield SettingsView(vm=vm, hub=_hub())
+            yield SettingsView(vm=vm, hub=new_hub())
 
     app = Host()
     try:
@@ -325,7 +320,7 @@ async def test_drafts_deferred_refresh_during_partial_child_teardown(tmp_path, r
     from tests.athena_drafts_helpers import runtime_at
 
     drafts, _ = runtime_at(tmp_path, enabled=False)
-    panel = AthenaDraftsPanel(vm=drafts, hub=_hub())
+    panel = AthenaDraftsPanel(vm=drafts, hub=new_hub())
 
     class Host(App[None]):
         def compose(self):
@@ -355,7 +350,7 @@ async def test_drafts_deferred_refresh_during_partial_child_teardown(tmp_path, r
             # A later, complete composition must still project current state.
             await panel.remove()
             assert panel._subscription.is_disposed
-            replacement = AthenaDraftsPanel(vm=drafts, hub=_hub())
+            replacement = AthenaDraftsPanel(vm=drafts, hub=new_hub())
             await app.mount(replacement)
             await pilot.pause()
             toggle = replacement.query_one("#athena-drafts-toggle", Button)

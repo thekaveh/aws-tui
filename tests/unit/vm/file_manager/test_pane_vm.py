@@ -5,7 +5,6 @@ from __future__ import annotations
 import asyncio
 import inspect
 from collections.abc import AsyncIterator, Callable
-from typing import cast
 
 import pytest
 from vmx import NULL_DISPATCHER, MessageHub, PropertyChangedMessage
@@ -27,10 +26,7 @@ from aws_tui.domain.filesystem import (
 from aws_tui.vm._component import IsolatedComponentVM
 from aws_tui.vm.file_manager.entry_vm import EntryVM
 from aws_tui.vm.file_manager.pane_vm import PaneSortField, PaneState, PaneVM
-
-
-def _hub() -> MessageHub[Message]:
-    return cast("MessageHub[Message]", MessageHub())
+from tests.helpers import new_hub
 
 
 async def _seed_fs() -> InMemoryFS:
@@ -49,7 +45,7 @@ async def _astream(payload: bytes) -> AsyncIterator[bytes]:
 async def _make_pane(fs: InMemoryFS, *, hub: MessageHub[Message] | None = None) -> PaneVM:
     pane = PaneVM(
         provider=fs,
-        hub=hub or _hub(),
+        hub=hub or new_hub(),
         dispatcher=NULL_DISPATCHER,
     )
     pane.construct()
@@ -170,7 +166,7 @@ async def test_the_current_entry_is_the_selected_entry(monkeypatch: pytest.Monke
 
 @pytest.mark.asyncio
 async def test_cursor_move_publishes_no_entry_hub_message() -> None:
-    hub = _hub()
+    hub = new_hub()
     pane = await _make_pane(await _seed_fs(), hub=hub)
     previous, target, *_ = pane.filtered_entries
     changes: list[tuple[object, str]] = []
@@ -197,7 +193,7 @@ async def test_cursor_move_publishes_no_entry_hub_message() -> None:
 
 @pytest.mark.asyncio
 async def test_activate_file_row_publishes_no_property_change() -> None:
-    hub = _hub()
+    hub = new_hub()
     pane = await _make_pane(await _seed_fs(), hub=hub)
     path = pane.path
     names = [entry.name for entry in pane.filtered_entries]
@@ -254,7 +250,7 @@ async def test_stale_reload_cannot_publish_after_provider_swap() -> None:
         return await old_list(path)
 
     old.list = blocked_list  # type: ignore[method-assign]
-    pane = PaneVM(provider=old, hub=_hub(), dispatcher=NULL_DISPATCHER)
+    pane = PaneVM(provider=old, hub=new_hub(), dispatcher=NULL_DISPATCHER)
     pane.construct()
     stale = asyncio.create_task(pane.refresh())
     await asyncio.wait_for(started.wait(), timeout=1)
@@ -454,7 +450,7 @@ async def test_provider_recovery_rejects_stale_stage(stale_by: str) -> None:
 async def test_pane_placeholder_redacts_endpoint_secrets() -> None:
     pane = PaneVM(
         provider=_EndpointSecretFailureFS(),
-        hub=_hub(),
+        hub=new_hub(),
         dispatcher=NULL_DISPATCHER,
     )
     pane.construct()
@@ -761,7 +757,7 @@ class _EmptyBucketFS(_UnreachableFS):
 
 @pytest.mark.asyncio
 async def test_pane_unreachable_state() -> None:
-    pane = PaneVM(provider=_UnreachableFS(), hub=_hub(), dispatcher=NULL_DISPATCHER)
+    pane = PaneVM(provider=_UnreachableFS(), hub=new_hub(), dispatcher=NULL_DISPATCHER)
     pane.construct()
     await pane.setup()
     assert pane.state == PaneState.UNREACHABLE
@@ -770,7 +766,7 @@ async def test_pane_unreachable_state() -> None:
 
 @pytest.mark.asyncio
 async def test_pane_throttling_uses_generic_error_state() -> None:
-    pane = PaneVM(provider=_ThrottledFS(), hub=_hub(), dispatcher=NULL_DISPATCHER)
+    pane = PaneVM(provider=_ThrottledFS(), hub=new_hub(), dispatcher=NULL_DISPATCHER)
     pane.construct()
     await pane.setup()
     assert pane.state == PaneState.ERROR
@@ -779,7 +775,7 @@ async def test_pane_throttling_uses_generic_error_state() -> None:
 
 @pytest.mark.asyncio
 async def test_pane_forbidden_state() -> None:
-    pane = PaneVM(provider=_ForbiddenFS(), hub=_hub(), dispatcher=NULL_DISPATCHER)
+    pane = PaneVM(provider=_ForbiddenFS(), hub=new_hub(), dispatcher=NULL_DISPATCHER)
     pane.construct()
     await pane.setup()
     assert pane.state == PaneState.FORBIDDEN
@@ -788,7 +784,7 @@ async def test_pane_forbidden_state() -> None:
 
 @pytest.mark.asyncio
 async def test_pane_auth_required_state_from_provider() -> None:
-    pane = PaneVM(provider=_AuthRequiredFS(), hub=_hub(), dispatcher=NULL_DISPATCHER)
+    pane = PaneVM(provider=_AuthRequiredFS(), hub=new_hub(), dispatcher=NULL_DISPATCHER)
     pane.construct()
     await pane.setup()
     assert pane.state == PaneState.AUTH_REQUIRED
@@ -798,7 +794,7 @@ async def test_pane_auth_required_state_from_provider() -> None:
 
 @pytest.mark.asyncio
 async def test_pane_error_state_carries_text() -> None:
-    pane = PaneVM(provider=_ErrorFS(), hub=_hub(), dispatcher=NULL_DISPATCHER)
+    pane = PaneVM(provider=_ErrorFS(), hub=new_hub(), dispatcher=NULL_DISPATCHER)
     pane.construct()
     await pane.setup()
     assert pane.state == PaneState.ERROR
@@ -808,7 +804,7 @@ async def test_pane_error_state_carries_text() -> None:
 
 @pytest.mark.asyncio
 async def test_pane_root_notfound_renders_empty() -> None:
-    pane = PaneVM(provider=_EmptyBucketFS(), hub=_hub(), dispatcher=NULL_DISPATCHER)
+    pane = PaneVM(provider=_EmptyBucketFS(), hub=new_hub(), dispatcher=NULL_DISPATCHER)
     pane.construct()
     await pane.setup()
     assert pane.state == PaneState.EMPTY
@@ -852,7 +848,7 @@ async def test_pane_viewmodel_summary_marks() -> None:
 @pytest.mark.asyncio
 async def test_pane_emits_property_changed_on_state() -> None:
     fs = await _seed_fs()
-    hub = _hub()
+    hub = new_hub()
     received: list[str] = []
     hub.messages.subscribe(
         on_next=lambda m: received.append(getattr(m, "property_name", "")) if m else None
@@ -1131,7 +1127,7 @@ async def test_set_marked_entries_marks_notifies_once_and_skips_the_parent_link(
     transfer that never marked anything cannot start a repaint).
     """
     fs = await _seed_fs()
-    hub = _hub()
+    hub = new_hub()
     notified: list[str] = []
     hub.messages.subscribe(
         on_next=lambda m: notified.append(getattr(m, "property_name", "")) if m else None

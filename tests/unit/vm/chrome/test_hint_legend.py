@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from typing import cast
-
 import pytest
 from vmx import NULL_DISPATCHER, ConstructionStatus, MessageHub
 from vmx.messages.protocols import Message
@@ -22,16 +20,13 @@ from aws_tui.vm.chrome.hint_legend_vm import (
     _canonical_shortcut,
     _tooltip_for,
 )
-
-
-def _hub() -> MessageHub[Message]:
-    return cast("MessageHub[Message]", MessageHub())
+from tests.helpers import new_hub
 
 
 def _build(
     keymap: KeymapStore | None = None,
 ) -> tuple[HintLegendVM, MessageHub[Message]]:
-    hub = _hub()
+    hub = new_hub()
     legend = HintLegendVM(
         hub=hub,
         dispatcher=NULL_DISPATCHER,

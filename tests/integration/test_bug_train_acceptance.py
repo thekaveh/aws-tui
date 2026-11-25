@@ -17,19 +17,14 @@ chrome rendering.
 from __future__ import annotations
 
 import pytest
-from vmx import NULL_DISPATCHER, MessageHub
-from vmx.messages.protocols import Message
+from vmx import NULL_DISPATCHER
 
 from aws_tui.demo.in_memory_emr import InMemoryEmr as _InMemoryEmr
 from aws_tui.domain.emr_serverless import ApplicationState, JobRunState
 from aws_tui.vm.chrome.focus_coordinator_vm import FocusCoordinatorVM, FocusSlot
 from aws_tui.vm.emr_serverless.applications_vm import ApplicationsVM
 from aws_tui.vm.emr_serverless.job_runs_vm import JobRunsVM
-
-
-def _hub() -> MessageHub[Message]:
-    return MessageHub()
-
+from tests.helpers import new_hub
 
 # -------------------- PR #100(b): fingerprint guard absorbed into VM --------------------
 
@@ -44,7 +39,7 @@ async def test_pr_100b_no_event_flow_on_no_change_application_refresh() -> None:
     fake = _InMemoryEmr()
     fake.add_application(app_id="a1", name="etl")
     fake.add_application(app_id="a2", name="ad-hoc", state=ApplicationState.STOPPED)
-    hub = _hub()
+    hub = new_hub()
     vm = ApplicationsVM(client=fake, hub=hub, dispatcher=NULL_DISPATCHER)
     vm.construct()
     try:
@@ -77,7 +72,7 @@ async def test_pr_100b_dedup_parity_for_job_runs_vm() -> None:
     fake.add_application(app_id="a1", name="etl")
     fake.add_job_run(application_id="a1", job_run_id="r1", state=JobRunState.SUCCESS)
     fake.add_job_run(application_id="a1", job_run_id="r2", state=JobRunState.RUNNING)
-    hub = _hub()
+    hub = new_hub()
     vm = JobRunsVM(client=fake, hub=hub, dispatcher=NULL_DISPATCHER)
     vm.construct()
     try:
@@ -105,7 +100,7 @@ async def test_pr_103_two_emr_vms_on_same_hub_have_isolated_observables() -> Non
     must NOT cause its per-VM Observable to fire events on the
     other VM's Observable. This is the contract that makes
     `sender_object` filtering unnecessary in the View."""
-    hub = _hub()
+    hub = new_hub()
     fake1 = _InMemoryEmr()
     fake1.add_application(app_id="a1", name="etl")
     fake1.add_job_run(application_id="a1", job_run_id="r1", state=JobRunState.RUNNING)
@@ -137,7 +132,7 @@ async def test_pr_103_two_emr_vms_on_same_hub_have_isolated_observables() -> Non
 async def test_pr_103_applications_vm_isolated_from_job_runs_vm() -> None:
     """Same isolation contract across the heterogeneous VM pair —
     a JobRunsVM event must not echo on ApplicationsVM's Observable."""
-    hub = _hub()
+    hub = new_hub()
     fake = _InMemoryEmr()
     fake.add_application(app_id="a1", name="etl")
     fake.add_job_run(application_id="a1", job_run_id="r1", state=JobRunState.RUNNING)
@@ -171,7 +166,7 @@ def test_pr_98_3_focus_coordinator_drives_nav_menu_slot() -> None:
     spec §4.3."""
     # Start on S3_LEFT so the first set_focused_slot(NAV_MENU) actually
     # fires an event — initial=NAV_MENU would no-op that call.
-    coord = FocusCoordinatorVM(hub=_hub(), dispatcher=NULL_DISPATCHER, initial=FocusSlot.S3_LEFT)
+    coord = FocusCoordinatorVM(hub=new_hub(), dispatcher=NULL_DISPATCHER, initial=FocusSlot.S3_LEFT)
     coord.construct()
     try:
         observed: list[FocusSlot] = []
@@ -190,7 +185,9 @@ def test_pr_98_3_modal_open_preserves_prior_slot() -> None:
     """Modal precedence: opening a modal while NavMenu has the
     slot saves NavMenu and promotes MODAL. Closing restores
     NavMenu. The Screen's `-rail-active` class should follow."""
-    coord = FocusCoordinatorVM(hub=_hub(), dispatcher=NULL_DISPATCHER, initial=FocusSlot.NAV_MENU)
+    coord = FocusCoordinatorVM(
+        hub=new_hub(), dispatcher=NULL_DISPATCHER, initial=FocusSlot.NAV_MENU
+    )
     coord.construct()
     try:
         coord.modal_open()
@@ -220,7 +217,7 @@ def test_pr_105_nav_menu_selection_is_singular() -> None:
     reg = ServiceRegistry()
     reg.register(_Service("s3", "S3"))  # type: ignore[arg-type]
     reg.register(_Service("ec2", "EC2"))  # type: ignore[arg-type]
-    hub = _hub()
+    hub = new_hub()
     menu = NavMenuVM(registry=reg, hub=hub, dispatcher=NULL_DISPATCHER)
     menu.construct()
     try:

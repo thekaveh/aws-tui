@@ -2,16 +2,10 @@
 
 from __future__ import annotations
 
-from typing import cast
-
-from vmx import NULL_DISPATCHER, MessageHub
-from vmx.messages.protocols import Message
+from vmx import NULL_DISPATCHER
 
 from aws_tui.vm.chrome.theme_picker_vm import ThemePickerVM
-
-
-def _hub() -> MessageHub[Message]:
-    return cast("MessageHub[Message]", MessageHub())
+from tests.helpers import new_hub
 
 
 def test_preview_command_calls_on_preview_without_committing_pick() -> None:
@@ -31,7 +25,7 @@ def test_preview_command_calls_on_preview_without_committing_pick() -> None:
         active_theme="carbon",
         on_pick=_record_pick,
         on_preview=_record_preview,
-        hub=_hub(),
+        hub=new_hub(),
         dispatcher=NULL_DISPATCHER,
     )
     picker.construct()
@@ -63,7 +57,7 @@ def test_pick_command_still_calls_on_pick_after_preview() -> None:
         active_theme="carbon",
         on_pick=_record_pick,
         on_preview=_record_preview,
-        hub=_hub(),
+        hub=new_hub(),
         dispatcher=NULL_DISPATCHER,
     )
     picker.construct()
@@ -83,7 +77,7 @@ def test_on_preview_defaults_to_noop_when_omitted() -> None:
         themes=("carbon", "amber"),
         active_theme="carbon",
         on_pick=lambda _n: True,
-        hub=_hub(),
+        hub=new_hub(),
         dispatcher=NULL_DISPATCHER,
     )
     picker.construct()
@@ -100,7 +94,7 @@ def test_preview_command_keeps_active_theme_when_callback_rejects() -> None:
         active_theme="carbon",
         on_pick=lambda _name: True,
         on_preview=lambda _name: False,
-        hub=_hub(),
+        hub=new_hub(),
         dispatcher=NULL_DISPATCHER,
     )
     picker.construct()

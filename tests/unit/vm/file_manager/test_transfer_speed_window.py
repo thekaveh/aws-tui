@@ -2,16 +2,10 @@
 
 from __future__ import annotations
 
-from typing import cast
-
-from vmx import NULL_DISPATCHER, MessageHub
-from vmx.messages.protocols import Message
+from vmx import NULL_DISPATCHER
 
 from aws_tui.vm.file_manager.transfer_vm import TransferModel, TransferState, TransferVM
-
-
-def _hub() -> MessageHub[Message]:
-    return cast("MessageHub[Message]", MessageHub())
+from tests.helpers import new_hub
 
 
 def _model(*, bytes_done: int = 0, bytes_total: int | None = 1_000_000) -> TransferModel:
@@ -32,7 +26,7 @@ def test_speed_is_none_with_fewer_than_two_samples() -> None:
     def fake_clock() -> float:
         return next(clock_values)
 
-    vm = TransferVM(_model(), hub=_hub(), dispatcher=NULL_DISPATCHER, clock=fake_clock)
+    vm = TransferVM(_model(), hub=new_hub(), dispatcher=NULL_DISPATCHER, clock=fake_clock)
     vm.construct()
     try:
         vm.apply_update(bytes_done=100, bytes_total=1_000_000, state=TransferState.RUNNING)
@@ -45,7 +39,7 @@ def test_speed_computed_after_two_samples() -> None:
     ticks = [0.0, 1.0]  # 1 second elapsed between samples
     clock_values = iter(ticks)
     vm = TransferVM(
-        _model(), hub=_hub(), dispatcher=NULL_DISPATCHER, clock=lambda: next(clock_values)
+        _model(), hub=new_hub(), dispatcher=NULL_DISPATCHER, clock=lambda: next(clock_values)
     )
     vm.construct()
     try:
@@ -64,7 +58,7 @@ def test_speed_window_prunes_samples_older_than_5_seconds() -> None:
     ticks = [0.0, 1.0, 5.5]
     clock_values = iter(ticks)
     vm = TransferVM(
-        _model(), hub=_hub(), dispatcher=NULL_DISPATCHER, clock=lambda: next(clock_values)
+        _model(), hub=new_hub(), dispatcher=NULL_DISPATCHER, clock=lambda: next(clock_values)
     )
     vm.construct()
     try:
@@ -84,7 +78,7 @@ def test_eta_computed_from_speed_and_remaining_bytes() -> None:
     clock_values = iter(ticks)
     vm = TransferVM(
         _model(bytes_total=1_000_000),
-        hub=_hub(),
+        hub=new_hub(),
         dispatcher=NULL_DISPATCHER,
         clock=lambda: next(clock_values),
     )
@@ -103,7 +97,7 @@ def test_eta_is_none_with_no_bytes_total() -> None:
     clock_values = iter(ticks)
     vm = TransferVM(
         _model(bytes_total=None),
-        hub=_hub(),
+        hub=new_hub(),
         dispatcher=NULL_DISPATCHER,
         clock=lambda: next(clock_values),
     )
@@ -121,7 +115,7 @@ def test_speed_window_requires_minimum_250ms_span() -> None:
     ticks = [0.0, 0.1]  # 100 ms span — too short
     clock_values = iter(ticks)
     vm = TransferVM(
-        _model(), hub=_hub(), dispatcher=NULL_DISPATCHER, clock=lambda: next(clock_values)
+        _model(), hub=new_hub(), dispatcher=NULL_DISPATCHER, clock=lambda: next(clock_values)
     )
     vm.construct()
     try:
