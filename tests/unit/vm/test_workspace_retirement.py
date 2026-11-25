@@ -3,7 +3,7 @@
 import asyncio
 
 import pytest
-from vmx import NULL_DISPATCHER, MessageHub, PropertyChangedMessage
+from vmx import NULL_DISPATCHER, ConstructionStatus, MessageHub, PropertyChangedMessage
 
 from aws_tui.demo.in_memory_fs import InMemoryFS
 from aws_tui.domain.filesystem import PathRef
@@ -65,7 +65,7 @@ async def test_last_known_panes_survive_switch_to_another_service(tmp_path):
         expected = (capture_pane_target(dual.left), capture_pane_target(dual.right))
         await root.switch_service("other")
         assert service.navigation_panes() == expected
-        assert dual._disposed
+        assert dual.status is ConstructionStatus.DISPOSED
         assert root.content_host.current_id == "other"
     finally:
         await root.content_host.shutdown()
@@ -81,7 +81,7 @@ async def test_failed_candidate_does_not_replace_last_known_navigation(tmp_path)
         with pytest.raises(RuntimeError, match="candidate construction failed"):
             await root.switch_service("bad")
         assert root.content_host.current is current
-        assert not current._disposed
+        assert current.status is not ConstructionStatus.DISPOSED
         assert service.navigation_panes() is None
         expected = (capture_pane_target(current.left), capture_pane_target(current.right))
         await root.switch_connection_with(_aws_conn("next"), TokenState.CONNECTED)
@@ -103,7 +103,7 @@ async def test_capture_failure_is_visible_and_does_not_interrupt_retirement(tmp_
         )
         await root.switch_service("other")
         assert root.content_host.current_id == "other"
-        assert current._disposed
+        assert current.status is ConstructionStatus.DISPOSED
         with pytest.raises(WorkspaceError):
             service.navigation_panes()
     finally:
@@ -132,7 +132,7 @@ async def test_prepared_local_workspace_adoption_clears_global_source_without_du
         assert await root.adopt_prepared_service_vm(None, TokenState.MISSING, "s3", stage.vm)
         stage.commit_selection()
         assert root.content_host.current is stage.vm
-        assert current._disposed
+        assert current.status is ConstructionStatus.DISPOSED
         assert root.active_connection is None
         assert root.active_auth_state is TokenState.MISSING
         assert root.services_menu.selected_id == "s3"
@@ -171,9 +171,9 @@ async def test_rejected_sourceless_adoption_keeps_current_connection_and_content
                 await root.adopt_prepared_service_vm(None, TokenState.MISSING, "other", stage.vm)
         assert root.active_connection == original
         assert root.content_host.current is current
-        assert not current._disposed
+        assert current.status is not ConstructionStatus.DISPOSED
         assert root.services_menu.selected_id == "s3"
-        assert not stage.vm._disposed
+        assert stage.vm.status is not ConstructionStatus.DISPOSED
     finally:
         await stage.vm.shutdown()
         stage.vm.dispose()
@@ -225,7 +225,7 @@ async def test_published_local_workspace_keeps_truthful_menu_after_observer_fail
             assert error_type is asyncio.CancelledError
         assert fired
         assert root.content_host.current is stage.vm
-        assert not stage.vm._disposed
+        assert stage.vm.status is not ConstructionStatus.DISPOSED
         assert root.active_connection is None
         assert root.active_auth_state is TokenState.MISSING
         assert root.services_menu.selected_id == "s3"
@@ -237,7 +237,7 @@ async def test_published_local_workspace_keeps_truthful_menu_after_observer_fail
         observed.dispose()
         await root.content_host.shutdown()
         root.dispose()
-        if not stage.vm._disposed:
+        if stage.vm.status is not ConstructionStatus.DISPOSED:
             await stage.vm.shutdown()
             stage.vm.dispose()
         service.transfer_runtime.dispose()

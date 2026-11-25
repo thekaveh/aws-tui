@@ -18,6 +18,7 @@ from aws_tui.vm.athena._pager_compat import SnapshotTokenPager
 from aws_tui.vm.athena.results_vm import AthenaResultsSnapshot, AthenaResultsVM
 from aws_tui.vm.file_manager.pane_vm import PaneState
 from aws_tui.vm.messages import ServiceOperationFailedMessage
+from tests.pager_helpers import assert_pager_disposed, assert_pager_live
 
 _ID = ResultColumn("id", "varchar", "NULLABLE")
 _VALUE = ResultColumn("value", "varchar", "NULLABLE")
@@ -759,10 +760,7 @@ async def test_dispose_invalidates_blocked_result_load_and_all_commands() -> Non
     await load
 
     assert [name for name in notifications if name not in {"status", "is_constructed"}] == []
-    assert pager._disposed  # type: ignore[attr-defined]
-    assert pager.load_more_command._disposed  # type: ignore[attr-defined]
-    assert pager.refresh_command._disposed  # type: ignore[attr-defined]
-    assert vm.load_more_command._disposed  # type: ignore[attr-defined]
+    assert_pager_disposed(pager)
     subscription.dispose()
 
 
@@ -770,6 +768,7 @@ def test_clear_replaces_pager_and_erases_execution_scoped_state() -> None:
     client = ResultClient({})
     vm = make_results_vm(client)
     old_pager = vm._pager  # type: ignore[attr-defined]
+    assert_pager_live(old_pager)
 
     vm.clear()
 
@@ -777,7 +776,7 @@ def test_clear_replaces_pager_and_erases_execution_scoped_state() -> None:
     assert vm.columns == ()
     assert vm.rows == ()
     assert vm.state is PaneState.EMPTY
-    assert old_pager._disposed  # type: ignore[attr-defined]
+    assert_pager_disposed(old_pager)
 
 
 def _page(
