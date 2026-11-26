@@ -125,3 +125,21 @@ def test_idle_worker_releases_completed_future_and_result():
     assert ref() is None
     worker.close_intake()
     worker._thread.join(1)
+
+
+def test_a_system_exit_from_an_operation_resolves_it_and_keeps_the_worker_running() -> None:
+    """SystemExit raised inside an operation used to end the worker thread.
+
+    The future was left unresolved and every later submission was stranded.
+    """
+    worker = DraftWorker()
+
+    def exits() -> DraftStoreResult:
+        raise SystemExit(1)
+
+    first = worker.submit(exits)
+    assert first.result(timeout=5).code == "io"
+
+    later = worker.submit(lambda: DraftStoreResult(code="ok"))
+    assert later.result(timeout=5).code == "ok"
+    worker.close_intake()

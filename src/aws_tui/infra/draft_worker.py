@@ -68,7 +68,10 @@ class DraftWorker:
                     try:
                         assert operation is not None
                         result = operation()
-                    except Exception:
+                    except BaseException:
+                        # Any failure, including SystemExit from an operation, resolves
+                        # the future. Leaving it unresolved ended the worker thread and
+                        # stranded every later submission.
                         result = DraftStoreResult(code="io")
                     future.set_result(result)
             finally:
