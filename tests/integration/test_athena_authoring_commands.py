@@ -92,6 +92,51 @@ async def test_seeded_demo_completion_inserts_only_selected_column_and_switches_
         ctx.log_sink.close()
 
 
+async def test_completion_replaces_only_the_token_under_the_cursor_with_a_selection(
+    tmp_path, monkeypatch
+):
+    """A selection must not widen the completion's replacement to the whole selection.
+
+    The candidates are computed for the token under the cursor. With "SELECT event_"
+    selected, the completion replaced the selection and the SELECT keyword was lost.
+    """
+    from textual.widgets import OptionList, TextArea
+    from textual.widgets.text_area import Selection
+
+    from aws_tui.app import AwsTuiApp
+    from aws_tui.composition import build_app_context
+    from aws_tui.ui.widgets.athena.authoring_dialogs import SqlChoiceModal
+    from tests.integration.test_credential_recovery import _connected_probe
+    from tests.integration.test_glue_athena_navigation import _open_service
+
+    ctx = build_app_context(config_dir=tmp_path / "config", cache_dir=tmp_path / "cache", demo=True)
+    monkeypatch.setattr(ctx.aws_session, "probe_token", _connected_probe)
+    app = AwsTuiApp(ctx)
+    try:
+        async with app.run_test(size=(120, 40)) as pilot:
+            old = await _open_service(ctx, app, pilot, "athena")
+            editor = app.query_one("#athena-editor", TextArea)
+            await seed_athena_sql(pilot, old.query, editor, "SELECT event_ FROM events")
+            editor.selection = Selection((0, 0), (0, len("SELECT event_")))
+            await focus_and_settle(editor)
+            await pilot.press("ctrl+space")
+            await wait_until(
+                lambda: isinstance(app.screen, SqlChoiceModal), what="column choices with selection"
+            )
+            options = app.screen.query_one(OptionList)
+            labels = [
+                str(options.get_option_at_index(i).prompt) for i in range(options.option_count)
+            ]
+            options.highlighted = next(i for i, label in enumerate(labels) if "event_id" in label)
+            await pilot.press("enter")
+            await drain_workers(app)
+            assert editor.text == 'SELECT "event_id" FROM events'
+    finally:
+        await ctx.root_vm.content_host.shutdown()
+        ctx.root_vm.dispose()
+        ctx.log_sink.close()
+
+
 @pytest.mark.parametrize("remapped", [False, True])
 async def test_format_binding_works_in_the_actual_app_editor(tmp_path, remapped):
     assert "athena.format_sql" in KeymapStore.DEFAULT_BINDINGS

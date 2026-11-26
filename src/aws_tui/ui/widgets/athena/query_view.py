@@ -453,11 +453,11 @@ class AthenaQueryView(DeferredWorkerMixin, Widget):
                     and self._owns_capture(capture)
                     and self._page_vm.completion.is_batch_current(batch)
                 ):
-                    start, end = capture.selection.start, capture.selection.end
-                    if start == end:
-                        document = Document(capture.text)
-                        start = document.get_location_from_index(batch.target.start)
-                        end = document.get_location_from_index(batch.target.end)
+                    # Candidates are computed for the token under the cursor, so only
+                    # that token is replaced; a selection is not part of the target.
+                    document = Document(capture.text)
+                    start = document.get_location_from_index(batch.target.start)
+                    end = document.get_location_from_index(batch.target.end)
                     self._native_edit(batch.choices[int(selected)].text, start, end)
             elif command in {"open", "save", "save_as"}:
                 path = authoring.path
