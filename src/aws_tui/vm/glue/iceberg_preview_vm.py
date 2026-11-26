@@ -27,10 +27,9 @@ pump harder than a network wait.
 
 MVVM: the pane binds to this VM's own ``on_property_changed`` observable and
 nothing pushes state into it. Unlike most sibling VMs in this package, nothing
-here reaches the shared ``MessageHub``: the inner resource is given a private
-hub of its own, because ``_ComponentVMBase._notify_property_changed``
-dual-publishes every state change and two tests depend on this subtree staying
-silent on the shared hub --
+here reaches the shared ``MessageHub``. The view model and its inner resource
+both publish on ``NULL_MESSAGE_HUB``, so a state change is never sent to any
+audience. Two tests hold this silence in place --
 ``test_no_state_change_is_published_through_the_shared_hub`` here, and
 ``test_hostile_hub_subscriber_is_value_free_and_does_not_interrupt_state`` in
 ``test_iceberg_vm.py``, which proves a hostile subscriber's exception text
@@ -46,8 +45,8 @@ from functools import partial
 
 import anyio
 import reactivex as rx
-from reactivex import operators as ops
 from vmx import (
+    NULL_MESSAGE_HUB,
     AsyncResourceErrorWithValue,
     AsyncResourceLoadingWithValue,
     AsyncResourceReady,
@@ -55,7 +54,6 @@ from vmx import (
     AsyncResourceState,
     AsyncResourceStatus,
     AsyncResourceVM,
-    ConstructionStatus,
     Dispatcher,
     Message,
     MessageHub,
@@ -68,7 +66,7 @@ from aws_tui.domain.iceberg_preview import (
 )
 from aws_tui.domain.s3_uri import parse_s3_uri
 from aws_tui.infra.duckdb import DuckDbOutcome, DuckDbPort
-from aws_tui.vm._observable import ObserverSafeSubject
+from aws_tui.vm._component import IsolatedComponentVM
 from aws_tui.vm.file_manager.pane_vm import PaneState
 
 # Outcome -> (state, error_text). Exact strings; the view surfaces them
@@ -120,7 +118,7 @@ def _outcome_of(error: BaseException) -> DuckDbOutcome:
     return DuckDbOutcome.FAILED
 
 
-class IcebergPreviewVM:
+class IcebergPreviewVM(IsolatedComponentVM):
     """Binds to one Iceberg table location and previews rows through DuckDB."""
 
     def __init__(
@@ -131,15 +129,9 @@ class IcebergPreviewVM:
         dispatcher: Dispatcher,
     ) -> None:
         del hub  # the shared hub is intentionally unused; see above
+        super().__init__(name="glue.iceberg_preview", hub=NULL_MESSAGE_HUB, dispatcher=dispatcher)
         self._port: DuckDbPort = port
-        # Deliberately NOT the shared hub -- see the module docstring. The
-        # resource is this VM's private implementation detail, not something the
-        # app addresses by name, so its property and lifecycle messages have no
-        # shared-hub audience.
-        self._hub: MessageHub[Message] = MessageHub()
         self._dispatcher: Dispatcher = dispatcher
-        self._disposed: bool = False
-        self._constructed: bool = False
         self._active_loaders = 0
 
         self._location: str | None = None
@@ -149,34 +141,21 @@ class IcebergPreviewVM:
         self._requested_snapshot_id: int | None = None
         self._load_requested: bool = False
 
-        # Per-VM Observable -- the pane binds here, never to the shared hub.
-        self._on_property_changed: ObserverSafeSubject[str] = ObserverSafeSubject[str]()
         self._resource_subscription: rx.abc.DisposableBase | None = None
         self._resource: AsyncResourceVM[IcebergPreviewPage] = self._new_resource()
+        self._own(self._release_resource)
 
     # ── Lifecycle ───────────────────────────────────────────────────────────
 
-    @property
-    def status(self) -> ConstructionStatus:
-        return self._resource.status
-
     def construct(self) -> None:
-        self._constructed = True
+        super().construct()
         self._resource.construct()
-
-    def dispose(self) -> None:
-        if self._disposed:
-            return
-        self._disposed = True
-        self._release_resource()
-        self._on_property_changed.on_completed()
-        self._on_property_changed.dispose()
 
     def _new_resource(self) -> AsyncResourceVM[IcebergPreviewPage]:
         resource = AsyncResourceVM[IcebergPreviewPage](
             name="glue.iceberg_preview",
             loader=self._load_page,
-            hub=self._hub,
+            hub=NULL_MESSAGE_HUB,
             dispatcher=self._dispatcher,
             retention=AsyncResourceRetention.RETAIN_PREVIOUS,
         )
@@ -296,16 +275,6 @@ class IcebergPreviewVM:
         """
         return self.available and not self._load_requested
 
-    @property
-    def on_property_changed(self) -> rx.Observable[str]:
-        """Sealed so a subscriber cannot ``on_next`` or dispose the stream.
-
-        VMx seals its own equivalent for the same reason (VMX-013,
-        ``vmx/components/base.py``): an external ``dispose`` on the subject
-        corrupts every other subscriber.
-        """
-        return self._on_property_changed.pipe(ops.as_observable())
-
     # ── Behaviour ───────────────────────────────────────────────────────────
 
     def bind(self, location: str | None, *, profile: str | None, region: str) -> None:
@@ -332,10 +301,10 @@ class IcebergPreviewVM:
         self._requested_snapshot_id = None
         self._limit = ROW_LIMIT_STEPS[0]
         self._load_requested = False
-        if not self._disposed and self._resource.state.status is not AsyncResourceStatus.IDLE:
+        if not self._is_disposed() and self._resource.state.status is not AsyncResourceStatus.IDLE:
             self._release_resource()
             self._resource = self._new_resource()
-            if self._constructed:
+            if self.is_constructed:
                 self._resource.construct()
         self._notify("snapshot_id")
         self._notify("limit")
@@ -462,9 +431,7 @@ class IcebergPreviewVM:
         return IcebergPreviewPage()
 
     def _notify(self, property_name: str) -> None:
-        if self._disposed:
-            return
-        self._on_property_changed.on_next(property_name)
+        self._publish(property_name)
 
 
 def _error_of(resource_state: AsyncResourceState[IcebergPreviewPage]) -> BaseException:

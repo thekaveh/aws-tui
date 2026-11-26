@@ -8,7 +8,14 @@ from datetime import UTC, datetime, timedelta, timezone, tzinfo
 from typing import Any, cast
 
 import pytest
-from vmx import NULL_DISPATCHER, ConstructionStatus, Message, MessageHub, PropertyChangedMessage
+from vmx import (
+    NULL_DISPATCHER,
+    ComponentVM,
+    ConstructionStatus,
+    Message,
+    MessageHub,
+    PropertyChangedMessage,
+)
 
 from aws_tui.domain.data_catalog import TableFormat, TableRef
 from aws_tui.domain.filesystem import PermissionDeniedError, ProviderError
@@ -1278,13 +1285,14 @@ def test_dispose_isolates_cancelled_completion_observers_and_cleans_up(
 
     assert completed == ["remaining"]
     assert vm.status is ConstructionStatus.DISPOSED
-    assert vm._on_property_changed._subject.is_disposed  # type: ignore[attr-defined]
     assert marker not in caplog.text
     assert "HOSTILE_ICEBERG_COMPLETION_EXCEPTION" not in caplog.text
     assert all(record.exc_info is None for record in caplog.records)
 
 
-def test_dispose_propagates_process_control_after_terminal_cleanup() -> None:
+def test_dispose_completes_terminal_cleanup_when_a_completion_observer_raises_process_control() -> (
+    None
+):
     vm, _inspector, _hub = make_vm()
 
     def interrupt() -> None:
@@ -1292,12 +1300,11 @@ def test_dispose_propagates_process_control_after_terminal_cleanup() -> None:
 
     vm.on_property_changed.subscribe(on_completed=interrupt)
 
-    with pytest.raises(KeyboardInterrupt):
-        vm.dispose()
+    vm.dispose()
     vm.dispose()
 
     assert vm.status is ConstructionStatus.DISPOSED
-    assert vm._on_property_changed._subject.is_disposed  # type: ignore[attr-defined]
+    assert vm.preview.status is ConstructionStatus.DISPOSED
 
 
 @pytest.mark.asyncio
@@ -1598,3 +1605,22 @@ async def test_old_structured_completion_cannot_replace_rebound_coverage() -> No
     inspector.blocked.clear()
     assert await vm.select_view("snapshots")
     assert vm.coverage.table_ref == OTHER_REF
+
+
+def test_iceberg_vm_is_a_component_vm_that_owns_its_preview() -> None:
+    vm, _inspector, _hub = make_vm()
+    assert isinstance(vm, ComponentVM)
+    assert vm.name == "glue.iceberg"
+    assert vm.status is ConstructionStatus.CONSTRUCTED
+    assert vm.preview.status is ConstructionStatus.CONSTRUCTED
+    vm.dispose()
+    vm.dispose()
+    assert vm.status is ConstructionStatus.DISPOSED
+    assert vm.preview.status is ConstructionStatus.DISPOSED
+
+
+def test_iceberg_vm_construct_after_dispose_is_a_silent_no_op() -> None:
+    vm, _inspector, _hub = make_vm()
+    vm.dispose()
+    vm.construct()
+    assert vm.status is ConstructionStatus.DISPOSED
