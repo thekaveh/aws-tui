@@ -248,3 +248,18 @@ def test_redact_text_redacts_an_authorization_scheme_without_a_delimiter() -> No
     assert redact_text("Authorization header missing for user") == (
         "Authorization header missing for user"
     )
+
+
+def test_redact_text_redacts_a_credential_scheme_after_a_sensitive_key() -> None:
+    """A credential scheme after a sensitive key must not expose the credential.
+
+    ``Authorization: token <PAT>`` is the GitHub form, and ``Token`` was missing from
+    the scheme list. ``api_key: Bearer ...`` and ``headers.Authorization: Bearer ...``
+    have a non-bare key, which the header pattern does not match. The scanner
+    redacts the scheme and the credential after it. A bare ``Authorization`` header
+    whose scheme the header pass already redacted keeps its existing output.
+    """
+    assert redact_text("Authorization: token ghp_abc123") == "Authorization: token [REDACTED]"
+    assert redact_text("api_key: Bearer sk-live-abc123") == "api_key: [REDACTED] [REDACTED]"
+    assert "abc123" not in redact_text("headers.Authorization: Bearer abc123")
+    assert redact_text("Authorization: Bearer SECRET") == "Authorization: Bearer [REDACTED]"

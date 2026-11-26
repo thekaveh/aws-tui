@@ -37,7 +37,23 @@ _KEY_VALUE = re.compile(
 # the credential and redacts the following field name instead. An unrecognized
 # token is therefore treated as the credential.
 _AUTHORIZATION_SCHEMES = (
-    r"Bearer|Basic|Digest|Negotiate|NTLM|Hawk|Mutual|OAuth|AWS4-HMAC-SHA256|AWS"
+    r"Bearer|Basic|Digest|Negotiate|NTLM|Hawk|Mutual|OAuth|Token|AWS4-HMAC-SHA256|AWS"
+)
+_CREDENTIAL_SCHEMES = frozenset(
+    scheme.casefold()
+    for scheme in (
+        "Bearer",
+        "Basic",
+        "Digest",
+        "Negotiate",
+        "NTLM",
+        "Hawk",
+        "Mutual",
+        "OAuth",
+        "Token",
+        "AWS4-HMAC-SHA256",
+        "AWS",
+    )
 )
 # Without a delimiter, the header is matched only when a known scheme follows,
 # so prose such as "Authorization header missing" is left alone.
@@ -125,9 +141,17 @@ def _redact_key_values(text: str) -> str:
     while (match := _KEY_VALUE.search(text, pos)) is not None:
         value = match.group("value")
         value_start, value_end = match.span("value")
-        if not value.startswith(("'", '"')) and _is_key_name(value.rstrip(":=")):
+        following = None if value.startswith(("'", '"')) else _NEXT_TOKEN.match(text, value_end)
+        # A value followed by an already-redacted token was handled by an earlier
+        # pass (the Authorization header), so it is left as it is.
+        already_redacted = following is not None and following.group("token") == _REDACTED
+        scheme_credential = following is not None and value.casefold() in _CREDENTIAL_SCHEMES
+        if (
+            not value.startswith(("'", '"'))
+            and not already_redacted
+            and (_is_key_name(value.rstrip(":=")) or scheme_credential)
+        ):
             pieces.append(text[pos:value_start])
-            following = _NEXT_TOKEN.match(text, value_end)
             pair = (
                 _KEY_VALUE.search(text, following.start("token")) if following is not None else None
             )
