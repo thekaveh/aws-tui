@@ -36,9 +36,15 @@ _KEY_VALUE = re.compile(
 # an arbitrary leading word as a scheme resolves it the unsafe way: it preserves
 # the credential and redacts the following field name instead. An unrecognized
 # token is therefore treated as the credential.
+_AUTHORIZATION_SCHEMES = (
+    r"Bearer|Basic|Digest|Negotiate|NTLM|Hawk|Mutual|OAuth|AWS4-HMAC-SHA256|AWS"
+)
+# Without a delimiter, the header is matched only when a known scheme follows,
+# so prose such as "Authorization header missing" is left alone.
 _AUTHORIZATION_HEADER = re.compile(
-    r"(?<![A-Za-z0-9_.-])(Authorization)([^\S\r\n]*[:=][^\S\r\n]*)"
-    r"(?:(Bearer|Basic|Digest|Negotiate|NTLM|Hawk|Mutual|OAuth|AWS|AWS4-HMAC-SHA256)"
+    r"(?<![A-Za-z0-9_.-])(Authorization)"
+    rf"([^\S\r\n]*[:=][^\S\r\n]*|[^\S\r\n]+(?=(?:{_AUTHORIZATION_SCHEMES})[^\S\r\n]))"
+    rf"(?:({_AUTHORIZATION_SCHEMES})"
     r"([^\S\r\n]+))?"
     r"([^\s,;}]+)",
     re.IGNORECASE,

@@ -235,3 +235,16 @@ def test_redact_text_redacts_a_value_that_is_itself_a_sensitive_key_name() -> No
         ("password aws_secret_access_key: wJalr", "wJalr"),
     ):
         assert secret not in redact_text(text), text
+
+
+def test_redact_text_redacts_an_authorization_scheme_without_a_delimiter() -> None:
+    """``Authorization Bearer <token>`` has no ``:`` or ``=``, so it passed through.
+
+    The credential follows a known scheme, so the header is matched by its scheme.
+    Prose that mentions the header, with no scheme after it, is left unchanged.
+    """
+    assert redact_text("Authorization Bearer abc123") == "Authorization Bearer [REDACTED]"
+    assert redact_text("Authorization Basic dXNlcjpwYXNz") == "Authorization Basic [REDACTED]"
+    assert redact_text("Authorization header missing for user") == (
+        "Authorization header missing for user"
+    )
