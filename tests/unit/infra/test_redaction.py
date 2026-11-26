@@ -263,3 +263,15 @@ def test_redact_text_redacts_a_credential_scheme_after_a_sensitive_key() -> None
     assert redact_text("api_key: Bearer sk-live-abc123") == "api_key: [REDACTED] [REDACTED]"
     assert "abc123" not in redact_text("headers.Authorization: Bearer abc123")
     assert redact_text("Authorization: Bearer SECRET") == "Authorization: Bearer [REDACTED]"
+
+
+def test_redact_text_redacts_a_quoted_authorization_value_as_one_unit() -> None:
+    """A quoted Authorization value with a scheme leaked its credential.
+
+    The unquoted pattern split the value on whitespace, so the base64 credential
+    after the quoted scheme was printed. The whole quoted value is redacted now.
+    """
+    assert redact_text('Authorization: "Basic dXNlcjpwYXNz"') == "Authorization: [REDACTED]"
+    assert "abc" not in redact_text('Authorization: "Bearer abc def"')
+    assert "def" not in redact_text('Authorization: "Bearer abc def"')
+    assert redact_text("Authorization: Bearer abc123") == "Authorization: Bearer [REDACTED]"

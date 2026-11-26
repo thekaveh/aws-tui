@@ -21,6 +21,7 @@ The Unreleased section is the promotion queue for the next package release. Entr
 - Byte sizes just below a unit boundary are labelled in the next unit (1048575 bytes is 1.0 MB, not 1024.0 kB).
 - Athena SQL completion replaces only the token under the cursor, even when text is selected. Previously the whole selection was replaced.
 - Opening an S3 location no longer crashes the application when restoring the previous Glue page fails. The failure is logged, and the handoff failure is reported.
+- Log and crash-dump redaction now covers a quoted `Authorization` value. Previously the credential after a quoted scheme could be printed.
 - Log and crash-dump redaction now covers `Authorization` headers written without a delimiter (`Authorization Bearer <token>`), the `Token` scheme (`Authorization: token <PAT>`), and credential schemes after a non-bare key (`api_key: Bearer <token>`, `headers.Authorization: Bearer <token>`).
 - A failed service-view content mount records its traceback in the application log, and a failure after its host was replaced is still logged.
 

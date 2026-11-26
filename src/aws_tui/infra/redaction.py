@@ -66,6 +66,13 @@ _AUTHORIZATION_HEADER = re.compile(
     re.IGNORECASE,
 )
 _URL = re.compile(r"https?://\S+", re.IGNORECASE)
+# A quoted Authorization value is one unit even when it holds several words, so
+# the whole quoted value is redacted before the unquoted header pattern runs.
+_AUTHORIZATION_QUOTED = re.compile(
+    r"(?<![A-Za-z0-9_.-])(Authorization)([^\S\r\n]*[:=][^\S\r\n]*)"
+    r"(\"(?:\\.|[^\"\\])*\"|'(?:\\.|[^'\\])*')",
+    re.IGNORECASE,
+)
 
 
 def is_sensitive_key(key: str) -> bool:
@@ -177,6 +184,12 @@ def _redact_key_values(text: str) -> str:
 
 def redact_text(text: str) -> str:
     text = _URL.sub(lambda match: _redact_url(match.group(0)), text)
+    text = _AUTHORIZATION_QUOTED.sub(
+        lambda match: (
+            f"{match.group(1)}{match.group(2)}{match.group(3)[0]}{_REDACTED}{match.group(3)[-1]}"
+        ),
+        text,
+    )
     text = _AUTHORIZATION_HEADER.sub(_redact_authorization_header, text)
     return _redact_key_values(text)
 
