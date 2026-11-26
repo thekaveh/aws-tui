@@ -8798,7 +8798,12 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
         self,
         snapshot: _S3HandoffSnapshot,
     ) -> bool:
-        """Finish rollback even when the handoff task itself is cancelled."""
+        """Finish rollback even when the handoff task itself is cancelled.
+
+        A failure inside the rollback is logged and reported as not restored. The
+        caller then still raises the handoff failure toast. The rollback is tracked
+        like the table handoff's, so shutdown waits for it.
+        """
         rollback = asyncio.create_task(
             self._restore_service_after_s3_handoff_failure(
                 connection=snapshot.connection,
@@ -8807,20 +8812,34 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
                 athena=snapshot.athena,
                 athena_result_execution_id=snapshot.athena_result_execution_id,
                 glue=snapshot.glue,
-            )
+            ),
+            name="s3-handoff-rollback",
         )
-        while True:
+        self.service_navigation.track_rollback(rollback)
+        try:
+            while not rollback.done():
+                try:
+                    await asyncio.shield(rollback)
+                except asyncio.CancelledError:
+                    if self._s3_handoff_was_superseded(snapshot):
+                        rollback.cancel()
+                        with contextlib.suppress(asyncio.CancelledError):
+                            await rollback
+                        raise
+                except Exception:
+                    # The rollback finished with its own failure, read below.
+                    break
             try:
-                return await asyncio.shield(rollback)
-            except asyncio.CancelledError:
-                if self._s3_handoff_was_superseded(snapshot):
-                    rollback.cancel()
-                    with contextlib.suppress(asyncio.CancelledError):
-                        await rollback
-                    raise
-                if rollback.done():
-                    return rollback.result()
-                continue
+                return rollback.result()
+            except Exception as exc:
+                self._app_ctx.log_sink.error(
+                    "app.s3_handoff.rollback_failed",
+                    error=redact_text(str(exc)),
+                    error_type=type(exc).__name__,
+                )
+                return False
+        finally:
+            self.service_navigation.untrack_rollback(rollback)
 
     async def _restore_service_after_s3_handoff_failure(
         self,
