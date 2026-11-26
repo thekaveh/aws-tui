@@ -36,9 +36,31 @@ _KEY_VALUE = re.compile(
 # an arbitrary leading word as a scheme resolves it the unsafe way: it preserves
 # the credential and redacts the following field name instead. An unrecognized
 # token is therefore treated as the credential.
+_AUTHORIZATION_SCHEMES = (
+    r"Bearer|Basic|Digest|Negotiate|NTLM|Hawk|Mutual|OAuth|Token|AWS4-HMAC-SHA256|AWS"
+)
+_CREDENTIAL_SCHEMES = frozenset(
+    scheme.casefold()
+    for scheme in (
+        "Bearer",
+        "Basic",
+        "Digest",
+        "Negotiate",
+        "NTLM",
+        "Hawk",
+        "Mutual",
+        "OAuth",
+        "Token",
+        "AWS4-HMAC-SHA256",
+        "AWS",
+    )
+)
+# Without a delimiter, the header is matched only when a known scheme follows,
+# so prose such as "Authorization header missing" is left alone.
 _AUTHORIZATION_HEADER = re.compile(
-    r"(?<![A-Za-z0-9_.-])(Authorization)([^\S\r\n]*[:=][^\S\r\n]*)"
-    r"(?:(Bearer|Basic|Digest|Negotiate|NTLM|Hawk|Mutual|OAuth|AWS|AWS4-HMAC-SHA256)"
+    r"(?<![A-Za-z0-9_.-])(Authorization)"
+    rf"([^\S\r\n]*[:=][^\S\r\n]*|[^\S\r\n]+(?=(?:{_AUTHORIZATION_SCHEMES})[^\S\r\n]))"
+    rf"(?:({_AUTHORIZATION_SCHEMES})"
     r"([^\S\r\n]+))?"
     r"([^\s,;}]+)",
     re.IGNORECASE,
@@ -96,10 +118,67 @@ def _redact_key_value(match: re.Match[str]) -> str:
     return f"{key_quote}{match.group('key')}{key_quote}{match.group('separator')}{_REDACTED}"
 
 
+def _is_key_name(token: str) -> bool:
+    return re.fullmatch(r"[A-Za-z0-9_.-]+", token) is not None and is_sensitive_key(token)
+
+
+_NEXT_TOKEN = re.compile(r"[^\S\r\n]+(?P<token>[^\s,;}]+)")
+
+
+def _redact_key_values(text: str) -> str:
+    """Redact each sensitive key's value, scanning left to right.
+
+    A value that is itself a sensitive key name is ambiguous. It may be a
+    credential that contains a keyword (``password Password123``), or the next
+    key of an adjacent pair (``password aws_secret_access_key wJalr...``). Only
+    redacting the name would leave the other reading exposed, so the name and
+    the token after it are both redacted, following the rule that an
+    unrecognized token is the credential. The exception is a token that starts
+    its own key/value pair: it is scanned as a key, so its value is redacted.
+    """
+    pieces: list[str] = []
+    pos = 0
+    while (match := _KEY_VALUE.search(text, pos)) is not None:
+        value = match.group("value")
+        value_start, value_end = match.span("value")
+        following = None if value.startswith(("'", '"')) else _NEXT_TOKEN.match(text, value_end)
+        # A value followed by an already-redacted token was handled by an earlier
+        # pass (the Authorization header), so it is left as it is.
+        already_redacted = following is not None and following.group("token") == _REDACTED
+        scheme_credential = following is not None and value.casefold() in _CREDENTIAL_SCHEMES
+        if (
+            not value.startswith(("'", '"'))
+            and not already_redacted
+            and (_is_key_name(value.rstrip(":=")) or scheme_credential)
+        ):
+            pieces.append(text[pos:value_start])
+            pair = (
+                _KEY_VALUE.search(text, following.start("token")) if following is not None else None
+            )
+            if following is None:
+                pieces.append(_REDACTED)
+                pos = value_end
+            elif pair is not None and pair.start() < following.end("token"):
+                # A key/value pair starts inside the next token, for example
+                # ``payload={'secret_access_key':``. Scan on so it is redacted.
+                pieces.append(_REDACTED)
+                pos = value_end
+            else:
+                gap = text[value_end : following.start("token")]
+                pieces.append(f"{_REDACTED}{gap}{_REDACTED}")
+                pos = following.end("token")
+            continue
+        pieces.append(text[pos : match.start()])
+        pieces.append(_redact_key_value(match))
+        pos = match.end()
+    pieces.append(text[pos:])
+    return "".join(pieces)
+
+
 def redact_text(text: str) -> str:
     text = _URL.sub(lambda match: _redact_url(match.group(0)), text)
     text = _AUTHORIZATION_HEADER.sub(_redact_authorization_header, text)
-    return _KEY_VALUE.sub(_redact_key_value, text)
+    return _redact_key_values(text)
 
 
 def safe_endpoint_display(url: str | None) -> str | None:

@@ -15,7 +15,7 @@ connection and region separate from other sources.
   rename files, create folders, delete entries and preview file contents.
   Connect to AWS S3 or S3-compatible storage.
 - **EMR Serverless:** browse applications and job runs, inspect S3 or CloudWatch
-  logs, submit a new Spark job, clone an existing run and cancel an active run.
+  logs, submit a Spark job, clone an existing run and cancel an active run.
 - **Glue and Iceberg:** inspect databases, tables, jobs, crawlers and Iceberg
   metadata. Open a selected table or snapshot in Athena with a starter query.
 - **Athena:** choose query context, review and execute allowed read-only SQL,

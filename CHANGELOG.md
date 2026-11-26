@@ -14,6 +14,12 @@ The Unreleased section is the promotion queue for the next package release. Entr
 - Remove unused file-manager request commands and orphan signals. Navigation, copy, move and delete retain their existing behavior.
 - `S3Service` requires `hub`; its late-binding method is removed. Composition already passed the hub.
 
+### Fixed
+
+- Log and crash-dump redaction no longer shows the second secret when two sensitive keys appear in whitespace form, as in `password aws_secret_access_key <value>`.
+- Log and crash-dump redaction now covers `Authorization` headers written without a delimiter (`Authorization Bearer <token>`), the `Token` scheme (`Authorization: token <PAT>`), and credential schemes after a non-bare key (`api_key: Bearer <token>`, `headers.Authorization: Bearer <token>`).
+- A failed service-view content mount records its traceback in the application log, and a failure after its host was replaced is still logged.
+
 ## [0.9.0] - 2026-11-12
 
 As of local source preparation on 2026-11-12, package publication remains pending and Git installation is supported until a published channel is confirmed.

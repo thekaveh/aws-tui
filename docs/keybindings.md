@@ -108,7 +108,7 @@ their existing source-cycle behavior.
 
 | Action | Default | Notes |
 |---|---|---|
-| Cancel / dismiss modal | `Esc` | Modal-owned; works on every modal that ships in v0.8.x |
+| Cancel / dismiss modal | `Esc` | Modal-owned; works on every modal that ships in v0.9.x |
 | Quit | `q` or `Ctrl+C` | |
 
 ### 1.8. EMR Serverless

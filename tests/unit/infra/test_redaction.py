@@ -205,3 +205,61 @@ def test_redaction_preserves_whitespace_separated_neighbor_of_quoted_url() -> No
     assert "synthetic-password" not in text
     assert "synthetic-query" not in text
     assert "safe=visible" in text
+
+
+def test_redact_text_redacts_a_value_that_is_itself_a_sensitive_key_name() -> None:
+    """A value that looks like a key name must not expose the credential after it.
+
+    ``password aws_secret_access_key wJalr...`` and ``password Password123``
+    have the same shape: a key whose value is a keyword-bearing word, followed by
+    another word. The scan therefore redacts the name and the token after it, so
+    neither reading leaks. A token that starts its own key/value pair is scanned
+    as a key, so its value is redacted.
+    """
+    leaked = "wJalrXUtnFEMIK7MDENGbPxRfiCY"
+    assert (
+        redact_text(f"password aws_secret_access_key {leaked}") == "password [REDACTED] [REDACTED]"
+    )
+    assert redact_text(f"secret password {leaked}") == "secret [REDACTED] [REDACTED]"
+    assert redact_text("password secretpass") == "password [REDACTED]"
+    assert redact_text("password secretpass token abc") == "password [REDACTED] token [REDACTED]"
+    assert (
+        redact_text('password secret "token": abc123') == 'password [REDACTED] "token": [REDACTED]'
+    )
+    assert "REPRSECRET" not in redact_text(
+        "private_key=SECRETPRIVATE payload={'secret_access_key': 'REPRSECRET'} tail"
+    )
+    for text, secret in (
+        ("invalid password Password123 for user bob", "Password123"),
+        ("aws s3 --password MyToken1 --region us-east-1", "MyToken1"),
+        ("password aws_secret_access_key: wJalr", "wJalr"),
+    ):
+        assert secret not in redact_text(text), text
+
+
+def test_redact_text_redacts_an_authorization_scheme_without_a_delimiter() -> None:
+    """``Authorization Bearer <token>`` has no ``:`` or ``=``, so it passed through.
+
+    The credential follows a known scheme, so the header is matched by its scheme.
+    Prose that mentions the header, with no scheme after it, is left unchanged.
+    """
+    assert redact_text("Authorization Bearer abc123") == "Authorization Bearer [REDACTED]"
+    assert redact_text("Authorization Basic dXNlcjpwYXNz") == "Authorization Basic [REDACTED]"
+    assert redact_text("Authorization header missing for user") == (
+        "Authorization header missing for user"
+    )
+
+
+def test_redact_text_redacts_a_credential_scheme_after_a_sensitive_key() -> None:
+    """A credential scheme after a sensitive key must not expose the credential.
+
+    ``Authorization: token <PAT>`` is the GitHub form, and ``Token`` was missing from
+    the scheme list. ``api_key: Bearer ...`` and ``headers.Authorization: Bearer ...``
+    have a non-bare key, which the header pattern does not match. The scanner
+    redacts the scheme and the credential after it. A bare ``Authorization`` header
+    whose scheme the header pass already redacted keeps its existing output.
+    """
+    assert redact_text("Authorization: token ghp_abc123") == "Authorization: token [REDACTED]"
+    assert redact_text("api_key: Bearer sk-live-abc123") == "api_key: [REDACTED] [REDACTED]"
+    assert "abc123" not in redact_text("headers.Authorization: Bearer abc123")
+    assert redact_text("Authorization: Bearer SECRET") == "Authorization: Bearer [REDACTED]"

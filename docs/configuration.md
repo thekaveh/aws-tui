@@ -41,14 +41,12 @@ aws-tui does not launch AWS CLI SSO setup or write credentials. Run `aws sso
 login --profile <name>` in a terminal when prompted. Then choose **Retry active
 source credentials** from the command palette (`:`) without relaunching.
 The app does not read `$PAGER` or
-`$EDITOR` in v0.8.x. The Quick Look full-file `$PAGER` shell-out is spec'd
-but not yet wired (see the
-`Deferred / v0.9 roadmap` block in the `[0.8.0]` section of
-`CHANGELOG.md`).
+`$EDITOR` in v0.9.x. The Quick Look full-file `$PAGER` shell-out is specified
+but not yet wired.
 
 ## 3. Localization
 
-aws-tui is English-only in v0.8.x. User-facing strings are intentionally
+aws-tui is English-only in v0.9.x. User-facing strings are intentionally
 hardcoded until a localization pass introduces translation bundles and
 locale-aware formatting.
 
