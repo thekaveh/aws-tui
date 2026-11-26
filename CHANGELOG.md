@@ -17,6 +17,7 @@ The Unreleased section is the promotion queue for the next package release. Entr
 ### Fixed
 
 - Log and crash-dump redaction no longer shows the second secret when two sensitive keys appear in whitespace form, as in `password aws_secret_access_key <value>`.
+- A failed service-view content mount records its traceback in the application log, and a failure after its host was replaced is still logged.
 
 ## [0.9.0] - 2026-11-12
 
