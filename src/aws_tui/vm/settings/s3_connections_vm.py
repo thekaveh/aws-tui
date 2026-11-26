@@ -9,7 +9,12 @@ import anyio
 from vmx import ComponentVM, Dispatcher, Message, MessageHub
 
 from aws_tui.infra.config_store import ConfigError, ConfigStore, ConnectionEntry
-from aws_tui.infra.connection_resolver import Connection, ConnectionNotFound, ConnectionResolver
+from aws_tui.infra.connection_resolver import (
+    Connection,
+    ConnectionNotFound,
+    ConnectionResolver,
+    _blank_to_none,
+)
 from aws_tui.infra.keychain import (
     KeychainBackend,
     app_keychain_revision_service,
@@ -17,13 +22,6 @@ from aws_tui.infra.keychain import (
 )
 from aws_tui.vm.messages import ConnectionListChangedMessage
 from aws_tui.vm.settings.s3_compat_form import S3CompatForm
-
-
-def _blank_to_none(value: str | None) -> str | None:
-    if value is None:
-        return None
-    stripped = value.strip()
-    return stripped or None
 
 
 def entry_from_s3_form(form: S3CompatForm) -> ConnectionEntry:

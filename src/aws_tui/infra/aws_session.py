@@ -21,7 +21,6 @@ import contextlib
 import hashlib
 import json
 import logging
-import os
 from contextlib import AbstractAsyncContextManager
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -32,7 +31,7 @@ from typing import Any, Final
 import aioboto3
 from botocore.config import Config as BotoConfig
 
-from aws_tui.infra.connection_resolver import Connection
+from aws_tui.infra.connection_resolver import Connection, _default_aws_config_path
 from aws_tui.version import __version__
 
 _logger = logging.getLogger("aws_tui.infra.aws_session")
@@ -63,13 +62,6 @@ class TokenLoadError(Exception):
 
 def _default_sso_cache_dir() -> Path:
     return Path.home() / ".aws" / "sso" / "cache"
-
-
-def _default_aws_config_path() -> Path:
-    configured = os.environ.get("AWS_CONFIG_FILE")
-    if configured is not None:
-        return Path(os.path.expandvars(configured)).expanduser()
-    return Path.home() / ".aws" / "config"
 
 
 def _sha1(s: str) -> str:

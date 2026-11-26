@@ -52,6 +52,7 @@ from aws_tui.domain.transfer_history import (
     parse_metadata_json,
     read_metadata,
 )
+from aws_tui.fsync import fsync_directory as _fsync_directory
 
 
 def _default_journal_dir() -> Path:
@@ -531,21 +532,6 @@ def _write_journal_line(fh: TextIO, line: str) -> None:
     # across power loss; the syscall cost is negligible beside transfer I/O.
     fh.flush()
     os.fsync(fh.fileno())
-
-
-def _fsync_directory(path: Path) -> None:
-    if os.name != "posix":
-        return
-    try:
-        fd = os.open(path, os.O_RDONLY)
-    except OSError:
-        return
-    try:
-        os.fsync(fd)
-    except OSError:
-        pass
-    finally:
-        os.close(fd)
 
 
 __all__ = ["TransferJournal", "TransferJournalEntry"]

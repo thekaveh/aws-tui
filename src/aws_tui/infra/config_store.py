@@ -29,6 +29,7 @@ from typing import Any, BinaryIO, Final
 
 import tomli_w
 
+from aws_tui.fsync import fsync_directory as _fsync_directory
 from aws_tui.infra.connection_validation import validate_endpoint_url
 from aws_tui.infra.paths import config_home
 from aws_tui.infra.redaction import safe_endpoint_display
@@ -807,21 +808,6 @@ class ConfigStore:
         if type(enabled) is not bool:
             raise ConfigError("[athena].sql_drafts must be a boolean")
         self._mutate(lambda cfg: replace(cfg, athena_sql_drafts=enabled))
-
-
-def _fsync_directory(path: Path) -> None:
-    if os.name != "posix":
-        return
-    try:
-        fd = os.open(path, os.O_RDONLY)
-    except OSError:
-        return
-    try:
-        os.fsync(fd)
-    except OSError:
-        pass
-    finally:
-        os.close(fd)
 
 
 def _bool_field(body: dict[str, Any], *, field: str, default: bool, table: str) -> bool:
