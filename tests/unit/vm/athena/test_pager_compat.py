@@ -443,3 +443,27 @@ async def test_drain_worker_tasks_skips_the_calling_task() -> None:
         await drain_worker_tasks([worker])
 
     await asyncio.wait_for(asyncio.create_task(drain_from_tracked_task()), 1)
+
+
+async def test_overlapping_continuations_append_their_page_once() -> None:
+    """Two continuations on the same token appended its page twice before the guard."""
+    started = asyncio.Event()
+    release = asyncio.Event()
+
+    async def fetch(token: str | None) -> tuple[list[str], str | None]:
+        if token == "next":
+            started.set()
+            await release.wait()
+            return ["page"], None
+        return ["seed"], None
+
+    pager: SnapshotTokenPager[str, str] = SnapshotTokenPager(fetch)
+    seed_token_pager(pager, ["seed"], "next")
+    first = asyncio.create_task(pager._load_more())
+    await started.wait()
+    second = asyncio.create_task(pager._load_more())
+    await asyncio.sleep(0)
+    release.set()
+    await asyncio.gather(first, second)
+
+    assert pager.items == ["seed", "page"]

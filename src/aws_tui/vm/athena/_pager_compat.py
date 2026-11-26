@@ -50,6 +50,7 @@ class SnapshotTokenPager(Generic[T, TToken]):
         self._consumed_tokens: set[TToken] = set()
         self._operation_generation = 0
         self._refreshing = False
+        self._loading_more = False
         self._disposed = False
         self._collection_changed: Subject[CollectionChangedEvent] = Subject()
         self._property_changed: Subject[str] = Subject()
@@ -132,6 +133,17 @@ class SnapshotTokenPager(Generic[T, TToken]):
         self._notify_reset()
 
     async def _load_more(self) -> None:
+        # A second continuation started while one is in flight would fetch the same
+        # token and append its page twice.
+        if self._loading_more:
+            return
+        self._loading_more = True
+        try:
+            await self._load_more_page()
+        finally:
+            self._loading_more = False
+
+    async def _load_more_page(self) -> None:
         generation = self._operation_generation
         request_token = self._current_token
         page, next_token = await self._fetch_next(request_token)
