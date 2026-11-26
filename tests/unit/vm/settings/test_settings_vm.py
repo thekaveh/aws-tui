@@ -5,8 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
-from vmx import NULL_DISPATCHER, ComponentVM
-from vmx.lifecycle.status import ConstructionStatus
+from vmx import NULL_DISPATCHER, ComponentVM, ConstructionStatus
 
 from aws_tui.infra.config_store import ConfigStore
 from aws_tui.infra.connection_resolver import ConnectionResolver

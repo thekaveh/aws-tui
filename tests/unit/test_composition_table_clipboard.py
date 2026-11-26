@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from vmx.lifecycle.status import ConstructionStatus
+from vmx import ConstructionStatus
 
 from aws_tui.composition import AppContext, build_app_context
 from aws_tui.vm.table_clipboard_vm import TableClipboardVM

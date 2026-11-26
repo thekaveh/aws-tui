@@ -11,8 +11,7 @@ import inspect
 import logging
 
 import pytest
-from vmx import MessageHub, PropertyChangedMessage
-from vmx.lifecycle.status import ConstructionStatus
+from vmx import ConstructionStatus, MessageHub, PropertyChangedMessage
 
 from aws_tui.vm._component import IsolatedComponentVM
 from aws_tui.vm.athena.authoring_vm import AthenaAuthoringVM

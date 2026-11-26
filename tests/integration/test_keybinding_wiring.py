@@ -12,8 +12,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
-from vmx import NULL_DISPATCHER, MessageHub
-from vmx.messages.protocols import Message
+from vmx import NULL_DISPATCHER, Message, MessageHub
 
 from aws_tui.app import _MODAL_ROUTED_ACTIONS, AwsTuiApp
 from aws_tui.composition import build_app_context

@@ -2,9 +2,7 @@
 
 from __future__ import annotations
 
-from vmx import NULL_DISPATCHER, MessageHub
-from vmx.lifecycle.status import ConstructionStatus
-from vmx.messages.protocols import Message
+from vmx import NULL_DISPATCHER, ConstructionStatus, Message, MessageHub
 
 from aws_tui.infra.keymap_store import KeymapStore
 from aws_tui.vm._component import IsolatedComponentVM

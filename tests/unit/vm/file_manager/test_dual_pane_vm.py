@@ -10,9 +10,7 @@ from pathlib import Path
 from typing import cast
 
 import pytest
-from vmx import NULL_DISPATCHER, MessageHub
-from vmx.lifecycle.status import ConstructionStatus
-from vmx.messages.protocols import Message
+from vmx import NULL_DISPATCHER, ConstructionStatus, Message, MessageHub
 
 from aws_tui.demo.in_memory_fs import InMemoryFS
 from aws_tui.domain.cross_fs import ConflictResolution

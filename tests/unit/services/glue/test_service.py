@@ -5,8 +5,7 @@ from datetime import UTC, datetime
 from typing import Any, cast
 
 import pytest
-from vmx import NULL_DISPATCHER, MessageHub
-from vmx.messages.protocols import Message
+from vmx import NULL_DISPATCHER, Message, MessageHub
 
 from aws_tui.domain.athena import AthenaWorkgroupSummary
 from aws_tui.domain.data_catalog import TableFormat

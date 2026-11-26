@@ -14,8 +14,7 @@ from collections.abc import Callable, Iterator
 import pytest
 from textual.app import App, ComposeResult
 from textual.widgets import Static
-from vmx import NULL_DISPATCHER, MessageHub
-from vmx.messages.protocols import Message
+from vmx import NULL_DISPATCHER, Message, MessageHub
 
 from aws_tui.demo.in_memory_emr import InMemoryEmr
 from aws_tui.domain.emr_serverless import JobRunDetail

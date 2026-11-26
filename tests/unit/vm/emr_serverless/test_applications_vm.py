@@ -6,8 +6,7 @@ import asyncio
 from datetime import UTC, datetime
 
 import pytest
-from vmx import NULL_DISPATCHER, ConstructionStatus, MessageHub
-from vmx.messages.protocols import Message
+from vmx import NULL_DISPATCHER, ConstructionStatus, Message, MessageHub
 
 from aws_tui.demo.in_memory_emr import InMemoryEmr as _InMemoryEmr
 from aws_tui.domain.emr_serverless import ApplicationState, ApplicationSummary

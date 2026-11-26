@@ -7,8 +7,7 @@ from types import SimpleNamespace
 from typing import cast
 
 import pytest
-from vmx import NULL_DISPATCHER, ComponentVM
-from vmx.lifecycle.status import ConstructionStatus
+from vmx import NULL_DISPATCHER, ComponentVM, ConstructionStatus
 
 from aws_tui.vm._component import IsolatedComponentVM
 from aws_tui.vm.content_host_vm import ContentHostVM

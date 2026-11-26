@@ -7,8 +7,7 @@ import tempfile
 from pathlib import Path
 
 from textual.app import App, ComposeResult
-from vmx import NULL_DISPATCHER, MessageHub
-from vmx.messages.protocols import Message
+from vmx import NULL_DISPATCHER, Message, MessageHub
 
 from aws_tui.infra.athena_draft_store import AthenaDraftStore
 from aws_tui.infra.config_store import ConfigStore, ConnectionEntry

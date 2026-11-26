@@ -8,8 +8,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
-from vmx import NULL_DISPATCHER, ConstructionStatus, MessageHub
-from vmx.messages.protocols import Message
+from vmx import NULL_DISPATCHER, ConstructionStatus, Message, MessageHub
 
 from aws_tui.domain.athena import (
     AthenaCatalogSummary,

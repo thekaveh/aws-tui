@@ -4,8 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from vmx import MessageHub
-from vmx.messages.protocols import Message
+from vmx import Message, MessageHub
 
 from aws_tui.domain.filesystem import ProviderError
 from aws_tui.vm.file_manager.pane_vm import PaneState

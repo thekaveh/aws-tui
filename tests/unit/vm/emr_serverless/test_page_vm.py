@@ -6,9 +6,7 @@ import asyncio
 from dataclasses import replace
 
 import pytest
-from vmx import NULL_DISPATCHER, MessageHub
-from vmx.lifecycle.status import ConstructionStatus
-from vmx.messages.protocols import Message
+from vmx import NULL_DISPATCHER, ConstructionStatus, Message, MessageHub
 
 from aws_tui.demo.in_memory_emr import InMemoryEmr as _InMemoryEmr
 from aws_tui.domain.emr_serverless import (
@@ -410,7 +408,7 @@ async def test_dispose_cascades_to_children() -> None:
     proxies; ``JobRunDetailVM`` / ``JobRunLogsVM`` do not, so we
     read their inner status via test-only dunder access — the
     cascade is what matters, not the public surface."""
-    from vmx.lifecycle.status import ConstructionStatus
+    from vmx import ConstructionStatus
 
     page, _ = _make()
     assert page.applications.status is ConstructionStatus.CONSTRUCTED

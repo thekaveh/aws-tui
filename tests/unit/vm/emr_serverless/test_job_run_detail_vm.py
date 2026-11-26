@@ -5,8 +5,7 @@ from __future__ import annotations
 import asyncio
 
 import pytest
-from vmx import NULL_DISPATCHER, MessageHub
-from vmx.messages.protocols import Message
+from vmx import NULL_DISPATCHER, Message, MessageHub
 
 from aws_tui.demo.in_memory_emr import InMemoryEmr as _InMemoryEmr
 from aws_tui.domain.emr_serverless import JobRunState
@@ -354,8 +353,7 @@ async def test_unexpected_failure_reports_once_after_a_cancelled_retry(
 
 @pytest.mark.asyncio
 async def test_resource_never_sends_to_the_shared_hub() -> None:
-    from vmx import AsyncResourceVM, PropertyChangedMessage
-    from vmx.lifecycle.status import ConstructionStatus
+    from vmx import AsyncResourceVM, ConstructionStatus, PropertyChangedMessage
 
     fake = _InMemoryEmr()
     fake.add_job_run(application_id="a1", job_run_id="r1")

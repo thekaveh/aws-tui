@@ -8,8 +8,14 @@ from datetime import UTC, datetime
 from typing import Any, TypeVar
 
 import pytest
-from vmx import NULL_DISPATCHER, ComponentVM, ConstructionStatus, MessageHub, TokenPagedComposition
-from vmx.messages.protocols import Message
+from vmx import (
+    NULL_DISPATCHER,
+    ComponentVM,
+    ConstructionStatus,
+    Message,
+    MessageHub,
+    TokenPagedComposition,
+)
 
 from aws_tui.domain.data_catalog import TableFormat, TableRef
 from aws_tui.domain.filesystem import PermissionDeniedError, ProviderError
