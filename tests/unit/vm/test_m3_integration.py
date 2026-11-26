@@ -5,8 +5,7 @@ from __future__ import annotations
 import tempfile
 from pathlib import Path
 
-from vmx import NULL_DISPATCHER, ComponentVM
-from vmx.lifecycle.status import ConstructionStatus
+from vmx import NULL_DISPATCHER, ComponentVM, ConstructionStatus
 
 from aws_tui.infra.aws_session import TokenState
 from aws_tui.infra.connection_resolver import Connection

@@ -5,7 +5,7 @@ from __future__ import annotations
 import dataclasses
 
 import pytest
-from vmx.messages.protocols import Message
+from vmx import Message
 
 from aws_tui.domain.data_catalog import TableRef
 from aws_tui.infra.aws_session import TokenState

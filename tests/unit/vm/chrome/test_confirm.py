@@ -9,10 +9,10 @@ from vmx import (
     NULL_DISPATCHER,
     ConstructionStatus,
     DialogService,
+    FileFilter,
     ModalVM,
     NotificationSeverity,
 )
-from vmx.dialogs.dialog_service import FileFilter
 
 from aws_tui.vm._component import IsolatedComponentVM
 from aws_tui.vm.chrome.confirm_vm import ConfirmationVM, ConfirmRequest

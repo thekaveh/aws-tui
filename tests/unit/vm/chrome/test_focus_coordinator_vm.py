@@ -3,8 +3,7 @@
 from __future__ import annotations
 
 import pytest
-from vmx import NULL_DISPATCHER, DiscriminatorVM
-from vmx.lifecycle.status import ConstructionStatus
+from vmx import NULL_DISPATCHER, ConstructionStatus, DiscriminatorVM
 
 from aws_tui.vm._component import IsolatedComponentVM
 from aws_tui.vm.chrome.focus_coordinator_vm import FocusCoordinatorVM, FocusSlot

@@ -20,8 +20,7 @@ import pytest
 from textual.app import App, ComposeResult
 from textual.containers import Container
 from textual.widgets import Input, Static, TextArea
-from vmx import NULL_DISPATCHER, MessageHub, PropertyChangedMessage
-from vmx.messages.protocols import Message
+from vmx import NULL_DISPATCHER, Message, MessageHub, PropertyChangedMessage
 
 from aws_tui.demo.in_memory_emr import InMemoryEmr as _InMemoryEmr
 from aws_tui.domain.emr_serverless import JobRunDetail, JobRunState

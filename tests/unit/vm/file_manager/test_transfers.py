@@ -3,8 +3,7 @@
 from __future__ import annotations
 
 import pytest
-from vmx import NULL_DISPATCHER, ComponentVMOf, PropertyChangedMessage
-from vmx.lifecycle.status import ConstructionStatus
+from vmx import NULL_DISPATCHER, ComponentVMOf, ConstructionStatus, PropertyChangedMessage
 
 from aws_tui.vm.file_manager.transfer_vm import TransferModel, TransferState, TransferVM
 from aws_tui.vm.file_manager.transfers_vm import TransfersVM

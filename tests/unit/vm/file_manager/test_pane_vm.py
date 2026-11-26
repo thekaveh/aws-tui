@@ -7,9 +7,7 @@ import inspect
 from collections.abc import AsyncIterator, Callable
 
 import pytest
-from vmx import NULL_DISPATCHER, MessageHub, PropertyChangedMessage
-from vmx.lifecycle.status import ConstructionStatus
-from vmx.messages.protocols import Message
+from vmx import NULL_DISPATCHER, ConstructionStatus, Message, MessageHub, PropertyChangedMessage
 
 from aws_tui.demo.in_memory_fs import InMemoryFS
 from aws_tui.domain.filesystem import (

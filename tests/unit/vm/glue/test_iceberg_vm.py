@@ -8,9 +8,7 @@ from datetime import UTC, datetime, timedelta, timezone, tzinfo
 from typing import Any, cast
 
 import pytest
-from vmx import NULL_DISPATCHER, MessageHub, PropertyChangedMessage
-from vmx.lifecycle.status import ConstructionStatus
-from vmx.messages.protocols import Message
+from vmx import NULL_DISPATCHER, ConstructionStatus, Message, MessageHub, PropertyChangedMessage
 
 from aws_tui.domain.data_catalog import TableFormat, TableRef
 from aws_tui.domain.filesystem import PermissionDeniedError, ProviderError

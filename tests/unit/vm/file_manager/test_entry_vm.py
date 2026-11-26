@@ -8,9 +8,7 @@ from inspect import getattr_static
 import pytest
 from reactivex import Observable
 from reactivex import operators as ops
-from vmx import NULL_DISPATCHER, ComponentVMOf, CompositeVM, MessageHub
-from vmx.lifecycle.status import ConstructionStatus
-from vmx.messages.protocols import Message
+from vmx import NULL_DISPATCHER, ComponentVMOf, CompositeVM, ConstructionStatus, Message, MessageHub
 
 from aws_tui.domain.filesystem import EntryKind, FileEntry
 from aws_tui.vm.file_manager.entry_vm import EntryState, EntryVM

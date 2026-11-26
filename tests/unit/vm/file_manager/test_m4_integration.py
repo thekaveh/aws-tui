@@ -17,8 +17,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from vmx import NULL_DISPATCHER, ComponentVM, MessageHub
-from vmx.lifecycle.status import ConstructionStatus
+from vmx import NULL_DISPATCHER, ComponentVM, ConstructionStatus, MessageHub
 
 from aws_tui.demo.in_memory_fs import InMemoryFS
 from aws_tui.domain.filesystem import PathRef

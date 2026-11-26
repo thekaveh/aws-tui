@@ -7,8 +7,7 @@ from __future__ import annotations
 
 import botocore.exceptions
 import pytest
-from vmx import NULL_DISPATCHER, MessageHub
-from vmx.messages.protocols import Message
+from vmx import NULL_DISPATCHER, Message, MessageHub
 
 from aws_tui.domain.emr_logs import EmrServerlessLogsClient
 from aws_tui.domain.emr_serverless import EMR_BOTO_CONFIG

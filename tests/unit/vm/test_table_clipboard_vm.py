@@ -3,8 +3,7 @@ from __future__ import annotations
 from typing import Any, cast
 
 import pytest
-from vmx import NULL_DISPATCHER, ComponentVMOf, MessageHub, RelayCommandOf
-from vmx.lifecycle.status import ConstructionStatus
+from vmx import NULL_DISPATCHER, ComponentVMOf, ConstructionStatus, MessageHub, RelayCommandOf
 
 from aws_tui.domain.data_catalog import TableRef
 from aws_tui.vm.table_clipboard_vm import CopiedTableReference, TableClipboardVM

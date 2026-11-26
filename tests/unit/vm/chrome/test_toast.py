@@ -6,8 +6,7 @@ import asyncio
 import logging
 
 import pytest
-from vmx import NULL_DISPATCHER
-from vmx.lifecycle.status import ConstructionStatus
+from vmx import NULL_DISPATCHER, ConstructionStatus
 
 from aws_tui.vm._component import IsolatedComponentVM
 from aws_tui.vm.chrome.toast_stack_vm import ToastStackVM

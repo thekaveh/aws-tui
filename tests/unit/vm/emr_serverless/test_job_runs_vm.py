@@ -6,8 +6,7 @@ import asyncio
 from datetime import timedelta
 
 import pytest
-from vmx import NULL_DISPATCHER, ComponentVMOf, ConstructionStatus, MessageHub
-from vmx.messages.protocols import Message
+from vmx import NULL_DISPATCHER, ComponentVMOf, ConstructionStatus, Message, MessageHub
 
 from aws_tui.demo.in_memory_emr import DEMO_NOW
 from aws_tui.demo.in_memory_emr import InMemoryEmr as _InMemoryEmr

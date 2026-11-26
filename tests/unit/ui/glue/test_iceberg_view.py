@@ -12,8 +12,7 @@ from textual.binding import Binding
 from textual.coordinate import Coordinate
 from textual.widgets import Button, DataTable, Static
 from textual.worker import NoActiveWorker, Worker, get_current_worker
-from vmx import NULL_DISPATCHER, MessageHub
-from vmx.messages.protocols import Message
+from vmx import NULL_DISPATCHER, Message, MessageHub
 
 from aws_tui.domain.data_catalog import TableFormat
 from aws_tui.infra.connection_resolver import Connection

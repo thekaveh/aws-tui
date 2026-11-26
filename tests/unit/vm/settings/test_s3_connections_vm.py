@@ -7,8 +7,7 @@ from dataclasses import replace
 from pathlib import Path
 
 import pytest
-from vmx import NULL_DISPATCHER, ComponentVM, MessageHub
-from vmx.messages.protocols import Message
+from vmx import NULL_DISPATCHER, ComponentVM, Message, MessageHub
 
 from aws_tui.infra.config_store import ConfigError, ConfigStore, ConnectionEntry
 from aws_tui.infra.connection_resolver import ConnectionResolver
