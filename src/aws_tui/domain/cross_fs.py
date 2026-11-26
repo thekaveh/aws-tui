@@ -122,7 +122,11 @@ async def _durably_run(
                 cancelled = True
                 cancellation_count = current_count
         except BaseException:
-            pass
+            # The task finished with its own failure, which is read below. A
+            # failure while the task is still pending came from outside it, such
+            # as a KeyboardInterrupt, and must not be swallowed.
+            if not task.done():
+                raise
     error: BaseException | None = None
     value: object | None = None
     if task.cancelled():

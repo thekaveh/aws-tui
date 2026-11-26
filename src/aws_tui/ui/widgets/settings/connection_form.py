@@ -21,6 +21,7 @@ from typing import TYPE_CHECKING, Literal
 from textual import on
 from textual.app import ComposeResult
 from textual.containers import Container, Horizontal, Vertical
+from textual.css.query import NoMatches
 from textual.events import Click
 from textual.message import Message as TextualMessage
 from textual.widget import Widget
@@ -439,7 +440,7 @@ class ConnectionFormInline(Widget):
         for key, _, _, _ in _FIELDS:
             try:
                 inp = self.query_one(f"#form-{key}", Input)
-            except Exception:
+            except NoMatches:
                 continue
             if key in errors:
                 inp.add_class("-invalid")
@@ -447,7 +448,7 @@ class ConnectionFormInline(Widget):
                 inp.remove_class("-invalid")
             try:
                 message = self.query_one(f"#form-error-{key}", Static)
-            except Exception:
+            except NoMatches:
                 continue
             message.update(errors.get(key, ""))
             message.display = key in errors

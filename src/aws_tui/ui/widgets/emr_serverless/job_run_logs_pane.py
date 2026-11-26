@@ -298,7 +298,7 @@ class JobRunLogsPane(Widget, can_focus=True):
         try:
             body = self.query_one("#logs-content", Log)
             body.scroll_up()
-        except Exception:
+        except NoMatches:
             pass
 
     def action_scroll_down(self) -> None:
@@ -306,7 +306,7 @@ class JobRunLogsPane(Widget, can_focus=True):
         try:
             body = self.query_one("#logs-content", Log)
             body.scroll_down()
-        except Exception:
+        except NoMatches:
             pass
 
     # ── Mouse ───────────────────────────────────────────────────────────────

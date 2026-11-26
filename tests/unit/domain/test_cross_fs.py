@@ -2797,3 +2797,34 @@ async def test_cancelled_directory_claim_is_registered_before_cleanup(tmp_path: 
     with pytest.raises(asyncio.CancelledError):
         await copying
     assert not list(tmp_path.iterdir())
+
+
+@pytest.mark.asyncio
+async def test_durable_run_propagates_process_control_raised_while_it_waits(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Only a failure of the drained task itself is deferred to the caller.
+
+    A KeyboardInterrupt delivered to the waiting coroutine while the task is still
+    pending is not the task's outcome. The wait used to swallow it and keep looping.
+    """
+    from aws_tui.domain import cross_fs
+
+    async def operation() -> None:
+        return None
+
+    calls: list[int] = []
+
+    async def interrupted_shield(awaitable: object) -> None:
+        calls.append(1)
+        if len(calls) == 1:
+            raise KeyboardInterrupt
+        # Later waits yield, so a wrong implementation finishes instead of spinning.
+        await asyncio.sleep(0)
+
+    monkeypatch.setattr(cross_fs.asyncio, "shield", interrupted_shield)
+    with pytest.raises(KeyboardInterrupt):
+        await cross_fs._durably_run(operation())
+    # Let the scheduled task run to completion so the test leaves no pending work.
+    await asyncio.sleep(0)
+    await asyncio.sleep(0)

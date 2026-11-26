@@ -31,6 +31,7 @@ from reactivex.abc import DisposableBase
 from textual.app import ComposeResult
 from textual.binding import Binding, BindingType
 from textual.containers import Horizontal, VerticalScroll
+from textual.css.query import NoMatches
 from textual.events import Click
 from textual.message import Message as TextualMessage
 from textual.widget import Widget
@@ -478,7 +479,7 @@ class JobRunsPane(Widget, can_focus=True):
         ):
             try:
                 chip = self.query_one(f"#runs-chip-{state.value.lower()}", Static)
-            except Exception:
+            except NoMatches:
                 continue
             if state in active:
                 chip.add_class("-active")
