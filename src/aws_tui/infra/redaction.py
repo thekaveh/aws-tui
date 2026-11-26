@@ -100,27 +100,43 @@ def _is_key_name(token: str) -> bool:
     return re.fullmatch(r"[A-Za-z0-9_.-]+", token) is not None and is_sensitive_key(token)
 
 
+_NEXT_TOKEN = re.compile(r"[^\S\r\n]+(?P<token>[^\s,;}]+)")
+
+
 def _redact_key_values(text: str) -> str:
     """Redact each sensitive key's value, scanning left to right.
 
-    A whitespace-separated value can itself be a sensitive key name, as in
-    ``password aws_secret_access_key wJalr...``. Replacing that name alone would
-    leave the next key's value visible, so a name that starts its own key/value
-    pair is kept and the scan resumes at it. A name with no pair after it is a
-    real value and is still redacted.
+    A value that is itself a sensitive key name is ambiguous. It may be a
+    credential that contains a keyword (``password Password123``), or the next
+    key of an adjacent pair (``password aws_secret_access_key wJalr...``). Only
+    redacting the name would leave the other reading exposed, so the name and
+    the token after it are both redacted, following the rule that an
+    unrecognized token is the credential. The exception is a token that starts
+    its own key/value pair: it is scanned as a key, so its value is redacted.
     """
     pieces: list[str] = []
     pos = 0
     while (match := _KEY_VALUE.search(text, pos)) is not None:
-        value_start = match.start("value")
-        whitespace_separated = not match.group("separator").strip()
-        if (
-            whitespace_separated
-            and _is_key_name(match.group("value"))
-            and _KEY_VALUE.match(text, value_start) is not None
-        ):
+        value = match.group("value")
+        value_start, value_end = match.span("value")
+        if not value.startswith(("'", '"')) and _is_key_name(value.rstrip(":=")):
             pieces.append(text[pos:value_start])
-            pos = value_start
+            following = _NEXT_TOKEN.match(text, value_end)
+            pair = (
+                _KEY_VALUE.search(text, following.start("token")) if following is not None else None
+            )
+            if following is None:
+                pieces.append(_REDACTED)
+                pos = value_end
+            elif pair is not None and pair.start() < following.end("token"):
+                # A key/value pair starts inside the next token, for example
+                # ``payload={'secret_access_key':``. Scan on so it is redacted.
+                pieces.append(_REDACTED)
+                pos = value_end
+            else:
+                gap = text[value_end : following.start("token")]
+                pieces.append(f"{_REDACTED}{gap}{_REDACTED}")
+                pos = following.end("token")
             continue
         pieces.append(text[pos : match.start()])
         pieces.append(_redact_key_value(match))

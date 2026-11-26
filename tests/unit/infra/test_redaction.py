@@ -208,22 +208,30 @@ def test_redaction_preserves_whitespace_separated_neighbor_of_quoted_url() -> No
 
 
 def test_redact_text_redacts_a_value_that_is_itself_a_sensitive_key_name() -> None:
-    """Two sensitive keys in whitespace form must not expose the second value.
+    """A value that looks like a key name must not expose the credential after it.
 
-    ``password aws_secret_access_key wJalr...`` used to leave the credential
-    visible: the first key's value was the second key's name, so the second
-    key's value was never matched. The shape is ambiguous, so the scan keeps
-    the name as a key and redacts the value after it. A name with no value
-    after it is still a value and is redacted.
+    ``password aws_secret_access_key wJalr...`` and ``password Password123``
+    have the same shape: a key whose value is a keyword-bearing word, followed by
+    another word. The scan therefore redacts the name and the token after it, so
+    neither reading leaks. A token that starts its own key/value pair is scanned
+    as a key, so its value is redacted.
     """
     leaked = "wJalrXUtnFEMIK7MDENGbPxRfiCY"
-    redacted = redact_text(f"password aws_secret_access_key {leaked}")
-    assert leaked not in redacted
-    assert "aws_secret_access_key [REDACTED]" in redacted
-
-    redacted = redact_text(f"secret password {leaked}")
-    assert leaked not in redacted
-
-    redacted = redact_text("password secretpass")
-    assert "secretpass" not in redacted
-    assert redacted == "password [REDACTED]"
+    assert (
+        redact_text(f"password aws_secret_access_key {leaked}") == "password [REDACTED] [REDACTED]"
+    )
+    assert redact_text(f"secret password {leaked}") == "secret [REDACTED] [REDACTED]"
+    assert redact_text("password secretpass") == "password [REDACTED]"
+    assert redact_text("password secretpass token abc") == "password [REDACTED] token [REDACTED]"
+    assert (
+        redact_text('password secret "token": abc123') == 'password [REDACTED] "token": [REDACTED]'
+    )
+    assert "REPRSECRET" not in redact_text(
+        "private_key=SECRETPRIVATE payload={'secret_access_key': 'REPRSECRET'} tail"
+    )
+    for text, secret in (
+        ("invalid password Password123 for user bob", "Password123"),
+        ("aws s3 --password MyToken1 --region us-east-1", "MyToken1"),
+        ("password aws_secret_access_key: wJalr", "wJalr"),
+    ):
+        assert secret not in redact_text(text), text
