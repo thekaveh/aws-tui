@@ -14,6 +14,7 @@ import inspect
 import mimetypes
 import os
 import sys
+import traceback
 import weakref
 from collections import deque
 from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Callable
@@ -9451,6 +9452,16 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
             )
 
         try:
+            # Logged before any ownership or host check: a failure that arrives
+            # after its host was replaced is still a lifecycle failure, and the
+            # traceback is what diagnoses it. Inside the try so the finally
+            # cleanup still runs if formatting the failure raises.
+            self._app_ctx.log_sink.error(
+                "app.content_mount.lifecycle_failed",
+                error=redact_text(str(error)),
+                error_type=type(error).__name__,
+                traceback=redact_text("".join(traceback.format_exception(error))),
+            )
             # Intent can advance while resetting, but the winning service mount
             # must wait until the empty host boundary is repaired.
             async with self.service_navigation.service_lock:
@@ -9459,11 +9470,6 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
                 current_host = self.query_one("#content-host", Container)
                 if current_host is not host:
                     return
-                self._app_ctx.log_sink.error(
-                    "app.content_mount.lifecycle_failed",
-                    error=str(error),
-                    error_type=type(error).__name__,
-                )
                 recovered_host = await self._reset_content_host(host)
                 if (
                     not is_owned()

@@ -11,7 +11,7 @@ from vmx import NULL_DISPATCHER, ConstructionStatus
 from aws_tui.vm._component import IsolatedComponentVM
 from aws_tui.vm.chrome.toast_stack_vm import ToastStackVM
 from aws_tui.vm.chrome.toast_vm import ToastLevel, ToastModel, ToastVM
-from tests.helpers import new_hub
+from tests.helpers import new_hub, wait_until
 
 
 def _stack() -> ToastStackVM:
@@ -150,9 +150,8 @@ async def test_non_sticky_toast_auto_dismisses() -> None:
         )
     )
     assert stack.count == 1
-    # Give the auto-dismiss task time to fire.
-    await asyncio.sleep(0.05)
-    assert stack.count == 0
+    # Poll against the shared deadline: a fixed sleep races the timer under load.
+    await wait_until(lambda: stack.count == 0, what="auto-dismiss fired")
     stack.dispose()
 
 

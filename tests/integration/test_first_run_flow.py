@@ -945,3 +945,51 @@ async def test_public_quit_drains_pending_first_run_rail_prune(app_context_facto
             assert aws_bytes(env) == before
         finally:
             release.set()
+
+
+@pytest.mark.asyncio
+async def test_content_mount_failure_logs_its_traceback(
+    app_context_factory: AppContextBuilder, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A failed content mount records the traceback, not only the message.
+
+    The lifecycle event used to omit the traceback, so a crash in a service
+    view was reported without the frames that explain it. The sink does not
+    propagate to the root logger, so the call itself is recorded and forwarded.
+    """
+    from textual.widget import Widget
+
+    from aws_tui import app as app_module
+
+    env = setup_context(app_context_factory, monkeypatch)
+    sink = env.app._app_ctx.log_sink
+    recorded: list[tuple[str, dict[str, object]]] = []
+    original_error = sink.error
+
+    def recording_error(event: str, **fields: object) -> None:
+        recorded.append((event, fields))
+        original_error(event, **fields)
+
+    monkeypatch.setattr(sink, "error", recording_error)
+
+    class BrokenView(Widget):
+        def on_mount(self):
+            raise RuntimeError("content mount exploded")
+
+    async with env.app.run_test(size=(120, 40)) as pilot:
+        await ready(env, pilot)
+        env.aws_config.write_text("[profile added]\nregion=us-east-1\n")
+        await pilot.press("tab", "tab", "enter")
+        await drain_workers(env.app)
+        monkeypatch.setattr(app_module, "build_service_view", lambda *args, **kwargs: BrokenView())
+        env.app.query_one(ConnectionChoice).focus()
+        await pilot.press("enter")
+        await drain_workers(env.app)
+        await pilot.pause()
+
+    failures = [
+        fields for event, fields in recorded if event == "app.content_mount.lifecycle_failed"
+    ]
+    assert failures, "the lifecycle failure was not logged"
+    assert "RuntimeError" in str(failures[0]["traceback"])
+    assert "content mount exploded" in str(failures[0]["traceback"])

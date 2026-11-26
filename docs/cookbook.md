@@ -450,7 +450,7 @@ keybinding until you edit the config back.
 The full list of action IDs lives in
 [`docs/keybindings.md`](keybindings.md#3-action-ids) and is the same set
 declared in `src/aws_tui/infra/keymap_store.py:DEFAULT_BINDINGS`. There
-is no `--print-bindings` CLI flag in v0.8; the launch path enters the
+is no `--print-bindings` CLI flag in v0.9; the launch path enters the
 TUI directly.
 
 ### 3.3. Unknown action IDs fall back to defaults
@@ -551,7 +551,7 @@ exception: TypeError: unsupported operand type(s) for +: ...
 
 The writer reads backward across the active log and numbered rotations. It retains up to 1,000 lines while reading at most 1 MiB in total. Thus, producing a crash report does not load every retained log into memory.
 
-The crash dump writer is live in v0.8.x. The interactive crash modal
+The crash dump writer is live in v0.9.x. The interactive crash modal
 below exists as UI scaffolding but is not wired into the unhandled
 exception path yet:
 
