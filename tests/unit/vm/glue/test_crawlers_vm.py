@@ -7,11 +7,11 @@ from vmx import (
     NULL_DISPATCHER,
     ComponentVM,
     ConstructionStatus,
+    Message,
     MessageHub,
     PropertyChangedMessage,
     TokenPagedComposition,
 )
-from vmx.messages.protocols import Message
 
 from aws_tui.domain.filesystem import PermissionDeniedError, ProviderError
 from aws_tui.vm.file_manager.pane_vm import PaneState

@@ -7,8 +7,7 @@ from contextlib import ExitStack
 from pathlib import Path
 
 import pytest
-from vmx import NULL_DISPATCHER, MessageHub
-from vmx.messages.protocols import Message
+from vmx import NULL_DISPATCHER, Message, MessageHub
 
 from aws_tui.demo.in_memory_fs import InMemoryFS
 from aws_tui.domain.transfer_journal import TransferJournal

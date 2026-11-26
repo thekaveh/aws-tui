@@ -4,8 +4,7 @@ import asyncio
 from typing import cast
 
 import pytest
-from vmx import NULL_DISPATCHER
-from vmx.lifecycle.status import ConstructionStatus
+from vmx import NULL_DISPATCHER, ConstructionStatus
 
 from aws_tui.domain.emr_logs import (
     DEFAULT_LOG_FILTER,

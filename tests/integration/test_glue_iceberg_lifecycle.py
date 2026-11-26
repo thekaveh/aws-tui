@@ -5,8 +5,7 @@ from dataclasses import replace
 from typing import cast
 
 import pytest
-from vmx import NULL_DISPATCHER, MessageHub
-from vmx.messages.protocols import Message
+from vmx import NULL_DISPATCHER, Message, MessageHub
 
 from aws_tui.domain.data_catalog import TableFormat
 from aws_tui.infra.aws_session import AwsSession

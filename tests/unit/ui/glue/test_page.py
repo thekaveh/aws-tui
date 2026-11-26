@@ -8,8 +8,7 @@ from textual.app import App, ComposeResult
 from textual.containers import Horizontal, VerticalScroll
 from textual.css.query import NoMatches
 from textual.widgets import OptionList, Static
-from vmx import NULL_DISPATCHER, MessageHub
-from vmx.messages.protocols import Message
+from vmx import NULL_DISPATCHER, Message, MessageHub
 
 from aws_tui.app import AwsTuiApp
 from aws_tui.domain.data_catalog import TableFormat

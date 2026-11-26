@@ -5,8 +5,7 @@ from dataclasses import replace
 from datetime import UTC, datetime
 
 import pytest
-from vmx import NULL_DISPATCHER, ConstructionStatus, MessageHub
-from vmx.messages.protocols import Message
+from vmx import NULL_DISPATCHER, ConstructionStatus, Message, MessageHub
 
 from aws_tui.domain.filesystem import ProviderError
 from aws_tui.domain.query import (

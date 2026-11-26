@@ -14,10 +14,10 @@ from vmx import (
     NULL_DISPATCHER,
     AsyncRelayCommand,
     ConstructionStatus,
+    Message,
     MessageHub,
     PropertyChangedMessage,
 )
-from vmx.messages.protocols import Message
 
 from aws_tui.domain.athena import (
     QueryContextRejectedError,

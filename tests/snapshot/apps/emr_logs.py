@@ -8,8 +8,7 @@ from __future__ import annotations
 import aioboto3
 from textual.app import App, ComposeResult
 from textual.containers import Container
-from vmx import NULL_DISPATCHER, MessageHub
-from vmx.messages.protocols import Message
+from vmx import NULL_DISPATCHER, Message, MessageHub
 
 from aws_tui.domain.emr_logs import EmrServerlessLogsClient, LogFile, LogFileKind
 from aws_tui.infra.theme_store import ThemeStore

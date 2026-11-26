@@ -16,8 +16,7 @@ import pytest
 from textual.app import App, ComposeResult
 from textual.containers import VerticalScroll
 from textual.widgets import Static
-from vmx import NULL_DISPATCHER, MessageHub
-from vmx.messages.protocols import Message
+from vmx import NULL_DISPATCHER, Message, MessageHub
 
 from aws_tui.demo.in_memory_emr import InMemoryEmr as _InMemoryEmr
 from aws_tui.domain.emr_serverless import JobRunState

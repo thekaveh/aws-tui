@@ -7,8 +7,7 @@ from textual.app import App, ComposeResult
 from textual.containers import Container, Horizontal
 from textual.pilot import Pilot
 from textual.widgets import DataTable, OptionList, Static
-from vmx import NULL_DISPATCHER, MessageHub
-from vmx.messages.protocols import Message
+from vmx import NULL_DISPATCHER, Message, MessageHub
 
 from aws_tui.domain.data_catalog import TableFormat
 from aws_tui.domain.filesystem import PermissionDeniedError

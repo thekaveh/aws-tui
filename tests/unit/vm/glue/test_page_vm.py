@@ -5,9 +5,14 @@ import contextlib
 from dataclasses import replace
 
 import pytest
-from vmx import NULL_DISPATCHER, ComponentVM, MessageHub, PropertyChangedMessage
-from vmx.lifecycle.status import ConstructionStatus
-from vmx.messages.protocols import Message
+from vmx import (
+    NULL_DISPATCHER,
+    ComponentVM,
+    ConstructionStatus,
+    Message,
+    MessageHub,
+    PropertyChangedMessage,
+)
 
 from aws_tui.domain.data_catalog import TableFormat, TableRef
 from aws_tui.domain.filesystem import PermissionDeniedError

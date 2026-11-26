@@ -6,9 +6,8 @@ import threading
 
 import anyio
 import pytest
-from vmx import NULL_DISPATCHER, MessageHub
+from vmx import NULL_DISPATCHER, Message, MessageHub
 from vmx.messages import ConstructionStatusChangedMessage
-from vmx.messages.protocols import Message
 
 from aws_tui.infra.duckdb import DuckDbOutcome, DuckDbResult, InMemoryDuckDb
 from aws_tui.vm.file_manager.pane_vm import PaneState
