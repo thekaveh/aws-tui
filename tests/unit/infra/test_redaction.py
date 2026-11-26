@@ -205,3 +205,25 @@ def test_redaction_preserves_whitespace_separated_neighbor_of_quoted_url() -> No
     assert "synthetic-password" not in text
     assert "synthetic-query" not in text
     assert "safe=visible" in text
+
+
+def test_redact_text_redacts_a_value_that_is_itself_a_sensitive_key_name() -> None:
+    """Two sensitive keys in whitespace form must not expose the second value.
+
+    ``password aws_secret_access_key wJalr...`` used to leave the credential
+    visible: the first key's value was the second key's name, so the second
+    key's value was never matched. The shape is ambiguous, so the scan keeps
+    the name as a key and redacts the value after it. A name with no value
+    after it is still a value and is redacted.
+    """
+    leaked = "wJalrXUtnFEMIK7MDENGbPxRfiCY"
+    redacted = redact_text(f"password aws_secret_access_key {leaked}")
+    assert leaked not in redacted
+    assert "aws_secret_access_key [REDACTED]" in redacted
+
+    redacted = redact_text(f"secret password {leaked}")
+    assert leaked not in redacted
+
+    redacted = redact_text("password secretpass")
+    assert "secretpass" not in redacted
+    assert redacted == "password [REDACTED]"

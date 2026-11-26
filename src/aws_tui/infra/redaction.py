@@ -96,10 +96,43 @@ def _redact_key_value(match: re.Match[str]) -> str:
     return f"{key_quote}{match.group('key')}{key_quote}{match.group('separator')}{_REDACTED}"
 
 
+def _is_key_name(token: str) -> bool:
+    return re.fullmatch(r"[A-Za-z0-9_.-]+", token) is not None and is_sensitive_key(token)
+
+
+def _redact_key_values(text: str) -> str:
+    """Redact each sensitive key's value, scanning left to right.
+
+    A whitespace-separated value can itself be a sensitive key name, as in
+    ``password aws_secret_access_key wJalr...``. Replacing that name alone would
+    leave the next key's value visible, so a name that starts its own key/value
+    pair is kept and the scan resumes at it. A name with no pair after it is a
+    real value and is still redacted.
+    """
+    pieces: list[str] = []
+    pos = 0
+    while (match := _KEY_VALUE.search(text, pos)) is not None:
+        value_start = match.start("value")
+        whitespace_separated = not match.group("separator").strip()
+        if (
+            whitespace_separated
+            and _is_key_name(match.group("value"))
+            and _KEY_VALUE.match(text, value_start) is not None
+        ):
+            pieces.append(text[pos:value_start])
+            pos = value_start
+            continue
+        pieces.append(text[pos : match.start()])
+        pieces.append(_redact_key_value(match))
+        pos = match.end()
+    pieces.append(text[pos:])
+    return "".join(pieces)
+
+
 def redact_text(text: str) -> str:
     text = _URL.sub(lambda match: _redact_url(match.group(0)), text)
     text = _AUTHORIZATION_HEADER.sub(_redact_authorization_header, text)
-    return _KEY_VALUE.sub(_redact_key_value, text)
+    return _redact_key_values(text)
 
 
 def safe_endpoint_display(url: str | None) -> str | None:
