@@ -6,7 +6,7 @@ import threading
 
 import anyio
 import pytest
-from vmx import NULL_DISPATCHER, Message, MessageHub
+from vmx import NULL_DISPATCHER, ComponentVM, ConstructionStatus, Message, MessageHub
 from vmx.messages import ConstructionStatusChangedMessage
 
 from aws_tui.infra.duckdb import DuckDbOutcome, DuckDbResult, InMemoryDuckDb
@@ -352,3 +352,23 @@ def test_a_subscriber_cannot_dispose_the_property_stream_for_the_others() -> Non
     vm.bind("s3://bkt/t", profile="p", region="r")
 
     assert seen, "the subscriber received no notifications at all"
+
+
+def test_preview_vm_is_a_component_vm_with_its_own_lifecycle() -> None:
+    vm = _build(InMemoryDuckDb())
+    assert isinstance(vm, ComponentVM)
+    assert vm.status is ConstructionStatus.CONSTRUCTED
+    vm.dispose()
+    vm.dispose()
+    assert vm.status is ConstructionStatus.DISPOSED
+
+
+@pytest.mark.asyncio
+async def test_preview_rebind_keeps_the_new_resource_constructed() -> None:
+    vm = _build(InMemoryDuckDb(columns=("a",), rows=(("1",),)))
+    vm.bind("s3://bkt/table-a", profile="p", region="r")
+    await vm.load()
+
+    vm.bind("s3://bkt/table-b", profile="p", region="r")
+
+    assert vm._resource.is_constructed
