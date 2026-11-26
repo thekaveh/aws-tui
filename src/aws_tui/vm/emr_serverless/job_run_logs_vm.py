@@ -22,8 +22,7 @@ from enum import StrEnum
 from time import monotonic
 from typing import Literal, cast
 
-from vmx import Dispatcher, Message, MessageHub
-from vmx.lifecycle.status import ConstructionStatus
+from vmx import ConstructionStatus, Dispatcher, Message, MessageHub
 
 from aws_tui.domain.emr_cloudwatch_logs import (
     CloudWatchLogEvent,

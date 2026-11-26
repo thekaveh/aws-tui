@@ -12,8 +12,7 @@ from collections.abc import Awaitable, Callable, Coroutine
 from dataclasses import dataclass
 from typing import Any, Literal
 
-from vmx import Dispatcher, Message, MessageHub
-from vmx.lifecycle.status import ConstructionStatus
+from vmx import ConstructionStatus, Dispatcher, Message, MessageHub
 
 from aws_tui.domain.emr_cloudwatch_logs import cloudwatch_location
 from aws_tui.domain.emr_logs import EmrServerlessLogsClientProtocol, LogFilter
