@@ -6,6 +6,7 @@ from textual.app import App, ComposeResult
 from textual.containers import Container, Horizontal
 from textual.pilot import Pilot
 from textual.widgets import OptionList
+from vmx import Message, MessageHub
 
 from aws_tui.domain.filesystem import PermissionDeniedError
 from aws_tui.domain.query import (
@@ -94,7 +95,8 @@ class AthenaPageApp(App[None]):
             self.CSS += "\n#content-host { width: 1fr; height: 1fr; }"
         self._fixture = fixture
         self._client = _client(fixture)
-        self._vm: AthenaPageVM = make_page_vm(self._client)
+        self._hub: MessageHub[Message] = MessageHub()
+        self._vm: AthenaPageVM = make_page_vm(self._client, hub=self._hub)
         self._keymap = (
             KeymapStore(
                 overlay={
@@ -110,8 +112,8 @@ class AthenaPageApp(App[None]):
         self._open_picker = open_picker
         self._hint_vm = (
             HintLegendVM(
-                hub=self._vm._hub,  # type: ignore[attr-defined]
-                dispatcher=self._vm._dispatcher,  # type: ignore[attr-defined]
+                hub=self._hub,
+                dispatcher=self._vm.dispatcher,
                 keymap=self._keymap,
             )
             if show_legend
@@ -126,7 +128,7 @@ class AthenaPageApp(App[None]):
         if self._hint_vm is not None:
             yield HintLegend(
                 self._hint_vm,
-                hub=self._vm._hub,  # type: ignore[attr-defined]
+                hub=self._hub,
                 id="hint-legend",
             )
 
@@ -136,7 +138,7 @@ class AthenaPageApp(App[None]):
         await self.query_one("#content-host", Container).mount(
             AthenaPage(
                 self._vm,
-                hub=self._vm._hub,  # type: ignore[attr-defined]
+                hub=self._hub,
                 keymap=self._keymap,
                 source_candidates=(
                     self._vm.source,
@@ -149,6 +151,13 @@ class AthenaPageApp(App[None]):
             self.query_one("#athena-catalog", ContextPicker).open()
         if self._fixture == "focused-rebound-tabs":
             self.query_one("#athena-view-tabs", ServiceTabStrip).focus()
+
+    async def on_unmount(self) -> None:
+        if self._hint_vm is not None:
+            self._hint_vm.dispose()
+        await self._vm.shutdown()
+        self._vm.dispose()
+        self._hub.dispose()
 
     async def open_catalog_picker_with_geometry_check(self, pilot: Pilot) -> None:
         await pilot.pause()
