@@ -8,7 +8,7 @@ changed property, and its observers cannot break it or leak values into logs.
 from __future__ import annotations
 
 import reactivex as rx
-from vmx import ComponentVM, Dispatcher, Message, MessageHub
+from vmx import ComponentVM, Dispatcher, Message, MessageHubProto
 
 from aws_tui.vm._observable import isolated, value_free_hub_sends
 
@@ -23,7 +23,7 @@ class IsolatedComponentVM(ComponentVM):
     subclasses, and a subscriber cannot stop later subscribers from running.
     """
 
-    def __init__(self, *, name: str, hub: MessageHub[Message], dispatcher: Dispatcher) -> None:
+    def __init__(self, *, name: str, hub: MessageHubProto[Message], dispatcher: Dispatcher) -> None:
         super().__init__(name=name, hint="", hub=hub, dispatcher=dispatcher)
         self._channel = name
 

@@ -10,7 +10,6 @@ from datetime import UTC, datetime, timedelta
 from functools import partial
 from typing import Any, Literal, Protocol, TypeAlias, cast
 
-import reactivex as rx
 from vmx import (
     NULL_MESSAGE_HUB,
     AsyncResourceError,
@@ -20,12 +19,9 @@ from vmx import (
     AsyncResourceRetention,
     AsyncResourceStatus,
     AsyncResourceVM,
-    ComponentVM,
-    ConstructionStatus,
     Dispatcher,
     Message,
     MessageHub,
-    PropertyChangedMessage,
 )
 
 from aws_tui.domain.data_catalog import TableFormat, TableRef
@@ -59,7 +55,8 @@ from aws_tui.domain.iceberg_interpretation import (
 )
 from aws_tui.domain.mutation_guard import PROTECTED_MESSAGE, ConnectionProtectedError
 from aws_tui.infra.duckdb import DuckDbPort, NativeDuckDb
-from aws_tui.vm._observable import ObserverSafeSubject, send_value_free
+from aws_tui.vm._component import IsolatedComponentVM
+from aws_tui.vm._observable import send_value_free
 from aws_tui.vm.file_manager.pane_vm import PaneState
 from aws_tui.vm.glue.iceberg_preview_vm import IcebergPreviewVM
 from aws_tui.vm.messages import OpenAthenaTableRequest
@@ -273,7 +270,7 @@ class _MetadataPane:
         return self.visible_count < len(self.rows)
 
 
-class GlueIcebergVM:
+class GlueIcebergVM(IsolatedComponentVM):
     """Own independent, on-demand metadata panes for one selected Iceberg table."""
 
     def __init__(
@@ -288,16 +285,17 @@ class GlueIcebergVM:
     ) -> None:
         if type(page_size) is not int or page_size <= 0:
             raise ValueError("Iceberg metadata page size must be positive")
+        super().__init__(name="glue.iceberg", hub=hub, dispatcher=dispatcher)
         self._inspector = inspector
-        self._hub = hub
+        self._hub: MessageHub[Message] = (
+            hub  # keeps the narrow type report_unexpected_service_error needs
+        )
         self._dispatcher = dispatcher
         self._page_size = page_size
         self._aws_profile = aws_profile
-        self._disposed = False
-        self._constructed = False
         self._shutdown_started = False
         self._shutdown_complete = False
-        self._lifecycle_lock = asyncio.Lock()
+        self._drain_lock = asyncio.Lock()
         self._metadata_tasks: set[asyncio.Task[Any]] = set()
         self._metadata_load_drain_count = 0
         self._silent_depth = 0
@@ -314,27 +312,18 @@ class GlueIcebergVM:
         self._panes: dict[IcebergView, _MetadataPane] = {
             view: self._new_pane(view) for view in _VIEWS
         }
-        self._on_property_changed = ObserverSafeSubject[str]()
-        self._inner: ComponentVM = (
-            ComponentVM.builder().name("glue.iceberg").services(hub, dispatcher).build()
-        )
         self._preview: IcebergPreviewVM = IcebergPreviewVM(
             port=duckdb_port or NativeDuckDb(),
             hub=hub,
             dispatcher=dispatcher,
         )
-
-    @property
-    def status(self) -> ConstructionStatus:
-        return self._inner.status
-
-    @property
-    def on_property_changed(self) -> rx.Observable[str]:
-        return self._on_property_changed.observable
+        self._own(self._preview)
 
     @property
     def available(self) -> bool:
-        return not self._disposed and not self._shutdown_started and self._table_ref is not None
+        return (
+            not self._is_disposed() and not self._shutdown_started and self._table_ref is not None
+        )
 
     @property
     def table_ref(self) -> TableRef | None:
@@ -447,7 +436,7 @@ class GlueIcebergVM:
         installs this port before user-triggered loads and acknowledges only
         after the bounded read plan was actually painted.
         """
-        if self._disposed or self._shutdown_started:
+        if self._is_disposed() or self._shutdown_started:
             return lambda: None
         lease = object()
         self._plan_required = True
@@ -524,33 +513,19 @@ class GlueIcebergVM:
         return self._pane(view).has_more
 
     def construct(self) -> None:
-        if not self._disposed:
-            self._constructed = True
-            self._inner.construct()
+        if not self._is_disposed():
+            super().construct()
             self._preview.construct()
             for pane in self._panes.values():
                 pane.resource.construct()
 
-    def dispose(self) -> None:
-        if self._disposed:
-            return
-        self._disposed = True
+    def _on_dispose(self) -> None:
         self._plan_presenter = None
         self._plan_lease = None
         self._shutdown_started = True
         self._binding_mutation_epoch += 1
         self._invalidate_binding(notify=False)
         self._cancel_metadata_tasks()
-        try:
-            self._on_property_changed.on_completed()
-        finally:
-            try:
-                self._on_property_changed.dispose()
-            finally:
-                try:
-                    self._preview.dispose()
-                finally:
-                    self._inner.dispose()
 
     async def bind_table(
         self,
@@ -560,7 +535,7 @@ class GlueIcebergVM:
         location: str | None = None,
     ) -> None:
         """Replace the table and clear every pane without issuing provider calls."""
-        if self._disposed or self._shutdown_started:
+        if self._is_disposed() or self._shutdown_started:
             return
         self._binding_mutation_epoch += 1
         binding_mutation_epoch = self._binding_mutation_epoch
@@ -582,7 +557,7 @@ class GlueIcebergVM:
 
     def clear_table(self) -> None:
         """Synchronously invalidate metadata during a parent selection reset."""
-        if self._disposed or self._shutdown_started:
+        if self._is_disposed() or self._shutdown_started:
             return
         self._binding_mutation_epoch += 1
         self._invalidate_binding()
@@ -591,18 +566,18 @@ class GlueIcebergVM:
 
     async def clear_table_and_drain(self) -> None:
         """Invalidate metadata and durably drain provider work."""
-        if not self._disposed and not self._shutdown_started:
+        if not self._is_disposed() and not self._shutdown_started:
             self._binding_mutation_epoch += 1
             binding_mutation_epoch = self._binding_mutation_epoch
         else:
             binding_mutation_epoch = None
-        async with self._lifecycle_lock:
+        async with self._drain_lock:
             if self._shutdown_complete:
                 return
             if (
                 binding_mutation_epoch is not None
                 and binding_mutation_epoch == self._binding_mutation_epoch
-                and not self._disposed
+                and not self._is_disposed()
                 and not self._shutdown_started
             ):
                 self._invalidate_binding()
@@ -611,12 +586,12 @@ class GlueIcebergVM:
 
     async def cancel_metadata_loads_and_drain_silently(self) -> None:
         """Supersede provider loads without changing or publishing the binding."""
-        has_drain_lease = not self._disposed and not self._shutdown_started
+        has_drain_lease = not self._is_disposed() and not self._shutdown_started
         if has_drain_lease:
             self._metadata_load_drain_count += 1
             self._invalidate_metadata_loads_silently()
         try:
-            async with self._lifecycle_lock:
+            async with self._drain_lock:
                 if self._shutdown_complete:
                     return
                 await self._cancel_and_drain_metadata_tasks()
@@ -630,14 +605,14 @@ class GlueIcebergVM:
             return
         self._shutdown_started = True
         self._binding_mutation_epoch += 1
-        if not self._disposed:
+        if not self._is_disposed():
             self._invalidate_binding()
         self._cancel_metadata_tasks()
         self._preview.bind(None, profile=self._aws_profile, region="")
 
     async def shutdown(self) -> None:
         self.begin_shutdown()
-        async with self._lifecycle_lock:
+        async with self._drain_lock:
             if self._shutdown_complete:
                 return
             await self._cancel_and_drain_metadata_tasks()
@@ -649,9 +624,9 @@ class GlueIcebergVM:
         table_ref: TableRef | None,
         binding_mutation_epoch: int,
     ) -> None:
-        async with self._lifecycle_lock:
+        async with self._drain_lock:
             if (
-                self._disposed
+                self._is_disposed()
                 or self._shutdown_started
                 or self._binding_mutation_epoch != binding_mutation_epoch
             ):
@@ -670,7 +645,7 @@ class GlueIcebergVM:
             if cancelled:
                 raise asyncio.CancelledError
             if (
-                self._disposed
+                self._is_disposed()
                 or self._shutdown_started
                 or self._binding_mutation_epoch != binding_mutation_epoch
                 or self._binding_generation != binding_generation
@@ -942,15 +917,15 @@ class GlueIcebergVM:
         rows. Retirement disposes the old resource, which cancels its read.
         """
         for view, pane in list(self._panes.items()):
-            if not self._disposed and pane.resource.state.status is AsyncResourceStatus.IDLE:
+            if not self._is_disposed() and pane.resource.state.status is AsyncResourceStatus.IDLE:
                 pane.visible_count = 0
                 pane.applied = None
                 continue
             self._retire_pane(pane)
             fresh = self._new_pane(view)
-            if self._disposed:
+            if self._is_disposed():
                 self._retire_pane(fresh)
-            elif self._constructed:
+            elif self.is_constructed:
                 fresh.resource.construct()
             self._panes[view] = fresh
 
@@ -1058,7 +1033,7 @@ class GlueIcebergVM:
 
     def _metadata_load_is_admitted(self) -> bool:
         return (
-            not self._disposed
+            not self._is_disposed()
             and not self._shutdown_started
             and self._metadata_load_drain_count == 0
         )
@@ -1100,13 +1075,7 @@ class GlueIcebergVM:
         self._notify_active()
 
     def _notify(self, property_name: str) -> None:
-        if self._disposed:
-            return
-        send_value_free(
-            self._hub,
-            PropertyChangedMessage.create(self, "glue.iceberg", property_name),
-        )
-        self._on_property_changed.on_next(property_name)
+        self._publish(property_name)
 
 
 def _now() -> datetime:
