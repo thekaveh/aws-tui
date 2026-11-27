@@ -56,6 +56,7 @@ The Unreleased section is the promotion queue for the next package release. Entr
 - A Glue Iceberg preview column whose name contains square brackets shows its name, instead of losing part of it or failing to render.
 - Cancelling a service switch no longer leaves the navigation pointing at a service whose content was closed; the selection is cleared instead.
 - Opening a Glue table whose listing failed reports the listing failure, not that the table is unavailable.
+- A Glue Iceberg snapshot selected beyond the visible rows keeps its detail and time-travel control after a retry.
 - Byte sizes just below a unit boundary are labelled in the next unit (1048575 bytes is 1.0 MB, not 1024.0 kB).
 - Athena SQL completion replaces only the token under the cursor, even when text is selected. Previously the whole selection was replaced.
 - Opening an S3 location no longer crashes the application when restoring the previous Glue page fails. The failure is logged, and the handoff failure is reported.

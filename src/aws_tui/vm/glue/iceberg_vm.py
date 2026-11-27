@@ -389,7 +389,9 @@ class GlueIcebergVM(IsolatedComponentVM):
     def selected_snapshot_detail(self) -> SnapshotExplanation | None:
         if not self.available:
             return None
-        row = next((r for r in self.snapshots if r.snapshot_id == self._selected_snapshot_id), None)
+        # The selection survives on the whole page, so the detail is read from the page, not the visible rows.
+        page_rows = cast(tuple[IcebergSnapshot, ...], self._panes["snapshots"].rows)
+        row = next((r for r in page_rows if r.snapshot_id == self._selected_snapshot_id), None)
         return explain_snapshot(row) if row is not None else None
 
     @property
@@ -468,7 +470,7 @@ class GlueIcebergVM(IsolatedComponentVM):
             and type(snapshot_id) is int
             and any(
                 row.snapshot_id == snapshot_id
-                for row in cast(tuple[IcebergSnapshot, ...], pane.visible_rows)
+                for row in cast(tuple[IcebergSnapshot, ...], pane.rows)
             )
         )
 
@@ -1091,11 +1093,26 @@ def _now() -> datetime:
 
 
 async def _settle_provider(request: _MetadataRequest) -> None:
-    """Wait until the request's loader task has finished, whatever it did."""
+    """Wait until the request's loader task has finished, whatever it did.
+
+    A cancellation of the waiting caller is reported once the provider has finished, so the
+    caller's own cancellation is not turned into a normal return. A cancellation that came
+    from the provider task itself is not the caller's, and is not re-raised.
+    """
     task = request.task
+    caller = asyncio.current_task()
+    base = caller.cancelling() if caller is not None else 0
+    cancelled = False
     while task is not None and not task.done():
-        with contextlib.suppress(asyncio.CancelledError, Exception):
+        try:
             await asyncio.shield(task)
+        except asyncio.CancelledError:
+            if caller is not None and caller.cancelling() > base:
+                cancelled = True
+        except Exception:
+            pass
+    if cancelled:
+        raise asyncio.CancelledError
 
 
 def _resource_value(state: object) -> _MetadataPage | None:

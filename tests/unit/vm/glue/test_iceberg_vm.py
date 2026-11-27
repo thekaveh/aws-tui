@@ -1678,3 +1678,49 @@ async def test_retry_keeps_a_snapshot_selection_that_is_still_on_the_page() -> N
     assert await vm.retry()
 
     assert vm.selected_snapshot_id == 42
+
+
+@pytest.mark.asyncio
+async def test_settling_a_provider_reports_its_callers_cancellation() -> None:
+    """A caller cancelled while a provider drained returned normally.
+
+    The settle helper suppressed cancellation, so the load looked complete to a caller that had
+    been cancelled. The caller's cancellation is reported after the provider has finished.
+    """
+    from types import SimpleNamespace
+
+    from aws_tui.vm.glue.iceberg_vm import _settle_provider
+
+    release = asyncio.Event()
+    provider = asyncio.create_task(release.wait())
+    caller = asyncio.create_task(_settle_provider(SimpleNamespace(task=provider)))  # type: ignore[arg-type]
+    await asyncio.sleep(0)
+    caller.cancel()
+    await asyncio.sleep(0)
+    release.set()
+
+    with pytest.raises(asyncio.CancelledError):
+        await caller
+    assert provider.done()
+
+
+@pytest.mark.asyncio
+async def test_a_selected_snapshot_beyond_the_visible_rows_keeps_its_detail_and_time_travel() -> (
+    None
+):
+    """The selection survives a retry on the whole page, but its detail and time travel did not.
+
+    Both read the visible rows only, so a selected snapshot past the first visible page showed no
+    detail and disabled time travel. Both read the page now.
+    """
+    vm, _inspector, _hub = make_vm(page_size=1)
+    await vm.bind_table(ICEBERG_REF, table_format=TableFormat.ICEBERG)
+    await vm.select_view("snapshots")
+    await vm.load_more()
+    assert vm.select_snapshot(42)
+
+    assert await vm.retry()
+
+    assert vm.selected_snapshot_id == 42
+    assert vm.selected_snapshot_detail is not None
+    assert vm.can_time_travel_in_athena
