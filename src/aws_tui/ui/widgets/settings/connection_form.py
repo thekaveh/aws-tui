@@ -295,6 +295,8 @@ class ConnectionFormInline(Widget):
             inp.value = ""
             inp.disabled = False
             inp.remove_class("-invalid")
+        # An empty form has required-field errors; apply them now, as open_for_edit does.
+        self._apply_error_classes()
         self._refresh_save_button()
         self.add_class("-open")
         # Focus the first field for keyboard convenience -- but only once the

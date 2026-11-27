@@ -227,3 +227,30 @@ def test_submitted_legacy_constructor_preserves_model_without_control() -> None:
     assert event.form is model
     assert event.mode == "add"
     assert event.original_name is None
+
+
+@pytest.mark.asyncio
+async def test_add_form_shows_its_required_field_errors_when_opened() -> None:
+    """Opening an empty Add form left Save disabled with no visible error or mark.
+
+    open_for_add reset the inputs but never applied the form's errors, so the
+    error slots stayed empty. open_for_edit applied them; the Add path now does too.
+    """
+    from textual.app import App, ComposeResult
+    from textual.widgets import Input, Static
+
+    from aws_tui.ui.widgets.settings.connection_form import ConnectionFormInline
+
+    form = ConnectionFormInline(submit_label="Save")
+
+    class Host(App[None]):
+        def compose(self) -> ComposeResult:
+            yield form
+
+    async with Host().run_test() as pilot:
+        form.open_for_add()
+        await pilot.pause()
+        assert form.has_errors
+        assert form.query_one("#form-name", Input).has_class("-invalid")
+        assert form.query_one("#form-error-name", Static).display
+        assert str(form.query_one("#form-error-name", Static).render()) != ""
