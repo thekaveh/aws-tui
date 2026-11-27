@@ -99,8 +99,10 @@ class ScopedOverviewModal(DeferredWorkerMixin, ModalScreen[OverviewEntry | None]
         index = self.query_one(OptionList).highlighted
         return self._rows[index] if index is not None and 0 <= index < len(self._rows) else None
 
-    def _section(self, scope: WatchScope) -> OverviewSection:
-        return next(section for section in self.vm.sections if section.scope == scope)
+    def _section(self, scope: WatchScope) -> OverviewSection | None:
+        # A highlight can arrive for a scope removed since the rows were built; the details
+        # path already handles a missing section, so the lookup must not raise StopIteration.
+        return next((section for section in self.vm.sections if section.scope == scope), None)
 
     def _refresh_view(self) -> None:
         if not self.is_mounted or not self.is_attached:

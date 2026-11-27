@@ -99,3 +99,16 @@ async def test_non_aws_session_does_not_claim_default_aws_authentication(kind):
             assert "AWS chain" not in label
     finally:
         await vm.shutdown()
+
+
+def test_section_lookup_for_a_removed_scope_returns_none() -> None:
+    """A highlight for a scope removed since its rows were built raised StopIteration in a handler."""
+    from types import SimpleNamespace
+
+    from aws_tui.ui.widgets.scoped_overview_modal import ScopedOverviewModal
+
+    modal = object.__new__(ScopedOverviewModal)
+    modal.vm = SimpleNamespace(sections=())  # type: ignore[attr-defined]
+
+    scope = WatchScope("athena", "dev", "eu-west-1", "chosen")
+    assert modal._section(scope) is None  # type: ignore[attr-defined]
