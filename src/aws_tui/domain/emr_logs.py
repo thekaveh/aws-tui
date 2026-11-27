@@ -22,7 +22,6 @@ from __future__ import annotations
 
 import asyncio
 import inspect
-import re
 import zlib
 from collections.abc import AsyncGenerator
 from contextlib import aclosing, suppress
@@ -74,11 +73,8 @@ class LogFilter:
         # iteration and surfacing through the VM's bottom-of-stack
         # ``except Exception`` as an opaque "unexpected error", with
         # all matches collected so far silently dropped.
-        for pattern in self.patterns:
-            try:
-                re.compile(pattern)
-            except (re.error, RecursionError, OverflowError) as exc:
-                raise ValueError(f"invalid regex pattern {pattern!r}: {exc}") from exc
+        # The regex module is the only engine: the matcher uses it, and a stdlib pre-check
+        # refused syntax the matcher accepts (for example \p{Lu}).
         flags = regex.VERSION0 | (regex.IGNORECASE if self.case_insensitive else 0)
         try:
             compiled = tuple(regex.compile(p, flags) for p in self.patterns)

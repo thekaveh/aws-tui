@@ -87,6 +87,7 @@ The Unreleased section is the promotion queue for the next package release. Entr
 - Files named without an extension no longer receive CSV preview hints.
 - A start response without a job run id says the job may have started and to check the run list before retrying.
 - Glue column statistics keep the batches that succeeded when a later batch is throttled.
+- The EMR log filter accepts the regex syntax its matcher uses, such as \p{Lu}, instead of refusing it.
 - Byte sizes just below a unit boundary are labelled in the next unit (1048575 bytes is 1.0 MB, not 1024.0 kB).
 - Athena SQL completion replaces only the token under the cursor, even when text is selected. Previously the whole selection was replaced.
 - Opening an S3 location no longer crashes the application when restoring the previous Glue page fails. The failure is logged, and the handoff failure is reported.

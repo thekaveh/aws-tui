@@ -1219,3 +1219,12 @@ def test_parse_log_uri_keeps_fragment_and_query_characters_in_the_prefix() -> No
     assert parse_log_uri("s3://my-bucket/logs/run?x=1") == S3LogLocation(
         "my-bucket", "logs/run?x=1"
     )
+
+
+def test_filter_accepts_the_regex_module_syntax_its_matcher_uses() -> None:
+    """A stdlib pre-check refused \\p{Lu} and named groups that the regex matcher compiles."""
+    from aws_tui.domain.emr_logs import LogFilter
+
+    log_filter = LogFilter((r"\p{Lu}+",), case_insensitive=False)
+    assert log_filter.matches("ERROR")
+    assert not log_filter.matches("ok")

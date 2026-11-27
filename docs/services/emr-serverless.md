@@ -105,6 +105,7 @@ show **not created yet** and can be retried. Left/Right selects an exact stream.
 
 `f` edits the regex filter and `Shift+F` restores its defaults.
 
+Patterns use the `regex` module's VERSION0 syntax, so classes such as `\p{Lu}` are available.
 Filters permit at most 64 patterns, with 4,096 characters per pattern. A match
 has a shared 50 ms deadline across patterns. CloudWatch matching also has a
 100 ms deadline across loaded lines. A limit failure preserves the previous
