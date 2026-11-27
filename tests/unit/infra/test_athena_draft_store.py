@@ -647,3 +647,26 @@ def test_fdopen_construction_preserves_original_error(tmp_path, monkeypatch, alr
     with pytest.raises(OSError, match=r".") as closed:
         real_fstat(descriptors[0])
     assert closed.value.errno == errno.EBADF
+
+
+def test_a_clock_step_back_does_not_make_the_next_save_invalid(tmp_path):
+    """A save stamped before the record's creation time made the record unreadable.
+
+    The reader rejects a record whose update precedes its creation. After a clock step back, the
+    next save of an existing draft kept the old creation time and an earlier update time, so every
+    later save failed. The update time is clamped to the creation time.
+    """
+    store = _enabled(tmp_path)
+    assert store.save(record(CTX, "SELECT 1"), permit=DraftPermit()).code is None
+    # The edit is stamped with the stepped-back clock: both times are before the first save.
+    stepped_back = replace(
+        record(CTX, "SELECT 2"),
+        created_at=STAMP - timedelta(hours=1),
+        updated_at=STAMP - timedelta(hours=1),
+    )
+
+    result = store.save(stepped_back, permit=DraftPermit())
+
+    assert result.code is None
+    saved = next(row for row in result.records if row.id == stepped_back.id)
+    assert saved.updated_at >= saved.created_at

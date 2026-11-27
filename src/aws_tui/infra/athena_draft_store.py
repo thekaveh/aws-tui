@@ -322,7 +322,13 @@ def mutate_records(
                     old, issue = decode(old_bytes, replacement.stem)
                     if old is None:
                         return DraftStoreResult(code=issue or "invalid", enabled=enabled)
-                    record = replace(record, created_at=old.created_at)
+                    # A clock that stepped back must not stamp an update before the creation the
+                    # record keeps: the reader rejects such a record, and every later save would fail.
+                    record = replace(
+                        record,
+                        created_at=old.created_at,
+                        updated_at=max(record.updated_at, old.created_at),
+                    )
                     payload = encode(record)
                     confirmed_record, issue = decode(payload, record.id)
                     if confirmed_record is None:

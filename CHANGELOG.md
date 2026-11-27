@@ -59,6 +59,7 @@ The Unreleased section is the promotion queue for the next package release. Entr
 - A Glue Iceberg snapshot selected beyond the visible rows keeps its detail and time-travel control after a retry.
 - An SSO session whose access token has expired but can be refreshed from its cached refresh token is no longer reported as expired.
 - A malformed SSO token cache or a non-string connection kind is reported as a load or config error, not a crash.
+- An Athena draft keeps saving after the system clock steps back, instead of every later save being refused.
 - Byte sizes just below a unit boundary are labelled in the next unit (1048575 bytes is 1.0 MB, not 1024.0 kB).
 - Athena SQL completion replaces only the token under the cursor, even when text is selected. Previously the whole selection was replaced.
 - Opening an S3 location no longer crashes the application when restoring the previous Glue page fails. The failure is logged, and the handoff failure is reported.
