@@ -30,7 +30,6 @@ from dataclasses import dataclass, field
 from enum import StrEnum
 from time import monotonic
 from typing import TYPE_CHECKING, Any, Protocol
-from urllib.parse import urlparse
 
 import regex  # type: ignore[import-untyped]
 
@@ -148,10 +147,13 @@ class S3LogLocation:
 
 
 def parse_log_uri(uri: str) -> S3LogLocation:
-    parsed = urlparse(uri)
-    if parsed.scheme != "s3":
+    # Split at the bucket's end only: a URL parser would treat '#' or '?' in a log prefix as a
+    # fragment or query and read a shorter prefix, so the logs of such a run were missed.
+    scheme, separator, rest = uri.partition("://")
+    if scheme.lower() != "s3" or not separator:
         raise ValueError(f"not an s3:// URI: {uri!r}")
-    return S3LogLocation(bucket=parsed.netloc, prefix=parsed.path.strip("/"))
+    bucket, _, prefix = rest.partition("/")
+    return S3LogLocation(bucket=bucket, prefix=prefix.strip("/"))
 
 
 class LogFileKind(StrEnum):

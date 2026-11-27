@@ -1211,3 +1211,11 @@ def test_timeout_engine_compile_failure_is_inline_validation_error(pattern: str)
 
     with pytest.raises(ValueError, match="invalid regex pattern"):
         LogFilter((r"a{e<=x}",))
+
+
+def test_parse_log_uri_keeps_fragment_and_query_characters_in_the_prefix() -> None:
+    """A '#' or '?' in a log prefix ended it early under URL parsing, so those logs were missed."""
+    assert parse_log_uri("s3://my-bucket/logs/run#1/") == S3LogLocation("my-bucket", "logs/run#1")
+    assert parse_log_uri("s3://my-bucket/logs/run?x=1") == S3LogLocation(
+        "my-bucket", "logs/run?x=1"
+    )
