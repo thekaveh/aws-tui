@@ -267,7 +267,7 @@ def parse_text(
     if text is None:
         return _raw(raw)
     sniff = raw[:PREVIEW_SNIFF_BYTES].decode("utf-8-sig", errors="ignore").lstrip()
-    suffix = name.rsplit(".", 1)[-1].lower()
+    suffix = name.rsplit(".", 1)[-1].lower() if "." in name else ""
     hinted = suffix == "csv" or "csv" in mime
     # A closed, unquoted bracket label is a legal CSV header (e.g. [red]id).
     # Admit it with a CSV hint after failed JSON parsing; JSON punctuation

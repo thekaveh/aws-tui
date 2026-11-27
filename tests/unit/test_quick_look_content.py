@@ -344,6 +344,17 @@ def test_only_a_byte_cut_forgives_a_dangling_utf8_sequence(raw, truncated):
     assert result.raw == raw
 
 
+@pytest.mark.parametrize(("name", "expected"), [("csv", "raw"), ("data.csv", "csv")])
+def test_dotless_name_gets_no_csv_hint(name, expected):
+    from aws_tui.domain.preview import parse_text
+    from aws_tui.domain.preview_limits import PreviewBudget
+
+    # Ragged rows only parse as a table when the name carries a CSV hint.
+    raw = b"a,b\n1,2,3\n"
+    result = parse_text(raw, name=name, mime="", truncated=False, budget=PreviewBudget.start())
+    assert result.format.value == expected
+
+
 @pytest.mark.asyncio
 async def test_csv_render_budget_fallback_retains_raw_validates_and_closes():
     from aws_tui.demo.in_memory_fs import InMemoryFS
