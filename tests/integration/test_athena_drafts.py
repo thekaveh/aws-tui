@@ -313,13 +313,19 @@ async def test_actual_app_keyboard_enable_save_restore_delete_disable(tmp_path, 
         assert not isinstance(app.screen, AthenaDraftsModal)
         assert vm.query.sql == original
         assert app.draft_results == ["closed", "restored"]
-        await wait_until(
-            lambda: (
-                app.focused is editor
-                and ctx.focus_coordinator.focused_slot is FocusSlot.ATHENA_PRIMARY
-            ),
-            what="restored editor focus and native focus projection",
-        )
+        try:
+            await wait_until(
+                lambda: (
+                    app.focused is editor
+                    and ctx.focus_coordinator.focused_slot is FocusSlot.ATHENA_PRIMARY
+                ),
+                what="restored editor focus and native focus projection",
+            )
+        except AssertionError as exc:
+            # The stall is intermittent in full runs and passes alone, so record the state that stalled.
+            raise AssertionError(
+                f"{exc}; focused={app.focused!r}, slot={ctx.focus_coordinator.focused_slot!r}"
+            ) from None
         assert app.focused is editor
         assert ctx.focus_coordinator.focused_slot is FocusSlot.ATHENA_PRIMARY
         assert client.start_calls == []
