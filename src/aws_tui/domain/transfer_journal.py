@@ -328,7 +328,8 @@ class TransferJournal:
             destination_uri = descriptor.destination_uri
             for line in lines[1:]:
                 timestamp = datetime.fromisoformat(line["ts"])
-                if timestamp.utcoffset() != started.utcoffset() or timestamp < updated:
+                # A wall clock that steps back is ordinary; only a different zone is corruption.
+                if timestamp.utcoffset() != started.utcoffset():
                     return None
                 updated = timestamp
                 if line.get("kind") == "attempted":

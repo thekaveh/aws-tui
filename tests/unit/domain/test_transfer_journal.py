@@ -836,3 +836,42 @@ def test_fdopen_construction_preserves_original_error(
     with pytest.raises(OSError, match=r".") as closed:
         real_fstat(descriptors[0])
     assert closed.value.errno == errno.EBADF
+
+
+def test_a_clock_step_back_between_records_does_not_make_the_journal_unreadable(
+    tmp_path: Path,
+) -> None:
+    """A wall-clock step back between begin and the next record made the reader drop the transfer.
+
+    The reader rejected any record stamped earlier than its predecessor. A system clock that
+    steps back is ordinary, so the transfer was lost along with its history. Only a record whose
+    time zone differs is still refused.
+    """
+    from datetime import UTC, datetime, timedelta
+
+    journal = TransferJournal(base_dir=tmp_path)
+    tid = safe_begin(journal)
+    later = datetime.now(UTC) + timedelta(minutes=5)
+    journal._append(
+        tid,
+        {
+            "kind": "part",
+            "ts": later.isoformat(),
+            "part_index": 1,
+            "etag": "e",
+            "bytes_written": 50,
+        },
+    )
+    journal._append(
+        tid,
+        {
+            "kind": "part",
+            "ts": (later - timedelta(minutes=4)).isoformat(),
+            "part_index": 2,
+            "etag": "f",
+            "bytes_written": 60,
+        },
+    )
+
+    # The terminal writes read the journal through _safe_state; it refused the backward record.
+    assert journal._safe_state(journal._path_for(tid)) is not None
