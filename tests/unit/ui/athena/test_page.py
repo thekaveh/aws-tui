@@ -2605,3 +2605,23 @@ async def test_native_sql_acknowledgement_does_not_claim_a_reentrant_vm_replacem
             subscription.dispose()
         await vm.shutdown()
         vm.dispose()
+
+
+async def test_closing_input_for_shutdown_carries_unpumped_editor_text_into_the_vm() -> None:
+    """A keystroke queued before quit reached the editor but not the view model.
+
+    The drafts flush then saved the SQL from before the last keystrokes.
+    """
+    vm, _client = _build_vm()
+    await vm.setup()
+    app = _AthenaApp(vm)
+
+    async with app.run_test(size=(100, 30)) as pilot:
+        await pilot.pause()
+        page = app.query_one(AthenaPage)
+        editor = page.query_one("#athena-editor", TextArea)
+        editor.load_text("SELECT 2")
+        # No pause here: the TextArea.Changed message is still queued, as it is when quit begins.
+        page.close_input_for_shutdown()
+        assert vm.query.sql == "SELECT 2"
+        assert editor.read_only

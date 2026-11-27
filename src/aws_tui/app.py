@@ -9785,6 +9785,13 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
             subscription.dispose()
             setattr(self, attribute, None)
 
+        def close_athena_editor_input() -> None:
+            # Before any await: a keystroke queued from here on would miss the drafts flush.
+            for screen in tuple(getattr(self, "screen_stack", ())):
+                for page in tuple(screen.query(AthenaPage)):
+                    page.close_input_for_shutdown()
+
+        run_cleanup("athena_page.close_input", close_athena_editor_input)
         for screen in tuple(getattr(self, "screen_stack", ())):
             if isinstance(screen, GlueComparisonModal):
                 run_cleanup("glue_comparison.close", screen.close)

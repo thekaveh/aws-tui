@@ -334,6 +334,20 @@ class AthenaPage(DeferredWorkerMixin, HubSubscriberMixin, Widget):
         self.call_after_refresh(self._request_table_refresh)
         self.call_after_refresh(self._maybe_focus_active)
 
+    def close_input_for_shutdown(self) -> None:
+        """Stop editor input before the drafts flush.
+
+        A ``TextArea.Changed`` message can still be queued when quit starts, and the
+        flush would then save the text from before the last keystrokes. Carry the
+        editor's current text into the view model first, then refuse later input.
+        """
+        editor = self.query_one("#athena-editor", TextArea)
+        if editor.text != self._vm.query.sql:
+            self._vm.query.set_sql(editor.text)
+        editor.read_only = True
+        self.disabled = True
+        self._vm.close_input_admission()
+
     def on_unmount(self) -> None:
         self._picker_open_intent.cancel()
         self.unsubscribe_from_vm()
