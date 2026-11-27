@@ -131,11 +131,9 @@ async def test_prepared_recovery_is_bound_to_key_selection_and_generation(contex
     _, _, vm = browser(context)
     await vm.load()
     vm.select_version(1)
-    prepared = await vm.prepare_recovery("new//../key")
+    prepared = await vm.prepare_recovery("new/key")
     assert vm.accepts(prepared)
-    assert prepared.request.destination_path == PathRef(
-        ("bucket", "prefix", "new", "", "..", "key")
-    )
+    assert prepared.request.destination_path == PathRef(("bucket", "prefix", "new", "key"))
     assert prepared.request.version.version_id == "old +/="
     vm.set_key("another")
     assert not vm.accepts(prepared)
@@ -216,3 +214,13 @@ async def test_versions_raising_subscriber_does_not_stop_later_subscribers(conte
     first.dispose()
     second.dispose()
     assert "state" in seen
+
+
+async def test_recovery_refuses_keys_the_listing_cannot_show(context):
+    """An empty or dot segment was accepted, and the recovered object was unreachable in the browser."""
+    _, _, vm = browser(context)
+    await vm.load()
+    vm.select_version(1)
+    for key in ("new//key", "new/../key", "new/./key", "new/"):
+        with pytest.raises(ConflictError):
+            await vm.prepare_recovery(key)

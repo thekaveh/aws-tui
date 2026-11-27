@@ -306,7 +306,12 @@ class S3VersionsVM(IsolatedComponentVM):
         version = self._transfer_version()
         if not key:
             raise ConflictError("Enter a different exact recovery key")
-        path = PathRef(self._prefix.segments + tuple(key.split("/")))
+        segments = tuple(key.split("/"))
+        # The listing cannot show an empty or dot segment, so a recovered object there
+        # would be unreachable from the browser. Refuse it before any provider read.
+        if any(segment in {"", ".", ".."} for segment in segments):
+            raise ConflictError("Recovery key must not contain empty, '.' or '..' segments")
+        path = PathRef(self._prefix.segments + segments)
         generation = self._generation
         self._busy = True
         self._notify()

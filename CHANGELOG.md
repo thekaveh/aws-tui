@@ -80,6 +80,7 @@ The Unreleased section is the promotion queue for the next package release. Entr
 - A Glue job, database, table, crawler or saved query named like the placeholder row is selectable.
 - The EMR new-job picker shows an application name with brackets literally in its tooltip.
 - A credential retry with no open pane using the source now says so, instead of finishing with no message.
+- Recovering an S3 version refuses a key with an empty or dot segment, which the browser cannot show.
 - Byte sizes just below a unit boundary are labelled in the next unit (1048575 bytes is 1.0 MB, not 1024.0 kB).
 - Athena SQL completion replaces only the token under the cursor, even when text is selected. Previously the whole selection was replaced.
 - Opening an S3 location no longer crashes the application when restoring the previous Glue page fails. The failure is logged, and the handoff failure is reported.
