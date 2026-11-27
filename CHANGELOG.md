@@ -46,7 +46,6 @@ The Unreleased section is the promotion queue for the next package release. Entr
 - Saving an S3 connection no longer holds the settings panel while the keychain or config file is busy; the panel keeps handling input and the save finishes in the background.
 - A Glue job, run, database, table or crawler list shows its rows again after a failed page is followed by a good one.
 - Log and crash-dump redaction covers a credential nested inside an object under a sensitive key, such as a `SecretAccessKey` inside `Credentials`.
-- A locked or unavailable keychain no longer hides every other connection; the connection whose credentials it cannot read keeps its metadata and the keychain is reported.
 - Saving the configuration through a symlinked config file keeps the link and writes the file it points to.
 - The read-only Athena SQL policy refuses table functions such as `system.query`, whose text runs at the source and was not checked.
 - A conditional S3 create whose response was lost is no longer reported as a conflict when it is retried.
