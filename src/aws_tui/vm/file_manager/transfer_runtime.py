@@ -57,10 +57,13 @@ class OwnedDiskOperations:
                     cancelled = True
                 except Exception:
                     break
-            value = task.result()
             if cancelled:
-                raise _DiskCancelled(value)
-            return value
+                if task.cancelled() or task.exception() is not None:
+                    # The owner was cancelled and the disk call then failed: the cancellation
+                    # is what the caller must see, not a persistence error.
+                    raise asyncio.CancelledError
+                raise _DiskCancelled(task.result())
+            return task.result()
         finally:
             self.tasks.discard(task)
 

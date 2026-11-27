@@ -37,6 +37,7 @@ The Unreleased section is the promotion queue for the next package release. Entr
 - Opening an Athena result location whose execution read failed shows the failure's reason, not "no valid S3 result location".
 - An Athena query whose submission the context gate retires no longer leaves the pane loading or reports a cancellation nobody requested.
 - A bounded list refresh that overlaps a continuation keeps its own limit state, so the refreshed list is not shown as at its limit.
+- Cancelling a file transfer whose history write then fails reports the cancellation, not a history write error.
 - Byte sizes just below a unit boundary are labelled in the next unit (1048575 bytes is 1.0 MB, not 1024.0 kB).
 - Athena SQL completion replaces only the token under the cursor, even when text is selected. Previously the whole selection was replaced.
 - Opening an S3 location no longer crashes the application when restoring the previous Glue page fails. The failure is logged, and the handoff failure is reported.
