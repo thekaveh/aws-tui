@@ -431,6 +431,17 @@ def _map_summary(value: str | None) -> tuple[tuple[str, str], ...]:
     return tuple(pairs)
 
 
+def _opens_quote(current: list[str]) -> bool:
+    """A quote only opens a quoted section at the start of a name or of a value.
+
+    Inside an unquoted value an apostrophe is a literal character (``O'Brien``).
+    """
+    text = "".join(current)
+    if "=" not in text:
+        return not text.strip()
+    return not text.split("=", 1)[1].strip()
+
+
 def _split_collection(value: str) -> tuple[str, ...]:
     items: list[str] = []
     current: list[str] = []
@@ -451,7 +462,7 @@ def _split_collection(value: str) -> tuple[str, ...]:
             if character == quote:
                 quote = None
             continue
-        if character in {"'", '"'}:
+        if character in {"'", '"'} and _opens_quote(current):
             current.append(character)
             quote = character
             continue
@@ -700,7 +711,8 @@ def _partition_values(
             if _unquote_field_name(item_name) != field_name:
                 raise ValueError
         normalized = item_value.strip()
-        if not normalized:
+        # An empty named value is a legal partition value; an empty positional item is not.
+        if not normalized and assignment is None:
             raise ValueError
         values.append(
             (
@@ -740,7 +752,7 @@ def _split_assignment(value: str) -> tuple[str, str] | None:
         if character == "=" and depth == 0:
             name = value[:index].strip()
             item_value = value[index + 1 :].strip()
-            if not name or not item_value:
+            if not name:
                 raise ValueError
             return name, item_value
     if quote is not None or depth != 0 or escaped:

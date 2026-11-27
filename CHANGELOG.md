@@ -61,6 +61,7 @@ The Unreleased section is the promotion queue for the next package release. Entr
 - A malformed SSO token cache or a non-string connection kind is reported as a load or config error, not a crash.
 - An Athena draft keeps saving after the system clock steps back, instead of every later save being refused.
 - Saving over an existing SQL file keeps the file's permissions instead of making it owner-only.
+- A Glue Iceberg partition page with a value containing an apostrophe, or an empty partition value, shows instead of failing as malformed.
 - Byte sizes just below a unit boundary are labelled in the next unit (1048575 bytes is 1.0 MB, not 1024.0 kB).
 - Athena SQL completion replaces only the token under the cursor, even when text is selected. Previously the whole selection was replaced.
 - Opening an S3 location no longer crashes the application when restoring the previous Glue page fails. The failure is logged, and the handoff failure is reported.

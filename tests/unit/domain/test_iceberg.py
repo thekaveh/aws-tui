@@ -1150,3 +1150,17 @@ def test_coverage_and_inspection_are_frozen_slot_values() -> None:
         coverage.status = "unknown"
     with pytest.raises(FrozenInstanceError):
         inspection.rows = ()
+
+
+def test_partition_values_with_an_apostrophe_or_an_empty_value_are_read() -> None:
+    """A partition value with an apostrophe, or an empty one, failed the whole partition page.
+
+    A quote opened a quoted section anywhere in a value, so ``O'Brien`` never closed; an empty
+    value was refused. An apostrophe inside an unquoted value is a character, and an empty named
+    value is a legal partition value.
+    """
+    from aws_tui.domain import iceberg
+
+    assert iceberg._partition_values("{name=O'Brien}", ("name",)) == (("name", "O'Brien"),)
+    assert iceberg._partition_values("{dt=}", ("dt",)) == (("dt", ""),)
+    assert iceberg._partition_values("{dt='2024-01-01'}", ("dt",)) == (("dt", "'2024-01-01'"),)
