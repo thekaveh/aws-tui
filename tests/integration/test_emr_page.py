@@ -1225,7 +1225,7 @@ async def test_full_app_clone_review_lifecycle(
                 assert calls[0][7]["executionTimeoutMinutes"] == 0
             elif outcome == "source-change":
                 page._vm.dispose()
-                await modal.action_submit()
+                await modal.submit_job()
                 assert "source" in str(modal.query_one("#clone-error", Static).content).lower()
                 await pilot.press("escape")
             elif outcome == "page-removal":

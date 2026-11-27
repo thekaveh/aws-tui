@@ -184,7 +184,7 @@ async def test_protection_enabled_after_review_blocks_start_and_retains_values(
             modal = await review_valid(app, pilot)
             entry = ctx.config_store.load().connections["synthetic"]
             ctx.config_store.update_connection("synthetic", replace(entry, protected=True))
-            await modal.action_submit()
+            await modal.submit_job()
             assert not [call for call in fake.calls if call[0] == "start_job_run"]
             assert PROTECTED_MESSAGE in str(modal.query_one("#clone-error", Static).render())
             assert modal.query_one("#clone-entry", Input).value == "s3://synthetic/job.py"
@@ -211,7 +211,7 @@ async def test_access_denial_retains_request_and_hides_provider_echo(tmp_path, m
             await start_form(app, pilot, ctx, "key")
             modal = await review_valid(app, pilot)
             token = modal.vm.client_token
-            await modal.action_submit()
+            await modal.submit_job()
             error = str(modal.query_one("#clone-error", Static).render())
             assert "Access denied" in error
             assert "PRIVATE_UNTRUSTED_REQUEST" not in error
@@ -240,7 +240,7 @@ async def test_application_change_during_review_cannot_retarget_submit(tmp_path,
             await start_form(app, pilot, ctx, "key")
             modal = await review_valid(app, pilot)
             await page.select_application("application002")
-            await modal.action_submit()
+            await modal.submit_job()
             assert "source changed" in str(modal.query_one("#clone-error", Static).render()).lower()
             assert not [call for call in fake.calls if call[0] == "start_job_run"]
             await pilot.press("escape")

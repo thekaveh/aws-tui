@@ -239,7 +239,15 @@ class JobRunCloneModal(DeferredWorkerMixin, ModalScreen[str | None]):
         self._vm.cancel()
         self.dismiss(None)
 
-    async def action_submit(self) -> None:
+    def action_submit(self) -> None:
+        """Enter reaches here through the app's priority ladder, which awaits the action.
+
+        The job start runs in a worker, so the key handler is free while AWS responds; an await here
+        blocked all input, including Close, until the start returned.
+        """
+        self._run_lifecycle_worker(self.submit_job, group="emr-clone-submit", exclusive=False)
+
+    async def submit_job(self) -> None:
         if self._submitting:
             return
         if not self.reviewing:
@@ -294,9 +302,7 @@ class JobRunCloneModal(DeferredWorkerMixin, ModalScreen[str | None]):
                 if node.disabled:
                     return
                 if node.button_id == "submit":
-                    self._run_lifecycle_worker(
-                        self.action_submit, group="emr-clone-submit", exclusive=False
-                    )
+                    self.action_submit()
                 elif node.button_id == "review":
                     self.action_review()
                 elif node.button_id == "back":

@@ -92,7 +92,7 @@ async def test_action_submit_provider_error_shows_inline_keeps_modal_open() -> N
         captured: list[str] = []
         modal.action_review()
         modal._show_error = MagicMock(side_effect=captured.append)  # type: ignore[method-assign]
-        await modal.action_submit()
+        await modal.submit_job()
         # Submission was awaited; drain dismissal events before asserting the error kept the modal open.
         await pilot.pause()
         # Modal still active — not dismissed.
@@ -118,7 +118,7 @@ async def test_action_submit_unexpected_exception_caught_keeps_modal_open() -> N
         captured: list[str] = []
         modal.action_review()
         modal._show_error = MagicMock(side_effect=captured.append)  # type: ignore[method-assign]
-        await modal.action_submit()
+        await modal.submit_job()
         # Submission was awaited; drain dismissal events before asserting the unexpected error kept the modal open.
         await pilot.pause()
         # Modal still active — defensive clause kept the app alive.
@@ -191,11 +191,11 @@ async def test_second_submit_while_the_first_is_in_flight_launches_one_job() -> 
         assert isinstance(modal, JobRunCloneModal)
 
         modal.action_review()
-        first = asyncio.ensure_future(modal.action_submit())
+        first = asyncio.ensure_future(modal.submit_job())
         await asyncio.wait_for(started.wait(), timeout=5)
 
         # Second activation arrives while the first round-trip is open.
-        await modal.action_submit()
+        await modal.submit_job()
         assert calls == 1, "a second submit started another EMR job run"
 
         release.set()
@@ -252,7 +252,7 @@ async def test_review_shows_identity_changes_and_keeps_actions_reachable(
             await pilot.pause()
             assert not modal.reviewing
             assert modal.query_one("#clone-name", Input).value == "changed-job"
-            await modal.action_submit()
+            await modal.submit_job()
             vm.submit.assert_not_awaited()
             modal.query_one("#clone-name", Input).value = "second-edit"
             modal.action_review()
@@ -280,7 +280,7 @@ async def test_review_preserves_empty_newline_arguments_and_spark_whitespace() -
                 detail.entry_point_arguments
             )
             modal.action_review()
-            await modal.action_submit()
+            await modal.submit_job()
             calls = [c[1] for c in fake.calls if c[0] == "start_job_run"]
             assert len(calls) == 1
             assert calls[0][3] == detail.entry_point_arguments
@@ -404,7 +404,7 @@ async def test_external_intent_change_invalidates_review() -> None:
             modal = pilot.app.screen
             modal.action_review()
             vm.apply_settings({"mode": "STREAMING"})
-            await modal.action_submit()
+            await modal.submit_job()
             vm.submit.assert_not_awaited()
             assert not modal.reviewing
             assert "review" in str(modal.query_one("#clone-error", Static).content).lower()
@@ -425,14 +425,14 @@ async def test_modal_ambiguous_retry_keeps_exact_reviewed_intent() -> None:
             modal.action_review()
             token = vm.client_token
             fake.start_job_run_exc = ProviderUnreachableError("PRIVATE_ARG_IN_EXCEPTION_238")
-            await modal.action_submit()
+            await modal.submit_job()
             assert modal.reviewing
             assert vm.client_token == token
             assert "PRIVATE_ARG_IN_EXCEPTION_238" not in str(
                 modal.query_one("#clone-error", Static).content
             )
             fake.start_job_run_exc = None
-            await modal.action_submit()
+            await modal.submit_job()
             calls = [call[1] for call in fake.calls if call[0] == "start_job_run"]
             assert len(calls) == 2
             assert calls[0][6] == calls[1][6] == token
@@ -459,7 +459,7 @@ async def test_cancel_during_submit_ignores_late_result() -> None:
         async with _CloneModalHostApp(vm, MessageHub()).run_test() as pilot:
             modal = pilot.app.screen
             modal.action_review()
-            task = asyncio.create_task(modal.action_submit())
+            task = asyncio.create_task(modal.submit_job())
             await asyncio.wait_for(started.wait(), timeout=5)
             assert str(modal.query_one("#clone-cancel", Static).content) == "Close"
             assert "does not cancel" in str(modal.query_one("#clone-progress", Static).content)
@@ -578,7 +578,7 @@ async def test_review_preserves_unicode_separators_and_mixed_line_endings(kind: 
             assert vm.spark_submit_parameters == detail.spark_submit_parameters
             assert vm.settings.get("configurationOverrides") == detail.configuration_overrides
             assert vm.client_token == token
-            await modal.action_submit()
+            await modal.submit_job()
             request = next(c[1][7] for c in fake.calls if c[0] == "start_job_run")
             assert request["jobDriver"]["sparkSubmit"]["entryPointArguments"] == list(
                 detail.entry_point_arguments
@@ -622,9 +622,21 @@ async def test_argument_null_review_omission_and_empty_edit_rotate_token() -> No
             modal.action_review()
             assert vm.client_token != empty_token
             assert vm.entry_point_arguments is None
-            await modal.action_submit()
+            await modal.submit_job()
             request = next(c[1][7] for c in fake.calls if c[0] == "start_job_run")
             assert "entryPointArguments" not in request["jobDriver"]["sparkSubmit"]
     finally:
         vm.dispose()
         fake.dispose()
+
+
+def test_keyboard_submit_action_is_not_awaited_by_the_key_handler() -> None:
+    """Enter reached an awaited submit, so the app's key handler blocked until AWS replied.
+
+    The app's priority ladder awaits any awaitable an action returns. The submit action must
+    start its work and return, so Close and the rest of the input keep working during a submit.
+    """
+    import inspect
+
+    assert not inspect.iscoroutinefunction(JobRunCloneModal.action_submit)
+    assert inspect.iscoroutinefunction(JobRunCloneModal.submit_job)
