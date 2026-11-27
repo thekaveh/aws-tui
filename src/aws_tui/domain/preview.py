@@ -161,6 +161,10 @@ def _reject_constant(value: str) -> Any:
     raise ValueError("Nonfinite JSON constant")
 
 
+class _JsonBudgetExceeded(ValueError):
+    """A well-formed document larger than the preview's node budget."""
+
+
 def _check_nodes(value: Any, budget: PreviewBudget) -> None:
     stack = [(value, 0)]
     nodes = 0
@@ -168,7 +172,7 @@ def _check_nodes(value: Any, budget: PreviewBudget) -> None:
         current, depth = stack.pop()
         nodes += 1
         if nodes > PREVIEW_MAX_NODES or depth > PREVIEW_MAX_NESTING:
-            raise ValueError("JSON nodes exceed preview budget")
+            raise _JsonBudgetExceeded("JSON nodes exceed preview budget")
         budget.check()
         if isinstance(current, dict):
             nodes += len(current)  # Keys also consume the traversal budget.
@@ -276,6 +280,9 @@ def parse_text(
                 format_ = PreviewFormat.JSON
             _check_nodes(value, budget)
             return _json_table(value, format_, raw)
+        except _JsonBudgetExceeded:
+            # Valid JSON too large to preview is not malformed; say which it is.
+            return _raw(raw, "JSON preview exceeds the display budget")
         except (ValueError, RecursionError):
             # Never reinterpret malformed JSON-shaped documents as delimited records.
             if sniff.startswith(("{", "[")) and not bracket_header:

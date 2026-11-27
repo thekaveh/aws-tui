@@ -60,3 +60,21 @@ def test_only_ranges_charge_bytes():
     budget = PreviewBudget.start(clock=lambda: 0.0)
     with pytest.raises(ValueError, match="only range"):
         budget.charge_request(kind=PreviewRequestKind.OPEN, length=1)
+
+
+def test_a_valid_array_over_the_node_budget_is_not_reported_as_malformed():
+    """A valid 1000-row JSON array was reported as a malformed or truncated document.
+
+    Exceeding the node budget was raised as the same error as malformed JSON. A well-formed array
+    too large to preview now says that it exceeds the display budget.
+    """
+    from aws_tui.domain import preview
+    from aws_tui.domain.preview import PreviewBudget
+
+    raw = ("[" + ",".join(f'{{"id": {i}, "name": "row {i}"}}' for i in range(1000)) + "]").encode()
+    result = preview.parse_text(
+        raw, name="rows.json", mime="", truncated=False, budget=PreviewBudget.start()
+    )
+
+    assert result.format is preview.PreviewFormat.RAW
+    assert result.notes == ("JSON preview exceeds the display budget",)
