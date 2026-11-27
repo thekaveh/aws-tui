@@ -1235,6 +1235,14 @@ class PaneVM(IsolatedComponentVM):
             if strict_missing and isinstance(provider, DirectoryNavigationVerifier):
                 await provider.verify_directory(path)
             raw = await provider.list(path)
+        except asyncio.CancelledError:
+            # A listing cancelled in flight has no reply left to end its LOADING state.
+            if (
+                self._reload_is_current(generation, provider, path)
+                and self._state is PaneState.LOADING
+            ):
+                self._set_state(PaneState.IDLE if self.entries else PaneState.EMPTY)
+            raise
         except NotFoundError as exc:
             if not self._reload_is_current(generation, provider, path):
                 return

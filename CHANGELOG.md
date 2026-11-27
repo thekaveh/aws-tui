@@ -25,6 +25,7 @@ The Unreleased section is the promotion queue for the next package release. Entr
 - Shift+A from no selected EMR application moves backward to the last application, not the second-to-last.
 - A cancelled EMR dashboard delivery no longer blocks the event loop.
 - Missing-credentials guidance omits `--profile` when the connection has no profile.
+- Athena results, tables, saved and prepared lists, and file listings no longer stay in the loading state after the load is cancelled.
 - Byte sizes just below a unit boundary are labelled in the next unit (1048575 bytes is 1.0 MB, not 1024.0 kB).
 - Athena SQL completion replaces only the token under the cursor, even when text is selected. Previously the whole selection was replaced.
 - Opening an S3 location no longer crashes the application when restoring the previous Glue page fails. The failure is logged, and the handoff failure is reported.

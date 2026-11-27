@@ -32,6 +32,9 @@ class SavedClient:
         self.named_fetch_started = asyncio.Event()
         self.release_named_fetch = asyncio.Event()
         self.block_prepared_detail = False
+        self.block_prepared_request: tuple[str, str | None] | None = None
+        self.prepared_list_started = asyncio.Event()
+        self.release_prepared_list = asyncio.Event()
         self.ignore_prepared_detail_cancellation = False
         self.prepared_detail_started = asyncio.Event()
         self.prepared_detail_cancelled = asyncio.Event()
@@ -63,6 +66,9 @@ class SavedClient:
     ) -> tuple[list[PreparedStatementSummary], str | None]:
         request = (workgroup, start_token)
         self.prepared_list_calls.append(request)
+        if request == self.block_prepared_request:
+            self.prepared_list_started.set()
+            await self.release_prepared_list.wait()
         return self.prepared_pages[request]
 
     async def get_prepared_statement(
@@ -626,3 +632,38 @@ def test_saved_vm_publishes_nothing_after_dispose() -> None:
     stream.clear()
     vm._publish("state")
     assert stream == []
+
+
+@pytest.mark.asyncio
+async def test_cancelled_saved_setup_does_not_leave_the_lists_loading() -> None:
+    """A setup cancelled in flight left the named and prepared lists LOADING."""
+    client = _seeded_client()
+    client.block_named_request = ("analysts", None)
+    vm = make_saved_vm(client)
+
+    setup = asyncio.create_task(vm.setup())
+    await client.named_fetch_started.wait()
+    assert vm.named_state is PaneState.LOADING
+
+    setup.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await setup
+
+    assert vm.named_state is not PaneState.LOADING
+
+
+@pytest.mark.asyncio
+async def test_cancelled_prepared_refresh_does_not_leave_the_list_loading() -> None:
+    client = _seeded_client()
+    client.block_prepared_request = ("analysts", None)
+    vm = make_saved_vm(client)
+
+    setup = asyncio.create_task(vm.setup())
+    await client.prepared_list_started.wait()
+    assert vm.prepared_state is PaneState.LOADING
+
+    setup.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await setup
+
+    assert vm.prepared_state is not PaneState.LOADING

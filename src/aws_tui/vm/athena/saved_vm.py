@@ -644,6 +644,11 @@ class AthenaSavedVM(IsolatedComponentVM):
         try:
             command = worker.pager.refresh_command if refresh else worker.pager.load_more_command
             await command.execute_async()
+        except asyncio.CancelledError:
+            # A list cancelled in flight has no reply left to end its LOADING state.
+            if self._is_current_named(worker) and self._named_state is PaneState.LOADING:
+                self._set_named_state(PaneState.IDLE if self.named_queries else PaneState.EMPTY)
+            raise
         except PagerCollectionLimitError:
             if self._is_current_named(worker):
                 accepted_ids = {row.query_id for row in worker.pager.items}
@@ -697,6 +702,13 @@ class AthenaSavedVM(IsolatedComponentVM):
         try:
             command = worker.pager.refresh_command if refresh else worker.pager.load_more_command
             await command.execute_async()
+        except asyncio.CancelledError:
+            # A list cancelled in flight has no reply left to end its LOADING state.
+            if self._is_current_prepared(worker) and self._prepared_state is PaneState.LOADING:
+                self._set_prepared_state(
+                    PaneState.IDLE if self.prepared_statements else PaneState.EMPTY
+                )
+            raise
         except PagerCollectionLimitError:
             if self._is_current_prepared(worker):
                 self._prepared_error_text = None

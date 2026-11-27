@@ -230,6 +230,11 @@ class AthenaTablesVM(IsolatedComponentVM):
                 if current():
                     self._state = PaneState.IDLE if self.items else PaneState.EMPTY
                     self._error_text = None
+            except asyncio.CancelledError:
+                # A request cancelled in flight has no reply left to end its LOADING state.
+                if current() and self._state is PaneState.LOADING:
+                    self._state = PaneState.IDLE if self.items else PaneState.EMPTY
+                raise
             except PagerCollectionLimitError:
                 if current():
                     pager.restore(pager.items, None, limit_reached=True)

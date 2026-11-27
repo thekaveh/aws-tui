@@ -335,6 +335,8 @@ async def test_reload_clears_marks_before_provider_returns(outcome: str) -> None
             task.cancel()
             with pytest.raises(asyncio.CancelledError):
                 await task
+            # A listing cancelled in flight stayed LOADING with no request left to end it.
+            assert vm.state is not PaneState.LOADING
         else:
             release.set()
             await task

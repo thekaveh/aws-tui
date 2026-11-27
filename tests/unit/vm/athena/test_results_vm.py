@@ -1086,3 +1086,21 @@ def test_results_vm_publishes_nothing_after_dispose() -> None:
     stream.clear()
     vm._publish("state")
     assert stream == []
+
+
+@pytest.mark.asyncio
+async def test_cancelled_result_load_does_not_leave_the_pane_loading() -> None:
+    """A load cancelled in flight stayed LOADING, so later snapshots reported busy."""
+    client = ResultClient({("q-1", None): ResultPage((_ID,), (("row",),), None)})
+    client.blocked_execution = "q-1"
+    vm = make_results_vm(client)
+
+    load = asyncio.create_task(vm.load("q-1"))
+    await client.fetch_started.wait()
+    assert vm.state is PaneState.LOADING
+
+    load.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await load
+
+    assert vm.state is not PaneState.LOADING

@@ -301,6 +301,11 @@ class AthenaResultsVM(IsolatedComponentVM):
         task = worker.track_current_task()
         try:
             await worker.pager.refresh_command.execute_async()
+        except asyncio.CancelledError:
+            # A load cancelled in flight has no request left to end its LOADING state.
+            if self._is_current_worker(worker) and self._state is PaneState.LOADING:
+                self._set_state(PaneState.IDLE if self.rows else PaneState.EMPTY)
+            raise
         except _ResultColumnsChangedError:
             if not self._is_current_worker(worker):
                 return

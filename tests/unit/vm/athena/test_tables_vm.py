@@ -430,3 +430,21 @@ def test_tables_vm_publishes_nothing_after_dispose() -> None:
     stream.clear()
     vm._publish("state")
     assert stream == []
+
+
+async def test_cancelled_table_refresh_does_not_leave_the_pane_loading():
+    """A refresh cancelled in flight stayed LOADING, with no request left to end it."""
+    client = TablesClient()
+    client.block = ("events", None)
+    vm = AthenaTablesVM(
+        client=client, context=CONTEXT, hub=MessageHub(), dispatcher=NULL_DISPATCHER
+    )
+    refresh = asyncio.create_task(vm.refresh())
+    await client.started.wait()
+    assert vm.state is PaneState.LOADING
+
+    refresh.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await refresh
+
+    assert vm.state is not PaneState.LOADING
