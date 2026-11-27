@@ -505,6 +505,7 @@ class LocalFS:
                         raise ConflictError(f"source changed: {claimed_original.as_posix()}")
                     host_stat = quarantined_stat
                 if stat.S_ISDIR(host_stat.st_mode) and not stat.S_ISLNK(host_stat.st_mode):
+                    await anyio.to_thread.run_sync(_require_removable_tree, str(host))
                     await anyio.to_thread.run_sync(shutil.rmtree, str(host))
                 else:
                     await host.unlink()
@@ -2437,6 +2438,38 @@ def _rename_no_replace_at(src_fd: int, src: str, dst_fd: int, dst: str) -> None:
         raise OSError(code, os.strerror(code), dst)
 
 
+def _require_removable_tree_at(parent_fd: int, name: str, value: os.stat_result) -> None:
+    """Refuse a recursive delete before removing anything if a directory cannot be emptied."""
+    if _WINDOWS or not stat.S_ISDIR(value.st_mode) or stat.S_ISLNK(value.st_mode):
+        return
+    if not os.access(name, os.W_OK | os.X_OK, dir_fd=parent_fd, follow_symlinks=False):
+        raise PermissionError(errno.EACCES, "directory is not writable and searchable", name)
+    directory_fd = _open_nofollow(
+        name,
+        os.O_RDONLY | _O_DIRECTORY,
+        dir_fd=parent_fd,
+    )
+    try:
+        for child in os.listdir(directory_fd):  # noqa: PTH208 - descriptor-relative API
+            child_stat = os.stat(child, dir_fd=directory_fd, follow_symlinks=False)
+            _require_removable_tree_at(directory_fd, child, child_stat)
+    finally:
+        os.close(directory_fd)
+
+
+def _require_removable_tree(root: str) -> None:
+    """Unrooted counterpart of ``_require_removable_tree_at`` for ``shutil.rmtree``."""
+    if _WINDOWS:
+        return
+
+    def unreadable(error: OSError) -> None:
+        raise error
+
+    for dirpath, _dirnames, _filenames in os.walk(root, onerror=unreadable):
+        if not os.access(dirpath, os.W_OK | os.X_OK):
+            raise PermissionError(errno.EACCES, "directory is not writable and searchable", dirpath)
+
+
 def _remove_tree_at(parent_fd: int, name: str, value: os.stat_result) -> None:
     if not stat.S_ISDIR(value.st_mode) or stat.S_ISLNK(value.st_mode):
         os.unlink(name, dir_fd=parent_fd)
@@ -2482,6 +2515,7 @@ def _rooted_delete(
             claimed = os.stat(quarantine, dir_fd=parent_fd, follow_symlinks=False)
             if _local_stable_identity(claimed) != _local_stable_identity(observed):
                 raise ConflictError(f"source changed: {path.as_posix()}")
+            _require_removable_tree_at(parent_fd, quarantine, claimed)
             _remove_tree_at(parent_fd, quarantine, claimed)
         except BaseException:
             _restore_claim(parent_fd, quarantine, name)

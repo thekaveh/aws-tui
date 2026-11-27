@@ -1988,6 +1988,32 @@ async def test_rooted_delete_restores_claim_on_permission_failure(tmp_path: Path
             path.chmod(0o700)
 
 
+@pytest.mark.skipif(
+    sys.platform == "win32" or os.geteuid() == 0,
+    reason="POSIX mode bits; root bypasses them",
+)
+@pytest.mark.parametrize("rooted", [True, False], ids=["rooted", "unrooted"])
+async def test_delete_refuses_a_tree_with_a_read_only_subdirectory_before_removing_anything(
+    tmp_path: Path, rooted: bool
+) -> None:
+    tree = tmp_path / "tree"
+    read_only = tree / "read_only"
+    read_only.mkdir(parents=True)
+    (tree / "keep.txt").write_bytes(b"keep")
+    (read_only / "inner.txt").write_bytes(b"inner")
+    read_only.chmod(0o500)
+    provider = LocalFS(root=tmp_path) if rooted else LocalFS()
+    target = PathRef(("tree",)) if rooted else PathRef.from_posix(str(tree))
+    try:
+        with pytest.raises(PermissionDeniedError):
+            await provider.delete(target)
+        assert (tree / "keep.txt").read_bytes() == b"keep"
+        assert (read_only / "inner.txt").read_bytes() == b"inner"
+        assert not list(tmp_path.glob(".aws-tui-delete-*"))
+    finally:
+        read_only.chmod(stat.S_IRWXU)
+
+
 @pytest.mark.skipif(os.name == "nt", reason="POSIX quarantine rename")
 async def test_direct_conditional_delete_drains_its_claim_before_cancellation_returns(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
