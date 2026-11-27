@@ -317,3 +317,20 @@ def test_cancelling_admitted_publication_does_not_block_caller(tmp_path, monkeyp
         cancelling.result(timeout=3)
     assert permit.publication_admitted
     assert result.sql == path.read_text() == "SELECT 1"
+
+
+def test_overwriting_a_sql_file_keeps_its_permissions(tmp_path):
+    """Saving over a 0644 file left it 0600, because the staged file is owner-only."""
+    import stat as _stat
+
+    m = api()
+    path = tmp_path / "shared.sql"
+    m.SqlFileStore().write(path, "SELECT 1")
+    path.chmod(0o644)
+    # The mode is part of the file's version, so the acknowledged version is read after it.
+    current = m.SqlFileStore().read(path)
+
+    m.SqlFileStore().write(path, "SELECT 2", expected=current.version)
+
+    assert _stat.S_IMODE(path.stat().st_mode) == 0o644
+    assert path.read_text(encoding="utf-8") == "SELECT 2"

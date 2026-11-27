@@ -218,6 +218,11 @@ class SqlFileStore:
                     target.write(payload)
                     target.flush()
                     os.fsync(target.fileno())
+                if expected is not None:
+                    # The staged file is owner-only; an overwrite keeps the file's own mode, as an
+                    # editor would, instead of turning a shared 0644 file into 0600.
+                    with contextlib.suppress(OSError):
+                        stage.chmod(stat.S_IMODE(path.stat().st_mode))
                 permit.check()
                 _check_target(path, expected)
                 with permit.publication():
