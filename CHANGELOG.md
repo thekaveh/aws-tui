@@ -71,6 +71,7 @@ The Unreleased section is the promotion queue for the next package release. Entr
 - When the Athena workgroup is unavailable for a Glue Iceberg view, its catalog and database are cleared with it, so workspace saves keep working.
 - Cancelling a folder change no longer leaves the previous folder's files listed under the new path, where a delete would act on files that were not shown.
 - Submitting an EMR job from the keyboard no longer freezes the app until AWS replies; Close and the rest of the input keep working.
+- A confirmation dialog answers once, so a double activation no longer closes the screen beneath it.
 - Byte sizes just below a unit boundary are labelled in the next unit (1048575 bytes is 1.0 MB, not 1024.0 kB).
 - Athena SQL completion replaces only the token under the cursor, even when text is selected. Previously the whole selection was replaced.
 - Opening an S3 location no longer crashes the application when restoring the previous Glue page fails. The failure is logged, and the handoff failure is reported.

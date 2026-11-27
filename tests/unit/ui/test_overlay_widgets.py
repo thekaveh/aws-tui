@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import AsyncIterator
+from types import SimpleNamespace
 
 import pytest
 from textual.app import App, ComposeResult
@@ -436,3 +437,28 @@ async def test_empty_standalone_help_never_invents_action_rows():
         await pilot.pause()
         assert not app.screen.query(HelpActionRow)
         assert any("doctor" in str(row.content) for row in app.screen.query(".help-dim"))
+
+
+def test_a_confirm_modal_answers_once_even_when_action_and_click_both_fire() -> None:
+    """Enter reached the confirm action and the button's click, so the modal dismissed twice.
+
+    The second dismiss popped the screen beneath the dialog. The first answer is the only one.
+    """
+    from aws_tui.ui.widgets.confirm_modal import ConfirmModal
+
+    modal = object.__new__(ConfirmModal)
+    executed: list[str] = []
+    dismissed: list[bool] = []
+    modal._answered = False  # type: ignore[attr-defined]
+    modal._vm = SimpleNamespace(  # type: ignore[attr-defined]
+        confirm_command=SimpleNamespace(execute=lambda: executed.append("confirm")),
+        cancel_command=SimpleNamespace(execute=lambda: executed.append("cancel")),
+    )
+    modal.dismiss = lambda result=None: dismissed.append(result)  # type: ignore[method-assign]
+
+    modal.action_confirm()
+    modal.action_confirm()
+    modal.action_cancel()
+
+    assert executed == ["confirm"]
+    assert dismissed == [True]

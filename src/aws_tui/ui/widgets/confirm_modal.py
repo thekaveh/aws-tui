@@ -67,6 +67,8 @@ class ConfirmModal(ModalScreen[bool]):
         self._vm: ConfirmationVM = vm
         self._request: ConfirmRequest = request
         self._hub: MessageHub[Message] = hub
+        # One answer only: Enter can reach the action and the button's click for one keypress.
+        self._answered = False
         # Default focus = the primary (confirm) button — matches the
         # most common case where the user is about to hit Enter to
         # accept. For danger dialogs we start on Cancel instead so a
@@ -140,10 +142,16 @@ class ConfirmModal(ModalScreen[bool]):
         self._focus_button_widget()
 
     def action_cancel(self) -> None:
+        if self._answered:
+            return
+        self._answered = True
         self._vm.cancel_command.execute()
         self.dismiss(False)
 
     def action_confirm(self) -> None:
+        if self._answered:
+            return
+        self._answered = True
         self._vm.confirm_command.execute()
         self.dismiss(True)
 
