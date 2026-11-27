@@ -1177,3 +1177,14 @@ def test_saving_through_a_symlinked_config_keeps_the_link_and_updates_the_target
 
     assert link.is_symlink()
     assert "linked" in real.read_text(encoding="utf-8")
+
+
+def test_a_non_string_connection_kind_is_a_config_error_not_a_type_error(tmp_path) -> None:
+    """A list-valued kind raised TypeError from the membership test, not ConfigError."""
+    from aws_tui.infra.config_store import ConfigError, ConfigStore
+
+    path = tmp_path / "config.toml"
+    path.write_text('[connections.odd]\nkind = ["aws"]\n', encoding="utf-8")
+
+    with pytest.raises(ConfigError, match="invalid kind"):
+        ConfigStore(path=path).load()

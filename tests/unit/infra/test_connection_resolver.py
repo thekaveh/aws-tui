@@ -886,9 +886,10 @@ class TestDiscovery:
         assert store.path.read_text(encoding="utf-8") == body
         assert config.read_bytes() == before
         assert not credentials.exists()
-        with pytest.raises(TypeError, match="unhashable"):
+        # The bad kind is a config error, not a type error from a membership test.
+        with pytest.raises(ConfigError, match="invalid kind"):
             resolver.list()
-        with pytest.raises(TypeError, match="unhashable"):
+        with pytest.raises(ConfigError, match="invalid kind"):
             resolver.resolve("usable")
 
     def test_credential_backend_type_error_is_not_disguised_as_bad_app_config(

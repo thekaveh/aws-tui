@@ -453,3 +453,58 @@ class TestClientLifecycle:
         assert client_kwargs["verify"] is False
         # Force-path-style propagates through botocore Config.
         assert "config" in client_kwargs
+
+
+class TestRefreshableSsoCache:
+    def _cache_with(self, tmp_path: Path, extra: dict) -> tuple[AwsSession, Path, str]:
+        aws_cfg = tmp_path / ".aws" / "config"
+        sso_session = "company-sso"
+        _write_aws_config_with_sso(aws_cfg, profile="dev", sso_session=sso_session)
+        cache_dir = tmp_path / "sso-cache"
+        cache_dir.mkdir(parents=True)
+        payload = {
+            "accessToken": "stale",
+            "expiresAt": (datetime.now(UTC) - timedelta(hours=1)).strftime("%Y-%m-%dT%H:%M:%SZ"),
+            **extra,
+        }
+        (cache_dir / f"{_sha1(sso_session)}.json").write_text(json.dumps(payload), encoding="utf-8")
+        return AwsSession(sso_cache_dir=cache_dir, aws_config_path=aws_cfg), cache_dir, sso_session
+
+    def test_expired_access_token_with_a_valid_refresh_path_is_not_an_expired_session(
+        self, tmp_path: Path
+    ) -> None:
+        """An expired access token was reported as an expired session, though botocore refreshes it.
+
+        With a refresh token, client credentials and a registration still in the future, botocore
+        refreshes the token itself. The live path is left to do that, so the session is not
+        reported as expired.
+        """
+        future = (datetime.now(UTC) + timedelta(days=30)).strftime("%Y-%m-%dT%H:%M:%SZ")
+        session, _, _ = self._cache_with(
+            tmp_path,
+            {
+                "refreshToken": "r",
+                "clientId": "c",
+                "clientSecret": "s",
+                "registrationExpiresAt": future,
+            },
+        )
+
+        assert session.probe_token(_aws_conn()).state is TokenState.CONNECTED
+
+    def test_expired_access_token_without_a_refresh_path_stays_expired(
+        self, tmp_path: Path
+    ) -> None:
+        session, _, _ = self._cache_with(tmp_path, {})
+
+        assert session.probe_token(_aws_conn()).state is TokenState.EXPIRED
+
+    def test_non_object_or_undecodable_cache_is_a_token_load_error(self, tmp_path: Path) -> None:
+        """A JSON list or invalid UTF-8 escaped as AttributeError or UnicodeDecodeError."""
+        from aws_tui.infra.aws_session import TokenLoadError
+
+        for raw in (b"[1, 2]", b"\xff\xfe"):
+            session, cache_dir, sso_session = self._cache_with(tmp_path / raw.hex(), {})
+            (cache_dir / f"{_sha1(sso_session)}.json").write_bytes(raw)
+            with pytest.raises(TokenLoadError):
+                session.probe_token(_aws_conn())

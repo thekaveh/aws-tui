@@ -118,8 +118,11 @@ class AwsSession:
 
         try:
             payload = json.loads(cache_file.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError) as exc:
+        except (OSError, ValueError) as exc:
+            # JSONDecodeError and UnicodeDecodeError are both ValueError.
             raise TokenLoadError(f"could not read SSO token cache at {cache_file}") from exc
+        if not isinstance(payload, dict):
+            raise TokenLoadError(f"SSO token cache at {cache_file} is not an object")
 
         expires_raw = payload.get("expiresAt")
         if not isinstance(expires_raw, str):
@@ -132,6 +135,11 @@ class AwsSession:
 
         now = datetime.now(UTC)
         if expires_at - _SKEW_BUFFER <= now:
+            if _refreshable_from_cache(payload, now):
+                # botocore refreshes an expired access token from the cached refresh token while
+                # the client registration is valid. That session is not expired; the live path
+                # performs the refresh and reports any real failure.
+                return TokenProbeResult(state=TokenState.CONNECTED)
             return TokenProbeResult(state=TokenState.EXPIRED, expires_at=expires_at)
         return TokenProbeResult(state=TokenState.CONNECTED, expires_at=expires_at)
 
@@ -253,6 +261,19 @@ class AwsSession:
                 )
             except BaseException:
                 raise
+
+
+def _refreshable_from_cache(payload: dict[str, Any], now: datetime) -> bool:
+    """Whether the cached token can be refreshed, using botocore's own preconditions."""
+    if not all(payload.get(key) for key in ("refreshToken", "clientId", "clientSecret")):
+        return False
+    registration = payload.get("registrationExpiresAt")
+    if not isinstance(registration, str):
+        return False
+    try:
+        return _parse_iso8601(registration) > now
+    except ValueError:
+        return False
 
 
 def _parse_iso8601(value: str) -> datetime:

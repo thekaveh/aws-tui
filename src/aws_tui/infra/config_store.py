@@ -443,7 +443,7 @@ class ConfigStore:
             if not isinstance(body, dict):
                 raise ConfigError(f"[connections.{name}] must be a table")
             kind = body.get("kind")
-            if kind not in VALID_KINDS:
+            if not isinstance(kind, str) or kind not in VALID_KINDS:
                 raise ConfigError(
                     f"[connections.{name}] has invalid kind {kind!r}; "
                     f"expected one of {sorted(VALID_KINDS)}"
