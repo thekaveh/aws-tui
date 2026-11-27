@@ -1638,7 +1638,11 @@ class S3FS:
                 progress(TransferProgress(bytes_transferred=bytes_written, bytes_total=total_size))
 
         try:
-            async with self._client() if _upload is None else self._upload_client() as s3:
+            # A conditional create is a final write: a retried request that finds its own earlier
+            # success gets a 412 and is reported as a conflict, so it gets one attempt.
+            async with (
+                self._upload_client() if (_upload is not None or not overwrite) else self._client()
+            ) as s3:
                 upload_id: str | None = None
                 try:
                     chunk = await reader.read(part_size)

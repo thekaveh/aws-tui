@@ -174,6 +174,7 @@ async def test_cancelled_write_aborts_multipart_upload(
 
     fs = S3FS(session=MagicMock(), bucket="bucket")
     monkeypatch.setattr(fs, "_client", client_context)
+    monkeypatch.setattr(fs, "_upload_client", client_context)
     task = asyncio.create_task(fs.write_stream(PathRef.from_posix("/key"), _source(), total_size=7))
     await asyncio.wait_for(client.upload_started.wait(), timeout=1)
 
@@ -197,6 +198,7 @@ async def test_repeated_cancellation_durably_drains_multipart_abort(
 
     fs = S3FS(session=MagicMock(), bucket="bucket")
     monkeypatch.setattr(fs, "_client", client_context)
+    monkeypatch.setattr(fs, "_upload_client", client_context)
     write = asyncio.create_task(
         fs.write_stream(PathRef.from_posix("/key"), _source(), total_size=7)
     )
@@ -224,6 +226,7 @@ async def test_cancellation_during_failed_upload_abort_takes_priority(
 
     fs = S3FS(session=MagicMock(), bucket="bucket")
     monkeypatch.setattr(fs, "_client", client_context)
+    monkeypatch.setattr(fs, "_upload_client", client_context)
     write = asyncio.create_task(
         fs.write_stream(PathRef.from_posix("/key"), _source(), total_size=7)
     )
@@ -244,6 +247,7 @@ async def test_failed_abort_surfaces_upload_id(monkeypatch: pytest.MonkeyPatch) 
 
     fs = S3FS(session=MagicMock(), bucket="bucket")
     monkeypatch.setattr(fs, "_client", client_context)
+    monkeypatch.setattr(fs, "_upload_client", client_context)
 
     with pytest.raises(ProviderError, match=r"upload-orphaned.*manual abort"):
         await fs.write_stream(PathRef.from_posix("/key"), _source(), total_size=7)
@@ -286,6 +290,7 @@ async def test_empty_write_uses_put_object_without_multipart(
 
     fs = S3FS(session=MagicMock(), bucket="bucket")
     monkeypatch.setattr(fs, "_client", client_context)
+    monkeypatch.setattr(fs, "_upload_client", client_context)
     await fs.write_stream(PathRef.from_posix("/empty"), empty_source(), total_size=0)
 
     client.put_object.assert_awaited_once_with(Bucket="bucket", Key="empty", Body=b"")
@@ -308,6 +313,7 @@ async def test_exclusive_empty_write_uses_s3_precondition(
 
     fs = S3FS(session=MagicMock(), bucket="bucket")
     monkeypatch.setattr(fs, "_client", client_context)
+    monkeypatch.setattr(fs, "_upload_client", client_context)
     await fs.write_stream(
         PathRef.from_posix("/empty"), empty_source(), total_size=0, overwrite=False
     )
@@ -328,6 +334,7 @@ async def test_exclusive_multipart_write_conditions_completion(
 
     fs = S3FS(session=MagicMock(), bucket="bucket")
     monkeypatch.setattr(fs, "_client", client_context)
+    monkeypatch.setattr(fs, "_upload_client", client_context)
     await fs.write_stream(PathRef.from_posix("/key"), _source(), total_size=7, overwrite=False)
 
     client.complete_multipart_upload.assert_awaited_once_with(
@@ -351,6 +358,7 @@ async def test_cancel_during_create_drains_response_and_aborts(
 
     fs = S3FS(session=MagicMock(), bucket="bucket")
     monkeypatch.setattr(fs, "_client", client_context)
+    monkeypatch.setattr(fs, "_upload_client", client_context)
     write = asyncio.create_task(fs.write_stream(PathRef.from_posix("/key"), _source()))
     await client.create_started.wait()
     write.cancel()
@@ -382,6 +390,7 @@ async def test_cancel_after_put_commit_rolls_back_only_owned_version(
 
     fs = S3FS(session=MagicMock(), bucket="bucket")
     monkeypatch.setattr(fs, "_client", client_context)
+    monkeypatch.setattr(fs, "_upload_client", client_context)
     write = asyncio.create_task(
         fs.write_stream(
             PathRef.from_posix("/key"),
@@ -422,6 +431,7 @@ async def test_cancel_after_multipart_commit_rolls_back_only_owned_version(
 
     fs = S3FS(session=MagicMock(), bucket="bucket")
     monkeypatch.setattr(fs, "_client", client_context)
+    monkeypatch.setattr(fs, "_upload_client", client_context)
     write = asyncio.create_task(
         fs.write_stream(
             PathRef.from_posix("/key"),
@@ -474,6 +484,7 @@ async def test_cancellation_stays_primary_when_publication_response_fails(
 
     fs = S3FS(session=MagicMock(), bucket="bucket")
     monkeypatch.setattr(fs, "_client", client_context)
+    monkeypatch.setattr(fs, "_upload_client", client_context)
     write = asyncio.create_task(
         fs.write_stream(PathRef.from_posix("/key"), source, total_size=total_size)
     )
@@ -506,6 +517,7 @@ async def test_cancelled_publication_reports_failed_exact_version_rollback(
 
     fs = S3FS(session=MagicMock(), bucket="bucket")
     monkeypatch.setattr(fs, "_client", client_context)
+    monkeypatch.setattr(fs, "_upload_client", client_context)
     write = asyncio.create_task(
         fs.write_stream(PathRef.from_posix("/key"), empty_source(), total_size=0)
     )
@@ -534,6 +546,7 @@ async def test_repeated_cancellation_drains_exact_version_rollback(
 
     fs = S3FS(session=MagicMock(), bucket="bucket")
     monkeypatch.setattr(fs, "_client", client_context)
+    monkeypatch.setattr(fs, "_upload_client", client_context)
     write = asyncio.create_task(
         fs.write_stream(PathRef.from_posix("/key"), empty_source(), total_size=0)
     )
@@ -549,3 +562,34 @@ async def test_repeated_cancellation_drains_exact_version_rollback(
 
     with pytest.raises(asyncio.CancelledError):
         await write
+
+
+async def test_conditional_create_uses_the_single_attempt_client(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A fresh conditional create used the retrying client.
+
+    A retry after a lost success finds its own object and gets a 412, which is reported as a
+    conflict. Conditional creates are final writes and use the single-attempt client.
+    """
+    client = _EmptyUploadClient()
+
+    async def empty_source() -> AsyncIterator[bytes]:
+        if False:
+            yield b""
+
+    @asynccontextmanager
+    async def single_attempt() -> AsyncIterator[_EmptyUploadClient]:
+        yield client
+
+    def retrying() -> Any:
+        raise AssertionError("the retrying client was used for a conditional create")
+
+    fs = S3FS(session=MagicMock(), bucket="bucket")
+    monkeypatch.setattr(fs, "_client", retrying)
+    monkeypatch.setattr(fs, "_upload_client", single_attempt)
+    await fs.write_stream(
+        PathRef.from_posix("/empty"), empty_source(), total_size=0, overwrite=False
+    )
+
+    client.put_object.assert_awaited_once()
