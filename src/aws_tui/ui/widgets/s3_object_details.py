@@ -170,10 +170,6 @@ class S3ObjectDetailsModal(DeferredWorkerMixin, ModalScreen[None]):
     def action_move_down(self) -> None:
         self.query_one(DataTable).action_cursor_down()
 
-    def action_descend(self) -> None:
-        if isinstance(self.focused, ModalButton):
-            self.focused.press()
-
     def action_focus_next(self) -> None:
         self.focus_next()
 
