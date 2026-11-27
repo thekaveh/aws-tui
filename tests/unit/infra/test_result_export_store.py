@@ -471,3 +471,23 @@ def test_postpublication_metadata_failure_does_not_hide_success(tmp_path, monkey
     assert target.read_bytes() == b"complete"
     stage.abort()
     assert list(tmp_path.iterdir()) == [target]
+
+
+def test_publishing_an_export_flushes_its_directory_entry(tmp_path, monkeypatch):
+    """The new name is durable only once the directory is flushed, not just the staged bytes."""
+    store = ResultExportStore()
+    destination = store.inspect(tmp_path / "result.json")
+    stage = store.begin(destination)
+    stage.write(b"{}")
+    calls: list[int] = []
+    real_fsync = os.fsync
+
+    def recording_fsync(fd: int) -> None:
+        calls.append(fd)
+        real_fsync(fd)
+
+    monkeypatch.setattr(os, "fsync", recording_fsync)
+    stage.publish()
+    stage.abort()
+    if os.name == "posix":
+        assert len(calls) >= 2  # the staged bytes, then the parent directory

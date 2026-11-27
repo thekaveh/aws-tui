@@ -299,6 +299,10 @@ class ExportStage:
                             dst_dir_fd=self._parent_fd,
                         )
                         self._stage_name = None
+                    # Flush the directory entry so the new name survives a crash.
+                    if os.name == "posix" and self._parent_fd is not None:
+                        with contextlib.suppress(OSError):
+                            os.fsync(self._parent_fd)
                     self._published = True
                 return self._bytes
         except OSError as error:

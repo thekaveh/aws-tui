@@ -334,3 +334,19 @@ def test_overwriting_a_sql_file_keeps_its_permissions(tmp_path):
 
     assert _stat.S_IMODE(path.stat().st_mode) == 0o644
     assert path.read_text(encoding="utf-8") == "SELECT 2"
+
+
+def test_publishing_a_sql_file_flushes_its_directory_entry(tmp_path, monkeypatch):
+    """A rename is durable only once its directory is flushed; the publish fsynced the file alone."""
+    m = api()
+    calls: list[int] = []
+    real_fsync = os.fsync
+
+    def recording_fsync(fd: int) -> None:
+        calls.append(fd)
+        real_fsync(fd)
+
+    monkeypatch.setattr(os, "fsync", recording_fsync)
+    m.SqlFileStore().write(tmp_path / "query.sql", "SELECT 1")
+    if os.name == "posix":
+        assert len(calls) >= 2  # the staged file, then the parent directory

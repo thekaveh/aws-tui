@@ -20,6 +20,8 @@ from hashlib import sha256
 from pathlib import Path
 from typing import Literal
 
+from aws_tui.fsync import fsync_directory
+
 MAX_SQL_BYTES = 1_048_576
 StorageCode = Literal[
     "path", "missing", "permission", "limit", "encoding", "exists", "changed", "cancelled", "io"
@@ -237,6 +239,8 @@ class SqlFileStore:
                     else:
                         stage.replace(path)
                         stage = None
+                    # Flush the directory entry so the new name survives a crash.
+                    fsync_directory(path.parent)
                 try:
                     version = _version(path.stat(), payload) if stage is None else None
                 except OSError:
