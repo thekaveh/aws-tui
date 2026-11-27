@@ -191,3 +191,59 @@ async def test_boot_chain_stops_when_the_time_budget_is_exhausted(
     assert exhausted == [{"attempted": 1, "total": 3}]
     assert mounted == ["chain-exhausted"]
     assert app._boot_in_flight is False
+
+
+@pytest.mark.asyncio
+async def test_a_cancelled_boot_attempt_dismisses_its_visible_attempt_toast(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A cancelled boot attempt left its sticky "trying X" toast on screen.
+
+    The dismissal ran after the try/finally, so a cancellation that propagated through the attempt
+    skipped it. The dismissal now runs in the finally, and the cancellation still propagates.
+    """
+    initial = _connection("initial")
+    dismissed: list[str] = []
+
+    class _Log:
+        def info(self, event: str, **fields: object) -> None:
+            del event, fields
+
+        def error(self, event: str, **fields: object) -> None:
+            del event, fields
+
+    app = object.__new__(AwsTuiApp)
+    object.__setattr__(
+        app,
+        "_app_ctx",
+        SimpleNamespace(
+            connection_resolver=SimpleNamespace(list=lambda: []),
+            log_sink=_Log(),
+        ),
+    )
+    object.__setattr__(app, "_boot_in_flight", True)
+
+    async def cancelled_attempt(self: AwsTuiApp, connection: Connection, *, timeout: float) -> str:
+        del self, connection, timeout
+        # A real attempt outlives the grace window, so its toast is up when the cancel arrives.
+        await asyncio.sleep(0.01)
+        raise asyncio.CancelledError
+
+    async def visible_toast(
+        self: AwsTuiApp, connection: Connection, *, index: int, total: int
+    ) -> bool:
+        del self, connection, index, total
+        return True
+
+    def record_dismissal(self: AwsTuiApp, connection: Connection) -> None:
+        del self
+        dismissed.append(connection.name)
+
+    monkeypatch.setattr(AwsTuiApp, "_try_connection", cancelled_attempt)
+    monkeypatch.setattr(AwsTuiApp, "_raise_attempt_toast_after_grace", visible_toast)
+    monkeypatch.setattr(AwsTuiApp, "_dismiss_attempt_toast", record_dismissal)
+
+    with pytest.raises(asyncio.CancelledError):
+        await app._initial_mount_worker(initial_conn=initial)
+
+    assert dismissed == ["initial"]

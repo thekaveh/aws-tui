@@ -1503,8 +1503,10 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
                     # outcome toast.
                     if pre_attempt_task.done() and not pre_attempt_task.cancelled():
                         pre_attempt_visible = bool(pre_attempt_task.result())
-                if pre_attempt_visible:
-                    self._dismiss_attempt_toast(conn)
+                    # Dismissed here, not after the try: a cancelled attempt propagates and
+                    # would otherwise leave its sticky "trying" toast on screen.
+                    if pre_attempt_visible:
+                        self._dismiss_attempt_toast(conn)
                 if outcome == "ok":
                     if pre_attempt_visible:
                         self._raise_success_toast(conn)

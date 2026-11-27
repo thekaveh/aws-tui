@@ -65,6 +65,7 @@ The Unreleased section is the promotion queue for the next package release. Entr
 - An HTTP client failure during an S3 or AWS operation is reported as a connection problem, not as an unexpected error.
 - EMR job run logs are found for a log prefix that contains '#' or '?'; those characters were read as a fragment or query and the logs were missed.
 - A valid JSON document too large to preview says so, instead of being reported as malformed or truncated.
+- Cancelling a connection attempt during startup removes its "trying" notice instead of leaving it on screen.
 - Byte sizes just below a unit boundary are labelled in the next unit (1048575 bytes is 1.0 MB, not 1024.0 kB).
 - Athena SQL completion replaces only the token under the cursor, even when text is selected. Previously the whole selection was replaced.
 - Opening an S3 location no longer crashes the application when restoring the previous Glue page fails. The failure is logged, and the handoff failure is reported.
