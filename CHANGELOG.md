@@ -53,6 +53,7 @@ The Unreleased section is the promotion queue for the next package release. Entr
 - A file or folder name containing a backslash is handled on macOS and Linux; only Windows treats a backslash as a separator.
 - A transfer whose wall clock stepped back during the transfer keeps its history; the journal no longer treats the step as corruption.
 - Choosing the table already selected in the Athena table picker changes nothing; it no longer asks to replace the query.
+- A Glue Iceberg preview column whose name contains square brackets shows its name, instead of losing part of it or failing to render.
 - Byte sizes just below a unit boundary are labelled in the next unit (1048575 bytes is 1.0 MB, not 1024.0 kB).
 - Athena SQL completion replaces only the token under the cursor, even when text is selected. Previously the whole selection was replaced.
 - Opening an S3 location no longer crashes the application when restoring the previous Glue page fails. The failure is logged, and the handoff failure is reported.

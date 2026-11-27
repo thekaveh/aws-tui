@@ -608,7 +608,7 @@ class GlueIcebergView(DeferredWorkerMixin, Widget):
                     self._table_snapshot = table_snapshot
                     table.clear(columns=True)
                     for index, column in enumerate(preview.columns):
-                        table.add_column(column, key=f"glue-iceberg-preview-column-{index}")
+                        table.add_column(Text(column), key=f"glue-iceberg-preview-column-{index}")
                     for index, preview_row in enumerate(preview.rows):
                         table.add_row(
                             *(
@@ -628,7 +628,7 @@ class GlueIcebergView(DeferredWorkerMixin, Widget):
                     table.clear(columns=True)
                     columns = _columns(active)
                     for index, column in enumerate(columns):
-                        table.add_column(column, key=f"glue-iceberg-column-{index}")
+                        table.add_column(Text(column), key=f"glue-iceberg-column-{index}")
                     for index, row in enumerate(self._vm.items):
                         row_key = (
                             f"iceberg-snapshot-{cast(IcebergSnapshot, row).snapshot_id}"

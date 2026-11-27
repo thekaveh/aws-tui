@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import ClassVar
 
 from reactivex.abc import DisposableBase
+from rich.text import Text
 from textual import events
 from textual.app import ComposeResult
 from textual.binding import Binding, BindingType
@@ -679,7 +680,9 @@ class AthenaQueryView(DeferredWorkerMixin, Widget):
             # progress, validation or error feedback for Run/Stop.
             message = self._status_text()
         status.update(f"{document}{' *' if authoring.dirty else ''} · {message}")
-        status.tooltip = str(authoring.path) if authoring.path else "Unsaved local SQL document"
+        status.tooltip = Text(
+            str(authoring.path) if authoring.path else "Unsaved local SQL document"
+        )
         self.query_one("#athena-authoring", Button).disabled = not self.authoring_available()
         self.query_one("#athena-query-options", Button).disabled = not self.authoring_available()
         detail.update(self._detail_text())

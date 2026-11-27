@@ -1278,3 +1278,28 @@ async def test_narrow_coverage_footer_keeps_metadata_table_and_controls_usable()
         await _wait_for_paint(pilot, lambda: table.row_count == 3, what="narrow rows")
         assert table.content_size.height >= 2
         assert pilot.app.query_one("#glue-iceberg-time-travel", Button).region.bottom <= 24
+
+
+@pytest.mark.asyncio
+async def test_a_preview_column_with_brackets_shows_its_literal_name() -> None:
+    """A column named like markup was parsed as markup and its text lost, or the view failed.
+
+    DataTable parses a plain string label as markup. ``status[x]`` lost its bracket group and
+    ``a[/x]`` raised. The labels are plain text now.
+    """
+    port = InMemoryDuckDb(columns=("status[x]", "a[/x]"), rows=(("1", "2"),))
+    vm, _ = _build_vm(duckdb_port=port)
+    await vm.setup()
+
+    async with _GlueIcebergApp(vm).run_test(size=(100, 30)) as pilot:
+        await pilot.click("#glue-iceberg-tab-preview")
+        await wait_until(
+            lambda: vm.catalog.iceberg.preview.state is PaneState.IDLE,
+            what="the preview pane finished loading",
+        )
+        await _peek_repainted(pilot, vm)
+        table = pilot.app.query_one("#glue-iceberg-table", DataTable)
+        labels = [str(column.label.plain) for column in table.columns.values()]
+
+    assert "status[x]" in labels
+    assert "a[/x]" in labels
