@@ -476,7 +476,12 @@ class GlueComparisonVM:
             record.state,
             state=PaneState.IDLE if combined else PaneState.EMPTY,
             error_text=None,
-            status_text=f"Choose a {'database' if kind == 'databases' else 'table'}"
+            # An empty listing says so; it does not invite a choice that is not there.
+            status_text=(
+                (f"Choose a {'database' if kind == 'databases' else 'table'}")
+                if combined
+                else ("No databases" if kind == "databases" else "No tables")
+            )
             + ("; listing safety limit reached" if limit else ""),
         )
         if kind == "databases":

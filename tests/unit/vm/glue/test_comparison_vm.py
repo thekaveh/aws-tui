@@ -644,3 +644,12 @@ async def test_resolve_failure_without_captured_route_is_still_reported(h) -> No
         assert h.clock_calls == []
     finally:
         await h.vm.shutdown()
+
+
+async def test_empty_database_listing_says_there_are_no_databases(h) -> None:
+    """An empty listing read "Choose a database", inviting a choice that is not there."""
+    h.router.clients["prod"].database_pages.append(([], None))
+    revision = h.vm.choose_source("left", "prod", "us-east-1")
+    await h.vm.load_revision("left", revision)
+    assert h.vm.side("left").status_text == "No databases"
+    await h.vm.shutdown()
