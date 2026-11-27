@@ -46,22 +46,28 @@ def _subsequence_span(text: str, query: str) -> int | None:
     """Return the minimum span (last_idx - first_idx) of *query* as a
     subsequence in *text*. None if not present as a subsequence.
 
-    Tight clusters of the query inside the text score lower (better).
+    Tight clusters of the query inside the text score lower (better). Each
+    occurrence of the query's first character is tried as the start, because
+    the leftmost match is not always the tightest.
     """
     if not query:
         return 0
-    first: int = -1
-    last: int = -1
-    cursor = 0
-    for ch in query:
-        idx = text.find(ch, cursor)
-        if idx < 0:
-            return None
-        if first == -1:
-            first = idx
-        last = idx
-        cursor = idx + 1
-    return last - first
+    best: int | None = None
+    start = text.find(query[0])
+    while start >= 0:
+        last = start
+        cursor = start + 1
+        for ch in query[1:]:
+            idx = text.find(ch, cursor)
+            if idx < 0:
+                return best
+            last = idx
+            cursor = idx + 1
+        span = last - start
+        if best is None or span < best:
+            best = span
+        start = text.find(query[0], start + 1)
+    return best
 
 
 def _score(entry: PaletteEntry, query: str) -> int | None:
@@ -85,16 +91,22 @@ def _score(entry: PaletteEntry, query: str) -> int | None:
     span = _subsequence_span(label, q)
     if span is not None:
         return 500 + span
+    # The best keyword tier wins, not the first keyword that matches at all.
+    best: int | None = None
     for kw in entry.keywords:
         kwl = kw.casefold()
         if kwl.startswith(q):
-            return 1_000
-        if q in kwl:
-            return 1_500
-        kspan = _subsequence_span(kwl, q)
-        if kspan is not None:
-            return 2_000 + kspan
-    return None
+            tier = 1_000
+        elif q in kwl:
+            tier = 1_500
+        else:
+            kspan = _subsequence_span(kwl, q)
+            if kspan is None:
+                continue
+            tier = 2_000 + kspan
+        if best is None or tier < best:
+            best = tier
+    return best
 
 
 class CommandPaletteVM(IsolatedComponentVM):

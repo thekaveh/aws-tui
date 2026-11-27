@@ -720,3 +720,20 @@ def test_command_palette_lifecycle_drives_members() -> None:
     palette.dispose()
     assert palette.status is ConstructionStatus.DISPOSED
     assert palette._inner_registry.status is ConstructionStatus.DISPOSED
+
+
+def test_subsequence_span_is_the_tightest_match_not_the_leftmost() -> None:
+    """The leftmost greedy match is 7 wide here; the tightest is 2 ("a.b" at the end)."""
+    from aws_tui.vm.chrome.command_palette_vm import _subsequence_span
+
+    assert _subsequence_span("a....a.b", "ab") == 2
+    assert _subsequence_span("xyz", "ab") is None
+
+
+def test_keyword_score_takes_the_best_tier_not_the_first_match() -> None:
+    """A keyword containing the query matched before a later keyword that starts with it."""
+    from aws_tui.vm.chrome.command_palette_vm import _score
+
+    entry = _entry("unrelated", "Unrelated", keywords=("xab", "abc"))
+
+    assert _score(entry, "ab") == 1_000
