@@ -260,6 +260,9 @@ class WorkspaceLibraryModal(DeferredWorkerMixin, ModalScreen[WorkspaceOpenReques
                         self._selection = (record.name, saved.name)
             if changed:
                 self._feedback = "Saved."
+            elif action != "refresh" and self.vm.error_text:
+                # A refused write (busy or read-only) explains itself here.
+                self._feedback = self.vm.error_text
         except WorkspaceError as error:
             self._feedback = str(error)
         except Exception:

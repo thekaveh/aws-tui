@@ -50,7 +50,13 @@ class WorkspaceLibraryVM:
             self._changed.on_next("library")
 
     def _begin(self, *, write: bool = False) -> asyncio.Task[Any] | None:
-        if self._closed or self.busy:
+        if self._closed:
+            return None
+        if self.busy:
+            if write:
+                # A refused write must say so; the caller would otherwise drop it silently.
+                self.error_text = "Workspace library is busy; try again when it finishes"
+                self._notify()
             return None
         if write and self.read_only:
             self.error_text = "Workspace library is read-only in demo mode"

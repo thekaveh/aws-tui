@@ -255,3 +255,21 @@ async def test_canceled_owner_never_dispatches_a_new_store_operation(
     finally:
         await vm.shutdown()
         subscription.dispose()
+
+
+@pytest.mark.asyncio
+async def test_write_while_busy_says_so_instead_of_failing_silently(tmp_path):
+    """A save while a read was in flight returned False with no message.
+
+    The modal showed feedback only for a change, so the save was dropped without a word.
+    """
+    vm, store = manager(tmp_path)
+    try:
+        vm.busy = True
+        assert not await vm.save(record("Busy"))
+        assert vm.error_text is not None
+        assert "busy" in vm.error_text
+        assert not store.list()
+    finally:
+        vm.busy = False
+        await vm.shutdown()
