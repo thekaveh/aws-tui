@@ -792,3 +792,17 @@ def test_legitimate_read_only_statements_are_still_accepted(sql: str) -> None:
     """Positive control. Without this the tests above would also pass against a
     policy that simply rejected everything."""
     assert ReadOnlySqlPolicy().validate(sql)
+
+
+def test_table_function_passthrough_cannot_smuggle_a_write() -> None:
+    """A TABLE(system.query(...)) relation ran its text at the source, unparsed by the policy.
+
+    A DELETE inside the string passed as read-only. Table functions are refused, so no
+    passthrough text reaches the source.
+    """
+    from aws_tui.domain.sql_policy import QueryRejectedError, ReadOnlySqlPolicy
+
+    policy = ReadOnlySqlPolicy()
+    with pytest.raises(QueryRejectedError, match="table functions"):
+        policy.validate("SELECT * FROM TABLE(system.query(query => 'DELETE FROM t'))")
+    assert policy.validate("SELECT * FROM db.t")

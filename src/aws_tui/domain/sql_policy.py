@@ -535,6 +535,14 @@ class ReadOnlySqlPolicy:
         for node in expression.walk():
             if node is not expression and isinstance(node, forbidden):
                 raise QueryRejectedError(f"nested statement type {node.key!r} is not read-only")
+            # TABLE(...) relations, such as system.query, run their text at the source. The text is
+            # never parsed here, so a DELETE inside it would pass. They are refused, fail closed.
+            if (
+                isinstance(node, exp.Table)
+                and isinstance(node.this, exp.Anonymous)
+                and str(node.this.this).upper() == "TABLE"
+            ):
+                raise QueryRejectedError("table functions are not allowed in a read-only query")
 
 
 def quote_athena_identifier(value: str) -> str:

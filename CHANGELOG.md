@@ -48,6 +48,7 @@ The Unreleased section is the promotion queue for the next package release. Entr
 - Log and crash-dump redaction covers a credential nested inside an object under a sensitive key, such as a `SecretAccessKey` inside `Credentials`.
 - A locked or unavailable keychain no longer hides every other connection; the connection whose credentials it cannot read keeps its metadata and the keychain is reported.
 - Saving the configuration through a symlinked config file keeps the link and writes the file it points to.
+- The read-only Athena SQL policy refuses table functions such as `system.query`, whose text runs at the source and was not checked.
 - Byte sizes just below a unit boundary are labelled in the next unit (1048575 bytes is 1.0 MB, not 1024.0 kB).
 - Athena SQL completion replaces only the token under the cursor, even when text is selected. Previously the whole selection was replaced.
 - Opening an S3 location no longer crashes the application when restoring the previous Glue page fails. The failure is logged, and the handoff failure is reported.
