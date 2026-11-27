@@ -725,7 +725,6 @@ class EmrServerlessClient:
                 "emr-serverless", region_name=self._region_name, config=_EMR_BOTO_CONFIG
             ) as c:
                 resp = await c.start_job_run(**kwargs)
-                return cast(str, resp["jobRunId"])
         except Exception as exc:
             mapped = _map_boto_error(exc)
             category = type(mapped) if mapped is not None else ProviderError
@@ -740,3 +739,11 @@ class EmrServerlessClient:
             # Provider messages and chained SDK exceptions can contain arbitrary
             # Spark arguments, policies or credential-process output.
             raise category(messages.get(category, "EMR job submission failed")) from None
+        # A missing id is not a rejection: AWS may already have queued the run.
+        job_run_id = resp.get("jobRunId") if isinstance(resp, dict) else None
+        if not isinstance(job_run_id, str) or not job_run_id:
+            raise ValidationError(
+                "AWS returned no job run id; the job may have started, "
+                "so check the run list before retrying"
+            )
+        return job_run_id

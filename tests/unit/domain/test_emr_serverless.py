@@ -583,6 +583,29 @@ async def test_start_job_run_omits_name_and_spark_params_when_unset() -> None:
 
 
 @pytest.mark.asyncio
+async def test_start_job_run_without_job_run_id_warns_that_the_job_may_have_started() -> None:
+    """A success response without ``jobRunId`` is not a rejection: AWS may already
+    have queued the run, so the message must send the user to the run list."""
+    stub = _StubClient()
+    stub.start_job_run.return_value = {"ResponseMetadata": {"HTTPStatusCode": 200}}
+    client = EmrServerlessClient(session=_StubSession(stub))  # type: ignore[arg-type]
+    with pytest.raises(ValidationError) as excinfo:
+        await client.start_job_run(
+            "00abc",
+            execution_role_arn="arn",
+            entry_point="s3://bucket/job.py",
+            entry_point_arguments=(),
+            spark_submit_parameters=None,
+            client_token="tok",
+        )
+    message = str(excinfo.value)
+    assert "no job run id" in message
+    assert "may have started" in message
+    assert "run list" in message
+    assert "rejected" not in message
+
+
+@pytest.mark.asyncio
 async def test_start_job_run_maps_validation_exception_to_validation_error() -> None:
     """A boto ``ValidationException`` from a malformed entry point
     must surface as the typed :class:`ValidationError` so the modal
