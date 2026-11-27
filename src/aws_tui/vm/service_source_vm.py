@@ -112,7 +112,12 @@ class ServiceSelectionStore:
     def install_navigation_targets(
         self, targets: tuple[NavigationTarget, ...], *, service_id: str | None = None
     ) -> None:
-        """Replace only named navigation fields after whole-batch validation."""
+        """Replace each target scope's navigation fields after whole-batch validation.
+
+        Every navigation key of a named scope is replaced: a field the target does not name
+        is cleared, not kept. A workgroup-only target therefore clears the catalog and database
+        for that scope, as the workspace selection tests pin. Other scopes are untouched.
+        """
         if self._adopted is not None:
             self._current().install_navigation_targets(targets, service_id=service_id)
             return
