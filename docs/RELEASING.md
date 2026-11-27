@@ -383,7 +383,7 @@ The `Development Status` classifier in `pyproject.toml` tracks
 the project maturity, not the version number:
 
 - `2 - Pre-Alpha` (v0.0.x – v0.7.0): exploratory.
-- `3 - Alpha` (v0.8.0 onward): public release, API may still
+- `3 - Alpha` (v0.8.0 and later): public release, API may still
   shift in 0.x but breakage is documented in `CHANGELOG.md`.
 - `4 - Beta` (when ready): API frozen for 1.0.
 - `5 - Production/Stable` (1.0.0): committed SemVer.
