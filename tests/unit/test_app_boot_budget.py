@@ -247,3 +247,58 @@ async def test_a_cancelled_boot_attempt_dismisses_its_visible_attempt_toast(
         await app._initial_mount_worker(initial_conn=initial)
 
     assert dismissed == ["initial"]
+
+
+@pytest.mark.asyncio
+async def test_a_cancelled_file_transfer_is_reported_and_still_cancels(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A copy cancelled by navigation or a group cancel was dropped without a log or toast.
+
+    The runner caught only Exception, so the cancellation produced no line and no notice. It is
+    logged and noticed now, and the cancellation still propagates.
+    """
+    logged: list[str] = []
+    toasts: list[str] = []
+
+    class _Log:
+        def error(self, event: str, **fields: object) -> None:
+            del fields
+            logged.append(event)
+
+        def info(self, event: str, **fields: object) -> None:
+            del fields
+            logged.append(event)
+
+    async def cancelled_transfer() -> None:
+        raise asyncio.CancelledError
+
+    def record_notice(stack: object, **kwargs: object) -> None:
+        del stack
+        toasts.append(str(kwargs.get("toast_id")))
+
+    monkeypatch.setattr(app_module.notifications, "advise", record_notice)
+    monkeypatch.setattr(AwsTuiApp, "_refresh_transfer_history", lambda self: None)
+    app = object.__new__(AwsTuiApp)
+    object.__setattr__(
+        app,
+        "_app_ctx",
+        SimpleNamespace(
+            log_sink=_Log(),
+            root_vm=SimpleNamespace(chrome=SimpleNamespace(toast_stack=object())),
+        ),
+    )
+    dual = SimpleNamespace(copy_across=cancelled_transfer)
+
+    with pytest.raises(asyncio.CancelledError):
+        await app._run_file_transfer(
+            dual,
+            None,
+            [object()],
+            False,
+            lambda: True,
+            operation="copy",
+        )
+
+    assert "app.copy.cancelled" in logged
+    assert "copy-cancelled" in toasts

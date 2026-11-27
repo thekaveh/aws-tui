@@ -6146,6 +6146,22 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
                 self._file_confirmation_invalidated()
                 return
             await transfer()
+        except asyncio.CancelledError:
+            # Cancelled by navigation or a worker-group cancel. Report it, then cancel as asked;
+            # the log or toast can itself fail during quit, so it must not replace the cancel.
+            with contextlib.suppress(Exception):
+                ctx.log_sink.info(
+                    f"app.{operation}.cancelled",
+                    file_count=len(targets),
+                    **_mutation_log_context(dual),
+                )
+                notifications.advise(
+                    ctx.root_vm.chrome.toast_stack,
+                    subject="Transfer",
+                    message=f"{operation} was cancelled before it finished",
+                    toast_id=f"{operation}-cancelled",
+                )
+            raise
         except Exception as exc:
             ctx.log_sink.error(
                 f"app.{operation}.failed",
