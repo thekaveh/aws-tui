@@ -369,3 +369,37 @@ async def test_drafts_deferred_refresh_during_partial_child_teardown(tmp_path, r
     finally:
         await drafts.shutdown()
         drafts.dispose()
+
+
+@pytest.mark.asyncio
+async def test_settings_focus_skips_titles_under_a_disabled_section(tmp_path: Path) -> None:
+    """A disabled section's title was a focus control, so Tab stopped on an unfocusable title.
+
+    The Themes and Keymap sections are disabled on their Collapsible. Their titles are
+    not disabled themselves, so the per-widget check kept them. Tab from the last enabled
+    control then "focused" a title that cannot take focus, and never reached the rail.
+    """
+    vm, s3, hub = _make_vm(tmp_path)
+
+    class _Host(App[None]):
+        def compose(self) -> ComposeResult:
+            yield view
+
+    view = SettingsView(vm=vm, hub=hub)
+    app = _Host()
+    try:
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            controls = view._focus_controls()
+            assert controls
+            assert all(
+                not any(getattr(node, "disabled", False) for node in control.ancestors_with_self)
+                for control in controls
+            )
+            controls[-1].focus()
+            await pilot.pause()
+            assert view.cycle_focus(reverse=False) is False
+    finally:
+        vm.dispose()
+        s3.dispose()
+        hub.dispose()

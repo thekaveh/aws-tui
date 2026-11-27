@@ -193,7 +193,9 @@ class SettingsView(Widget):
             is_title = callable(getattr(widget, "action_toggle_collapsible", None))
             if not (is_title or isinstance(widget, Button)):
                 continue
-            if not widget.can_focus or widget.disabled:
+            # ``focusable`` also excludes a control under a disabled section; its
+            # title is not disabled itself, so the per-widget check let it through.
+            if not widget.focusable:
                 continue
             if all(node.display for node in widget.ancestors_with_self):
                 controls.append(widget)

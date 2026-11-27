@@ -22,6 +22,7 @@ The Unreleased section is the promotion queue for the next package release. Entr
 - Athena SQL completion replaces only the token under the cursor, even when text is selected. Previously the whole selection was replaced.
 - Opening an S3 location no longer crashes the application when restoring the previous Glue page fails. The failure is logged, and the handoff failure is reported.
 - Switching an Athena page to a catalog that has no databases keeps its state when the page hands off to another service, instead of dropping it.
+- Tab in Settings no longer stops on the titles of the disabled Themes and Keymap sections; it moves on to the navigation rail.
 - Opening the S3 connection form to add a connection shows its required-field errors, as editing does.
 - A sync row shows both the transfer error and the cleanup error when both occur, instead of only the cleanup error.
 - Log and crash-dump redaction now covers a quoted `Authorization` value. Previously the credential after a quoted scheme could be printed.
