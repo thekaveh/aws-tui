@@ -18,6 +18,7 @@ from aws_tui.ui.widgets.glue.detail_rows import (
     display_time,
     display_value,
 )
+from aws_tui.ui.widgets.option_ids import PLACEHOLDER_OPTION_ID
 from aws_tui.vm.glue.page_vm import GluePageVM
 
 
@@ -68,7 +69,7 @@ class GlueCrawlersView(DeferredWorkerMixin, Widget):
         event: OptionList.OptionHighlighted,
     ) -> None:
         option_id = event.option.id
-        if option_id is None or option_id == "__placeholder__":
+        if option_id is None or option_id == PLACEHOLDER_OPTION_ID:
             return
         if (
             event.option_list.id == "glue-crawlers-pane-options"

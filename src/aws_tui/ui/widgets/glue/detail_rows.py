@@ -15,6 +15,7 @@ from textual.widget import Widget
 from textual.widgets import OptionList, Static
 from textual.widgets.option_list import Option
 
+from aws_tui.ui.widgets.option_ids import PLACEHOLDER_OPTION_ID
 from aws_tui.vm.file_manager.pane_vm import PaneState
 
 
@@ -146,7 +147,7 @@ class ResourceListPane(Widget):
                 if classes:
                     options.add_class(classes)
                 options.add_option(
-                    Option(Text(text, no_wrap=False), id="__placeholder__", disabled=True)
+                    Option(Text(text, no_wrap=False), id=PLACEHOLDER_OPTION_ID, disabled=True)
                 )
             else:
                 for row_id, label in rows:

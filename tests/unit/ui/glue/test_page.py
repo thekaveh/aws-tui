@@ -24,6 +24,7 @@ from aws_tui.ui.widgets.glue.iceberg_view import GlueIcebergView
 from aws_tui.ui.widgets.glue.jobs_view import GlueJobsView
 from aws_tui.ui.widgets.glue.page import GluePage
 from aws_tui.ui.widgets.nav_menu import NavMenu
+from aws_tui.ui.widgets.option_ids import PLACEHOLDER_OPTION_ID
 from aws_tui.ui.widgets.overlay_option_list import OverlayOptionList
 from aws_tui.ui.widgets.service_source_header import ServiceSourceHeader
 from aws_tui.ui.widgets.service_tab_strip import ServiceTabStrip
@@ -1572,7 +1573,7 @@ async def test_selected_job_detail_is_retained_when_the_job_has_no_runs() -> Non
 
         assert "Job             idle-job" in detail_text
         assert "Role            GlueRole" in detail_text
-        assert run_placeholder.id == "__placeholder__"
+        assert run_placeholder.id == PLACEHOLDER_OPTION_ID
         assert str(run_placeholder.prompt) == "no runs"
 
 
@@ -1604,7 +1605,7 @@ async def test_selected_job_detail_is_retained_when_filter_has_no_matching_runs(
 
         assert "Job             nightly" in detail_text
         assert "Script          s3://scripts/nightly.py" in detail_text
-        assert run_placeholder.id == "__placeholder__"
+        assert run_placeholder.id == PLACEHOLDER_OPTION_ID
         assert str(run_placeholder.prompt) == "no runs"
 
 

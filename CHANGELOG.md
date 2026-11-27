@@ -77,6 +77,7 @@ The Unreleased section is the promotion queue for the next package release. Entr
 - Highlighting a watched scope that was removed in the overview no longer raises an error in the dialog.
 - A saved SQL file and an exported result flush their directory entry after publication, so the new name survives a crash.
 - The Athena editor's last keystrokes reach the drafts saved at quit: input closes and the current SQL is carried into the view model before the flush.
+- A Glue job, database, table, crawler or saved query named like the placeholder row is selectable.
 - Byte sizes just below a unit boundary are labelled in the next unit (1048575 bytes is 1.0 MB, not 1024.0 kB).
 - Athena SQL completion replaces only the token under the cursor, even when text is selected. Previously the whole selection was replaced.
 - Opening an S3 location no longer crashes the application when restoring the previous Glue page fails. The failure is logged, and the handoff failure is reported.

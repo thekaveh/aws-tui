@@ -21,6 +21,7 @@ from textual.widgets.option_list import Option
 
 from aws_tui.domain.emr_serverless import ApplicationState
 from aws_tui.ui.widgets._focus_guard import is_on_active_screen
+from aws_tui.ui.widgets.option_ids import PLACEHOLDER_OPTION_ID
 from aws_tui.ui.widgets.overlay_option_list import (
     OverlayOptionList,
     PickerFocusIntent,
@@ -270,7 +271,7 @@ class ApplicationPicker(Widget, can_focus=True):
         if opts.highlighted is None:
             return
         opt = opts.get_option_at_index(opts.highlighted)
-        if opt.disabled or opt.id == "__placeholder__":
+        if opt.disabled or opt.id == PLACEHOLDER_OPTION_ID:
             return
         self.close()
         if opt.id is not None:
@@ -321,13 +322,13 @@ class ApplicationPicker(Widget, can_focus=True):
                 picker.close(refocus=False)
 
     def on_option_list_option_selected(self, event: OptionList.OptionSelected) -> None:
-        # ``__placeholder__`` is the synthetic disabled row used for
+        # ``PLACEHOLDER_OPTION_ID`` is the synthetic disabled row used for
         # error / loading states (see ``_build_options``). Belt-and-
         # braces guard — Textual's OptionList already suppresses
         # selection on disabled rows, but a key-driven Enter while
         # the row is the only option could slip through.
         self.close()
-        if event.option.id is not None and event.option.id != "__placeholder__":
+        if event.option.id is not None and event.option.id != PLACEHOLDER_OPTION_ID:
             self._vm.select_by_id(event.option.id)
             self.post_message(self.ApplicationCommitted(event.option.id))
 
@@ -402,7 +403,7 @@ class ApplicationPicker(Widget, can_focus=True):
         # is unchanged. Preserve the user's pending identity across that gap.
         if self.is_open and opts.highlighted is not None:
             highlighted = opts.get_option_at_index(opts.highlighted)
-            if not highlighted.disabled and highlighted.id != "__placeholder__":
+            if not highlighted.disabled and highlighted.id != PLACEHOLDER_OPTION_ID:
                 self._pending_highlight = highlighted.id
                 self._pending_scroll = opts.scroll_y
         options = self._build_options()
@@ -524,24 +525,30 @@ class ApplicationPicker(Widget, can_focus=True):
         round-13 already branches on the same five states."""
         state = self._vm.state
         if state is PaneState.LOADING:
-            return [Option(prompt="loading…", id="__placeholder__", disabled=True)]
+            return [Option(prompt="loading…", id=PLACEHOLDER_OPTION_ID, disabled=True)]
         if state is PaneState.UNREACHABLE:
             msg = self._vm.error_text or "endpoint unreachable — press r to retry"
-            return [Option(prompt=f"⚠ {_escape_markup(msg)}", id="__placeholder__", disabled=True)]
+            return [
+                Option(prompt=f"⚠ {_escape_markup(msg)}", id=PLACEHOLDER_OPTION_ID, disabled=True)
+            ]
         if state is PaneState.AUTH_REQUIRED:
             return [
                 Option(
                     prompt="⚠ auth required — aws sso login --profile <X>",
-                    id="__placeholder__",
+                    id=PLACEHOLDER_OPTION_ID,
                     disabled=True,
                 )
             ]
         if state is PaneState.FORBIDDEN:
             msg = self._vm.error_text or "permission denied — check IAM policy"
-            return [Option(prompt=f"⚠ {_escape_markup(msg)}", id="__placeholder__", disabled=True)]
+            return [
+                Option(prompt=f"⚠ {_escape_markup(msg)}", id=PLACEHOLDER_OPTION_ID, disabled=True)
+            ]
         if state is PaneState.ERROR:
             msg = self._vm.error_text or "error — press r to retry"
-            return [Option(prompt=f"⚠ {_escape_markup(msg)}", id="__placeholder__", disabled=True)]
+            return [
+                Option(prompt=f"⚠ {_escape_markup(msg)}", id=PLACEHOLDER_OPTION_ID, disabled=True)
+            ]
         return [
             Option(
                 # Rich Text keeps AWS-controlled names literal, including brackets.
