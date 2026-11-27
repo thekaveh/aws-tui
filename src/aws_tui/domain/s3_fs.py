@@ -1323,10 +1323,12 @@ class S3FS:
                         "S3 multipart copy failed and cleanup also failed; "
                         f"upload ID {upload_id!r} may require manual abort: {cleanup_error}"
                     )
-                    if isinstance(exc, asyncio.CancelledError):
-                        exc.add_note(message)
+                    error = _multipart_cleanup_failure(
+                        exc, cleanup_cancelled=cleanup_cancelled, message=message
+                    )
+                    if error is exc:
                         raise
-                    raise ProviderError(message) from cleanup_error
+                    raise error from cleanup_error
                 if cleanup_cancelled and not isinstance(exc, asyncio.CancelledError):
                     raise asyncio.CancelledError from None
             raise
@@ -2356,7 +2358,13 @@ async def _drain_publication_task(task: asyncio.Task[Any]) -> tuple[Any, bool]:
     try:
         return await _drain_task(task)
     except BaseException as exc:
-        if not isinstance(exc, asyncio.CancelledError) and _cancellation_pending():
+        # An authoritative rejection proves nothing was committed. Keep it as the
+        # outcome instead of reporting an unknown publication while a cancel is pending.
+        if (
+            not isinstance(exc, asyncio.CancelledError)
+            and not _upload_rejected(exc)
+            and _cancellation_pending()
+        ):
             cancellation = asyncio.CancelledError()
             cancellation.add_note(
                 f"S3 publication also failed while cancellation was pending: "
@@ -2380,8 +2388,26 @@ async def _abort_multipart_upload(
     try:
         _, cancelled = await _drain_task(task)
     except Exception as exc:
-        return False, exc
+        # The drain re-raises the abort's failure without its cancellation flag, so
+        # a cancel that arrived first is read from the task itself.
+        return _cancellation_pending(), exc
     return cancelled, None
+
+
+def _multipart_cleanup_failure(
+    exc: BaseException, *, cleanup_cancelled: bool, message: str
+) -> BaseException:
+    """Choose the exception to raise when aborting a multipart upload also failed.
+
+    A pending cancellation stays primary, as it does for publication. The cleanup
+    failure, which may leave a partial upload, rides in a note. Otherwise it is a
+    provider error that names the upload ID.
+    """
+    if isinstance(exc, asyncio.CancelledError) or cleanup_cancelled or _cancellation_pending():
+        cancellation = exc if isinstance(exc, asyncio.CancelledError) else asyncio.CancelledError()
+        cancellation.add_note(message)
+        return cancellation
+    return ProviderError(message)
 
 
 class _AsyncStreamReader:
