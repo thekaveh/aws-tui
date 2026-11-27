@@ -207,7 +207,21 @@ class DashboardVM(IsolatedComponentVM):
             try:
                 return await asyncio.shield(task)
             except asyncio.CancelledError:
+                # A run cancelled before its first step never reaches its own finally.
+                # Awaiting the finished task does not yield, so retrying here spun forever.
+                if task.cancelled():
+                    self._release_unstarted_run(task)
+                    raise
                 self.cancel()
+
+    def _release_unstarted_run(self, task: asyncio.Task[DashboardOutcome]) -> None:
+        if self._task is not task:
+            return
+        self._task = None
+        self._permit = None
+        self._provider = None
+        self._outcome = None
+        self._publish("busy", "delivery_status", "outcome")
 
     def _blocked(self, target: DashboardTarget, permit: _DispatchPermit) -> str | None:
         if permit.cancelled:

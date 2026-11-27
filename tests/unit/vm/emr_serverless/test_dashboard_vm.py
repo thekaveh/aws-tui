@@ -389,3 +389,33 @@ async def test_hive_supported_and_close_fences_future_requests():
     assert (await perform(vm, current, browser, copy)).status == "stale"
     assert client.get_dashboard_for_job_run.await_count == 1
     assert vm.outcome == result
+
+
+@pytest.mark.asyncio
+async def test_drain_of_a_run_cancelled_before_its_first_step_returns_instead_of_spinning() -> None:
+    """A run cancelled before it started never ran its finally, and the drain spun forever.
+
+    The shielded await on a finished, cancelled task does not yield to the loop, so
+    the drain looped on CancelledError without suspending and blocked the event loop.
+    The drain now raises and releases the owners of the run that never started.
+    """
+    vm, _current, _client, _browser, _copy = setup_vm()
+    task = asyncio.create_task(asyncio.sleep(0))
+    task.cancel()
+    vm._task = task
+    calls = 0
+    original_cancel = vm.cancel
+
+    def counted_cancel() -> None:
+        nonlocal calls
+        calls += 1
+        if calls > 50:
+            raise AssertionError("drain is spinning on a finished task")
+        original_cancel()
+
+    vm.cancel = counted_cancel  # type: ignore[method-assign]
+    with pytest.raises(asyncio.CancelledError):
+        await vm._drain(task)
+
+    assert calls == 0
+    assert not vm.busy
