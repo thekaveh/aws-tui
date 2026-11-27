@@ -541,10 +541,14 @@ def _execution_identity_belongs_to(
     detail: QueryExecutionDetail,
     expected: QueryContext,
 ) -> bool:
+    # The S3 output is identified by the connection, region and workgroup that ran it. The
+    # database is not part of that identity: an execution from another database in the same
+    # workgroup still owns its output location.
     ref = detail.summary.ref
     return (
         ref.connection_name == detail.context.connection_name
         and ref.region == detail.context.region
         and ref.workgroup == detail.context.workgroup
-        and detail.context == expected
+        and (detail.context.connection_name, detail.context.region, detail.context.workgroup)
+        == (expected.connection_name, expected.region, expected.workgroup)
     )

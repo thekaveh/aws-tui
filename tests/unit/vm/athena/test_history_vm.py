@@ -740,3 +740,31 @@ async def test_overlapping_load_more_keeps_busy_until_the_first_page_lands() -> 
     client.release_fetch.set()
     await first
     assert not vm.is_loading_more
+
+
+@pytest.mark.asyncio
+async def test_open_s3_location_accepts_an_execution_from_another_database_in_the_workgroup() -> (
+    None
+):
+    """A valid output from another database in the same workgroup was refused as invalid.
+
+    The location belongs to the connection, region and workgroup that ran the query; the
+    database the page happens to be scoped to is not part of its identity.
+    """
+    client = _seeded_client()
+    detail = client.details["q-2"]
+    client.details["q-2"] = replace(
+        detail,
+        context=replace(detail.context, database="other_database"),
+    )
+    vm = make_history_vm(client)
+    published: list[object] = []
+    subscription = vm.hub.messages.subscribe(published.append)
+    try:
+        await vm.setup()
+        await vm.select_execution("q-2")
+
+        assert vm.open_s3_location() is True
+        assert any(isinstance(message, OpenS3LocationRequest) for message in published)
+    finally:
+        subscription.dispose()
