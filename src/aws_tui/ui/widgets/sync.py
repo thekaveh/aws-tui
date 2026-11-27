@@ -12,10 +12,18 @@ from textual.widgets import DataTable, Input, Select, Static, TextArea
 
 from aws_tui.domain.filesystem import ConflictError
 from aws_tui.domain.sync_plan import SyncComparison, SyncRow, SyncSettings, parse_sync_patterns
+from aws_tui.domain.upload_batch import UploadOutcome
 from aws_tui.infra.redaction import redact_text
 from aws_tui.ui.widgets.modal_button import ModalButton
 from aws_tui.ui.widgets.recursive_upload import RecursiveUploadModal, _button
 from aws_tui.vm.file_manager.sync_vm import SyncVM
+
+
+def _row_warning(outcome: UploadOutcome) -> str:
+    """Both failures are shown: a transfer error can be followed by a failed cleanup."""
+    error = str(outcome.error or "")
+    cleanup = outcome.cleanup_error or ""
+    return " · ".join(part for part in (error, cleanup) if part)
 
 
 def sync_review_text(vm: SyncVM) -> str:
@@ -204,7 +212,7 @@ class SyncModal(RecursiveUploadModal):
         rows = {}
         for row in vm.rows:
             comparison, outcome = row.comparison, row.outcome
-            warning = (outcome.cleanup_error or str(outcome.error or "")) if outcome else ""
+            warning = _row_warning(outcome) if outcome else ""
             detail = warning or comparison.reason
             size = comparison.known_bytes
             location = self._display_location(comparison)
