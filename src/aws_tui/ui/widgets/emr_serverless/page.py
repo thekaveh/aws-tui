@@ -546,7 +546,10 @@ class EmrServerlessPage(DeferredWorkerMixin, Widget):
             source_is_current=lambda: self._new_job_source_current(application_id),
         )
         vm.construct()
-        modal = JobRunCloneModal(vm)
+        modal = JobRunCloneModal(
+            vm,
+            on_settled=partial(self._settle_new_job, source_label, application_id, vm),
+        )
         try:
             try:
                 new_id = await self.app.push_screen_wait(modal)
@@ -558,24 +561,49 @@ class EmrServerlessPage(DeferredWorkerMixin, Widget):
                 return
             if new_id is None:
                 return
-            with contextlib.suppress(Exception):
-                stack = self.app._app_ctx.root_vm.chrome.toast_stack  # type: ignore[attr-defined]
-                notifications.success(
-                    stack,
-                    subject="Job",
-                    message=(f"job submitted on {source_label} / {application_id} ({new_id})"),
-                )
-            if not self._new_job_source_current(application_id):
-                return
-            await self._vm.refresh_job_runs(application_id=application_id)
-            if self._new_job_source_current(application_id) and any(
-                run.job_run_id == new_id for run in self._vm.job_runs.runs
-            ):
-                await self._vm.select_job_run(new_id)
         finally:
             if modal.is_attached and modal.is_active:
                 modal.action_cancel()
+            # A submission that started may still be in flight; its settle callback disposes.
+            if not modal.submission_started:
+                vm.dispose()
+
+    def _settle_new_job(
+        self,
+        source_label: str,
+        application_id: str,
+        vm: JobRunCloneVM,
+        new_id: str | None,
+        error: str | None,
+    ) -> None:
+        """Report a submission that settled, even after its form closed."""
+        try:
+            if new_id is not None:
+                with contextlib.suppress(Exception):
+                    stack = self.app._app_ctx.root_vm.chrome.toast_stack  # type: ignore[attr-defined]
+                    notifications.success(
+                        stack,
+                        subject="Job",
+                        message=(f"job submitted on {source_label} / {application_id} ({new_id})"),
+                    )
+                if self._new_job_source_current(application_id):
+                    self._run_lifecycle_worker(
+                        partial(self._select_submitted_job, application_id, new_id),
+                        group="emr-new-job-select",
+                    )
+            elif error is not None:
+                self._post_advisory_toast("Job", f"job not submitted: {error}")
+        finally:
             vm.dispose()
+
+    async def _select_submitted_job(self, application_id: str, new_id: str) -> None:
+        if not self._new_job_source_current(application_id):
+            return
+        await self._vm.refresh_job_runs(application_id=application_id)
+        if self._new_job_source_current(application_id) and any(
+            run.job_run_id == new_id for run in self._vm.job_runs.runs
+        ):
+            await self._vm.select_job_run(new_id)
 
     async def action_clone_selected_run(self) -> None:
         """Start one lifecycle-owned worker; push_screen_wait requires one."""
@@ -621,7 +649,12 @@ class EmrServerlessPage(DeferredWorkerMixin, Widget):
             self._post_advisory_toast("Job", unsupported)
             clone_vm.dispose()
             return
-        modal = JobRunCloneModal(clone_vm)
+        modal = JobRunCloneModal(
+            clone_vm,
+            on_settled=partial(
+                self._settle_clone, detail.application_id, detail.job_run_id, clone_vm
+            ),
+        )
         # Unified try/finally so cancellation (CancelledError is a
         # BaseException, NOT an Exception) disposes the VM too.
         # Previously the outer try caught only Exception, so an
@@ -645,17 +678,33 @@ class EmrServerlessPage(DeferredWorkerMixin, Widget):
                 # User cancelled — silent (Cancel is intentional UX,
                 # not an error to advertise).
                 return
-            if not self.is_attached or not self._vm.can_clone_source(
-                detail.application_id, detail.job_run_id
-            ):
-                return
-            self._post_clone_success_toast(new_id)
-            # Re-fresh the runs list so the new SUBMITTED row appears
-            # immediately rather than waiting for the next 60-s tick.
-            self._run_lifecycle_worker(self._vm.refresh_job_runs, group="emr-poll-runs")
         finally:
             if modal.is_attached and modal.is_active:
                 modal.action_cancel()
+            # A submission that started may still be in flight; its settle callback disposes.
+            if not modal.submission_started:
+                clone_vm.dispose()
+
+    def _settle_clone(
+        self,
+        application_id: str,
+        job_run_id: str,
+        clone_vm: JobRunCloneVM,
+        new_id: str | None,
+        error: str | None,
+    ) -> None:
+        """Report a clone submission that settled, even after its form closed."""
+        try:
+            if new_id is not None:
+                # The job exists, so say so even when the source has since moved on.
+                self._post_clone_success_toast(new_id)
+                if self.is_attached and self._vm.can_clone_source(application_id, job_run_id):
+                    # Re-fresh the runs list so the new SUBMITTED row appears immediately
+                    # rather than waiting for the next 60-s tick.
+                    self._run_lifecycle_worker(self._vm.refresh_job_runs, group="emr-poll-runs")
+            elif error is not None:
+                self._post_advisory_toast("Job", f"clone not submitted: {error}")
+        finally:
             clone_vm.dispose()
 
     def action_cancel_selected_run(self) -> None:

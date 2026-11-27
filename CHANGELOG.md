@@ -90,6 +90,7 @@ The Unreleased section is the promotion queue for the next package release. Entr
 - The EMR log filter accepts the regex syntax its matcher uses, such as \p{Lu}, instead of refusing it.
 - A rejected S3 upload reports that it was rejected even if a cancel was pending, and a failed multipart cleanup no longer hides a cancel.
 - Quitting shows "Still saving" for a shutdown step that runs longer than three seconds; the save itself is not cut short.
+- Closing the new-job or clone form during a submission no longer abandons it: the job is reported when AWS answers.
 - Byte sizes just below a unit boundary are labelled in the next unit (1048575 bytes is 1.0 MB, not 1024.0 kB).
 - Athena SQL completion replaces only the token under the cursor, even when text is selected. Previously the whole selection was replaced.
 - Opening an S3 location no longer crashes the application when restoring the previous Glue page fails. The failure is logged, and the handoff failure is reported.

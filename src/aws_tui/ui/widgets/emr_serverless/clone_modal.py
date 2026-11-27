@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
+from collections.abc import Callable
 from typing import ClassVar
 
 from textual import on
@@ -79,17 +81,50 @@ class JobRunCloneModal(DeferredWorkerMixin, ModalScreen[str | None]):
 
     BINDINGS = [("escape", "cancel", "Cancel")]  # noqa: RUF012
 
-    def __init__(self, vm: JobRunCloneVM) -> None:
+    def __init__(
+        self,
+        vm: JobRunCloneVM,
+        *,
+        on_settled: Callable[[str | None, str | None], None] | None = None,
+    ) -> None:
         super().__init__()
         self._vm = vm
         self._error: Static | None = None
         self._submitting = False
         self._reviewed_token: str | None = None
         self._reviewed_form: tuple[str, ...] | None = None
+        # Reports the outcome of a submission that may finish after this form is gone:
+        # (new job run id, None) on success, (None, message) on failure.
+        self._on_settled = on_settled
+        self._submission: asyncio.Future[str] | None = None
+        self._submission_started = False
 
     @property
     def vm(self) -> JobRunCloneVM:
         return self._vm
+
+    @property
+    def submission_started(self) -> bool:
+        """True once a submission exists. Its settle callback then owns the view model."""
+        return self._submission_started
+
+    def _submission_done(self, task: asyncio.Future[str]) -> None:
+        # Reading the exception also marks it retrieved when the form has already closed.
+        if task.cancelled():
+            new_id, error = None, "the submission was stopped"
+        elif (exc := task.exception()) is not None:
+            new_id = None
+            error = (
+                _submission_error(exc) if isinstance(exc, Exception) else "the submission stopped"
+            )
+        else:
+            new_id, error = task.result(), None
+        if self._on_settled is None:
+            return
+        # A failure the open form already shows inline needs no second notice.
+        if new_id is None and self.is_attached and self.is_active:
+            return
+        self._on_settled(new_id, error)
 
     @property
     def reviewing(self) -> bool:
@@ -276,10 +311,16 @@ class JobRunCloneModal(DeferredWorkerMixin, ModalScreen[str | None]):
         back_button.disabled = True
         self.query_one("#clone-cancel", Static).update("Close")
         progress.update("Submitting. Closing this form does not cancel the AWS job.")
+        self._submission_started = True
+        # The submission is its own task. Closing this form cancels only the wait below,
+        # never the AWS call, which may already have queued the job.
+        self._submission = asyncio.ensure_future(self._vm.submit())
+        self._submission.add_done_callback(self._submission_done)
         try:
-            new_id = await self._vm.submit()
+            new_id = await asyncio.shield(self._submission)
         except Exception as exc:
-            self._show_error(_submission_error(exc))
+            if self.is_attached:
+                self._show_error(_submission_error(exc))
             return
         finally:
             self._submitting = False

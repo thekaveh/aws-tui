@@ -12,6 +12,7 @@ error label shows the message, and the page does not crash.
 from __future__ import annotations
 
 import json
+from collections.abc import Callable
 from dataclasses import replace
 from datetime import UTC, datetime
 from unittest.mock import AsyncMock, MagicMock
@@ -24,7 +25,7 @@ from vmx import NULL_DISPATCHER, Message, MessageHub, PropertyChangedMessage
 
 from aws_tui.demo.in_memory_emr import InMemoryEmr as _InMemoryEmr
 from aws_tui.domain.emr_serverless import JobRunDetail, JobRunState
-from aws_tui.domain.filesystem import AuthRequiredError
+from aws_tui.domain.filesystem import AuthRequiredError, ProviderError
 from aws_tui.ui.widgets.emr_serverless.clone_modal import JobRunCloneModal
 from aws_tui.vm.emr_serverless.clone_vm import JobRunCloneVM
 from aws_tui.vm.service_source_vm import ServiceSourceContext
@@ -55,16 +56,23 @@ class _CloneModalHostApp(App[None]):
     """Vanilla host that pushes a single :class:`JobRunCloneModal`
     so the modal can be exercised via Textual's pilot harness."""
 
-    def __init__(self, vm: JobRunCloneVM, hub: MessageHub[Message]) -> None:
+    def __init__(
+        self,
+        vm: JobRunCloneVM,
+        hub: MessageHub[Message],
+        *,
+        on_settled: Callable[[str | None, str | None], None] | None = None,
+    ) -> None:
         super().__init__()
         self._vm = vm
         self._hub = hub
+        self._on_settled = on_settled
 
     def compose(self) -> ComposeResult:
         yield Container(id="content-host")
 
     async def on_mount(self) -> None:
-        await self.push_screen(JobRunCloneModal(self._vm))
+        await self.push_screen(JobRunCloneModal(self._vm, on_settled=self._on_settled))
 
 
 def _make_vm() -> JobRunCloneVM:
@@ -640,3 +648,90 @@ def test_keyboard_submit_action_is_not_awaited_by_the_key_handler() -> None:
 
     assert not inspect.iscoroutinefunction(JobRunCloneModal.action_submit)
     assert inspect.iscoroutinefunction(JobRunCloneModal.submit_job)
+
+
+async def test_closing_the_form_does_not_abandon_an_accepted_submission() -> None:
+    """Closing cancelled the awaited AWS call, so a job AWS had already queued was reported as nothing."""
+    import asyncio
+    import contextlib
+
+    started = asyncio.Event()
+    release = asyncio.Event()
+    finished: list[str] = []
+    settled: list[tuple[str | None, str | None]] = []
+    vm = _make_vm()
+
+    async def submit() -> str:
+        started.set()
+        await release.wait()
+        finished.append("r-accepted")
+        return "r-accepted"
+
+    vm.submit = submit
+    try:
+        host = _CloneModalHostApp(
+            vm, MessageHub(), on_settled=lambda new_id, error: settled.append((new_id, error))
+        )
+        async with host.run_test() as pilot:
+            modal = pilot.app.screen
+            modal.action_review()
+            submitting = asyncio.create_task(modal.submit_job())
+            await asyncio.wait_for(started.wait(), timeout=5)
+            modal.action_cancel()
+            await pilot.pause()
+            # Textual cancels the form's own work when the form goes away.
+            submitting.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await submitting
+            release.set()
+            for _ in range(200):
+                if settled:
+                    break
+                await asyncio.sleep(0.01)
+            assert finished == ["r-accepted"]
+            assert settled == [("r-accepted", None)]
+    finally:
+        release.set()
+        vm.dispose()
+
+
+async def test_a_failed_submission_after_the_form_closed_reports_once() -> None:
+    import asyncio
+    import contextlib
+
+    started = asyncio.Event()
+    release = asyncio.Event()
+    settled: list[tuple[str | None, str | None]] = []
+    vm = _make_vm()
+
+    async def submit() -> str:
+        started.set()
+        await release.wait()
+        raise ProviderError("denied by policy")
+
+    vm.submit = submit
+    try:
+        host = _CloneModalHostApp(
+            vm, MessageHub(), on_settled=lambda new_id, error: settled.append((new_id, error))
+        )
+        async with host.run_test() as pilot:
+            modal = pilot.app.screen
+            modal.action_review()
+            submitting = asyncio.create_task(modal.submit_job())
+            await asyncio.wait_for(started.wait(), timeout=5)
+            modal.action_cancel()
+            await pilot.pause()
+            submitting.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await submitting
+            release.set()
+            for _ in range(200):
+                if settled:
+                    break
+                await asyncio.sleep(0.01)
+            assert len(settled) == 1
+            assert settled[0][0] is None
+            assert settled[0][1]
+    finally:
+        release.set()
+        vm.dispose()
