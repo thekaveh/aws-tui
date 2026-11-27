@@ -551,7 +551,11 @@ class EmrServerlessPageVM(IsolatedComponentVM):
             idx = next(i for i, a in enumerate(apps) if a.id == current_id)
         except StopIteration:
             idx = -1
-        next_idx = (idx + direction) % len(apps)
+        # With no selection, forward starts at the first application and backward at the last.
+        if idx < 0:
+            next_idx = 0 if direction > 0 else len(apps) - 1
+        else:
+            next_idx = (idx + direction) % len(apps)
         await self.select_application(apps[next_idx].id)
 
     async def select_job_run(self, run_id: str) -> None:

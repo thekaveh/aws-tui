@@ -918,3 +918,24 @@ def test_page_destruct_cascades_in_reverse_and_dispose_reaches_members() -> None
     assert page.applications.status is ConstructionStatus.DISPOSED
     assert page.job_runs.status is ConstructionStatus.DISPOSED
     assert page.job_run_logs.status is ConstructionStatus.DISPOSED
+
+
+@pytest.mark.asyncio
+async def test_backward_application_cycle_from_no_selection_lands_on_the_last_application() -> None:
+    """With no selection, Shift+A backward landed on the second-to-last application.
+
+    The index for "no selection" is -1, and (-1 - 1) % n is n - 2. Backward from nothing
+    should reach the last application, as forward from nothing reaches the first.
+    """
+    page, fake = _make()
+    for index, name in enumerate(("alpha", "bravo", "charlie")):
+        fake.add_application(app_id=f"a{index}", name=name)
+    await page.setup()
+    page.applications._inner.current = None  # the no-selection state the cycle starts from
+    assert page.applications.selected_id is None
+
+    await page.cycle_application(-1)
+
+    assert page.applications.selected_id == "a2"
+    page.dispose()
+    fake.dispose()
