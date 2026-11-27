@@ -696,6 +696,9 @@ class GlueIcebergVM(IsolatedComponentVM):
                     if current_count > cancellation_count:
                         cancelled = True
                         cancellation_count = current_count
+                except Exception:
+                    # A read that failed while drained is read below; it must not strand the rest.
+                    pass
             if task.cancelled():
                 self._metadata_tasks.discard(task)
                 continue
@@ -950,8 +953,12 @@ class GlueIcebergVM(IsolatedComponentVM):
             pane.applied = page
             pane.visible_count = min(len(page.rows), self._page_size)
             if view == "snapshots":
-                snapshots = cast(tuple[IcebergSnapshot, ...], pane.visible_rows)
-                if not any(row.snapshot_id == self._selected_snapshot_id for row in snapshots):
+                # Check the whole page, as the comparison pin does: a row beyond the visible
+                # rows is still on the page and keeps its selection.
+                if not any(
+                    cast(IcebergSnapshot, row).snapshot_id == self._selected_snapshot_id
+                    for row in page.rows
+                ):
                     selection_changed = self._selected_snapshot_id is not None
                     self._selected_snapshot_id = None
                 if not any(

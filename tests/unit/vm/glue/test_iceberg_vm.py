@@ -1624,3 +1624,57 @@ def test_iceberg_vm_construct_after_dispose_is_a_silent_no_op() -> None:
     vm.dispose()
     vm.construct()
     assert vm.status is ConstructionStatus.DISPOSED
+
+
+@pytest.mark.asyncio
+async def test_metadata_drain_survives_a_read_that_fails_while_being_drained() -> None:
+    """A metadata read failing while the drain awaited it escaped and stranded the rest.
+
+    The drain caught only cancellation. An ordinary failure from a read it was still
+    waiting on propagated out, skipping the other tasks and the cleanup that shutdown
+    relies on.
+    """
+    vm, _inspector, _hub = make_vm()
+    cleanup_ran = asyncio.Event()
+
+    async def ignores_cancel_then_fails() -> None:
+        try:
+            await asyncio.sleep(10)
+        except asyncio.CancelledError:
+            await asyncio.sleep(0)
+            raise ValueError("metadata read failed") from None
+
+    async def cancelled_cleanly() -> None:
+        try:
+            await asyncio.sleep(10)
+        finally:
+            cleanup_ran.set()
+
+    failing = asyncio.create_task(ignores_cancel_then_fails())
+    clean = asyncio.create_task(cancelled_cleanly())
+    await asyncio.sleep(0)
+    vm._metadata_tasks.update({failing, clean})  # type: ignore[attr-defined]
+
+    await vm._cancel_and_drain_metadata_tasks()  # type: ignore[attr-defined]
+
+    assert cleanup_ran.is_set()
+    assert not vm._metadata_tasks  # type: ignore[attr-defined]
+    assert failing.done()
+
+
+@pytest.mark.asyncio
+async def test_retry_keeps_a_snapshot_selection_that_is_still_on_the_page() -> None:
+    """A retry that returned the same page dropped a selection outside the first visible rows.
+
+    The selection was checked against the visible rows, while the comparison pin was
+    checked against the whole page. A row still on the page lost its selection.
+    """
+    vm, _inspector, _hub = make_vm(page_size=1)
+    await vm.bind_table(ICEBERG_REF, table_format=TableFormat.ICEBERG)
+    await vm.select_view("snapshots")
+    await vm.load_more()
+    assert vm.select_snapshot(42)
+
+    assert await vm.retry()
+
+    assert vm.selected_snapshot_id == 42
