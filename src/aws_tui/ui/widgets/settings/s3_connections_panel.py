@@ -10,6 +10,7 @@ from textual.widget import Widget
 from textual.widgets import Button, Static
 from vmx import Message, MessageHub
 
+from aws_tui.infra.config_store import ConnectionEntry
 from aws_tui.infra.redaction import safe_endpoint_display
 from aws_tui.ui.widgets.confirm_modal import ask_with_scratch_confirmation
 from aws_tui.ui.widgets.settings.connection_form import (
@@ -388,16 +389,37 @@ class S3ConnectionsPanel(Widget):
         self._set_read_status("")
         form = self.query_one(ConnectionFormInline)
         entry = self._vm.entry_from_form(event.form)
+        self._edit_generation += 1
+        self._set_read_status("")
+        form = self.query_one(ConnectionFormInline)
+        entry = self._vm.entry_from_form(event.form)
+        # The keychain and the config file run in a worker, so the message loop keeps handling
+        # keys and the form's own controls while a prompt or lock is pending.
+        self._save_submitted(event, form, entry)
+
+    def _form_is_live(self, form: ConnectionFormInline) -> bool:
+        """The panel and its form are still mounted; a save can outlive either."""
+        return self.is_attached and form.is_attached
+
+    @work(exclusive=False, group="s3-connections-save")
+    async def _save_submitted(
+        self,
+        event: ConnectionFormSubmitted,
+        form: ConnectionFormInline,
+        entry: ConnectionEntry,
+    ) -> None:
         if event.mode == "add":
             try:
                 await self._vm.add_async(entry)
             except ValueError:
                 # Duplicate name — keep form open, mark the field invalid.
-                form.mark_name_invalid()
-                self._surface_error_toast(
-                    f"Connection {event.form.name!r} already exists.",
-                    toast_id=f"duplicate-{event.form.name}",
-                )
+                if self._form_is_live(form):
+                    form.mark_name_invalid()
+                if self.is_attached:
+                    self._surface_error_toast(
+                        f"Connection {event.form.name!r} already exists.",
+                        toast_id=f"duplicate-{event.form.name}",
+                    )
                 return
             except Exception as exc:
                 # ConfigError (invalid kind), OSError (disk full / read-only),
@@ -406,11 +428,13 @@ class S3ConnectionsPanel(Widget):
                 # the error so they understand why it didn't save.
                 # ``clear_submitting()`` re-arms the re-entrancy flag so the
                 # user can retry after fixing the underlying problem.
-                form.clear_submitting()
-                self._surface_error_toast(
-                    f"Could not save {event.form.name!r}: {exc}",
-                    toast_id=f"add-error-{event.form.name}",
-                )
+                if self._form_is_live(form):
+                    form.clear_submitting()
+                if self.is_attached:
+                    self._surface_error_toast(
+                        f"Could not save {event.form.name!r}: {exc}",
+                        toast_id=f"add-error-{event.form.name}",
+                    )
                 return
         else:  # "edit"
             if event.original_name is None:
@@ -418,24 +442,36 @@ class S3ConnectionsPanel(Widget):
                 # As an ``assert`` this vanished under ``python -O`` and the
                 # ``None`` reached ``update()``, which raised a confusing
                 # "connection cannot be renamed in place: old=None" instead.
-                self._surface_error_toast(
-                    "Could not save: the edit form did not report which connection it was editing.",
-                    toast_id="edit-error-missing-original-name",
-                )
-                form.clear_submitting()
+                if self.is_attached:
+                    self._surface_error_toast(
+                        "Could not save: the edit form did not report which connection it was editing.",
+                        toast_id="edit-error-missing-original-name",
+                    )
+                if self._form_is_live(form):
+                    form.clear_submitting()
                 return
             try:
                 await self._vm.update_async(event.original_name, entry)
             except Exception as exc:
-                form.clear_submitting()
-                self._surface_error_toast(
-                    f"Could not save {event.form.name!r}: {exc}",
-                    toast_id=f"edit-error-{event.form.name}",
-                )
+                if self._form_is_live(form):
+                    form.clear_submitting()
+                if self.is_attached:
+                    self._surface_error_toast(
+                        f"Could not save {event.form.name!r}: {exc}",
+                        toast_id=f"edit-error-{event.form.name}",
+                    )
                 return
         # Persistence succeeded — close the form and refresh the list.
-        form.close()
-        await self.refresh_rows()
+        if self._form_is_live(form):
+            form.close()
+        try:
+            await self.refresh_rows()
+        except Exception as exc:
+            if self.is_attached:
+                self._surface_error_toast(
+                    f"Connection saved, but the list could not refresh: {exc}",
+                    toast_id="save-refresh-error",
+                )
 
     def on_connection_form_cancelled(self, event: ConnectionFormCancelled) -> None:
         """Retire pending edit reads when the current form is cancelled."""

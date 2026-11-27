@@ -238,8 +238,11 @@ async def test_duplicate_name_keeps_form_open_and_surfaces_error(tmp_path: Path)
     """Regression: when vm.add raises ValueError (duplicate name), the
     panel must keep the form open + mark the name field invalid + show
     a toast (not silently swallow the error)."""
+    import asyncio
+
     from textual.widgets import Input
 
+    add_failed = asyncio.Event()
     hub = new_hub()
     store = ConfigStore(path=tmp_path / "config.toml")
     # Pre-seed a conflict.
@@ -249,6 +252,16 @@ async def test_duplicate_name_keeps_form_open_and_surfaces_error(tmp_path: Path)
         resolver=resolver, config_store=store, hub=hub, dispatcher=NULL_DISPATCHER
     )
     s3_vm.construct()
+    original_add = s3_vm.add_async
+
+    async def recording_add(entry):  # type: ignore[no-untyped-def]
+        try:
+            return await original_add(entry)
+        except ValueError:
+            add_failed.set()
+            raise
+
+    s3_vm.add_async = recording_add  # type: ignore[method-assign]
     panel = S3ConnectionsPanel(vm=s3_vm, hub=hub)
 
     class _Host(App[None]):
@@ -278,11 +291,10 @@ async def test_duplicate_name_keeps_form_open_and_surfaces_error(tmp_path: Path)
             form.post_message(
                 ConnectionFormSubmitted(form=form_obj, mode="add", original_name=None)
             )
-            await _settle_until(
-                lambda: pilot.app.query_one("#form-name", Input).has_class("-invalid"),
-                pilot,
-                what="the duplicate name to be marked invalid",
-            )
+            # The name field is already marked invalid when the form opens empty, so wait for the
+            # save itself to fail, then for the worker to finish marking the form.
+            await _settle_until(add_failed.is_set, pilot, what="the duplicate add to fail")
+            await pilot.pause(0.05)
             # Form must still be open
             assert form.has_class("-open")
             # Name field must be marked invalid
@@ -354,4 +366,70 @@ async def test_unusable_keychain_renders_a_notice_instead_of_killing_the_app(
         with pytest.raises(RuntimeError, match="keychain locked"):
             resolver.resolve("minio-local")
     finally:
+        s3_vm.dispose()
+
+
+@pytest.mark.asyncio
+async def test_a_pending_keychain_write_does_not_hold_the_message_loop(tmp_path: Path) -> None:
+    """The save handler awaited the keychain write, so the panel's loop could not handle anything.
+
+    The write now runs in a worker. A second message posted while the first write is pending is
+    handled before that write completes.
+    """
+    import asyncio
+    import threading
+
+    hub = new_hub()
+    store = ConfigStore(path=tmp_path / "config.toml")
+    resolver = ConnectionResolver(config_store=store)
+    s3_vm = S3ConnectionsVM(
+        resolver=resolver, config_store=store, hub=hub, dispatcher=NULL_DISPATCHER
+    )
+    s3_vm.construct()
+    panel = S3ConnectionsPanel(vm=s3_vm, hub=hub)
+    gate = threading.Event()
+    original_add = s3_vm.add_async
+
+    async def held_add(entry):  # type: ignore[no-untyped-def]
+        await asyncio.to_thread(gate.wait)
+        return await original_add(entry)
+
+    s3_vm.add_async = held_add  # type: ignore[method-assign]
+    handled: list[str] = []
+
+    class _Host(App[None]):
+        def compose(self) -> ComposeResult:
+            yield panel
+
+    app = _Host()
+    try:
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            form = S3CompatForm(
+                name="held",
+                endpoint_url="http://localhost:9999",
+                region="us-east-1",
+                access_key_id="K",
+                secret_access_key="S",
+                session_token=None,
+                force_path_style=True,
+                verify_tls=True,
+            )
+            panel.post_message(ConnectionFormSubmitted(form=form, mode="add", original_name=None))
+            await pilot.pause()
+            panel.call_later(handled.append, "handled")
+            await _settle_until(
+                lambda: handled,
+                pilot,
+                what="the panel to handle a queued call during the held write",
+            )
+            assert not gate.is_set()
+            gate.set()
+            await _settle_until(
+                lambda: "held" in store.load().connections,
+                pilot,
+                what="the held write to finish",
+            )
+    finally:
+        gate.set()
         s3_vm.dispose()
