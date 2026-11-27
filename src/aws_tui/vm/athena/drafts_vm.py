@@ -1078,8 +1078,14 @@ class AthenaDraftSession:
         elif self._state == "context_required" and self._bound_context == context:
             if self._save_failed_revision == self._editor_revision:
                 self._state = "error"
+            elif self.has_unsaved_text(self._sql, context):
+                # Returning to the saved context must queue the retained edit; setting
+                # pending alone left the stored draft stale until the next keystroke.
+                self._state = "pending"
+                if self._active and self._runtime.enabled:
+                    self._runtime.schedule_session(self, self._sql, context, self._editor_revision)
             else:
-                self._state = "pending" if self.has_unsaved_text(self._sql, context) else "saved"
+                self._state = "saved"
         self._notify("state")
         self._notify("error_text")
 

@@ -1419,3 +1419,32 @@ async def test_unschedulable_activated_baseline_obeys_later_writer(tmp_path, rep
         ["SELECT replacement"] if replacement else []
     )
     runtime.dispose()
+
+
+@pytest.mark.asyncio
+async def test_returning_to_the_saved_context_saves_the_edit_made_away_from_it(tmp_path):
+    """Returning to the saved context reported "pending" with no save queued.
+
+    An edit made while the context was unresolved is retained, not written. When the
+    context came back, the session showed pending but never scheduled the write, so the
+    stored draft stayed stale until the next keystroke.
+    """
+    runtime, store = runtime_at(tmp_path)
+    session = runtime.open_session()
+    original = QueryContext(*CTX)
+    other = QueryContext(*(*CTX[:4], "other"))
+    session.edited("SELECT origin", original)
+    await wait_until(
+        lambda: not session.has_unsaved_text("SELECT origin", original),
+        what="origin saved",
+    )
+    session.context_changed(other)
+    session.edited("SELECT changed", other)
+    session.context_changed(original)
+    assert session.state == "pending"
+
+    await wait_until(
+        lambda: any(draft.sql == "SELECT changed" for draft in store.list().records),
+        what="edit made away from the saved context saved on return, without another keystroke",
+    )
+    assert (await runtime.shutdown()).unpersisted == 0
