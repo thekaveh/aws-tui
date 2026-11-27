@@ -35,6 +35,10 @@ class HistoryWriteError(ProviderError):
     """Fixed safe refusal before a transfer mutation."""
 
 
+# Labels of recent transfers, kept after release so a late progress message keeps its direction.
+_MAX_REMEMBERED_LABELS = 512
+
+
 class _DiskCancelled(asyncio.CancelledError):
     def __init__(self, value: object) -> None:
         super().__init__()
@@ -103,6 +107,7 @@ class TransferRuntime:
         self._running_ids: set[str] = set()
         self._totals: dict[str, tuple[int, int | None]] = {}
         self._destination_uris: dict[str, str] = {}
+        self._labels: dict[str, tuple[str, str]] = {}
         self._observed_ids: set[str] = set()
         self._queued_cleanup: dict[str, asyncio.Task[None]] = {}
         self._owners: dict[str, asyncio.Task[Any]] = {}
@@ -184,6 +189,9 @@ class TransferRuntime:
             self.cancel_events[tid] = asyncio.Event()
             self._totals[tid] = (0, bytes_total)
             self._destination_uris[tid] = destination_uri
+            self._labels[tid] = (source_uri, destination_uri)
+            while len(self._labels) > _MAX_REMEMBERED_LABELS:
+                del self._labels[next(iter(self._labels))]
             if descriptor is not None:
                 self._descriptors.add(tid)
             if cancelled:
@@ -261,6 +269,9 @@ class TransferRuntime:
         source: str = "",
         destination: str = "",
     ) -> None:
+        if not source and not destination and tid in self._labels:
+            # Terminal and late messages carry no labels; the transfer's own labels keep its direction.
+            source, destination = self._labels[tid]
         self.hub.send(
             TransferProgressMessage(
                 transfer_id=tid,
