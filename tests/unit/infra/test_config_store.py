@@ -1156,3 +1156,24 @@ def test_fdopen_construction_preserves_original_error(
     with pytest.raises(OSError, match=r".") as closed:
         real_fstat(descriptors[0])
     assert closed.value.errno == errno.EBADF
+
+
+def test_saving_through_a_symlinked_config_keeps_the_link_and_updates_the_target(tmp_path) -> None:
+    """A save replaced a symlinked config.toml with a regular file.
+
+    The config is often a link into a dotfiles repository. The save now writes the real file, so
+    the link survives and the repository copy carries the change.
+    """
+    from aws_tui.infra.config_store import ConfigStore, ConnectionEntry
+
+    real = tmp_path / "dotfiles" / "config.toml"
+    real.parent.mkdir()
+    real.write_text("", encoding="utf-8")
+    link = tmp_path / "config.toml"
+    link.symlink_to(real)
+    store = ConfigStore(path=link)
+
+    store.add_connection(ConnectionEntry(name="linked", kind="aws", profile="dev"))
+
+    assert link.is_symlink()
+    assert "linked" in real.read_text(encoding="utf-8")

@@ -638,15 +638,18 @@ class ConfigStore:
         # chmod is idempotent and best-effort — a failure (e.g.
         # filesystem doesn't support permission bits, like FAT) is
         # surfaced via logs upstream but is not fatal to the save.
+        # A symlinked config is a link into a dotfiles repository: write the real file, so the
+        # link is kept instead of being replaced by a regular file.
+        target = self._path.resolve()
         with contextlib.suppress(OSError, NotImplementedError):
-            self._path.parent.chmod(0o700)
+            target.parent.chmod(0o700)
         payload = self._serialize(config)
 
         # Same-directory temp ensures os.replace is a true atomic rename.
         tmp_fd, tmp_name = tempfile.mkstemp(
             prefix=".config-",
             suffix=".toml.tmp",
-            dir=str(self._path.parent),
+            dir=str(target.parent),
         )
         tmp_path = Path(tmp_name)
         try:
@@ -662,8 +665,8 @@ class ConfigStore:
                 os.fsync(fh.fileno())
             # Path.replace delegates to os.replace, so test patches on
             # `os.replace` still flow through here.
-            tmp_path.replace(self._path)
-            _fsync_directory(self._path.parent)
+            tmp_path.replace(target)
+            _fsync_directory(target.parent)
         except BaseException:
             # Catching BaseException (rather than Exception) is
             # intentional: KeyboardInterrupt and SystemExit must also
