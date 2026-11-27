@@ -1461,7 +1461,13 @@ async def test_follow_prunes_only_before_overlap_preserves_empty_freshness_and_l
     from tests.helpers import wait_until
 
     vm, fake, names = _cw_vm(monkeypatch)
-    clock = [100_000]
+    from aws_tui.vm.emr_serverless.job_run_logs_vm import _CW_LOOKBACK_MS
+
+    # The window starts _CW_LOOKBACK_MS before the poll's end, so the timestamps are
+    # placed relative to the constant rather than to a fixed 60-second window.
+    base = _CW_LOOKBACK_MS + 100_000
+    window_start = base - _CW_LOOKBACK_MS
+    clock = [base]
     monkeypatch.setattr("aws_tui.vm.emr_serverless.job_run_logs_vm._now_ms", lambda: clock[0])
     ticks = asyncio.Queue()
 
@@ -1470,28 +1476,29 @@ async def test_follow_prunes_only_before_overlap_preserves_empty_freshness_and_l
 
     monkeypatch.setattr("aws_tui.vm.emr_serverless.job_run_logs_vm._sleep", sleep)
     fake._cloudwatch_events[("/aws/emr-serverless", names[0])] = (
-        CloudWatchLogEvent("start", 40_000, 40_000, "ERROR boundary"),
+        CloudWatchLogEvent("start", base - 60_000, base - 60_000, "ERROR boundary"),
     )
     task = asyncio.create_task(vm.follow())
     await wait_until(lambda: vm.state is LogsState.READY, what="initial boundary event")
     # A late event inside the overlap appears; a timestamp before it is excluded.
     for event in (
-        CloudWatchLogEvent("late", 40_001, 110_000, "ERROR late"),
-        CloudWatchLogEvent("too-old", 39_999, 110_000, "ERROR outside overlap"),
+        CloudWatchLogEvent("late", base - 59_999, base + 10_000, "ERROR late"),
+        CloudWatchLogEvent("too-old", window_start - 1, base + 10_000, "ERROR outside overlap"),
     ):
         fake.append_cloudwatch_event(
             log_group_name="/aws/emr-serverless", stream_name=names[0], event=event
         )
-    clock[0] = 110_000
+    clock[0] = base + 10_000
     ticks.put_nowait(None)
-    await wait_until(lambda: vm.last_successful_read_at_ms == 110_000, what="late poll")
+    await wait_until(lambda: vm.last_successful_read_at_ms == base + 10_000, what="late poll")
     assert vm.lines == ("ERROR boundary", "ERROR late")
-    assert vm.last_event_at_ms == 40_001
+    assert vm.last_event_at_ms == base - 59_999
     # Same IDs remain suppressed at the inclusive overlap boundary.
-    clock[0] = 120_000
+    clock[0] = base + 20_000
     ticks.put_nowait(None)
     await wait_until(
-        lambda: vm.last_successful_read_at_ms == 120_000, what="empty successful poll freshness"
+        lambda: vm.last_successful_read_at_ms == base + 20_000,
+        what="empty successful poll freshness",
     )
     assert vm.lines == ("ERROR boundary", "ERROR late")
     vm.stop_follow()
@@ -1736,3 +1743,45 @@ def test_job_run_logs_vm_isolated_component_publishes_and_completes() -> None:
     vm.dispose()
     assert vm.status is ConstructionStatus.DISPOSED
     assert completed == [True]
+
+
+async def test_follow_keeps_an_event_ingested_minutes_after_its_timestamp(monkeypatch):
+    """An event ingested a few minutes after its timestamp was never fetched.
+
+    The follow window started one minute before the previous poll's end, so an event
+    timestamped earlier than that, but ingested after the poll, was dropped for good.
+    """
+    from aws_tui.domain.emr_cloudwatch_logs import CloudWatchLogEvent
+    from aws_tui.vm.emr_serverless.job_run_logs_vm import _CW_LOOKBACK_MS
+    from tests.helpers import wait_until
+
+    vm, fake, names = _cw_vm(monkeypatch)
+    base = _CW_LOOKBACK_MS + 100_000
+    clock = [base]
+    monkeypatch.setattr("aws_tui.vm.emr_serverless.job_run_logs_vm._now_ms", lambda: clock[0])
+    ticks = asyncio.Queue()
+
+    async def sleep(_delay):
+        await ticks.get()
+
+    monkeypatch.setattr("aws_tui.vm.emr_serverless.job_run_logs_vm._sleep", sleep)
+    fake._cloudwatch_events[("/aws/emr-serverless", names[0])] = (
+        CloudWatchLogEvent("start", base - 60_000, base - 60_000, "ERROR boundary"),
+    )
+    task = asyncio.create_task(vm.follow())
+    await wait_until(lambda: vm.state is LogsState.READY, what="initial boundary event")
+    late_timestamp = base - 200_000
+    fake.append_cloudwatch_event(
+        log_group_name="/aws/emr-serverless",
+        stream_name=names[0],
+        event=CloudWatchLogEvent("lagged", late_timestamp, base + 5_000, "ERROR lagged"),
+    )
+    clock[0] = base + 5_000
+    ticks.put_nowait(None)
+    await wait_until(lambda: vm.last_successful_read_at_ms == base + 5_000, what="lagged poll")
+    assert "ERROR lagged" in vm.lines
+    vm.stop_follow()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    await vm.shutdown()
+    vm.dispose()

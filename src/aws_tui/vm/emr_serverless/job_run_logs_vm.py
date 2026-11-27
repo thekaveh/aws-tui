@@ -92,6 +92,9 @@ FailureKind = Literal[
 _CW_EVENT_CAP = 5_000
 _CW_BYTE_CAP = 4 * 1024 * 1024
 _CW_ID_CAP = 20_000
+# CloudWatch can ingest an event minutes after its timestamp, and the follow window
+# filters on event time. A lookback shorter than the ingestion lag drops those events.
+_CW_LOOKBACK_MS = 300_000
 _LINE_BREAK = re.compile(r"\r\n|[\n\r\v\f\x1c-\x1e\x85\u2028\u2029]")
 _LIMIT_ERRORS = frozenset(
     {
@@ -953,7 +956,7 @@ class JobRunLogsVM(IsolatedComponentVM):
                 group, _ = cloudwatch_location(
                     configuration, self._application_id or "", self._job_run_id or ""
                 )
-                start = max(self._run_created_at_ms, last_end - 60_000)
+                start = max(self._run_created_at_ms, last_end - _CW_LOOKBACK_MS)
                 end = max(last_end, _now_ms())
                 snapshot = await self._client.read_cloudwatch_events(
                     log_group_name=group,
