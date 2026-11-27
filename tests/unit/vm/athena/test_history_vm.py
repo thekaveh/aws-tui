@@ -701,3 +701,42 @@ def test_athena_history_vm_raising_subscriber() -> None:
     vm._publish("items")
     assert "items" in seen
     vm.dispose()
+
+
+@pytest.mark.asyncio
+async def test_cancelled_refresh_does_not_leave_history_loading() -> None:
+    """A refresh cancelled in flight stayed LOADING, with no request running."""
+    client = _seeded_client()
+    vm = make_history_vm(client)
+    await vm.setup()
+    client.block_request = ("analysts", None)
+
+    refreshing = asyncio.create_task(vm.refresh())
+    await client.fetch_started.wait()
+    assert vm.state is PaneState.LOADING
+
+    refreshing.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await refreshing
+
+    assert vm.state is not PaneState.LOADING
+
+
+@pytest.mark.asyncio
+async def test_overlapping_load_more_keeps_busy_until_the_first_page_lands() -> None:
+    """A second load-more cleared the busy flag while the first page was still loading."""
+    client = _seeded_client()
+    vm = make_history_vm(client)
+    await vm.setup()
+    client.block_request = ("analysts", "next")
+
+    first = asyncio.create_task(vm.load_more())
+    await client.fetch_started.wait()
+    second = asyncio.create_task(vm.load_more())
+    await asyncio.sleep(0)
+    await second
+    assert vm.is_loading_more
+
+    client.release_fetch.set()
+    await first
+    assert not vm.is_loading_more

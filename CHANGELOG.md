@@ -18,6 +18,8 @@ The Unreleased section is the promotion queue for the next package release. Entr
 
 - Log and crash-dump redaction no longer shows the second secret when two sensitive keys appear in whitespace form, as in `password aws_secret_access_key <value>`.
 - Loading more Athena results while a page is still loading no longer appends the same page twice.
+- Athena history no longer stays in the loading state when a refresh is cancelled, and a second load-more no longer clears the busy indicator while the first page is still loading.
+- Athena draft edits made while the saved context was unresolved are saved when the context returns, without another keystroke.
 - Byte sizes just below a unit boundary are labelled in the next unit (1048575 bytes is 1.0 MB, not 1024.0 kB).
 - Athena SQL completion replaces only the token under the cursor, even when text is selected. Previously the whole selection was replaced.
 - Opening an S3 location no longer crashes the application when restoring the previous Glue page fails. The failure is logged, and the handoff failure is reported.

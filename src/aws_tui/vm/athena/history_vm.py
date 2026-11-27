@@ -143,11 +143,18 @@ class AthenaHistoryVM(IsolatedComponentVM):
         self._notify_all()
         if not self._workgroup:
             return
-        await self._run_pager(worker, refresh=True)
+        try:
+            await self._run_pager(worker, refresh=True)
+        except asyncio.CancelledError:
+            # A refresh cancelled in flight has no request left to end its LOADING state.
+            if self._worker_is_current(worker) and self._state is PaneState.LOADING:
+                self._set_state(PaneState.IDLE if self.items else PaneState.EMPTY)
+            raise
 
     async def load_more(self) -> None:
         worker = self._worker
-        if not self._can_load_more(worker):
+        # A continuation already in flight owns the busy flag; a second call must not clear it.
+        if not self._can_load_more(worker) or self._loading_more_worker is worker:
             return
         self._begin_loading_more(worker)
         try:
