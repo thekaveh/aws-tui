@@ -542,7 +542,9 @@ class JobRunsPane(Widget, can_focus=True):
         # JobRunLogsPane already guard their analogue branches; this
         # was the asymmetric holdout. Static-string branches get
         # the guard too for parity.
-        if state is PaneState.LOADING:
+        # A background poll sets LOADING on rows that are already on screen; keep them shown and
+        # show the placeholder only when there is nothing to show yet.
+        if state is PaneState.LOADING and not runs:
             await body.mount(Static("loading…", classes="runs-placeholder", markup=False))
             return
         if state is PaneState.UNREACHABLE:

@@ -73,6 +73,7 @@ The Unreleased section is the promotion queue for the next package release. Entr
 - Submitting an EMR job from the keyboard no longer freezes the app until AWS replies; Close and the rest of the input keep working.
 - A confirmation dialog answers once, so a double activation no longer closes the screen beneath it.
 - Renaming a marked file or folder keeps its mark under the new name.
+- The EMR job runs list keeps its rows on screen during its periodic refresh instead of blanking to "loading…" every minute.
 - Byte sizes just below a unit boundary are labelled in the next unit (1048575 bytes is 1.0 MB, not 1024.0 kB).
 - Athena SQL completion replaces only the token under the cursor, even when text is selected. Previously the whole selection was replaced.
 - Opening an S3 location no longer crashes the application when restoring the previous Glue page fails. The failure is logged, and the handoff failure is reported.

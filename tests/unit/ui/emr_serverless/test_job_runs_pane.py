@@ -286,3 +286,27 @@ async def test_item_budget_is_visible_after_paging_stops(monkeypatch) -> None:
         await pilot.pause()
         body = pilot.app.query_one("#runs-body", VerticalScroll)
         assert any("safety limit" in str(row.render()) for row in body.query(Static))
+
+
+async def test_a_background_poll_keeps_the_rows_on_screen() -> None:
+    """Each minute's poll set LOADING, and the pane replaced the visible rows with "loading…".
+
+    The placeholder is for a listing with nothing to show. A poll over rows already on screen
+    keeps them visible.
+    """
+    vm, hub, fake = _make_vm()
+    fake.add_application(app_id="a1", name="etl")
+    fake.add_job_run(application_id="a1", job_run_id="r0", state=JobRunState.SUCCESS)
+    vm.set_application("a1")
+    await vm.refresh()
+
+    async with _PaneApp(vm, hub).run_test() as pilot:
+        await pilot.pause()
+        pane = pilot.app.query_one(JobRunsPane)
+        assert vm.runs
+        vm._state = PaneState.LOADING  # type: ignore[attr-defined]
+        await pane._refresh_rows()  # type: ignore[attr-defined]
+        await pilot.pause()
+        body = pilot.app.query_one("#runs-body", VerticalScroll)
+        assert len(body.query(".runs-row")) == len(vm.runs)
+        assert not any("loading" in str(p.render()) for p in body.query(".runs-placeholder"))
