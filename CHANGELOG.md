@@ -86,6 +86,7 @@ The Unreleased section is the promotion queue for the next package release. Entr
 - Preview of a text file whose 64 KiB cut splits a UTF-8 character shows the structured view instead of the raw fallback.
 - Files named without an extension no longer receive CSV preview hints.
 - A start response without a job run id says the job may have started and to check the run list before retrying.
+- Glue column statistics keep the batches that succeeded when a later batch is throttled.
 - Byte sizes just below a unit boundary are labelled in the next unit (1048575 bytes is 1.0 MB, not 1024.0 kB).
 - Athena SQL completion replaces only the token under the cursor, even when text is selected. Previously the whole selection was replaced.
 - Opening an S3 location no longer crashes the application when restoring the previous Glue page fails. The failure is logged, and the handoff failure is reported.

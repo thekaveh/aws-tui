@@ -495,11 +495,22 @@ class GlueClient:
         async with await self._aws_session.client(self._connection, "glue") as client:
             for offset in range(0, len(columns), _COLUMN_STATISTICS_BATCH_SIZE):
                 batch = list(columns[offset : offset + _COLUMN_STATISTICS_BATCH_SIZE])
-                response = await client.get_column_statistics_for_table(
-                    DatabaseName=ref.database_name,
-                    TableName=ref.table_name,
-                    ColumnNames=batch,
-                )
+                try:
+                    response = await client.get_column_statistics_for_table(
+                        DatabaseName=ref.database_name,
+                        TableName=ref.table_name,
+                        ColumnNames=batch,
+                    )
+                except Exception as exc:
+                    # Only a later batch degrades: an earlier batch's rows are kept and
+                    # this failure is reported like a per-column error. The first batch
+                    # keeps its existing path, and unknown errors still propagate.
+                    mapped = _map_operation_error(exc)
+                    if offset == 0 or mapped is None:
+                        raise
+                    if first_error is None:
+                        first_error = mapped
+                    break
                 if first_error is None:
                     first_error = _column_statistics_error(response)
                 rows.extend(

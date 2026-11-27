@@ -641,6 +641,44 @@ async def test_get_column_statistics_batches_at_glue_limit_and_maps_values() -> 
     ]
 
 
+async def test_get_column_statistics_keeps_earlier_batches_when_a_later_one_is_throttled() -> None:
+    client, glue, _, _ = _client()
+    ref = TableRef("AwsDataCatalog", "analytics", "events", "dev", "us-east-1")
+    columns = tuple(f"column_{index}" for index in range(101))
+    glue.get_column_statistics_for_table.side_effect = [
+        {
+            "ColumnStatisticsList": [
+                {
+                    "ColumnName": "column_0",
+                    "ColumnType": "bigint",
+                    "AnalyzedTime": NOW,
+                    "StatisticsData": {
+                        "Type": "LONG",
+                        "LongColumnStatisticsData": {"NumberOfNulls": 2},
+                    },
+                }
+            ]
+        },
+        _client_error("ThrottlingException", operation="GetColumnStatisticsForTable"),
+    ]
+
+    result = await client.get_column_statistics(ref, columns)
+
+    assert result == (ColumnStatistics("column_0", "bigint", NOW, (("NumberOfNulls", "2"),)),)
+    assert glue.get_column_statistics_for_table.await_count == 2
+
+
+async def test_get_column_statistics_first_batch_throttle_still_raises() -> None:
+    client, glue, _, _ = _client()
+    ref = TableRef("AwsDataCatalog", "analytics", "events", "dev", "us-east-1")
+    glue.get_column_statistics_for_table.side_effect = _client_error(
+        "ThrottlingException", operation="GetColumnStatisticsForTable"
+    )
+
+    with pytest.raises(ThrottledError):
+        await client.get_column_statistics(ref, ("column_0",))
+
+
 async def test_get_column_statistics_with_no_columns_makes_no_request() -> None:
     client, glue, _, _ = _client()
     ref = TableRef("AwsDataCatalog", "analytics", "events", "dev", "us-east-1")
