@@ -276,7 +276,22 @@ class EmrServerlessPageVM(IsolatedComponentVM):
             return CancelJobRunResult("busy")
         target = self._cancel_target()
         if target is None:
-            return CancelJobRunResult("inert", "select an EMR job run to request cancellation")
+            # A selected run the state filter hides is not a missing selection; say which it is.
+            selected = self.job_runs.selected_summary
+            app_id = self.applications.selected_id
+            visible_ids = {run.job_run_id for run in self.job_runs.runs}
+            hidden = (
+                selected is not None
+                and app_id is not None
+                and selected.application_id == app_id
+                and selected.job_run_id not in visible_ids
+            )
+            message = (
+                "the selected EMR job run is hidden by the state filter; show it to request cancellation"
+                if hidden
+                else "select an EMR job run to request cancellation"
+            )
+            return CancelJobRunResult("inert", message)
         if target.state not in CANCELLABLE_JOB_RUN_STATES:
             return CancelJobRunResult(
                 "inert", f"job run is {target.state.value}; cancellation is unavailable"

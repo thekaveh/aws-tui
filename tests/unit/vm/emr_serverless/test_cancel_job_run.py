@@ -841,3 +841,15 @@ async def test_unsent_dismissed_and_stale_results_survive_busy_release_change(
         assert not page.cancel_busy
     finally:
         subscription.dispose()
+
+
+async def test_a_selected_run_hidden_by_the_state_filter_is_named_as_hidden(page_with_state):
+    """A hidden selected run got the same message as no selection at all."""
+    page, fake = await page_with_state(JobRunState.RUNNING)
+    page.job_runs.set_state_filter(frozenset({JobRunState.SUCCESS}))
+
+    result = await page.cancel_selected_run(AsyncMock(return_value=True))
+
+    assert result.status == "inert"
+    assert "hidden by the state filter" in result.message
+    assert cancel_calls(fake) == []

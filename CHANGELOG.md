@@ -42,6 +42,7 @@ The Unreleased section is the promotion queue for the next package release. Entr
 - EMR job run logs in follow mode keep events CloudWatch ingests up to five minutes after their timestamp; they were dropped after one minute.
 - A transfer's final progress update keeps its source and destination, so a transfer that re-appears in the list keeps its direction.
 - Command palette ranks a subsequence by its tightest match and a keyword by its best tier.
+- Cancelling an EMR job run whose row the state filter hides says the run is hidden, not that nothing is selected.
 - Byte sizes just below a unit boundary are labelled in the next unit (1048575 bytes is 1.0 MB, not 1024.0 kB).
 - Athena SQL completion replaces only the token under the cursor, even when text is selected. Previously the whole selection was replaced.
 - Opening an S3 location no longer crashes the application when restoring the previous Glue page fails. The failure is logged, and the handoff failure is reported.
