@@ -138,6 +138,21 @@ async def test_named_footer_errors_validate_and_close(data, message):
     assert fs.session.closed
 
 
+@pytest.fixture(autouse=True)
+def _decode_budget_independent_of_wall_clock(monkeypatch):
+    """Give these tests a budget that real time cannot exhaust.
+
+    The decoder runs in a child process under the 5 s real-clock preview budget. Under load the
+    spawn and import could exceed it, and these tests then failed with "Preview timed out" although
+    they test drift, layout and allowance. Deadline behaviour has its own tests.
+    """
+    monkeypatch.setattr(
+        PreviewBudget,
+        "start",
+        classmethod(lambda cls, *, clock=monotonic: PreviewBudget(clock() + 60.0, clock)),
+    )
+
+
 @pytest.mark.asyncio
 async def test_drift_never_returns_decoder_result():
     fs = RecordingProvider(fixture_bytes(), drift=True)
