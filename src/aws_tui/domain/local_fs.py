@@ -2269,8 +2269,12 @@ def _require_secure_dir_fd() -> None:
 
 
 def _validate_relative(path: PathRef) -> None:
+    # A backslash separates path components only on Windows; on POSIX it is an ordinary name
+    # character, so refusing it here broke uploads and listings of such names.
+    separators = ("/", "\\") if _WINDOWS else ("/",)
     if any(
-        segment in {"", ".", ".."} or "/" in segment or "\\" in segment for segment in path.segments
+        segment in {"", ".", ".."} or any(sep in segment for sep in separators)
+        for segment in path.segments
     ):
         raise ProviderError(f"path {path.as_posix()!r} contains an unsafe segment")
 

@@ -2082,3 +2082,19 @@ async def test_delete_restores_claim_when_post_rename_metadata_fails(
         if not empty_directory:
             assert source.read_bytes() == b"original bytes"
         assert list(tmp_path.iterdir()) == [source]
+
+
+def test_backslash_is_an_ordinary_name_character_on_posix() -> None:
+    """A backslash in a POSIX file name was refused as an unsafe segment.
+
+    Uploads, listings and renames of such names failed. Only Windows treats a backslash as a
+    separator, so only there is it unsafe.
+    """
+    from aws_tui.domain import local_fs
+    from aws_tui.domain.filesystem import PathRef, ProviderError
+
+    if local_fs._WINDOWS:
+        return
+    local_fs._validate_relative(PathRef.from_posix("/a\\b.txt"))
+    with pytest.raises(ProviderError):
+        local_fs._validate_relative(PathRef.from_posix("/a/../b"))
