@@ -693,6 +693,27 @@ def _flash_cursor_fallback_marks(
     setter(targets, marked=marked)
 
 
+SHUTDOWN_NOTICE_SECONDS = 3.0
+
+
+async def _await_with_notice(
+    step: str,
+    run: Callable[[], Awaitable[object]],
+    notify: Callable[[str], None],
+    *,
+    delay: float = SHUTDOWN_NOTICE_SECONDS,
+) -> None:
+    """Run one shutdown step, telling the user what is still being saved after ``delay``.
+
+    The step itself is not bounded: a timeout could abandon an in-flight write.
+    """
+    handle = asyncio.get_running_loop().call_later(delay, notify, step)
+    try:
+        await run()
+    finally:
+        handle.cancel()
+
+
 class AwsTuiApp(DeferredWorkerMixin, App[None]):
     """The aws-tui Textual application.
 
@@ -9780,9 +9801,19 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
             except (Exception, asyncio.CancelledError) as exc:
                 errors.append((step, exc))
 
+        def announce_pending(step: str) -> None:
+            label = step.split(".", 1)[0].replace("_", " ")
+            with contextlib.suppress(Exception):
+                notifications.advise(
+                    ctx.root_vm.chrome.toast_stack,
+                    subject="Transfer",
+                    message=f"Still saving {label}…",
+                    toast_id="shutdown-still-saving",
+                )
+
         async def await_cleanup(step: str, cleanup: Any) -> None:
             try:
-                await cleanup()
+                await _await_with_notice(step, cleanup, announce_pending)
             except (Exception, asyncio.CancelledError) as exc:
                 errors.append((step, exc))
 
