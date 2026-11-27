@@ -235,6 +235,8 @@ class LocalFS:
             except FileNotFoundError:
                 # Race: entry removed between iterdir and stat. Skip it.
                 continue
+            except PermissionError as exc:
+                raise PermissionDeniedError(host.as_posix()) from exc
         entries.sort(key=lambda e: (e.kind != EntryKind.DIRECTORY, e.name))
         return entries
 

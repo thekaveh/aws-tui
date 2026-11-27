@@ -17,6 +17,7 @@ import pytest
 from aws_tui.domain.filesystem import (
     ConflictError,
     EntryKind,
+    FileEntry,
     NotFoundError,
     PathRef,
     PermissionDeniedError,
@@ -1685,6 +1686,33 @@ async def test_permission_denied_on_unreadable_dir(tmp_path: Path) -> None:
     finally:
         # Restore so pytest can clean up tmp_path.
         secret.chmod(stat.S_IRWXU)
+
+
+async def test_unrooted_listing_maps_child_stat_permission_error_to_denied(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A child whose lstat is denied must surface as PermissionDeniedError.
+
+    The rooted listing already maps this; the unrooted loop caught only
+    FileNotFoundError, so the raw PermissionError escaped the provider contract.
+    """
+    from anyio import Path as AnyioPath
+
+    from aws_tui.domain import local_fs
+
+    (tmp_path / "locked.txt").write_bytes(b"x")
+    (tmp_path / "open.txt").write_bytes(b"y")
+    real_stat_entry = local_fs._stat_entry
+
+    async def stat_entry(host: AnyioPath) -> FileEntry:
+        if host.name == "locked.txt":
+            raise PermissionError(errno.EACCES, "Permission denied", str(host))
+        return await real_stat_entry(host)
+
+    monkeypatch.setattr(local_fs, "_stat_entry", stat_entry)
+
+    with pytest.raises(PermissionDeniedError):
+        await LocalFS().list(PathRef.from_posix(str(tmp_path)))
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="POSIX mode bits")
