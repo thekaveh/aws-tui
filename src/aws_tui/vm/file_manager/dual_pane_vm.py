@@ -588,7 +588,7 @@ class DualPaneVM(IsolatedComponentVM):
                 ) from first_exc
             names = ", ".join(name for name, _ in failures)
             raise ProviderError(
-                f"failed to delete {len(failures)} of {len(targets)} entries: {names}"
+                f"failed to delete {len(failures)} of {len(targets)} entries: {names}; first failure: {first_exc}"
             ) from first_exc
 
     async def _mark_transfer_completed(self, transfer_id: str, entry: EntryVM) -> None:

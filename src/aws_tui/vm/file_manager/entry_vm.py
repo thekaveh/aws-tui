@@ -42,7 +42,8 @@ def _format_size(size: int | None, kind: EntryKind) -> str:
     value = float(size)
     for unit in ("K", "M", "G", "T"):
         value /= 1024.0
-        if value < 1024.0:
+        # Compare the displayed value: 1023.96 would print as "1024.0 K" otherwise.
+        if round(value, 1) < 1024.0:
             return f"{value:.1f} {unit}"
     # The loop divides once per unit it offers, so reaching here means the value
     # is still in tebibytes; the petabyte label needs its own division. Without

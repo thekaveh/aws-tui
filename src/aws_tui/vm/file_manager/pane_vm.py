@@ -258,7 +258,8 @@ def _human_bytes(n: int) -> str:
     value = float(n)
     for unit in units:
         value /= 1024.0
-        if value < 1024.0:
+        # Compare the displayed value, as humanize_bytes does: 1023.96 would print as "1024.0 K".
+        if round(value, 1) < 1024.0:
             return f"{value:.1f} {unit}"
     return f"{value:.1f} E"
 
@@ -1114,7 +1115,7 @@ class PaneVM(IsolatedComponentVM):
                 ) from first_exc
             names = ", ".join(n for n, _ in failures)
             raise ProviderError(
-                f"failed to delete {len(failures)} of {len(targets)} entries: {names}"
+                f"failed to delete {len(failures)} of {len(targets)} entries: {names}; first failure: {first_exc}"
             ) from first_exc
 
     async def make_directory(self, name: str) -> None:

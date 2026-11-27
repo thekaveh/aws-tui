@@ -344,3 +344,13 @@ async def test_reload_clears_marks_before_provider_returns(outcome: str) -> None
             task.cancel()
             await asyncio.gather(task, return_exceptions=True)
         vm.dispose()
+
+
+def test_human_bytes_rolls_over_at_the_displayed_boundary() -> None:
+    """A value just below a unit boundary printed as "1024.0 K" instead of "1.0 M"."""
+    from aws_tui.vm.file_manager.pane_vm import _human_bytes
+
+    assert _human_bytes(1048575) == "1.0 M"
+    assert _human_bytes(1073741823) == "1.0 G"
+    assert _human_bytes(1023) == "1023 B"
+    assert _human_bytes(1024) == "1.0 K"

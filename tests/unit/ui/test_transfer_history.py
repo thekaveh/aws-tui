@@ -398,8 +398,9 @@ async def test_actual_ordinary_delete_reports_aggregate_after_independent_succes
             for toast in app.app_ctx.root_vm.chrome.toast_stack.toasts
             if toast.model.id == "delete-failed"
         )
-        assert toast.text == (
-            f"✖  [b]Transfer:[/] delete failed: failed to delete 2 of 3 entries: {failure_name}, b.txt"
+        # The first failure's reason follows the list, so a refusal is not reported without its cause.
+        assert toast.text.startswith(
+            f"✖  [b]Transfer:[/] delete failed: failed to delete 2 of 3 entries: {failure_name}, b.txt; first failure: "
         )
         records = {
             record.source_uri: record for record in app.app_ctx.transfer_journal.load_history()

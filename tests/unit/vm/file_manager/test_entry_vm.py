@@ -232,7 +232,10 @@ def test_directory_kind_round_trip() -> None:
         # nothing exercised _format_size at all.
         (1024, "1.0 K"),
         (1025, "1.0 K"),
-        (1024 * 1024 - 1, "1024.0 K"),
+        # Just below a unit boundary the displayed value must roll over, not read "1024.0 K".
+        (1024 * 1024 - 1, "1.0 M"),
+        (1024**3 - 1, "1.0 G"),
+        (1024**4 - 1, "1.0 T"),
         (1024 * 1024, "1.0 M"),
         (1024**3, "1.0 G"),
         (1024**4, "1.0 T"),

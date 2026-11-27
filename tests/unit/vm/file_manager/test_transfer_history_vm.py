@@ -147,7 +147,10 @@ async def test_delete_attempts_all_targets_and_aggregates_truthful_history(
         if failure_count == 1:
             assert str(caught.value) == f"failed to delete {TRANSFER_NAME!r}: permission refusal"
         else:
-            assert str(caught.value) == f"failed to delete 2 of 3 entries: {TRANSFER_NAME}, b.txt"
+            assert (
+                str(caught.value)
+                == f"failed to delete 2 of 3 entries: {TRANSFER_NAME}, b.txt; first failure: permission refusal"
+            )
         assert caught.value.__cause__ is errors[TRANSFER_NAME]
         assert {path.name for path in source.iterdir()} == set(errors)
         assert {entry.entry.name for entry in dual.left.entries} == set(errors)
