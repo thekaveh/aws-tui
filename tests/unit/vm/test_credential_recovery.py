@@ -191,3 +191,20 @@ def test_guidance_never_includes_exception_or_endpoint_secrets() -> None:
 
     assert guidance.kind is RecoveryFailureKind.OTHER
     assert all(value not in guidance.message for value in secret_values)
+
+
+def test_missing_credentials_guidance_names_no_profile_when_the_connection_has_none() -> None:
+    """Without a profile the guidance named the connection, which may not be a profile.
+
+    A config connection with no profile uses the default credential chain. The command
+    should then carry no --profile flag.
+    """
+    connection = replace(_aws_connection(), profile=None)
+
+    guidance = classify_recovery_failure(connection, token_state=TokenState.MISSING, error=None)
+
+    assert guidance.message == (
+        "AWS credentials are unavailable. Configure shared credentials, "
+        "credential_process, environment or role credentials; verify with "
+        "`aws sts get-caller-identity`; then press a to retry."
+    )

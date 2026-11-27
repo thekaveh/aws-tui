@@ -116,13 +116,17 @@ def classify_recovery_failure(
                 ),
                 retryable=True,
             )
-        profile = shlex.quote(connection.profile or connection.name)
+        # A config connection without a profile uses the default credential chain, so the
+        # command names no profile; naming the connection would point at a profile that may not exist.
+        command = "aws sts get-caller-identity"
+        if connection.profile:
+            command += f" --profile {shlex.quote(connection.profile)}"
         return RecoveryGuidance(
             kind=RecoveryFailureKind.CREDENTIALS_MISSING,
             message=(
                 "AWS credentials are unavailable. Configure shared credentials, "
                 "credential_process, environment or role credentials; verify with "
-                f"`aws sts get-caller-identity --profile {profile}`; then press a "
+                f"`{command}`; then press a "
                 "to retry."
             ),
             retryable=True,
