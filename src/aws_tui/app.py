@@ -5557,13 +5557,21 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
     async def _discard_staged_service_recovery(self, candidate: object) -> None:
         """Drain and dispose an off-screen candidate that was not adopted."""
         shutdown = getattr(candidate, "shutdown", None)
+        cancelled = False
         if callable(shutdown):
-            with contextlib.suppress(Exception, asyncio.CancelledError):
+            try:
                 result = shutdown()
                 if isinstance(result, Awaitable):
                     await result
+            except asyncio.CancelledError:
+                # Dispose the candidate, then report the cancellation to the caller.
+                cancelled = True
+            except Exception:
+                pass
         with contextlib.suppress(Exception):
             candidate.dispose()  # type: ignore[attr-defined]
+        if cancelled:
+            raise asyncio.CancelledError
 
     async def _commit_staged_service_recovery(
         self,

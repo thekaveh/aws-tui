@@ -302,3 +302,28 @@ async def test_a_cancelled_file_transfer_is_reported_and_still_cancels(
 
     assert "app.copy.cancelled" in logged
     assert "copy-cancelled" in toasts
+
+
+@pytest.mark.asyncio
+async def test_discarding_a_candidate_whose_shutdown_is_cancelled_still_propagates_the_cancel() -> (
+    None
+):
+    """A cancel during a discarded candidate's shutdown was suppressed, and the caller returned.
+
+    The discard now disposes the candidate, then re-raises the cancellation, as the other drains do.
+    """
+    disposed: list[bool] = []
+
+    class _Candidate:
+        async def shutdown(self) -> None:
+            raise asyncio.CancelledError
+
+        def dispose(self) -> None:
+            disposed.append(True)
+
+    app = object.__new__(AwsTuiApp)
+
+    with pytest.raises(asyncio.CancelledError):
+        await app._discard_staged_service_recovery(_Candidate())
+
+    assert disposed == [True]
