@@ -485,6 +485,9 @@ class GlueCatalogVM(IsolatedComponentVM):
         if database_discovery is None:
             raise ProviderError("Glue catalog discovery did not complete")
         if not database_discovery:
+            if self._databases_error_text is not None:
+                # A provider failure is reported as itself, not as a missing table.
+                raise ProviderError(self._databases_error_text)
             raise ValueError("table is unavailable in the active Glue source")
         if self._selected_database_name != ref.database_name:
             request_epoch += 1
@@ -505,6 +508,9 @@ class GlueCatalogVM(IsolatedComponentVM):
         if table_discovery is None:
             raise ProviderError("Glue catalog discovery did not complete")
         if not table_discovery:
+            if self._tables_error_text is not None:
+                # A provider failure is reported as itself, not as a missing table.
+                raise ProviderError(self._tables_error_text)
             raise ValueError("table is unavailable in the active Glue source")
         request_epoch += 1
         await self.select_table(ref.table_name)

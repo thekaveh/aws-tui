@@ -1634,3 +1634,25 @@ def test_construct_after_dispose_is_a_silent_no_op() -> None:
     vm.dispose()
     vm.construct()
     assert _status(vm) is ConstructionStatus.DISPOSED
+
+
+@pytest.mark.asyncio
+async def test_open_table_reports_a_provider_failure_while_discovering_it_as_that_failure() -> None:
+    """A provider failure during discovery was raised as a missing table.
+
+    The open ended in a generic value error, which the log then recorded as the table being
+    unavailable, though the listing had failed. The provider error is raised now.
+    """
+    fake = seeded_glue()
+    vm = make_catalog_vm(fake)
+    await vm.setup()
+    missing = TableRef("AwsDataCatalog", "analytics", "not_listed", "dev", "us-east-1")
+
+    async def unreachable(*args, **kwargs):  # type: ignore[no-untyped-def]
+        raise ProviderError("network down")
+
+    fake.list_tables_page = unreachable  # type: ignore[method-assign]
+    with pytest.raises(ProviderError) as caught:
+        await asyncio.wait_for(vm.open_table(missing), timeout=2)
+
+    assert not isinstance(caught.value, ValueError)
