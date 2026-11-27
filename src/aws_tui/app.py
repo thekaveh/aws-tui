@@ -5290,6 +5290,14 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
             return
 
         if recovery is None:
+            if self._source_revision == revision:
+                # No bound pane took the retry. Say so, unless the source changed meanwhile.
+                notifications.advise(
+                    ctx.root_vm.chrome.toast_stack,
+                    subject="Auth",
+                    message="No open pane uses this source; reopen it to retry.",
+                    toast_id="credential-recovery-no-pane",
+                )
             return
         state = recovery.state if isinstance(recovery, _StagedServiceRecovery) else recovery
         if isinstance(recovery, _StagedServiceRecovery):
