@@ -20,6 +20,11 @@ The Unreleased section is the promotion queue for the next package release. Entr
 - Loading more Athena results while a page is still loading no longer appends the same page twice.
 - Athena history no longer stays in the loading state when a refresh is cancelled, and a second load-more no longer clears the busy indicator while the first page is still loading.
 - Athena draft edits made while the saved context was unresolved are saved when the context returns, without another keystroke.
+- File sizes just below a unit boundary are labelled in the next unit in the file list and the entry details (1048575 bytes is 1.0 M).
+- A failed multi-entry delete names the first failure's reason, so a refused entry is not reported without its cause.
+- Shift+A from no selected EMR application moves backward to the last application, not the second-to-last.
+- A cancelled EMR dashboard delivery no longer blocks the event loop.
+- Missing-credentials guidance omits `--profile` when the connection has no profile.
 - Byte sizes just below a unit boundary are labelled in the next unit (1048575 bytes is 1.0 MB, not 1024.0 kB).
 - Athena SQL completion replaces only the token under the cursor, even when text is selected. Previously the whole selection was replaced.
 - Opening an S3 location no longer crashes the application when restoring the previous Glue page fails. The failure is logged, and the handoff failure is reported.
