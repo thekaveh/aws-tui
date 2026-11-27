@@ -612,3 +612,16 @@ def test_storage_identity_carries_no_endpoint_userinfo() -> None:
     assert "hunter2" not in repr(identity)
     assert "analyst" not in repr(identity)
     assert identity[1] == "https://storage.example:9000"
+
+
+def test_every_http_client_failure_is_a_transport_failure() -> None:
+    """An HTTP client failure outside the listed subclasses escaped S3 listing unwrapped.
+
+    The transport tuple named the timeout and connection subclasses only. Its base class is the
+    contract for the HTTP layer, so it is in the tuple now.
+    """
+    from botocore.exceptions import HTTPClientError
+
+    from aws_tui.domain.aws_transport import AWS_TRANSPORT_EXCEPTIONS
+
+    assert issubclass(HTTPClientError, AWS_TRANSPORT_EXCEPTIONS)

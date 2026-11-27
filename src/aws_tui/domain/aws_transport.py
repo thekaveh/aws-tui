@@ -7,6 +7,7 @@ from botocore.exceptions import (
     ConnectTimeoutError,
     EndpointConnectionError,
     EndpointResolutionError,
+    HTTPClientError,
     IncompleteReadError,
     ReadTimeoutError,
     ResponseStreamingError,
@@ -14,6 +15,7 @@ from botocore.exceptions import (
 from botocore.exceptions import ConnectionError as BotoConnectionError
 
 AWS_TRANSPORT_EXCEPTIONS = (
+    HTTPClientError,
     EndpointConnectionError,
     EndpointResolutionError,
     ConnectTimeoutError,

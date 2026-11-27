@@ -63,6 +63,7 @@ The Unreleased section is the promotion queue for the next package release. Entr
 - Saving over an existing SQL file keeps the file's permissions instead of making it owner-only.
 - A Glue Iceberg partition page with a value containing an apostrophe, or an empty partition value, shows instead of failing as malformed.
 - A transfer history fingerprint for an S3-compatible connection no longer contains the endpoint's user name or password; the fingerprints of endpoints with credentials in the URL change once.
+- An HTTP client failure during an S3 or AWS operation is reported as a connection problem, not as an unexpected error.
 - Byte sizes just below a unit boundary are labelled in the next unit (1048575 bytes is 1.0 MB, not 1024.0 kB).
 - Athena SQL completion replaces only the token under the cursor, even when text is selected. Previously the whole selection was replaced.
 - Opening an S3 location no longer crashes the application when restoring the previous Glue page fails. The failure is logged, and the handoff failure is reported.
