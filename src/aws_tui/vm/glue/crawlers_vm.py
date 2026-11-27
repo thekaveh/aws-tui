@@ -149,6 +149,9 @@ class GlueCrawlersVM(IsolatedComponentVM):
         )
         if not ok:
             return
+        # A failed page left the pane in ERROR, which hides its rows; a good page returns it to rows.
+        self._error_text = None
+        self._set_state(PaneState.IDLE if self.crawlers else PaneState.EMPTY)
         self._notify("crawlers")
         self._notify("has_more_crawlers")
 

@@ -309,6 +309,11 @@ class GlueCatalogVM(IsolatedComponentVM):
         )
         if not ok:
             return
+        # A failed page left the pane in ERROR, which hides its rows; a good page returns it to rows.
+        self._databases_error_text = None
+        self._set_state(
+            "_databases_state", PaneState.IDLE if self.databases else PaneState.EMPTY, "state"
+        )
         self._notify("databases")
         self._notify("has_more_databases")
 
@@ -380,6 +385,11 @@ class GlueCatalogVM(IsolatedComponentVM):
         )
         if not ok:
             return
+        # A failed page left the pane in ERROR, which hides its rows; a good page returns it to rows.
+        self._tables_error_text = None
+        self._set_state(
+            "_tables_state", PaneState.IDLE if self.tables else PaneState.EMPTY, "tables_state"
+        )
         self._notify("tables")
         self._notify("has_more_tables")
 

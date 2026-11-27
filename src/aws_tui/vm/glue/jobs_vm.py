@@ -186,6 +186,9 @@ class GlueJobsVM(IsolatedComponentVM):
         )
         if not ok:
             return
+        # A failed page left the pane in ERROR, which hides its rows; a good page returns it to rows.
+        self._jobs_error_text = None
+        self._set_state("_jobs_state", PaneState.IDLE if self.jobs else PaneState.EMPTY, "state")
         self._notify("jobs")
         self._notify("has_more_jobs")
 
@@ -226,6 +229,11 @@ class GlueJobsVM(IsolatedComponentVM):
         )
         if not ok:
             return
+        # A failed page left the pane in ERROR, which hides its rows; a good page returns it to rows.
+        self._runs_error_text = None
+        self._set_state(
+            "_runs_state", PaneState.IDLE if self.runs else PaneState.EMPTY, "runs_state"
+        )
         self._notify("runs")
         self._notify("has_more_runs")
 

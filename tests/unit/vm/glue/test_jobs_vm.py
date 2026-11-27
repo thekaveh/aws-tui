@@ -311,3 +311,34 @@ async def test_jobs_hub_messages_keep_the_vm_as_sender() -> None:
     assert matching[0].sender_object is vm
     assert matching[0].sender_name == "glue.jobs"
     vm.dispose()
+
+
+@pytest.mark.asyncio
+async def test_a_good_job_page_after_a_failed_one_shows_the_rows_again() -> None:
+    """A failed load-more left the pane in ERROR, and the next good page kept it there.
+
+    The pane hides its rows whenever it is not IDLE, so the loaded jobs disappeared until a
+    manual refresh. A good page returns the pane to showing its rows.
+    """
+    fake = seeded_glue()
+    fake.job_page_size = 1
+    vm = make_jobs_vm(fake)
+    await vm.setup()
+    assert vm.has_more_jobs
+
+    original = fake.list_jobs_page
+    failures = [ProviderUnreachableError("network down")]
+
+    async def flaky(*args, **kwargs):  # type: ignore[no-untyped-def]
+        if failures:
+            raise failures.pop()
+        return await original(*args, **kwargs)
+
+    fake.list_jobs_page = flaky  # type: ignore[method-assign]
+    await vm.load_more_jobs()
+    assert vm.state is not PaneState.IDLE
+
+    await vm.load_more_jobs()
+
+    assert vm.state is PaneState.IDLE
+    assert vm.jobs
