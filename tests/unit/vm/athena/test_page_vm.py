@@ -3148,3 +3148,25 @@ def test_athena_page_vm_raising_subscriber() -> None:
     page._notify("context")
     assert "context" in seen
     page.dispose()
+
+
+@pytest.mark.asyncio
+async def test_snapshot_is_valid_for_a_catalog_with_no_databases() -> None:
+    """A catalog with no databases leaves no database selected; its snapshot must export.
+
+    The validity check required exactly one matching database even when none was
+    selected, so the handoff dropped the Athena state for an empty catalog.
+    """
+    client = PageClient()
+    client.catalogs["primary"] = [
+        *client.catalogs["primary"],
+        AthenaCatalogSummary("empty", "LAMBDA", None),
+    ]
+    client.databases[("primary", "empty")] = []
+    page = make_page_vm(client)
+    await page.setup()
+    await page.select_catalog("empty")
+
+    snapshot = page.export_snapshot()
+
+    assert snapshot is not None

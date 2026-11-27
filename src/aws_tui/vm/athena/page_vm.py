@@ -3180,6 +3180,10 @@ def _snapshot_context_stage_is_valid(
         )
     ):
         return False
+    # No database is selected when the catalog has none; the snapshot is then
+    # consistent. A selected database must appear exactly once.
+    if not expected_context.database:
+        return True
     return sum(row.ref.database_name == expected_context.database for row in value.databases) == 1
 
 
