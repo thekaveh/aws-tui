@@ -1182,6 +1182,10 @@ class PaneVM(IsolatedComponentVM):
             cursor_name = cursor.entry.name if cursor is not None else None
             renamed_cursor = renamed is not None and cursor is renamed[0]
             marks = {entry.entry.name for entry in self._entries if entry.is_marked}
+            if renamed is not None and renamed[0].is_marked:
+                # A marked entry that was renamed keeps its mark under its new name.
+                marks.discard(renamed[0].entry.name)
+                marks.add(renamed[1])
             generation = self._reload_generation + 1
             await self._reload()
             if not current() or self._reload_generation != generation:

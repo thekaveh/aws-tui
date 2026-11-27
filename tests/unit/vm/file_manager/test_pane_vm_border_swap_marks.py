@@ -395,3 +395,21 @@ async def test_cancelled_navigation_does_not_keep_the_previous_directory_rows() 
     finally:
         release.set()
         vm.dispose()
+
+
+@pytest.mark.asyncio
+async def test_renaming_a_marked_entry_keeps_its_mark_under_the_new_name() -> None:
+    """Marks were restored by name, so renaming a marked entry silently dropped its mark."""
+    fs = await _seed()
+    vm = PaneVM(provider=fs, hub=MessageHub(), dispatcher=NULL_DISPATCHER)
+    vm.construct()
+    await vm.setup()
+    target = next(entry for entry in vm.entries if entry.entry.name == "alpha.txt")
+    vm.set_marked_entries((target,), marked=True)
+    assert target.is_marked
+
+    await vm.rename_entry(target, "alpha-renamed.txt")
+
+    marked = [entry.entry.name for entry in vm.entries if entry.is_marked]
+    assert marked == ["alpha-renamed.txt"]
+    vm.dispose()
