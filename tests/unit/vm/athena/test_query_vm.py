@@ -1981,3 +1981,29 @@ def test_query_vm_publishes_nothing_after_dispose() -> None:
     stream.clear()
     vm._publish("state")
     assert stream == []
+
+
+@pytest.mark.asyncio
+async def test_submission_retired_by_the_gate_does_not_leave_the_pane_loading() -> None:
+    """A submission the gate retired, not a cancelled caller, left the pane LOADING.
+
+    The submission raised CancelledError at its fence. The caller treated that as its own
+    cancellation: it re-raised, and the pane stayed LOADING with nothing to end it.
+    """
+    fake = seeded_athena([QueryState.RUNNING])
+    vm = make_query_vm(fake)
+    vm.set_sql("SELECT 1")
+    calls = 0
+    original = vm._execution_request_is_current
+
+    def gate_retires_the_submission(generation: int) -> bool:
+        nonlocal calls
+        calls += 1
+        return original(generation) if calls < 3 else False
+
+    vm._execution_request_is_current = gate_retires_the_submission  # type: ignore[method-assign]
+
+    await vm.execute()
+
+    assert vm.pane_state is not PaneState.LOADING
+    assert not vm.is_submitting

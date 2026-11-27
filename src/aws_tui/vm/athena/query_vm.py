@@ -942,6 +942,14 @@ class AthenaQueryVM(IsolatedComponentVM):
                 self._submission_finalizers.add(finalizer)
                 finalizer.add_done_callback(self._submission_finalizers.discard)
                 await asyncio.shield(finalizer)
+                current = asyncio.current_task()
+                if current is None or current.cancelling() == 0:
+                    # The gate retired the submission; this caller was not cancelled, so
+                    # the cancellation is not propagated and the pane must not stay LOADING.
+                    if generation == self._generation and self._pane_state is PaneState.LOADING:
+                        self._pane_state = PaneState.EMPTY
+                        self._publish("pane_state")
+                    return
                 raise
             except ProviderError as exc:
                 if generation == self._generation:
