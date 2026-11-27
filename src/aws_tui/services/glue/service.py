@@ -216,7 +216,10 @@ class _ContextualIcebergInspector:
             return selected
         if enabled:
             return enabled[0]
-        self._selections.discard(self._scope, "workgroup")
+        # The catalog and database belong to this workgroup; a navigation target with a catalog and
+        # no workgroup is invalid, so every workspace save would fail for the rest of the session.
+        for key in ("workgroup", "catalog", "database"):
+            self._selections.discard(self._scope, key)
         raise IcebergInspectionUnavailableError("Athena workgroup unavailable")
 
 

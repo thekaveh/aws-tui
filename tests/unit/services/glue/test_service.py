@@ -379,3 +379,42 @@ async def test_glue_service_persists_first_resolved_workgroup_for_athena() -> No
         == "first"
     )
     page.dispose()
+
+
+@pytest.mark.asyncio
+async def test_unavailable_workgroup_discards_its_dependent_catalog_and_database() -> None:
+    """Discarding an unavailable workgroup left the catalog and database behind.
+
+    Without a workgroup the navigation target for the scope is invalid, so every workspace or
+    bookmark save failed for the rest of the session. The dependent keys are discarded together.
+    """
+    from aws_tui.vm.service_source_vm import SelectionScope, ServiceSelectionStore
+
+    hub: MessageHub[Message] = MessageHub()
+    athena = _PagedIcebergAthena(
+        {
+            None: ([AthenaWorkgroupSummary("disabled", "DISABLED", None, None)], None),
+        }
+    )
+    store = ServiceSelectionStore()
+    service = GlueService(
+        hub=hub,
+        dispatcher=NULL_DISPATCHER,
+        aws_session=AwsSession(),
+        glue_client_factory=lambda _connection: _iceberg_glue(),
+        athena_client_factory=lambda _connection: athena,
+        selection_store=store,
+    )
+    scope = SelectionScope("athena", "dev", "us-east-1")
+    store.set(scope, "workgroup", "gone")
+    store.set(scope, "catalog", "AwsDataCatalog")
+    store.set(scope, "database", "db1")
+
+    page = service.build_vm(_connection("dev"))
+    page.construct()
+    await page.setup()
+    await page.catalog.iceberg.select_view("snapshots")
+
+    assert store.get(scope, "catalog") is None
+    assert store.get(scope, "database") is None
+    page.dispose()
