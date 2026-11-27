@@ -367,7 +367,12 @@ class AthenaCompletionVM(IsolatedComponentVM):
                 return None
             partial |= len(choices) == 200
             state: CompletionState = (
-                "unavailable" if unavailable and not work else "partial" if partial else "ready"
+                # Entries are kept column-less when their read fails, so check the columns.
+                "unavailable"
+                if unavailable and not any(item.columns for item in work)
+                else "partial"
+                if partial
+                else "ready"
             )
             message = {
                 "ready": "Schema completion ready",

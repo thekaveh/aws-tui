@@ -762,7 +762,7 @@ async def test_open_table_bounds_empty_database_discovery_pages(token_mode: str)
         "us-west-2",
     )
 
-    with pytest.raises(ProviderError, match=r"^Athena catalog discovery did not complete$"):
+    with pytest.raises(ProviderError, match=r"^Athena database discovery did not complete$"):
         await asyncio.wait_for(page.open_table(missing), timeout=1)
 
     assert len(client.database_calls) <= 8

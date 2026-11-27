@@ -2445,7 +2445,7 @@ class AthenaPageVM(IsolatedComponentVM):
             failed=lambda: self._database_list.error_text is not None,
         )
         if discovery is None:
-            raise ProviderError("Athena catalog discovery did not complete")
+            raise ProviderError("Athena database discovery did not complete")
         return discovery
 
     async def _load_until_discovered(

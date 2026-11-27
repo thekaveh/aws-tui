@@ -238,7 +238,8 @@ class AthenaSavedVM(IsolatedComponentVM):
 
     async def load_more_named_queries(self) -> None:
         worker = self._named_worker
-        if self._can_load_more_named(worker):
+        # A continuation already in flight owns the busy flag; a second call must not clear it.
+        if self._can_load_more_named(worker) and self._loading_more_named_worker is not worker:
             self._begin_loading_more_named(worker)
             try:
                 await self._run_named_pager(worker, refresh=False)
@@ -247,7 +248,10 @@ class AthenaSavedVM(IsolatedComponentVM):
 
     async def load_more_prepared_statements(self) -> None:
         worker = self._prepared_worker
-        if self._can_load_more_prepared(worker):
+        if (
+            self._can_load_more_prepared(worker)
+            and self._loading_more_prepared_worker is not worker
+        ):
             self._begin_loading_more_prepared(worker)
             try:
                 await self._run_prepared_pager(worker, refresh=False)

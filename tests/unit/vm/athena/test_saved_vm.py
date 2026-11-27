@@ -667,3 +667,23 @@ async def test_cancelled_prepared_refresh_does_not_leave_the_list_loading() -> N
         await setup
 
     assert vm.prepared_state is not PaneState.LOADING
+
+
+@pytest.mark.asyncio
+async def test_overlapping_named_load_more_keeps_busy_until_the_first_page_lands() -> None:
+    """A second named load-more cleared the busy flag while the first page was loading."""
+    client = _seeded_client()
+    client.block_named_request = ("analysts", "named-next")
+    vm = make_saved_vm(client)
+    await vm.setup()
+
+    first = asyncio.create_task(vm.load_more_named_queries())
+    await client.named_fetch_started.wait()
+    second = asyncio.create_task(vm.load_more_named_queries())
+    await asyncio.sleep(0)
+    await second
+    assert vm.is_loading_more_named_queries
+
+    client.release_named_fetch.set()
+    await first
+    assert not vm.is_loading_more_named_queries

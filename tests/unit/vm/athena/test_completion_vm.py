@@ -13,7 +13,7 @@ from vmx import NULL_DISPATCHER, MessageHub
 
 from aws_tui.demo.in_memory_athena import InMemoryAthena
 from aws_tui.domain.data_catalog import Column
-from aws_tui.domain.filesystem import PermissionDeniedError
+from aws_tui.domain.filesystem import PermissionDeniedError, ProviderError
 from aws_tui.domain.query import QueryContext
 from aws_tui.domain.sql_authoring import CompletionTable
 from tests.helpers import wait_until
@@ -512,4 +512,29 @@ async def test_outer_timeout_cannot_revive_a_retired_metadata_request(tmp_path):
         assert not vm._schemas
     finally:
         fake.release.set()
+        await close(vm, query)
+
+
+class ColumnsUnreadable(InMemoryAthena):
+    def __init__(self, source):
+        self.__dict__.update(source.__dict__)
+
+    async def get_table_columns(self, *args, **kwargs):
+        raise ProviderError("columns unreadable")
+
+
+async def test_unreadable_columns_for_every_table_reports_unavailable_not_partial(tmp_path):
+    """Every referenced table's columns failing reported "partial", not "unavailable".
+
+    The check treated the column-less entries it had pre-filled as usable, so the state
+    never reached "unavailable".
+    """
+    fake = ColumnsUnreadable(client())
+    vm, query, _ = make(tmp_path, fake=fake)
+    try:
+        query.set_sql("SELECT  FROM events")
+        batch = await vm.complete(7)
+        assert batch is not None
+        assert batch.state == "unavailable"
+    finally:
         await close(vm, query)
