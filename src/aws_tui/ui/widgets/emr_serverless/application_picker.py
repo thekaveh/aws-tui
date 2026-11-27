@@ -369,7 +369,8 @@ class ApplicationPicker(Widget, can_focus=True):
             (app for app in self._vm.applications if app.id == self._vm.selected_id),
             None,
         )
-        tooltip = None if selected is None else f"{selected.name} · {selected.state.value}"
+        # Text keeps the AWS-controlled name literal: a str tooltip is read as markup.
+        tooltip = None if selected is None else Text(f"{selected.name} · {selected.state.value}")
         self.tooltip = tooltip
         marker = marker or self._marker_widget
         value = value or self._value_widget

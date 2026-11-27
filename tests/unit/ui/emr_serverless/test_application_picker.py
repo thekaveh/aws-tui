@@ -144,12 +144,12 @@ async def test_created_and_stopped_use_distinct_glyphs_and_textual_tooltips() ->
         vm.select_by_id("created")
         await pilot.pause()
         created_marker, _ = picker._trigger_fragments()  # type: ignore[attr-defined]
-        assert picker.tooltip == "ready · CREATED"
+        assert picker.tooltip.plain == "ready · CREATED"
 
         vm.select_by_id("stopped")
         await pilot.pause()
         stopped_marker, _ = picker._trigger_fragments()  # type: ignore[attr-defined]
-        assert picker.tooltip == "quiet · STOPPED"
+        assert picker.tooltip.plain == "quiet · STOPPED"
         assert created_marker != stopped_marker
 
 
@@ -710,3 +710,17 @@ async def test_open_application_picker_retains_pending_identity_across_poll(remo
             await pilot.pause()
             assert vm.selected_id == "b"
             assert not picker.is_open
+
+
+async def test_a_bracketed_application_name_is_shown_literally_in_the_tooltip() -> None:
+    """A str tooltip is read as markup, so a bracket in an AWS-controlled name broke it."""
+    fake = _InMemoryEmr()
+    fake.add_application(app_id="odd", name="etl[/x]", state=ApplicationState.STARTED)
+    vm, hub = _make_vm(fake)
+    await vm.refresh()
+    async with _PickerApp(vm, hub).run_test() as pilot:
+        picker = pilot.app.query_one(ApplicationPicker)
+        await pilot.pause()
+        vm.select_by_id("odd")
+        await pilot.pause()
+        assert picker.tooltip.plain == "etl[/x] · STARTED"
