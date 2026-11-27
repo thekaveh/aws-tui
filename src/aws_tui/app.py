@@ -6936,10 +6936,13 @@ class AwsTuiApp(DeferredWorkerMixin, App[None]):
             opened = await page.vm.results.open_s3_location()
         if opened:
             return
+        message = "selected execution has no valid S3 result location"
+        if page.vm.active_view == "results" and page.vm.results.location_error_text:
+            message = page.vm.results.location_error_text
         notifications.advise(
             self._app_ctx.root_vm.chrome.toast_stack,
             subject="Source",
-            message="selected execution has no valid S3 result location",
+            message=message,
             toast_id="athena-result-location-invalid",
         )
 

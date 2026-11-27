@@ -1104,3 +1104,25 @@ async def test_cancelled_result_load_does_not_leave_the_pane_loading() -> None:
         await load
 
     assert vm.state is not PaneState.LOADING
+
+
+@pytest.mark.asyncio
+async def test_failed_location_read_records_its_reason_instead_of_an_invalid_location() -> None:
+    """A failed detail read reported "no valid S3 result location" for a valid output.
+
+    The failure is not an invalid location. The reason is recorded for the caller to show.
+    """
+    client = ResultClient({("q-1", None): ResultPage((_ID,), (("one",),), None)})
+
+    async def fail_detail(_execution_id: str) -> object:
+        raise ProviderError("credentials expired for analyst profile")
+
+    client.get_query_execution = fail_detail  # type: ignore[attr-defined]
+    vm = make_results_vm(client)
+    await vm.load("q-1")
+
+    assert not await vm.open_s3_location()
+
+    assert vm.location_error_text is not None
+    assert "credentials expired" not in vm.location_error_text
+    assert "S3 result location" not in vm.location_error_text

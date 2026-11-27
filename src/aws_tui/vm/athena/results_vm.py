@@ -115,6 +115,8 @@ class AthenaResultsVM(IsolatedComponentVM):
         self._columns: tuple[ResultColumn, ...] = ()
         self._state = PaneState.EMPTY
         self._error_text: str | None = None
+        # Why the last S3 location could not be opened; kept apart from the pane error.
+        self._location_error: str | None = None
         self._is_loading_more = False
         self._loading_more_worker: _PagerGeneration | None = None
         self._workers: set[_PagerGeneration] = set()
@@ -277,6 +279,11 @@ class AthenaResultsVM(IsolatedComponentVM):
     @property
     def error_text(self) -> str | None:
         return self._error_text
+
+    @property
+    def location_error_text(self) -> str | None:
+        """The reason the last S3 location open failed, or None."""
+        return self._location_error
 
     @property
     def is_loading_more(self) -> bool:
@@ -487,9 +494,12 @@ class AthenaResultsVM(IsolatedComponentVM):
             return False
         generation = self._generation
         execution_id = self._execution_id
+        self._location_error = None
         try:
             detail = await self._client.get_query_execution(execution_id)
-        except ProviderError:
+        except ProviderError as exc:
+            # A failed read is not an invalid location; report why it failed.
+            _state, self._location_error = map_provider_error(exc, fallback=_RESULTS_ERROR)
             return False
         except Exception as exc:
             report_unexpected_service_error(
@@ -498,6 +508,7 @@ class AthenaResultsVM(IsolatedComponentVM):
                 operation="get_query_execution",
                 error=exc,
             )
+            _state, self._location_error = map_unexpected_error(fallback=_RESULTS_ERROR)
             return False
         if (
             self._is_disposed()
