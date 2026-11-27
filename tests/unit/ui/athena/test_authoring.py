@@ -424,3 +424,37 @@ async def test_declining_table_picker_restores_the_committed_display_value(tmp_p
         assert vm.selected_table_ref is None
         assert picker.value is None
         no_starts(fake)
+
+
+async def test_choosing_the_selected_table_again_asks_nothing_and_keeps_the_query(tmp_path):
+    """Choosing the table already selected asked to replace the query.
+
+    The other pickers return early for an unchanged value; the table picker did not. Accepting
+    the replacement then cleared an opened file's path and text without the dirty-edit prompt.
+    """
+    async with mounted(tmp_path) as (app, vm, _fake, pilot):
+        picker = app.query_one("#athena-table", ContextPicker)
+        await focus_and_settle(picker)
+        await pilot.press("enter")
+        await wait_until(lambda: picker.is_open, what="table options opened")
+        listing = app.query_one("#athena-table-options", OptionList)
+        listing.highlighted = listing.get_option_index("events")
+        await pilot.press("enter")
+        await drain_workers(app)
+        await pilot.pause()
+        assert vm.selected_table_ref is not None
+        assert vm.selected_table_ref.table_name == "events"
+
+        vm.query.set_sql("SELECT 'keep'")
+        await pilot.pause()
+        await focus_and_settle(picker)
+        await pilot.press("enter")
+        await wait_until(lambda: picker.is_open, what="table options reopened")
+        listing = app.query_one("#athena-table-options", OptionList)
+        listing.highlighted = listing.get_option_index("events")
+        await pilot.press("enter")
+        await drain_workers(app)
+        await pilot.pause()
+
+        assert not isinstance(app.screen, ConfirmModal)
+        assert vm.query.sql == "SELECT 'keep'"

@@ -355,10 +355,14 @@ class AthenaPage(DeferredWorkerMixin, HubSubscriberMixin, Widget):
             return
         value = event.value
         if event.control.id == "athena-table":
-            self._run_lifecycle_worker(
-                partial(self._select_table_from_picker, value),
-                group="athena-context",
-            )
+            # Choosing the table already selected is a no-op. Replacing it would clear an
+            # opened file's path and text without the dirty-edit prompt.
+            selected = self._vm.selected_table_ref
+            if selected is None or value != selected.table_name:
+                self._run_lifecycle_worker(
+                    partial(self._select_table_from_picker, value),
+                    group="athena-context",
+                )
         elif event.control.id == "athena-workgroup" and value != self._vm.context.workgroup:
             self._run_lifecycle_worker(
                 partial(self._select_context_from_picker, self._vm.select_workgroup, value),
