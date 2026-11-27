@@ -27,17 +27,23 @@ class BoundedTokenPagedComposition(TokenPagedComposition[T, TToken], Generic[T, 
             raise ValueError("max_items must be positive")
         self._max_items = max_items
         self._limit_reached = False
+        # Advances on every refresh; a fetch that started before it is superseded.
+        self._fetch_epoch = 0
 
         async def bounded_fetch(token: TToken | None) -> tuple[Sequence[T], TToken | None]:
             if token is None:
+                self._fetch_epoch += 1
                 self._limit_reached = False
+            epoch = self._fetch_epoch
             page, next_token = await fetch_next(token)
             rows = list(page)
             loaded = 0 if token is None else len(self.items)
             remaining = max(0, self._max_items - loaded)
             accepted = rows[:remaining]
             if len(rows) > remaining or (next_token is not None and len(accepted) == remaining):
-                self._limit_reached = True
+                # A continuation a refresh superseded must not mark the list that replaced it.
+                if epoch == self._fetch_epoch:
+                    self._limit_reached = True
                 next_token = None
             return accepted, next_token
 
