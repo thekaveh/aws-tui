@@ -21,6 +21,8 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Final
 
+from keyring.errors import KeyringError
+
 from aws_tui.infra.config_store import Config, ConfigError, ConfigStore, ConnectionEntry
 from aws_tui.infra.keychain import KeychainBackend
 from aws_tui.infra.redaction import safe_endpoint_display
@@ -364,11 +366,18 @@ class ConnectionResolver:
                     )
                 )
             elif entry.kind == "s3-compatible":
-                access_key_id, secret_access_key, session_token = (
-                    self._dispatch_s3_credentials(entry, invalid_sources)
-                    if self._read_credentials and not metadata_only
-                    else (None, None, None)
-                )
+                try:
+                    access_key_id, secret_access_key, session_token = (
+                        self._dispatch_s3_credentials(entry, invalid_sources)
+                        if self._read_credentials and not metadata_only
+                        else (None, None, None)
+                    )
+                except KeyringError:
+                    # A locked or unavailable keychain must not drop every other connection. This
+                    # entry keeps its metadata, and the source is reported as invalid.
+                    if invalid_sources is not None:
+                        invalid_sources.add("keychain")
+                    access_key_id, secret_access_key, session_token = (None, None, None)
                 out.append(
                     Connection(
                         name=entry.name,

@@ -1250,3 +1250,55 @@ def test_resolve_selected_preserves_explicit_over_auto_precedence(
     assert selected.profile == "base"
     assert selected.region == "ap-south-1"
     assert resolver.resolve_selected("base").source == "auto-aws-profile"
+
+
+class TestLockedKeychainDoesNotDropOtherConnections:
+    def test_listing_keeps_healthy_connections_when_one_keychain_read_fails(
+        self, tmp_path: Path, store: ConfigStore
+    ) -> None:
+        """One locked keychain entry emptied the whole connection list.
+
+        The keyring error escaped the listing, so the app fell back to no connections at all,
+        including the auto-discovered AWS profiles. That entry now keeps its metadata, and the
+        keychain source is reported as invalid.
+        """
+        from keyring.errors import KeyringError
+
+        class _LockedKeychain(InMemoryKeychain):
+            def get(self, service: str, key: str) -> str | None:
+                del key
+                if service == "locked":
+                    raise KeyringError("keychain is locked")
+                return None
+
+        store.add_connection(
+            ConnectionEntry(
+                name="locked",
+                kind="s3-compatible",
+                endpoint_url="http://localhost:9000",
+                credentials="keychain:locked",
+            )
+        )
+        store.add_connection(
+            ConnectionEntry(
+                name="healthy",
+                kind="s3-compatible",
+                endpoint_url="http://localhost:9001",
+                credentials="keychain:healthy",
+            )
+        )
+        config, credentials = _write_aws_files(
+            tmp_path,
+            config_body="[profile synthetic-profile]\nregion=us-west-2\n",
+            credentials_body="[synthetic-profile]\naws_access_key_id=SYNTHETIC\naws_secret_access_key=SYNTHETIC\n",
+        )
+        resolver = ConnectionResolver(
+            config_store=store,
+            keychain=_LockedKeychain(),
+            aws_config_path=config,
+            aws_credentials_path=credentials,
+        )
+
+        names = {connection.name for connection in resolver.list()}
+
+        assert {"locked", "healthy", "synthetic-profile"} <= names
