@@ -593,3 +593,22 @@ async def test_conditional_create_uses_the_single_attempt_client(
     )
 
     client.put_object.assert_awaited_once()
+
+
+def test_storage_identity_carries_no_endpoint_userinfo() -> None:
+    """The storage identity was hashed into an on-disk fingerprint with an endpoint password.
+
+    The fingerprint is unsalted, so the password could be recovered from it offline. The identity
+    now keeps the host and port only.
+    """
+    fs = S3FS(
+        session=MagicMock(),
+        bucket="bucket",
+        endpoint_url="https://analyst:hunter2@storage.example:9000",
+    )
+
+    identity = fs.storage_identity
+
+    assert "hunter2" not in repr(identity)
+    assert "analyst" not in repr(identity)
+    assert identity[1] == "https://storage.example:9000"

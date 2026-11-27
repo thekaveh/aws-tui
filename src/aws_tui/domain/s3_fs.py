@@ -191,7 +191,13 @@ class S3FS:
 
     @property
     def storage_identity(self) -> tuple[str, str | None, str | None, str]:
-        return ("s3", self._endpoint_url, self._bucket, self._prefix)
+        # The identity is hashed into an on-disk transfer fingerprint, so it carries no
+        # userinfo: a password in the endpoint must not be recoverable from that hash.
+        endpoint = self._endpoint_url
+        if endpoint is not None:
+            parsed = urlsplit(endpoint)
+            endpoint = parsed._replace(netloc=parsed.netloc.rpartition("@")[2]).geturl()
+        return ("s3", endpoint, self._bucket, self._prefix)
 
     def canonical_storage_path(
         self, path: PathRef
