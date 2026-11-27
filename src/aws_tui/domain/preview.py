@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import codecs
 import csv
 import io
 import json
@@ -243,15 +244,27 @@ def _csv_table(text: str, raw: bytes, truncated: bool, hinted: bool) -> PreviewR
     return _bounded_result(PreviewFormat.CSV, raw, columns, rows)
 
 
+def _decode_text(raw: bytes, *, truncated: bool) -> str | None:
+    """Strictly decode UTF-8; a byte cut may only drop its own incomplete trailing sequence."""
+    payload = raw[len(codecs.BOM_UTF8) :] if raw.startswith(codecs.BOM_UTF8) else raw
+    try:
+        return payload.decode("utf-8", errors="strict")
+    except UnicodeDecodeError as exc:
+        # The first bad byte of a valid prefix is reported first, so a dangling
+        # sequence at the very end is the only error a 64 KiB cut can cause.
+        if not truncated or exc.reason != "unexpected end of data" or exc.end != len(payload):
+            return None
+        return payload[: exc.start].decode("utf-8")
+
+
 def parse_text(
     raw: bytes, *, name: str, mime: str, truncated: bool, budget: PreviewBudget
 ) -> PreviewResult:
     budget.check()
     if len(raw) > RAW_PREVIEW_BYTES:
         raise PreviewLimitExceeded("Preview range exceeds budget")
-    try:
-        text = raw.decode("utf-8-sig", errors="strict")
-    except UnicodeDecodeError:
+    text = _decode_text(raw, truncated=truncated)
+    if text is None:
         return _raw(raw)
     sniff = raw[:PREVIEW_SNIFF_BYTES].decode("utf-8-sig", errors="ignore").lstrip()
     suffix = name.rsplit(".", 1)[-1].lower()

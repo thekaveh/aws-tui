@@ -304,6 +304,47 @@ def test_csv_control_does_not_publish_unquoted_partial_field():
 
 
 @pytest.mark.asyncio
+async def test_csv_cut_inside_a_three_byte_character_still_previews_as_table():
+    from aws_tui.domain.preview import PreviewFormat
+    from aws_tui.domain.preview_limits import RAW_PREVIEW_BYTES
+
+    # The 64 KiB cut ends after the first two bytes of the three-byte euro sign.
+    head = b"name,note\n"
+    rows = b"a,b\n" * 16000
+    padding = RAW_PREVIEW_BYTES - 2 - len(head) - len(rows) - len(b"c,")
+    raw = head + rows + b"c," + b"x" * padding + "€".encode() + b"\nd,e\n"
+    with pytest.raises(UnicodeDecodeError):
+        raw[:RAW_PREVIEW_BYTES].decode("utf-8")
+
+    result = await _structured(raw, "rows.csv", "text/csv")
+
+    assert result.format is PreviewFormat.CSV
+    assert tuple(column.name for column in result.columns) == ("name", "note")
+    assert result.rows[0][0].text == "a"
+    assert result.raw == raw[:RAW_PREVIEW_BYTES]
+
+
+@pytest.mark.parametrize(
+    ("raw", "truncated"),
+    [
+        # A genuinely invalid byte before the cut is corruption, not a split character.
+        (b"name,note\na,\xff\nb,c\nd,\xe2\x82", True),
+        # Without a byte cut, a dangling sequence at the end is corruption too.
+        (b"name,note\na,b\nc,\xe2\x82", False),
+    ],
+)
+def test_only_a_byte_cut_forgives_a_dangling_utf8_sequence(raw, truncated):
+    from aws_tui.domain.preview import PreviewFormat, parse_text
+    from aws_tui.domain.preview_limits import PreviewBudget
+
+    result = parse_text(
+        raw, name="rows.csv", mime="text/csv", truncated=truncated, budget=PreviewBudget.start()
+    )
+    assert result.format is PreviewFormat.RAW
+    assert result.raw == raw
+
+
+@pytest.mark.asyncio
 async def test_csv_render_budget_fallback_retains_raw_validates_and_closes():
     from aws_tui.demo.in_memory_fs import InMemoryFS
     from aws_tui.domain.filesystem import PathRef
