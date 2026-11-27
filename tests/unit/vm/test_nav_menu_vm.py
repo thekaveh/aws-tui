@@ -411,3 +411,35 @@ def test_menu_row_is_constructed_and_not_current() -> None:
     assert menu.items[0].is_constructed
     assert menu.items[0].is_current is False
     menu.dispose()
+
+
+def test_rebuild_keeping_the_selected_service_keeps_it_without_a_selection_change() -> None:
+    """A connection change that still offers the selected service cleared the selection.
+
+    The rebuild removed every row, which dropped the current item, and the repopulated
+    rows were not made current again. A selection notice then reported ``None`` for a
+    service that was still offered.
+    """
+    reg = ServiceRegistry()
+    reg.register(FakeService("s3", "S3", accepts_aws=True, accepts_s3_compat=True))
+    reg.register(FakeService("ec2", "EC2", accepts_aws=True, accepts_s3_compat=False))
+    hub = new_hub()
+    menu = ServicesMenuVM(registry=reg, hub=hub, dispatcher=NULL_DISPATCHER)
+    menu.construct()
+    try:
+        menu.update_connection(_aws_conn())
+        menu.switch_service_command.execute("s3")
+        assert menu.selected_id == "s3"
+        notified: list[str] = []
+        sub = hub.messages.subscribe(
+            on_next=lambda m: notified.append(getattr(m, "property_name", ""))
+        )
+        try:
+            # The S3-compatible connection still offers S3, so the selection must hold.
+            menu.update_connection(_minio_conn())
+            assert menu.selected_id == "s3"
+            assert "selected_id" not in notified
+        finally:
+            sub.dispose()
+    finally:
+        menu.dispose()

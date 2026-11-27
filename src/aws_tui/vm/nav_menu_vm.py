@@ -211,6 +211,15 @@ class NavMenuVM:
             icon="⚙️",
         )
         self._add_item(settings_descriptor)
+        # The rows were rebuilt; a service that is still offered becomes current again,
+        # so the rebuild does not change the selection.
+        if prior_selected_id is not None:
+            restored = next(
+                (item for item in self._inner.snapshot() if item.model.id == prior_selected_id),
+                None,
+            )
+            if restored is not None:
+                self._inner.current = restored
 
         if notify:
             # Notify subscribers that the items collection changed so the View

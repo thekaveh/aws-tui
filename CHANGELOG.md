@@ -29,6 +29,11 @@ The Unreleased section is the promotion queue for the next package release. Entr
 - Glue Iceberg shutdown finishes draining when a metadata read fails while it is being cancelled.
 - A Glue Iceberg snapshot stays selected after a retry when it is still on the page.
 - An empty Glue comparison listing says there are no databases or tables.
+- A connection change that still offers the selected service keeps that service selected.
+- A save refused because the workspace library is busy says so, instead of doing nothing.
+- Athena completion reports unavailable, not partial, when no referenced table's columns can be read.
+- A second Athena saved-query load-more no longer clears the busy indicator while the first page is loading.
+- The Athena database lookup reports a database failure as one.
 - Byte sizes just below a unit boundary are labelled in the next unit (1048575 bytes is 1.0 MB, not 1024.0 kB).
 - Athena SQL completion replaces only the token under the cursor, even when text is selected. Previously the whole selection was replaced.
 - Opening an S3 location no longer crashes the application when restoring the previous Glue page fails. The failure is logged, and the handoff failure is reported.
