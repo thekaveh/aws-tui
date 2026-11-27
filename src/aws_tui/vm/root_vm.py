@@ -397,17 +397,22 @@ class RootVM(ComponentVM):
             # Only an unadopted candidate can roll back the ribbon. Observer
             # failure after publication must not claim old content is current.
             if self._content_host.current is not vm:
-                if prior_selection is not None:
-                    self._services_menu.switch_service_command.execute(prior_selection)
-                else:
-                    self._services_menu.clear_selection()
+                self._restore_prior_selection(prior_selection)
             raise
         if not adopted and self._services_menu.selected_id == service_id:
-            if prior_selection is not None:
-                self._services_menu.switch_service_command.execute(prior_selection)
-            else:
-                self._services_menu.clear_selection()
+            self._restore_prior_selection(prior_selection)
         return adopted
+
+    def _restore_prior_selection(self, prior_selection: str | None) -> None:
+        """Put the menu back on the prior service only while its content is still hosted.
+
+        A cancelled swap can shut the prior service down before the rollback runs. Its
+        selection then points at a disposed service, and the view shows nothing.
+        """
+        if prior_selection is not None and self._content_host.current is not None:
+            self._services_menu.switch_service_command.execute(prior_selection)
+        else:
+            self._services_menu.clear_selection()
 
     def _set_connection_state(self, connection: Connection | None, auth_state: TokenState) -> None:
         self._connection = connection

@@ -799,3 +799,25 @@ def test_dispose_continues_after_a_child_dispose_failure(monkeypatch: pytest.Mon
     assert completed == [True]
     assert root.services_menu.status is ConstructionStatus.DISPOSED
     assert root.content_host.status is ConstructionStatus.DISPOSED
+
+
+async def test_rollback_after_the_prior_content_was_shut_down_clears_the_selection() -> None:
+    """A cancelled swap can shut the prior service down before its rollback runs.
+
+    The rollback then re-selected the shut-down service, so the nav showed a selection and the
+    content area stayed blank. With no content hosted, the selection is cleared instead.
+    """
+    s3 = _FakeService("s3")
+    root = _build_root(s3)
+    await root.switch_connection_with(_aws_conn(), TokenState.CONNECTED)
+    await root.switch_service("s3")
+    assert root.services_menu.selected_id == "s3"
+
+    # The swap disposes the outgoing service and leaves the host empty; that is the state a
+    # cancelled swap leaves behind.
+    root.content_host._dispose_current()  # type: ignore[attr-defined]
+    assert root.content_host.current is None
+    root._restore_prior_selection("s3")  # type: ignore[attr-defined]
+
+    assert root.services_menu.selected_id is None
+    root.dispose()
