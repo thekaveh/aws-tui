@@ -356,3 +356,42 @@ def test_human_bytes_rolls_over_at_the_displayed_boundary() -> None:
     assert _human_bytes(1073741823) == "1.0 G"
     assert _human_bytes(1023) == "1023 B"
     assert _human_bytes(1024) == "1.0 K"
+
+
+@pytest.mark.asyncio
+async def test_cancelled_navigation_does_not_keep_the_previous_directory_rows() -> None:
+    """A navigation cancelled before its listing returned kept the old directory's rows.
+
+    The path had already changed, and the cancel branch returned the pane to idle with the
+    previous listing, so the rows shown belonged to a different path than the one selected. A
+    path change now drops the rows listed for the old path.
+    """
+    import asyncio
+
+    fs = await _seed()
+    vm = PaneVM(provider=fs, hub=MessageHub(), dispatcher=NULL_DISPATCHER)
+    vm.construct()
+    await vm.setup()
+    assert vm.entries
+    started, release = asyncio.Event(), asyncio.Event()
+    original_list = fs.list
+
+    async def blocked_list(path: PathRef):  # type: ignore[no-untyped-def]
+        if path == PathRef.from_posix("/subdir"):
+            started.set()
+            await release.wait()
+        return await original_list(path)
+
+    fs.list = blocked_list  # type: ignore[method-assign]
+    try:
+        navigation = asyncio.create_task(vm.navigate_to(PathRef.from_posix("/subdir")))
+        await started.wait()
+        navigation.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await navigation
+
+        assert vm.entries == ()
+        assert vm.state is PaneState.EMPTY
+    finally:
+        release.set()
+        vm.dispose()

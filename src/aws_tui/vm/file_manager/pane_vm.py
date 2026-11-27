@@ -292,6 +292,9 @@ class PaneVM(IsolatedComponentVM):
         self._dispatcher: Dispatcher = dispatcher
         self._provider: FileSystemProvider = provider
         self._path: PathRef = initial_path
+        # The path the current rows were listed for, so a cancelled listing for another path
+        # can drop them instead of showing them under the new path.
+        self._entries_path: PathRef | None = None
         self._id_prefix: str = id_prefix
         # Connection identity rendered in the bottom border subtitle
         # (e.g. ``aws · sso-dev · us-east-1`` for the left pane). Stable
@@ -901,6 +904,7 @@ class PaneVM(IsolatedComponentVM):
         self._error_text = None
         materialized = self._materialize_entries(staged.entries, staged.path)
         self._replace_entries(materialized)
+        self._entries_path = staged.path
         self._set_state(PaneState.IDLE if materialized else PaneState.EMPTY)
         self._notify(*(("path", "filter_text") if filter_reset else ("path",)))
 
@@ -1241,6 +1245,9 @@ class PaneVM(IsolatedComponentVM):
                 self._reload_is_current(generation, provider, path)
                 and self._state is PaneState.LOADING
             ):
+                if self._entries_path != path:
+                    # These rows belong to the directory navigated away from.
+                    self._replace_entries([])
                 self._set_state(PaneState.IDLE if self.entries else PaneState.EMPTY)
             raise
         except NotFoundError as exc:
@@ -1315,6 +1322,7 @@ class PaneVM(IsolatedComponentVM):
         self._error_text = None
         materialized = self._materialize_entries(raw, self._path)
         self._replace_entries(materialized)
+        self._entries_path = path
         # IDLE if at least one real entry; EMPTY only if neither real entries
         # nor a ".." row is present (i.e. truly root + empty bucket).
         self._set_state(PaneState.IDLE if materialized else PaneState.EMPTY)

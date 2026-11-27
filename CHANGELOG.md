@@ -69,6 +69,7 @@ The Unreleased section is the promotion queue for the next package release. Entr
 - A file copy, move or delete that is cancelled by navigating away is recorded in the log and shown as cancelled, instead of ending silently.
 - Cancelling a navigation whose recovered view is being discarded reports the cancellation instead of completing as if it had not been cancelled.
 - When the Athena workgroup is unavailable for a Glue Iceberg view, its catalog and database are cleared with it, so workspace saves keep working.
+- Cancelling a folder change no longer leaves the previous folder's files listed under the new path, where a delete would act on files that were not shown.
 - Byte sizes just below a unit boundary are labelled in the next unit (1048575 bytes is 1.0 MB, not 1024.0 kB).
 - Athena SQL completion replaces only the token under the cursor, even when text is selected. Previously the whole selection was replaced.
 - Opening an S3 location no longer crashes the application when restoring the previous Glue page fails. The failure is logged, and the handoff failure is reported.
