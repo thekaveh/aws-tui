@@ -275,3 +275,22 @@ def test_redact_text_redacts_a_quoted_authorization_value_as_one_unit() -> None:
     assert "abc" not in redact_text('Authorization: "Bearer abc def"')
     assert "def" not in redact_text('Authorization: "Bearer abc def"')
     assert redact_text("Authorization: Bearer abc123") == "Authorization: Bearer [REDACTED]"
+
+
+def test_redact_text_redacts_a_nested_credential_under_a_sensitive_key() -> None:
+    """A sensitive key whose value is an object printed the object's secret.
+
+    The unquoted value ran to the first space, which was inside "{'SecretAccessKey':", so the
+    rest of the object was scanned as ordinary text and the secret was printed.
+    """
+    out = redact_text("{'Credentials': {'SecretAccessKey': 'wJalrSECRET'}}")
+
+    assert "wJalrSECRET" not in out
+    assert "SecretAccessKey" not in out
+
+
+def test_redact_text_redacts_a_truncated_container_value_to_the_line_end() -> None:
+    out = redact_text('token={"x": "SECRET3"\nnext line stays')
+
+    assert "SECRET3" not in out
+    assert "next line stays" in out

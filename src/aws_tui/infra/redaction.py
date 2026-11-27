@@ -132,6 +132,20 @@ def _is_key_name(token: str) -> bool:
 _NEXT_TOKEN = re.compile(r"[^\S\r\n]+(?P<token>[^\s,;}]+)")
 
 
+def _container_end(text: str, start: int) -> int | None:
+    """Index just past the bracket that closes the one at ``start``, or None."""
+    depth = 0
+    for index in range(start, len(text)):
+        char = text[index]
+        if char in "{[":
+            depth += 1
+        elif char in "}]":
+            depth -= 1
+            if depth == 0:
+                return index + 1
+    return None
+
+
 def _redact_key_values(text: str) -> str:
     """Redact each sensitive key's value, scanning left to right.
 
@@ -148,6 +162,23 @@ def _redact_key_values(text: str) -> str:
     while (match := _KEY_VALUE.search(text, pos)) is not None:
         value = match.group("value")
         value_start, value_end = match.span("value")
+        if value.startswith(("{", "[")):
+            # The whole container is the sensitive key's value, so it is redacted as one unit.
+            # The unquoted token ends at the first space and would print the rest of the nested
+            # object, for example the SecretAccessKey inside Credentials.
+            container_end = _container_end(text, value_start)
+            if container_end is not None:
+                pieces.append(text[pos:value_start])
+                pieces.append(_REDACTED)
+                pos = container_end
+                continue
+            # Unbalanced (a truncated line): redact the rest of the line, which is fail-closed.
+            line_end = text.find("\n", value_start)
+            line_end = len(text) if line_end < 0 else line_end
+            pieces.append(text[pos:value_start])
+            pieces.append(_REDACTED)
+            pos = line_end
+            continue
         following = None if value.startswith(("'", '"')) else _NEXT_TOKEN.match(text, value_end)
         # A value followed by an already-redacted token was handled by an earlier
         # pass (the Authorization header), so it is left as it is.
