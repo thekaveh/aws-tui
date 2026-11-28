@@ -210,6 +210,13 @@ async def drive(root: Path, mode: str, active: str, size: tuple[int, int]) -> No
 
 
 if __name__ == "__main__":
+    import faulthandler
+
+    # The test kills a helper that has not exited after 40 s and then reports only a timeout.
+    # Dumping every thread's stack at 30 s names where it waited, and exits so the test fails
+    # with that stack. A normal run finishes in a few seconds.
+    faulthandler.dump_traceback_later(30, exit=True)
     asyncio.run(
         drive(Path(sys.argv[1]), sys.argv[2], sys.argv[3], (int(sys.argv[4]), int(sys.argv[5])))
     )
+    faulthandler.cancel_dump_traceback_later()
