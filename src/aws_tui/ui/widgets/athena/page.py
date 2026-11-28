@@ -36,6 +36,9 @@ from aws_tui.vm.file_manager.pane_vm import PaneState
 from aws_tui.vm.service_source_vm import ServiceSourceContext
 
 _VIEW_ORDER: tuple[AthenaView, ...] = ("query", "history", "results", "saved")
+# A restored focus target is retried on a short timer, for about one second, before falling back.
+_DRAFTS_FOCUS_ATTEMPTS = 50
+_DRAFTS_FOCUS_RETRY_SECONDS = 0.02
 _ATHENA_FOCUS_ORDER = (
     FocusSlot.ATHENA_SOURCE,
     FocusSlot.ATHENA_WORKGROUP,
@@ -413,24 +416,41 @@ class AthenaPage(DeferredWorkerMixin, HubSubscriberMixin, Widget):
             focus_coordinator=self._focus_coordinator,
         )
 
-        def restore_focus(result: DraftModalResult | None) -> None:
-            def apply_focus() -> None:
-                if not self.is_mounted or self.screen is not self.app.screen:
-                    return
-                selector = "#athena-editor" if result == "restored" else "#athena-drafts"
+        self.app.push_screen(modal, self._restore_focus_after_drafts)
+
+    def _restore_focus_after_drafts(self, result: DraftModalResult | None) -> None:
+        """Return focus to the editor (restored) or the drafts control (closed).
+
+        A single attempt parked focus on the drafts control whenever the target was not yet
+        focusable or another screen was still settling, and nothing retried. The restore now
+        retries on a short timer until the target is focusable, and falls back to the default
+        slot only after the attempts run out (about one second).
+        """
+        if not self.is_mounted:
+            return
+        selector = "#athena-editor" if result == "restored" else "#athena-drafts"
+
+        def apply_focus(remaining: int) -> None:
+            if not self.is_mounted:
+                return
+            if self.screen is self.app.screen:
                 try:
                     target = self.query_one(selector, Widget)
                 except NoMatches:
                     target = None
                 if target is not None and self._is_focus_target(target):
                     target.focus()
-                else:
+                    return
+                if remaining == 0:
                     self.focus_default()
+                    return
+            elif remaining == 0:
+                return
+            self.set_timer(_DRAFTS_FOCUS_RETRY_SECONDS, partial(apply_focus, remaining - 1))
 
-            if self.is_mounted:
-                self.call_after_refresh(apply_focus)
-
-        self.app.push_screen(modal, restore_focus)
+        # Only the editor can become focusable a moment later; the drafts control falls back at once.
+        attempts = _DRAFTS_FOCUS_ATTEMPTS if selector == "#athena-editor" else 0
+        self.call_after_refresh(apply_focus, attempts)
 
     async def _confirm_sql(self, message: str) -> bool:
         return await ask_sql_confirmation(

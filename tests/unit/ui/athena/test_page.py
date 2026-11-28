@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 from collections.abc import Callable
 
@@ -2625,3 +2626,27 @@ async def test_closing_input_for_shutdown_carries_unpumped_editor_text_into_the_
         page.close_input_for_shutdown()
         assert vm.query.sql == "SELECT 2"
         assert editor.read_only
+
+
+async def test_restored_draft_focus_waits_for_a_momentarily_unfocusable_editor() -> None:
+    """One attempt parked focus on the drafts control when the editor was not yet focusable.
+
+    The restore now retries each refresh until the editor can take focus.
+    """
+    vm, _client = _build_vm()
+    await vm.setup()
+    app = _AthenaApp(vm)
+
+    async with app.run_test(size=(100, 30)) as pilot:
+        await pilot.pause()
+        page = app.query_one(AthenaPage)
+        editor = page.query_one("#athena-editor", TextArea)
+        page.query_one("#athena-drafts", Button).focus()
+        await pilot.pause()
+        editor.disabled = True
+        page._restore_focus_after_drafts("restored")
+        await asyncio.sleep(0.1)
+        editor.disabled = False
+        await asyncio.sleep(0.3)
+        await pilot.pause()
+        assert app.focused is editor
